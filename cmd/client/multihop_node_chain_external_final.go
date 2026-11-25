@@ -11,9 +11,9 @@ import (
 // The external final has its own public exit and DNS policy. The paired entry
 // remains the selected control; it cannot impersonate the final's proof.
 func desktopNodeChainExternalFinalSchema(members []desktopNodeChainMember) (int, error) {
-	bad := errors.New("ordered external final requires Local WireGuard entry and independently captured literal SS2022 streams")
+	bad := errors.New("ordered external final requires a Local WireGuard or AWG2 entry and independently captured literal SS2022 streams")
 	if len(members) < 3 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes ||
-		members[0].Mode != "wg" || members[0].Profile.External != nil ||
+		!mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[0].Profile.External != nil ||
 		members[0].Profile.NodeKind != "" && members[0].Profile.NodeKind != "router-vpn" ||
 		!common.ValidNodeProofID(members[0].Profile.NodeProofID) {
 		return 0, bad
@@ -21,7 +21,7 @@ func desktopNodeChainExternalFinalSchema(members []desktopNodeChainMember) (int,
 	seen := make(map[string]bool, len(members))
 	for i, member := range members {
 		p := member.Profile
-		if !validProfileID(p.ID) || seen[p.ID] || p.StartLayer != "" && p.StartLayer != "off" {
+		if !validProfileID(p.ID) || seen[p.ID] || !mobilemultihop.NodeChainExternalFinalEntryLayer(p.StartLayer) || i > 0 && p.StartLayer != "" && p.StartLayer != "off" {
 			return 0, bad
 		}
 		seen[p.ID] = true
@@ -67,29 +67,40 @@ func (capture *desktopNodeChainCapture) compileExternalFinal(ctx context.Context
 	if err != nil {
 		return "", "", "", err
 	}
-	files, err := readDesktopNodeAssets(capture.root, entry.ID, "wg")
+	mode := capture.members[0].Mode
+	readOwned := func(assetMode string) (map[string][]byte, error) {
+		files, err := readDesktopNodeAssets(capture.root, entry.ID, assetMode)
+		if err != nil {
+			return nil, err
+		}
+		digest := viaEntryAssetDigest(files)
+		for _, asset := range capture.assets {
+			if asset.id == entry.ID && asset.mode == assetMode && asset.digest == digest {
+				if entry.Endpoint == capture.endpoint {
+					return files, nil
+				}
+				frozen, err := freezeDesktopNodeAssets(files, entry.Endpoint, capture.endpoint)
+				clearViaEntryAssets(files)
+				return frozen, err
+			}
+		}
+		clearViaEntryAssets(files)
+		return nil, bad
+	}
+	files, err := readOwned(mode)
 	if err != nil {
 		return "", "", "", err
 	}
 	defer clearViaEntryAssets(files)
-	owned := false
-	for _, asset := range capture.assets {
-		if asset.id == entry.ID && asset.mode == "wg" && asset.digest == viaEntryAssetDigest(files) {
-			owned = true
+	var start map[string][]byte
+	if entry.StartLayer != "" && entry.StartLayer != "off" {
+		start, err = readOwned("shadowsocks")
+		if err != nil {
+			return "", "", "", err
 		}
+		defer clearViaEntryAssets(start)
 	}
-	if !owned {
-		return "", "", "", bad
-	}
-	if entry.Endpoint != capture.endpoint {
-		frozen, freezeErr := freezeDesktopNodeAssets(files, entry.Endpoint, capture.endpoint)
-		if freezeErr != nil {
-			return "", "", "", freezeErr
-		}
-		defer clearViaEntryAssets(frozen)
-		files = frozen
-		entry.Endpoint = capture.endpoint
-	}
+	entry.Endpoint = capture.endpoint
 	profile, err := externalRuntimePolicy(member.Profile)
 	if err == nil {
 		profile, err = externalDNSPolicyForPath(profile, entry, false)
@@ -98,12 +109,12 @@ func (capture *desktopNodeChainCapture) compileExternalFinal(ctx context.Context
 		return "", "", "", err
 	}
 	// These choices describe this captured operation, not a saved profile edit.
-	profile.MultihopEntryMode, profile.MultihopExecution = "wg", "local"
+	profile.MultihopEntryMode, profile.MultihopExecution = mode, "local"
 	exit, err := standardExitFromExternalProfile(profile)
 	if err != nil {
 		return "", "", "", err
 	}
-	launch, err := compileDesktopExternalCaptured(ctx, profile, entry, exit, false, "", files, nil, nil)
+	launch, err := compileDesktopExternalCaptured(ctx, profile, entry, exit, false, "", files, start, nil)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -127,7 +138,7 @@ func (capture *desktopNodeChainCapture) compileExternalFinal(ctx context.Context
 // Requests explicitly name the external-final family. This public shape alone
 // grants no source or runtime authority; linked identities are checked next.
 func desktopExternalFinalReferences(nodes []common.MultihopNodeSelection) bool {
-	if len(nodes) < 3 || len(nodes) > mobilemultihop.NodeChainExtendedLocalMaximumNodes || nodes[0].Mode != "wg" || common.ValidateMultihopNodes(nodes) != nil {
+	if len(nodes) < 3 || len(nodes) > mobilemultihop.NodeChainExtendedLocalMaximumNodes || !mobilemultihop.NodeChainPrefixMode(nodes[0].Mode) || common.ValidateMultihopNodes(nodes) != nil {
 		return false
 	}
 	for _, node := range nodes[1:] {
@@ -152,7 +163,7 @@ func desktopNodeChainMetadataMatchesSelection(meta mobilemultihop.DesktopNodeCha
 		return false
 	}
 	entry, final := meta.Prefixes[0], meta.Prefixes[len(meta.Prefixes)-1]
-	return entry.ProfileID == selection.Control.ID && entry.NodeID == selection.Control.NodeProofID && entry.NodeKind == "" && entry.Mode == "wg" &&
+	return entry.ProfileID == selection.Control.ID && entry.NodeID == selection.Control.NodeProofID && entry.NodeKind == "" && entry.Mode == selection.Nodes[0].Mode &&
 		final.ProfileID == selection.Exit.ID && final.NodeID == "" && final.NodeKind == "external" && final.Kind == "public-path" &&
 		final.Mode == "shadowsocks" && final.Tag == meta.FinalTag && meta.ExternalFinal.SourceSHA256 == final.SourceSHA256
 }

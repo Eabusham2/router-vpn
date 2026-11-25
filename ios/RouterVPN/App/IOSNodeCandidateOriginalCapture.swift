@@ -41,7 +41,7 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
                   Set(proofs.map(\.profile_id)).count == proofs.count else { return false }
             return proofs.enumerated().allSatisfy { index, row in
                 guard row.position == index, !row.profile_id.isEmpty else { return false }
-                if index == 0 { return row.mode == "wg" && !row.node_id.isEmpty && row.measurement == nil }
+                if index == 0 { return IOSMultihopNodeSelection.supportsNativePrefix(row.mode) && !row.node_id.isEmpty && row.measurement == nil }
                 return row.mode == "shadowsocks" && row.node_id.isEmpty &&
                     row.measurement == (index < proofs.count - 1 ? "routed-public-candidate-response" : nil)
             }

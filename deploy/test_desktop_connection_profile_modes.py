@@ -712,10 +712,15 @@ SWIFT_ORDERED_EDITOR = r'''
 '''
 
 SWIFT_ORDERED = r'''
-for count in [3, 4, 9, 95, 96] {
+let publicPaths = [(3,"wg"),(4,"wg"),(9,"wg"),(95,"wg"),(96,"wg"),(9,"awg2-fast"),(96,"awg2-strong")].map { ($0.0, $0.1, "off") }
+let layeredPaths = RouterVPNOrderedNodes.prefixModes.flatMap { mode in
+    [(3,mode,"aes-256-gcm"), (9,mode,"aes-256-gcm+xor-whitening")]
+}
+for (count, entryMode, entryLayer) in publicPaths + layeredPaths {
     let ids = (0..<count).map { "schema8-\($0)" }
     let tokens = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, String(format:"%064x",$0.offset+1)) })
     var profiles = catalogRows(ids, tokens: tokens)
+    profiles[0]["start_layer"] = entryLayer
     for i in 1..<count {
         profiles[i]["node_kind"] = "external"
         profiles[i]["external"] = ["protocol":"shadowsocks","ordered_middle_supported":true,"ordered_local_imported_nodes_supported":true,"ordered_external_final":true] as [String:Any]
@@ -724,10 +729,14 @@ for count in [3, 4, 9, 95, 96] {
     var editor = try RouterVPNOrderedNodeDraft(selection:initial,generation:UUID(),catalog:profiles)
     try editor.chooseExternalExit(ids.last!)
     for id in ids.dropFirst().dropLast() { try editor.add(id) }
+    try editor.chooseMode(entryMode,at:0)
+    rejects({ try editor.chooseMode("shadowsocks",at:0) },"external final replaced the paired entry with a stream")
+    rejects({ try editor.chooseMode("wg",at:1) },"external final replaced an imported stream with a paired mode")
+    rejects({ try editor.chooseMode("shadowsocks",at:count) },"external final accepted a missing editor row")
     let saved8 = try editor.selection()
     let current: [String:Any] = ["selected_id":ids[0],"profiles":profiles]
     let body8 = try RouterVPNOrderedNodes.connectBody(saved8,current:current)
-    check((body8["external_final"] as? Bool) == true && saved8.orderedNodes.first?["id"] == ids[0] && saved8.orderedNodes.last?["id"] == ids.last! && saved8.profileTokens == tokens, "external final lost its selected WireGuard entry or source tokens")
+    check((body8["external_final"] as? Bool) == true && saved8.orderedNodes.first?["id"] == ids[0] && saved8.orderedNodes.first?["mode"] == entryMode && body8["nodes"] as? [[String:String]] == saved8.orderedNodes && saved8.orderedNodes.last?["id"] == ids.last! && saved8.profileTokens == tokens, "external final lost its paired entry transport or source tokens")
     let loaded = try RouterVPNOrderedNodeDraft(selection:saved8,generation:UUID(),catalog:profiles)
     check(try loaded.selection() == saved8, "saved external final lost its exit in the editor")
     for position in 0..<count-1 { check(loaded.canMeasure(after:position),"original public route lost its next measurable prefix") }
@@ -763,6 +772,21 @@ for count in [3, 4, 9, 95, 96] {
             check(owner.draftMeasurement?.1==position+1 && owner.draftMeasurement?.0["nodes"] as? [[String:String]]==inserted,"public callback did not reopen the inserted prefix up to its final 96-node measurement")
             owner.draftMeasurement=nil;DispatchQueue.clear()
         }
+    }
+    check(body8["start_layer"] == nil && (body8["expected_profile_tokens"] as? [String:String])?[ids[0]] == tokens[ids[0]], "external draft lost its revision-bound entry layer")
+    if entryLayer != "off" {
+        let serialized = try JSONEncoder().encode(saved8)
+        let replay = try JSONDecoder().decode(RouterVPNConnectionProfileSelection.self, from: serialized)
+        check(replay == saved8, "saved external route lost its layered entry selection")
+        for member in [0, 1, count-1] {
+            var changed = profiles
+            changed[member]["start_layer"] = member == 0 ? "aes+xor" : entryLayer
+            rejects({ _ = try RouterVPNOrderedNodeDraft(selection:replay,generation:UUID(),catalog:changed) }, "reopened external route accepted a misplaced or unsupported layer")
+        }
+        var changed = profiles
+        changed[0]["start_layer"] = "off"
+        changed[0]["profile_token"] = String(repeating:"f", count:64)
+        rejects({ _ = try RouterVPNOrderedNodes.connectBody(replay,current:["selected_id":ids[0],"profiles":changed]) }, "saved external route followed a replacement entry revision")
     }
     var other = saved8; other.execution = "server"
     rejects({ _ = try RouterVPNOrderedNodes.connectBody(other,current:current) }, "external final accepted Server")
@@ -2583,7 +2607,8 @@ def macos(directory):
         "ordered-middle-source": replace_once(source, 'matches[0]["profile_token"] as? String == token', 'true'),
         "ordered-capability": replace_once(source, 'CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue', 'true, true'),
         "ordered-request-owner": replace_once(source, 'self.connectionProfileSelectionGeneration == generation &&', 'true &&'),
-        "ordered-locked-source-preconditions": replace_once(source, 'return ["nodes": rows, "execution": selection.execution, "expected_selected_node_id": selection.selectedNodeID,\n                "expected_profile_tokens": tokens]', 'return ["nodes": rows, "execution": selection.execution, "expected_selected_node_id": selection.selectedNodeID,\n                "expected_profile_tokens": [String: String]()]'),
+        "ordered-locked-source-preconditions": replace_once(source,
+            '"expected_profile_tokens": tokens]\n        if externalFinal', '"expected_profile_tokens": [String: String]()]\n        if externalFinal'),
     }
     execution_variants = {
         "ordered-execution-capture": (
@@ -2611,7 +2636,7 @@ def macos(directory):
     final_variants = {
         "local-imported-position": ('mode == "shadowsocks" && (3...physicalTraversalDepth).contains(count) && position > 0 && position < count - 1', 'mode == "shadowsocks" && (3...physicalTraversalDepth).contains(count) && position > 0 && position == count - 2', "Local imported nodes lost complete original path"),
         "local-imported-capability": ('CFGetTypeID(allowed) == CFBooleanGetTypeID()', 'true', "Local imported nodes accepted invalid source capability"),
-        "ordered-final-draft": ('[["id": control, "mode": finalMode]]', '[["id": control, "mode": "shadowsocks"]]', "ordered final callback substituted a member transport"),
+        "ordered-final-draft": ('[["id": externalExit ?? control, "mode": finalMode]]', '[["id": externalExit ?? control, "mode": "shadowsocks"]]', "ordered final callback substituted a member transport"),
         "ordered-final-snapshot": ('"mode": selectedPath.orderedNodes.last!["mode"]!', '"mode": "shadowsocks"', "ordered save retained unrelated mode or layers"),
         "ordered-final-apply": ('let mode = selection.orderedNodes.last!["mode"]!\\n        fixtureDefaults.set(mode, forKey: macConnectionModeKey)', 'let mode = "shadowsocks"\\n        fixtureDefaults.set(mode, forKey: macConnectionModeKey)', "ordered Apply displayed a different final transport"),
         "ordered-final-widget": ('transport.isEnabled = !modes.isEmpty', 'transport.isEnabled = draft.prefixes.indices.contains(index)', "ordered editor did not expose the supported final transport"),
@@ -2626,7 +2651,7 @@ def macos(directory):
         variants[name] = replace_once(source, old.replace("UserDefaults.standard", "fixtureDefaults"), new)
     socks_variants = {
         "ordered-socks-protocol": ('row["mode"] == importedMode', '["shadowsocks", "socks5"].contains(row["mode"]!)', "SOCKS Connect borrowed another imported protocol"),
-        "ordered-socks-draft-mode": ('modes.insert(mode, at: position)', 'modes.insert(mode == "socks5" ? "shadowsocks" : mode, at: position)', "SOCKS editor Add replaced the captured middle mode"),
+        "ordered-socks-draft-mode": ('prefixes.insert(id, at: position)\n        modes.insert(mode, at: position)', 'prefixes.insert(id, at: position)\n        modes.insert(mode == "socks5" ? "shadowsocks" : mode, at: position)', "SOCKS editor Add replaced the captured middle mode"),
         "ordered-socks-capability": ('CFGetTypeID(value) == CFBooleanGetTypeID(), value.boolValue,', 'value.boolValue,', "SOCKS imported capability accepted non-boolean authority"),
         "ordered-socks-final": ('return finalModes.filter { $0 == "shadowsocks" || importedIDs.isDisjoint(with: prefixes) }', 'return finalModes.filter { $0 == "shadowsocks" || !modes.contains("shadowsocks") }', "SOCKS imported middle editor offered a Hysteria2 final"),
     }
@@ -2634,7 +2659,7 @@ def macos(directory):
         variants[name] = replace_once(source, old, new)
     connect_variants = {
         "ordered-connect-protocol": ('row["mode"] == importedMode', '(row["mode"] == importedMode || (["http-connect", "https-connect"].contains(row["mode"]!) && ["http-connect", "https-connect"].contains(importedMode!)))', "CONNECT Connect borrowed HTTP or HTTPS transport"),
-        "ordered-connect-draft-mode": ('modes.insert(mode, at: position)', 'modes.insert(mode == "https-connect" ? "http-connect" : mode, at: position)', "CONNECT editor Add replaced the captured middle mode"),
+        "ordered-connect-draft-mode": ('prefixes.insert(id, at: position)\n        modes.insert(mode, at: position)', 'prefixes.insert(id, at: position)\n        modes.insert(mode == "https-connect" ? "http-connect" : mode, at: position)', "CONNECT editor Add replaced the captured middle mode"),
     }
     for name, (old, new, _) in connect_variants.items():
         variants[name] = replace_once(source, old, new)

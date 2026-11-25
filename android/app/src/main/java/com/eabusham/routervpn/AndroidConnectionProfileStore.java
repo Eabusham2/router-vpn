@@ -221,7 +221,7 @@ final class AndroidConnectionProfileStore {
                 int controlPosition = AndroidNodeChainCapture.sourceSchema(sources, modes) == 8 ? 0 : sources.size()-1;
                 AndroidNodeStore.ChainSource control=sources.get(controlPosition);
                 if (controlPosition == 0 && !control.id.equals(catalog.selectedId))
-                    throw new IllegalStateException("The imported exit requires the originally selected WireGuard control.");
+                    throw new IllegalStateException("The imported exit requires the originally selected paired packet entry.");
                 JSONObject row=new JSONObject().put("id",newId()).put("name","Ordered Router path").put("node_kind","router-vpn")
                         .put("node_id",control.id).put("node_profile_id",control.profileId).put("policy",members.getJSONObject(controlPosition).getJSONObject("policy"))
                         .put("mode","smart-auto").put("custom_layers",new JSONArray()).put("multihop_enabled",true).put("multihop_execution",execution)
@@ -420,8 +420,8 @@ final class AndroidConnectionProfileStore {
         boolean externalFinal="external".equals(members.getJSONObject(members.length()-1).optString("node_kind"));
         if (externalFinal && (members.length()<3 || !"local".equals(requested) || importedCount!=members.length()-1
                 || "external".equals(members.getJSONObject(0).optString("node_kind"))
-                || !"wg".equals(members.getJSONObject(0).getString("mode"))))
-            throw new IllegalStateException("A saved imported exit requires its original Local WireGuard control and literal Shadowsocks sources.");
+                || !List.of("wg","awg2-fast","awg2-strong").contains(members.getJSONObject(0).getString("mode"))))
+            throw new IllegalStateException("A saved imported exit requires its original Local packet entry and literal Shadowsocks sources.");
         if (members.length() > 8) {
             int last=members.length()-1;
             boolean localExecution="local".equals(requested),stream=false;
@@ -444,7 +444,7 @@ final class AndroidConnectionProfileStore {
                 }else if(i==last||stream||imported||!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(mode)
                         ||importedCount==0&&!"wg".equals(mode)||!localExecution&&(i!=0||!List.of("wg","awg2-fast","awg2-strong").contains(mode)))
                     throw new IllegalStateException("The saved longer mixed route lost its Local execution or packet entry.");
-                if(!imported&&!java.util.Arrays.asList("","off").contains(member.getJSONObject("policy").optString("start_layer","off")))
+                if(!imported && !(externalFinal && i==0) && !java.util.Arrays.asList("","off").contains(member.getJSONObject("policy").optString("start_layer","off")))
                     throw new IllegalStateException("The saved longer route lost its original Off layer.");
             }
         }

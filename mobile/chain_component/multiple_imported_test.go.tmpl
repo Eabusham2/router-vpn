@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/netip"
@@ -126,7 +127,18 @@ type multipleImportedCandidateSetup struct {
 	route    desktopNodeLayerRoute
 	closed   bool
 }
+type multipleImportedOuter struct{ adapter.Outbound }
+
+func (*multipleImportedOuter) Dependencies() []string { return nil }
+
+type multipleImportedEntryLayer struct {
+	mode, tag, virtual string
+	provider           desktopExternalInstalledSSPeer
+	server             *desktopNodeLayerServer
+}
+
 type multipleImportedFixture struct {
+	entryLayer                  *multipleImportedEntryLayer
 	physical                    string
 	ctx                         context.Context
 	cancel                      context.CancelFunc
@@ -157,6 +169,9 @@ func (f *multipleImportedFixture) close() error {
 		err = errors.Join(err, f.native.Close())
 	}
 	f.cancel()
+	if f.entryLayer != nil {
+		f.entryLayer.provider.close()
+	}
 	for _, member := range f.members {
 		if member != nil && member.close != nil {
 			member.close()
@@ -478,6 +493,10 @@ func newMultipleImportedHostnameFixture(t *testing.T, layout multipleImportedLay
 type multipleImportedPeerRoutes func(*testing.T, *multipleImportedFixture, int, *tls.Certificate) []desktopNodeLayerRoute
 
 func newMultipleImportedFixtureWithRoutes(t *testing.T, layout multipleImportedLayout, mode, finalLayer, fault string, wrap func(tun.Handler) tun.Handler, streams []int, host *multipleImportedHostname, peerRoutes multipleImportedPeerRoutes, candidate ...multipleImportedCandidateSetup) *multipleImportedFixture {
+	return newMultipleImportedFixtureWithLayerRoutes(t, layout, mode, finalLayer, fault, wrap, streams, host, peerRoutes, "", candidate...)
+}
+
+func newMultipleImportedFixtureWithLayerRoutes(t *testing.T, layout multipleImportedLayout, mode, finalLayer, fault string, wrap func(tun.Handler) tun.Handler, streams []int, host *multipleImportedHostname, peerRoutes multipleImportedPeerRoutes, entryLayer string, candidate ...multipleImportedCandidateSetup) *multipleImportedFixture {
 	privateStreams := make(map[int]bool, len(streams))
 	for _, i := range streams {
 		privateStreams[i] = true
@@ -635,6 +654,12 @@ func newMultipleImportedFixtureWithRoutes(t *testing.T, layout multipleImportedL
 			continue
 		}
 		identity := request.Prefixes[position]
+		if externalFinal && position == 0 && fault == "wrong-awg-entry" {
+			// Keep the captured client source intact. Only the independently
+			// started peer receives a different initiation header.
+			identity.Parameters = maps.Clone(identity.Parameters)
+			identity.Parameters["h1"] = "900000000-900000010"
+		}
 		inner, _ := desktopNodeChainInner(position, len(request.Prefixes))
 		target := net.JoinHostPort(inner, "8787")
 		private := f.privateServer(t, member, target, identity.APIToken, identity.NodeProofID)
@@ -756,6 +781,12 @@ func newMultipleImportedFixtureWithRoutes(t *testing.T, layout multipleImportedL
 			t.Fatal(err)
 		}
 	}
+	if entryLayer != "" {
+		if !externalFinal {
+			t.Fatal("independent outer transport requires original schema-8 source")
+		}
+		f.installExternalEntryLayer(t, entryLayer, fault)
+	}
 	if externalFinal {
 		f.source = externalFinalNativeSource(t, f, layout.name == "external-final-home", fault)
 	}
@@ -793,7 +824,6 @@ func newMultipleImportedFixtureWithRoutes(t *testing.T, layout multipleImportedL
 func (f *multipleImportedFixture) startBox(t *testing.T, physical string, closed ...*mobilemultihop.NodeChainCandidatePreparation) {
 	t.Helper()
 	ins, outs, ends := inbound.NewRegistry(), outbound.NewRegistry(), endpoint.NewRegistry()
-	WHT.RegisterOutbound(outs)
 	config := f.chain.Config()
 	if len(closed) == 1 {
 		config = closed[0].Config()
@@ -804,6 +834,21 @@ func (f *multipleImportedFixture) startBox(t *testing.T, physical string, closed
 		return &multipleImportedTUN{inbound.NewAdapter("tun", tag)}, nil
 	})
 	firstTag := f.chain.PrefixTags()[0]
+	original := f.members[0].physical
+	if f.entryLayer != nil {
+		var graph struct {
+			Endpoints []map[string]any `json:"endpoints"`
+		}
+		if json.Unmarshal([]byte(config), &graph) != nil || len(graph.Endpoints) != 1 || graph.Endpoints[0]["tag"] != firstTag {
+			t.Fatal("layered graph lost its captured packet entry")
+		}
+		outer, ok := graph.Endpoints[0]["detour"].(string)
+		if !ok || outer == "" {
+			t.Fatal("layered packet has no original outer transport")
+		}
+		firstTag, original, physical = outer, f.entryLayer.provider.address, f.entryLayer.virtual
+		f.entryLayer.tag = outer
+	}
 	physicalContext := func(ctx context.Context, tag, detour string) (context.Context, bool, error) {
 		if tag != firstTag {
 			if detour == "" {
@@ -815,12 +860,30 @@ func (f *multipleImportedFixture) startBox(t *testing.T, physical string, closed
 			return nil, false, errors.New("first physical member has an unowned detour")
 		}
 		ctx = service.ExtendContext(ctx)
-		lower := &desktopSSReferenceLower{virtual: physical, original: f.members[0].physical}
+		lower := &desktopSSReferenceLower{virtual: physical, original: original}
 		ctx = service.ContextWith[adapter.OutboundManager](ctx, &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": lower}})
 		ctx = service.ContextWith[adapter.NetworkManager](ctx, &desktopImportedPacketNetwork{})
 		return ctx, true, nil
 	}
-	if f.members[0].imported {
+	if f.entryLayer != nil {
+		outbound.Register[WHT.Options](outs, "routervpn-aes-xor", func(ctx context.Context, r adapter.Router, l log.ContextLogger, tag string, o WHT.Options) (adapter.Outbound, error) {
+			owned, first, err := physicalContext(ctx, tag, o.Detour)
+			if err != nil {
+				return nil, err
+			}
+			if first {
+				o.Detour = "captured-physical"
+			}
+			actual, err := WHT.NewOutbound(owned, r, l, tag, o)
+			if err != nil || !first {
+				return actual, err
+			}
+			return &multipleImportedOuter{actual}, nil
+		})
+	} else {
+		WHT.RegisterOutbound(outs)
+	}
+	if f.members[0].imported || f.entryLayer != nil {
 		outbound.Register[option.ShadowsocksOutboundOptions](outs, "shadowsocks", func(ctx context.Context, r adapter.Router, l log.ContextLogger, tag string, o option.ShadowsocksOutboundOptions) (adapter.Outbound, error) {
 			owned, first, err := physicalContext(ctx, tag, o.Detour)
 			if err != nil {
@@ -1437,6 +1500,7 @@ func externalFinalNativeSource(t *testing.T, f *multipleImportedFixture, home bo
 	}
 	var selection, entryProfile map[string]any
 	var entryLaunch struct {
+		Mode    string `json:"mode"`
 		Profile string `json:"profile_json"`
 	}
 	if json.Unmarshal([]byte(source.Nodes[0]), &entryLaunch) != nil || json.Unmarshal([]byte(entryLaunch.Profile), &entryProfile) != nil || json.Unmarshal([]byte(original.Capture), &selection) != nil {
@@ -1447,7 +1511,7 @@ func externalFinalNativeSource(t *testing.T, f *multipleImportedFixture, home bo
 		t.Fatal(err)
 	}
 	profile := selection["profile"].(map[string]any)
-	profile["multihop_enabled"], profile["multihop_entry_mode"], profile["multihop_execution"] = true, "wg", "local"
+	profile["multihop_enabled"], profile["multihop_entry_mode"], profile["multihop_execution"] = true, entryLaunch.Mode, "local"
 	profile["multihop_entry_id"], profile["multihop_exit_id"] = entryProfile["id"], profile["id"]
 	if !home {
 		profile["dns_mode"], profile["dns_host"], profile["dns_protocol"], profile["dns_port"] = "custom", "192.168.50.133", "udp", 53
@@ -1459,4 +1523,48 @@ func externalFinalNativeSource(t *testing.T, f *multipleImportedFixture, home bo
 	}
 	source.Schema, source.IdentitySources[last] = 8, ""
 	return source
+}
+
+// Read back the real retained device and compare it to the selected graph.
+func (f *multipleImportedFixture) checkExternalAWGEntry(t *testing.T, mode string, mismatch bool) {
+	t.Helper()
+	first := f.chain.ProofInventory()[0]
+	peer := f.members[0].prefix
+	if f.native == nil || first.Mode != mode || peer == nil || peer.mode != mode || peer.readback == nil {
+		t.Fatal("original AWG physical device or variant missing")
+	}
+	var graph struct {
+		Endpoints []mobilemultihop.AmneziaEndpointConfig `json:"endpoints"`
+	}
+	if err := json.Unmarshal([]byte(f.chain.Config()), &graph); err != nil {
+		t.Fatal(err)
+	}
+	for _, endpoint := range graph.Endpoints {
+		if endpoint.Tag != first.Tag {
+			continue
+		}
+		if endpoint.Type != mobilemultihop.AmneziaType {
+			t.Fatal("physical entry lost native AWG")
+		}
+		expected, err := desktopNodeAWGParameterDigest(endpoint.Parameters)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.entryLayer == nil {
+			verifyExtendedClientAWG(t, f.native, first.Tag, mode, expected)
+		} else {
+			current, ok := f.native.Endpoint().Get(first.Tag)
+			client, exact := current.(*Endpoint)
+			if !ok || !exact {
+				t.Fatal("layered graph substituted its AWG packet endpoint")
+			}
+			verifyExtendedAWGDevice(t, client, mode, expected)
+		}
+		observed, err := peer.readback()
+		if err != nil || observed == "" || (expected != observed) != mismatch {
+			t.Fatal("original endpoint and independent Amnezia device parameter readback disagree", err)
+		}
+		return
+	}
+	t.Fatal("original physical AWG endpoint missing")
 }

@@ -79,7 +79,7 @@ def main():
         ('RouterVPNModel.swift','func disconnect()', 'disconnect'),
         ('RouterVPNModel.swift','func importBundle(', 'profile'),
         ('RouterVPNModel.swift','func saveRouter()', 'profile'),
-        ('RouterVPNModelExternal.swift','func connectSelectedExternal()', 'connection'),
+        ('RouterVPNModelExternal.swift','func connectSelectedExternal(nodeID:', 'connection'),
         ('RouterVPNModelExternal.swift','func selectNode(', 'profile'),
         ('RouterVPNModelExternal.swift','func linkNodeBundle(', 'profile'),
         ('IOSOwnedStrategy.swift','func runIOSOwnedStrategy(', 'connection'),
@@ -88,6 +88,10 @@ def main():
     ]:
         body=(APP/filename).read_text().split(signature,1)[1].split('{',1)[1]
         required='guard await iosSpeedLabOwnership.admitConnection()' if action=='connection' else 'guard iosSpeedLabOwnership.admit(.'+action+')'
+        if signature == 'func connectSelectedExternal(nodeID:':
+            first = 'if let nodeID, selectedNodeProfile?.id != nodeID { return }'
+            assert body.lstrip().startswith(first), (filename, signature)
+            body = body.lstrip()[len(first):]
         if signature == 'func runIOSCustom(':
             first = 'guard original?.admits(self) != false else { return }'
             assert body.lstrip().startswith(first), (filename, signature)

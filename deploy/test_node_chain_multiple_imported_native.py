@@ -25,6 +25,12 @@ EXTERNAL_FINAL_CASES = {
     'three-home': (3, 'home'), 'four-custom': (4, 'custom'),
     'nine-custom-fifty': (9, 'custom'), 'wrong-exit-key': (4, 'custom'),
     'wrong-public-exit': (3, 'home'), 'failed-selected-dns': (4, 'custom'),
+    'fast-home': (3, 'home'), 'strong-custom-fifty': (9, 'custom'),
+    'fast-wrong-entry': (3, 'home'), 'strong-wrong-entry': (3, 'custom'),
+    'wg-aes-home': (3,'home'), 'wg-xor-custom': (4,'custom'),
+    'fast-aes-custom': (4,'custom'), 'fast-xor-home': (3,'home'),
+    'strong-aes-home': (3,'home'), 'strong-xor-custom-fifty': (9,'custom'),
+    'wg-wrong-layer-key': (3,'home'), 'strong-wrong-whitening': (3,'custom'), 'fast-wrong-layer-target': (3,'home'),
 }
 
 PUBLIC_CANDIDATE_TEMPLATE = 'mobile/chain_component/external_final_candidates_test.go.tmpl'
@@ -34,6 +40,17 @@ PUBLIC_CANDIDATE_CASES = {
     'home-retained-suffix': (4, 1, 2), 'custom-retained-final': (3, 1, 2),
     'nine-late-import': (9, 7, 2), 'wrong-key': (4, 1, 0), 'wrong-exit': (4, 2, 0),
     'late-catalog': (4, 1, 0), 'cancel-close': (4, 2, 0),
+    'fast-closed': (4, 1, 2), 'strong-connected': (3, 1, 2),
+    'fast-xor-closed': (4,1,2), 'strong-aes-connected': (3,1,2),
+}
+
+EXTERNAL_ENTRY_LAYERS = {
+    'wg-aes-home': ('wg','aes-256-gcm','original'), 'wg-xor-custom': ('wg','aes-256-gcm+xor-whitening','original'),
+    'fast-aes-custom': ('awg2-fast','aes-256-gcm','original'), 'fast-xor-home': ('awg2-fast','aes-256-gcm+xor-whitening','original'),
+    'strong-aes-home': ('awg2-strong','aes-256-gcm','original'), 'strong-xor-custom-fifty': ('awg2-strong','aes-256-gcm+xor-whitening','original'),
+    'wg-wrong-layer-key': ('wg','aes-256-gcm','entry-layer-key'), 'strong-wrong-whitening': ('awg2-strong','aes-256-gcm+xor-whitening','entry-layer-whitening'),
+    'fast-wrong-layer-target': ('awg2-fast','aes-256-gcm','entry-layer-target'),
+    'fast-xor-closed': ('awg2-fast','aes-256-gcm+xor-whitening','original'), 'strong-aes-connected': ('awg2-strong','aes-256-gcm','original'),
 }
 
 MIXED_CANDIDATE_TEMPLATE = 'mobile/chain_component/mixed_local_candidates_test.go.tmpl'
@@ -330,6 +347,24 @@ def verdict(output, root, leaf=None, *, worker_digest=None):
         raise ValueError('Independent imported native inventory omitted, duplicated or failed a required case')
     if any(any(marker in row.get('Output', '') for marker in (*FATAL, *JOIN_FAILURES)) for row in rows):
         raise ValueError('Independent imported native receipt contains a fatal or unjoined result')
+    if root in (EXTERNAL_FINAL_ROOT, PUBLIC_CANDIDATE_ROOT) and leaf in EXTERNAL_ENTRY_LAYERS:
+        mode, layer, fault = EXTERNAL_ENTRY_LAYERS[leaf]
+        marker = f'EXTERNAL_PACKET_LAYER mode={mode} layer={layer} fault={fault} udp_on_original=true complete={str(fault == "original").lower()}'
+        witnesses = [row.get('Output', '').strip() for row in rows if row.get('Test') == root+'/'+leaf and 'EXTERNAL_PACKET_LAYER' in row.get('Output', '')]
+        if len(witnesses) != 1 or not witnesses[0].endswith(marker):
+            raise ValueError('Missing original packet entry layer physical UDP, exact credentials, or failure boundary')
+    if root in (EXTERNAL_FINAL_ROOT, PUBLIC_CANDIDATE_ROOT) and leaf.startswith(('fast-', 'strong-')):
+        mode = 'awg2-fast' if leaf.startswith('fast-') else 'awg2-strong'
+        mismatch = 'true' if leaf.endswith('wrong-entry') else 'false'
+        marker = f'AWG_EXTERNAL_ENTRY case={leaf} mode={mode} mismatch={mismatch} readback=true'
+        emitted = [row.get('Output', '').strip() for row in rows if row.get('Test') == root+'/'+leaf and 'AWG_EXTERNAL_ENTRY' in row.get('Output', '')]
+        client_marker = f'QUALIFIED_SELECTED_CLIENT_AWG entry={mode} parameters_current=true other_mode_refused=true'
+        clients = [row.get('Output', '').strip() for row in rows
+                   if row.get('Test') == root+'/'+leaf and 'QUALIFIED_SELECTED_CLIENT_AWG' in row.get('Output', '')]
+        if len(clients) != (2 if root == PUBLIC_CANDIDATE_ROOT else 1) or not all(line.endswith(client_marker) for line in clients):
+            raise ValueError('Missing original live client AmneziaWG parameter readback')
+        if len(emitted) != 1 or not emitted[0].endswith(marker):
+            raise ValueError('Missing original AmneziaWG device parameter readback')
     if root == PUBLIC_CANDIDATE_ROOT:
         count, position, rounds = PUBLIC_CANDIDATE_CASES[leaf]
         marker = f'PUBLIC_CANDIDATE case={leaf} nodes={count} position={position} rounds={rounds} samples={50*rounds} retained=true joined=true'
@@ -342,7 +377,7 @@ def verdict(output, root, leaf=None, *, worker_digest=None):
         lines = [row.get('Output', '').strip().split('QUALIFIED_', 1)[-1] for row in rows if row.get('Test') == root+'/'+leaf and 'QUALIFIED_' in row.get('Output', '')]
         if lines.count(marker.removeprefix('QUALIFIED_')) != 1 or sum(line.startswith('EXTERNAL_FINAL') for line in lines) != 1:
             raise ValueError('Missing original encrypted external-final receipt')
-        if leaf == 'nine-custom-fifty' and lines.count('LATENCY_HISTORY nodes=9 receipts=9 samples=450') != 1:
+        if leaf in ('nine-custom-fifty', 'strong-custom-fifty', 'strong-xor-custom-fifty') and lines.count('LATENCY_HISTORY nodes=9 receipts=9 samples=450') != 1:
             raise ValueError('Missing per-position external-final response history')
     if root == POSITIVE_ROOT and leaf in ('wg/extended-nine/off', 'wg/extended-sixteen/off'):
         count = 9 if leaf == 'wg/extended-nine/off' else 16

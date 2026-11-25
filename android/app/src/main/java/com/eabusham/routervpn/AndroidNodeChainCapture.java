@@ -425,12 +425,12 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         int count = members.size();
         if (count > 0 && members.get(count - 1).imported) {
             if (count < 3 || count > AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || members.get(0).imported
-                    || !"wg".equals(modes.get(0)) || !List.of("", "off").contains(members.get(0).profile().optString("start_layer", "off")))
-                throw new IllegalStateException("An imported final requires its original WireGuard entry and at least one imported intermediate.");
+                    || !List.of("wg", "awg2-fast", "awg2-strong").contains(modes.get(0)) || !members.get(0).supportsExternalExitEntryLayer())
+                throw new IllegalStateException("An imported final requires its original paired packet entry and at least one imported intermediate.");
             members.get(0).requirePairedIdentity();
             for (int i = 1; i < count; i++) {
                 if (!members.get(i).imported || !"shadowsocks".equals(modes.get(i)))
-                    throw new IllegalStateException("Choose literal imported Shadowsocks 2022 nodes after the WireGuard entry.");
+                    throw new IllegalStateException("Choose literal imported Shadowsocks 2022 nodes after the paired packet entry.");
                 requireLiteralImportedSS(members.get(i));
             }
             return 8;

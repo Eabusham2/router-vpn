@@ -77,7 +77,7 @@ struct RouterVPNNodeManagerSheet: View {
                         Button("Select lowest-latency node") {
                             guard measuredProfiles.count >= 2,
                                   let best = measuredProfiles.min(by: IOSNodeLatencyReceipt.lower) else { return }
-                            model.selectNode(best.id)
+                            guard model.selectNode(best.id) else { return }
                             nodeSort = .latency
                         }
                         .disabled(measuredProfiles.count < 2 || model.profileMutationBlocked)
@@ -194,8 +194,8 @@ struct RouterVPNNodeManagerSheet: View {
 
                 if profile.normalizedNodeKind == "external" {
                     Button("Connect external") {
-                        model.selectNode(profile.id)
-                        Task { await model.connectSelectedExternal() }
+                        guard model.selectNode(profile.id) else { return }
+                        Task { await model.connectSelectedExternal(nodeID: profile.id) }
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(model.profileMutationBlocked || !["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor", "tor-bridge"].contains(profile.external?.protocolName.lowercased() ?? ""))

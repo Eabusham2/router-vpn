@@ -329,7 +329,7 @@ private enum IOSConnectionProfileStore {
         try IOSMultihopNodeSelection.validate(nodes, execution: execution, entryID: nil, entryMode: nil,
             exitID: nil, exitMode: nil, controlID: final.id)
         var record = IOSConnectionProfileRecord(id: UUID().uuidString.lowercased(), name: try cleanName(name),
-            nodeID: final.id, nodeKind: "router-vpn", mode: publicExit ? "wg" : "shadowsocks", customLayers: [],
+            nodeID: final.id, nodeKind: "router-vpn", mode: publicExit ? nodes[0].mode : "shadowsocks", customLayers: [],
             preferences: try capturePreferences(final), updatedAt: Date())
         record.chainPolicies = try profiles.map { profile in
             IOSConnectionEntryCapture(nodeID: profile.id, nodeKind: profile.normalizedNodeKind,
@@ -923,12 +923,10 @@ struct IOSConnectionProfilesView: View {
                         Text("Select…").tag(String?.none)
                         ForEach(profiles) { profile in Text("\(profile.name) • \(profile.mode) • \(profile.nodeKind == "external" ? "Custom" : "Router") • \(profile.autoRequirementsSummary)").tag(Optional(profile.id)) }
                     }
-                    HStack {
-                        Button("Add") { add() }.disabled(model.profileMutationBlocked)
-                        Button("Load") { load() }.disabled(model.profileMutationBlocked || selectedID == nil)
-                        Button("Update") { update() }.disabled(model.profileMutationBlocked || selectedID == nil)
-                        Button("Delete", role: .destructive) { delete() }.disabled(model.profileMutationBlocked || selectedID == nil)
-                    }
+                    Button("Add") { add() }.disabled(model.profileMutationBlocked)
+                    Button("Load") { load() }.disabled(model.profileMutationBlocked || selectedID == nil)
+                    Button("Update") { update() }.disabled(model.profileMutationBlocked || selectedID == nil)
+                    Button("Delete", role: .destructive) { delete() }.disabled(model.profileMutationBlocked || selectedID == nil)
                     if model.profileMutationBlocked {
                         Text("Disconnect or let the active VPN transition finish before Add / Load / Update / Delete.")
                             .font(.caption).foregroundStyle(.secondary)

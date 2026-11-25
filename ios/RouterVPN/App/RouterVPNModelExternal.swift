@@ -35,13 +35,14 @@ extension RouterVPNModel {
     /// raw runtime profiles. This is what makes multiple Router VPN homes real
     /// on iOS instead of merely keeping several metadata rows beside one set of
     /// node-specific wg/sing-box files.
-    func selectNode(_ id: String) {
-        guard iosSpeedLabOwnership.admit(.profile) else { return }
-        guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before selecting another node."; return }
+    @discardableResult
+    func selectNode(_ id: String) -> Bool {
+        guard iosSpeedLabOwnership.admit(.profile) else { return false }
+        guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before selecting another node."; return false }
         guard let data = IOSNodeBundleStore.shared.bundleData(containing: id, current: bundle),
               var value = try? JSONDecoder().decode(ClientBundle.self, from: data),
               let selected = value.routerProfiles.first(where: { $0.id == id })
-        else { message = "Node not found in the linked iOS bundle store"; return }
+        else { message = "Node not found in the linked iOS bundle store"; return false }
         value.selectedRouterID = selected.id
         value.endpoint = selected.endpoint
         if selected.normalizedNodeKind == "router-vpn" {
@@ -63,7 +64,11 @@ extension RouterVPNModel {
             let selectedData = try JSONEncoder().encode(value)
             try importBundle(selectedData)
             message = "Selected \(selected.name) • \(nodeRuntimeSummary(selected))"
-        } catch { message = "Could not select node: \(error.localizedDescription)" }
+            return true
+        } catch {
+            message = "Could not select node: \(error.localizedDescription)"
+            return false
+        }
     }
 
     /// Add/link a complete node bundle while preserving the current bundle in
@@ -79,12 +84,13 @@ extension RouterVPNModel {
         message = "Linked node bundle • \(allNodeProfiles.count) node(s) available without reinstalling Router VPN"
     }
 
-    func connectSelectedExternal() async {
+    func connectSelectedExternal(nodeID: String? = nil) async {
+        if let nodeID, selectedNodeProfile?.id != nodeID { return }
         guard await iosSpeedLabOwnership.admitConnection() else { return }
-        await connectSelectedExternal(startupAdmission: nil)
+        await connectSelectedExternal(startupAdmission: nil, expectedNodeID: nodeID)
     }
 
-    func connectSelectedExternal(startupAdmission: (() -> Bool)?, restoreLast: Bool = false) async {
+    func connectSelectedExternal(startupAdmission: (() -> Bool)?, restoreLast: Bool = false, expectedNodeID: String? = nil) async {
         // Startup has no right to supersede a temporary test. Its captured
         // admission proves idle ownership synchronously before preparation.
         // Explicit Connect has already joined the normal owner above.
@@ -93,6 +99,7 @@ extension RouterVPNModel {
         guard let bundle, let profile = selectedNodeProfile, profile.normalizedNodeKind == "external" else {
             message = "Choose an external custom node first"; return
         }
+        if let expectedNodeID, profile.id != expectedNodeID { return }
         guard selectedExternalSupportedOnIOS else {
             connected = false
             if selectedExternalProtocol == "openvpn" {

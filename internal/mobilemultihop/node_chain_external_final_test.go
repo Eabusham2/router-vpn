@@ -1,18 +1,50 @@
 package mobilemultihop
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"testing"
 )
 
 func externalFinalSourceFixture(t *testing.T, count int, dns string) NodeChainSource {
 	t.Helper()
+	return externalFinalModeFixture(t, count, dns, "wg")
+}
+
+func externalFinalModeFixture(t *testing.T, count int, dns, mode string) NodeChainSource {
+	t.Helper()
+	return externalFinalEntryLayerFixture(t, count, dns, mode, "")
+}
+
+func externalFinalEntryLayerFixture(t *testing.T, count int, dns, mode, layer string) NodeChainSource {
+	t.Helper()
 	positions := make([]int, count-2)
 	for i := range positions {
 		positions[i] = i + 1
 	}
-	source := nodeChainMultipleImportedFixture(t, nodeChainImportedLayout{"external-final", count, positions}, "wg", "")
+	source := nodeChainMultipleImportedFixture(t, nodeChainImportedLayout{"external-final", count, positions}, mode, "")
+	if layer != "" {
+		first := nodeChainModeFixtureNodes(t, []string{mode}, []string{layer})[0]
+		var assets map[string]string
+		if err := json.Unmarshal([]byte(first.inputs.Start), &assets); err != nil {
+			t.Fatal(err)
+		}
+		graph := externalTestRead(t, string(mustDecodeChainAsset(t, assets["sing-box.json"])))
+		outer := graph["outbounds"].([]any)[0].(map[string]any)
+		outer["password"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{239}, 32))
+		assets["sing-box.json"] = base64.StdEncoding.EncodeToString([]byte(startJSON(t, graph)))
+		first, err := NewNodeProfile(mode, first.inputs.Files, first.inputs.ProfileJSON, startJSON(t, assets), first.inputs.DNSBootstrap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		source.Nodes[0], err = first.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	entry, err := ParseNodeLaunchInput(source.Nodes[0])
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +55,7 @@ func externalFinalSourceFixture(t *testing.T, count int, dns string) NodeChainSo
 	}
 	s := externalTestRead(t, record.Capture)
 	p := s["profile"].(map[string]any)
-	p["dns_mode"], p["multihop_entry_mode"], p["multihop_entry_id"], p["multihop_exit_id"], p["multihop_enabled"], p["multihop_execution"] = dns, "wg", entry.profile["id"], s["exit_id"], true, "local"
+	p["dns_mode"], p["multihop_entry_mode"], p["multihop_entry_id"], p["multihop_exit_id"], p["multihop_enabled"], p["multihop_execution"] = dns, mode, entry.profile["id"], s["exit_id"], true, "local"
 	if dns == "custom" {
 		p["dns_protocol"], p["dns_host"], p["dns_port"] = "tcp", "198.51.100.198", float64(5353)
 	}
@@ -103,6 +135,179 @@ func TestNodeChainExternalFinalLocal(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestNodeChainExternalFinalEntryLayers(t *testing.T) {
+	for _, spec := range []struct {
+		mode, layer, dns string
+		count            int
+	}{
+		{"wg", "aes-256-gcm", "home", 3}, {"wg", "aes-256-gcm+xor-whitening", "custom", 9},
+		{"awg2-fast", "aes-256-gcm", "custom", 9}, {"awg2-fast", "aes-256-gcm+xor-whitening", "home", 3},
+		{"awg2-strong", "aes-256-gcm", "home", 9}, {"awg2-strong", "aes-256-gcm+xor-whitening", "custom", 96},
+	} {
+		t.Run(spec.mode+"/"+spec.layer, func(t *testing.T) {
+			source := externalFinalEntryLayerFixture(t, spec.count, spec.dns, spec.mode, spec.layer)
+			chain, err := NewNodeChain(startJSON(t, source))
+			if err != nil {
+				t.Fatal("complete source", err)
+			}
+			first := chain.proofs[0]
+			if !chain.HasExternalFinal() || first.StartLayer != spec.layer || first.Mode != spec.mode {
+				t.Fatal("original paired first layer missing")
+			}
+			outer := nodeChainNamespace(0, first.SourceSHA256, "node", NativeStartLayerTag)
+			graph := externalTestRead(t, chain.Config())
+			if externalTestFind(t, graph, first.Tag)["detour"] != outer {
+				t.Fatal("packet escaped its original outer transport")
+			}
+			owner := externalTestFind(t, graph, outer)
+			transport, err := nodeMultihopPredecessor(chain.nodes[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			for k, v := range transport.nodes[NativeStartLayerTag] {
+				if k != "tag" && !reflect.DeepEqual(owner[k], v) {
+					t.Fatal("changed outer credential, protocol or endpoint", k)
+				}
+			}
+			plan, err := chain.MTUPlan()
+			if err != nil || len(plan.Prefixes) != len(chain.proofs) {
+				t.Fatal("layered prefix MTU", err)
+			}
+			if _, err = chain.PlanForMTU(chain.Config(), plan.Original); err != nil {
+				t.Fatal("live layer MTU readback", err)
+			}
+			desktop, err := NewDesktopNodeChainPolicy(chain, "0123456789abcdef0123456789abcdef", "linux", 0)
+			if err != nil {
+				t.Fatal("desktop layer", err)
+			}
+			_, _, capture, err := desktop.ReadValidated()
+			projected := desktop.NodeChain()
+			if projected == nil {
+				t.Fatal("sealed physical layer projection missing")
+			}
+			if _, e := projected.PlanForMTU(desktop.Config(), plan.Original); e != nil {
+				t.Fatal("physical owner readback", e)
+			}
+			detour := chain.FinalTag()
+			if spec.dns == "home" {
+				detour = first.Tag
+			}
+			if err != nil || capture.SelectedDNS.Detour != detour || len(capture.PhysicalRoots) != 1 {
+				t.Fatal("selected DNS or physical root", err)
+			}
+			if spec.count < 96 {
+				inv := candidateInventoryFixture(t, "original", nodeChainIndependentImportedFixture(t, 49))
+				if _, err = chain.NewPublicCandidatePreparation(spec.count-2, inv); err != nil {
+					t.Fatal("closed layered prefix", err)
+				}
+			}
+		})
+	}
+}
+
+func TestNodeChainExternalFinalLayerRejectsSharedCredential(t *testing.T) {
+	source := externalFinalEntryLayerFixture(t, 3, "home", "awg2-fast", "aes-256-gcm+xor-whitening")
+	chain, err := NewNodeChain(startJSON(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := nodeMultihopPredecessor(chain.nodes[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := nodeChainIndependentImportedFixture(t, 49)
+	var record nodeChainImportedInput
+	if json.Unmarshal([]byte(candidate), &record) != nil {
+		t.Fatal("original candidate")
+	}
+	graph, policy := externalTestRead(t, record.Config), externalTestRead(t, record.Capture)
+	key := entry.nodes[NativeStartLayerTag]["password"]
+	externalTestFind(t, graph, ExternalFinalTag)["password"] = key
+	policy["profile"].(map[string]any)["external"].(map[string]any)["shadowsocks"].(map[string]any)["password"] = key
+	input, err := NodeChainImportedMemberInput(startJSON(t, graph), startJSON(t, policy))
+	if err != nil {
+		t.Fatal("independent standalone candidate", err)
+	}
+	if _, err = chain.NewPublicCandidatePreparation(1, candidateInventoryFixture(t, "same-layer", input)); err == nil {
+		t.Fatal("public candidate reused the physical layer credential")
+	}
+	source.Nodes[1] = input
+	if _, err = NewNodeChain(startJSON(t, source)); err == nil {
+		t.Fatal("imported suffix reused the physical layer credential")
+	}
+}
+
+func TestNodeChainExternalFinalAWGEntry(t *testing.T) {
+	for _, mode := range []string{"awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			source := externalFinalModeFixture(t, 9, "home", mode)
+			chain, err := NewNodeChain(startJSON(t, source))
+			if err != nil {
+				t.Fatal("original AWG external-final route", err)
+			}
+			first, last := chain.proofs[0], chain.proofs[len(chain.proofs)-1]
+			if !chain.HasExternalFinal() || first.Mode != mode || !proofID.MatchString(first.NodeID) || last.Kind != "public-path" {
+				t.Fatal("lost original packet entry, Home DNS or public exit", first, last)
+			}
+			projected, err := NewDesktopNodeChainPolicy(chain, "0123456789abcdef0123456789abcdef", "linux", 0)
+			if err != nil {
+				t.Fatal("desktop policy", err)
+			}
+			_, _, capturePolicy, err := projected.ReadValidated()
+			if err != nil || capturePolicy.SelectedDNS.Detour != first.Tag || len(capturePolicy.PhysicalRoots) != 1 {
+				t.Fatal("lost original Home resolver or physical owner", err)
+			}
+			original, err := nodeMultihopPredecessor(chain.nodes[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			physical := externalTestFind(t, externalTestRead(t, chain.Config()), first.Tag)
+			for key, value := range original.final {
+				if key != "tag" && !reflect.DeepEqual(physical[key], value) {
+					t.Fatal("selected AWG entry changed a captured endpoint field", key)
+				}
+			}
+			plan, err := chain.MTUPlan()
+			if err != nil {
+				t.Fatal("original prefix bounds", err)
+			}
+			bound, err := chain.PlanForMTU(chain.Config(), plan.Original)
+			if err != nil || len(plan.Prefixes) != len(chain.proofs) || bound.Ceiling != plan.Ceiling {
+				t.Fatal("actual per-prefix MTU", err)
+			}
+			candidate := candidateInventoryFixture(t, "original", nodeChainIndependentImportedFixture(t, 49))
+			if _, err := chain.NewPublicCandidatePreparation(7, candidate); err != nil {
+				t.Fatal("public candidate through the captured AWG entry", err)
+			}
+			mobileFinal, err := NodeChainExternalFinalFromEntry(source.Nodes[0], nodeChainIndependentImportedFixture(t, 8))
+			if err != nil {
+				t.Fatal("mobile original entry to external final", err)
+			}
+			mobile := source
+			mobile.Nodes = append([]string(nil), source.Nodes...)
+			mobile.Nodes[len(mobile.Nodes)-1] = mobileFinal
+			if replay, err := NewNodeChain(startJSON(t, mobile)); err != nil || replay.proofs[0] != first {
+				t.Fatal("mobile replay changed packet entry", err)
+			}
+			var final nodeChainImportedInput
+			if err := json.Unmarshal([]byte(source.Nodes[8]), &final); err != nil {
+				t.Fatal(err)
+			}
+			capture := externalTestRead(t, final.Capture)
+			other := "awg2-fast"
+			if mode == other {
+				other = "awg2-strong"
+			}
+			capture["profile"].(map[string]any)["multihop_entry_mode"] = other
+			final.Capture = startJSON(t, capture)
+			source.Nodes[8] = startJSON(t, final)
+			if _, err := NewNodeChain(startJSON(t, source)); err == nil {
+				t.Fatal("substituted AWG variant admitted")
+			}
+		})
 	}
 }
 

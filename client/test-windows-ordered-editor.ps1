@@ -385,14 +385,21 @@ try{
             }
             $id=$keepID;$store.selected_id=$id;$RouterCombo.SelectedValue=$id
         }
-        foreach($externalCount in @(3,4,9,95,96)){
+        $paths8=@(@(3,'wg','off'),@(4,'wg','off'),@(9,'wg','off'),@(95,'wg','off'),@(96,'wg','off'),@(9,'awg2-fast','off'),@(96,'awg2-strong','off'))
+        foreach($packet in @('wg','awg2-fast','awg2-strong')){
+            $paths8+=,@(3,$packet,'aes-256-gcm')
+            $paths8+=,@(9,$packet,'aes-256-gcm+xor-whitening')
+        }
+        foreach($path8 in $paths8){
+            $externalCount,$entryMode,$entryLayer=$path8
             $externalRows=@();$externalProfiles=@();$externalTokens=@{}
             for($i=0;$i -lt $externalCount;$i++){
                 $source=@{id="typed-exit-$i";name="member $i";node_kind='router-vpn';start_layer='off';profile_token=('{0:x64}' -f ($i+90))}
                 if($i){$source.node_kind='external';$source.external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_local_imported_nodes_supported=$true;ordered_external_final=$true}}
                 $externalProfiles+=$source;$externalTokens[$source.id]=$source.profile_token
-                $externalRows+=[pscustomobject]@{id=$source.id;mode=$(if($i){'shadowsocks'}else{'wg'})}
+                $externalRows+=[pscustomobject]@{id=$source.id;mode=$(if($i){'shadowsocks'}else{$entryMode})}
             }
+            $externalProfiles[0].start_layer=$entryLayer
             $catalog8=@{profiles=$externalProfiles;selected_id=$externalRows[0].id}
             $draft8=@{nodes=$externalRows;execution='local';control_id=$externalRows[0].id;profile_tokens=$externalTokens}
             if($externalCount -eq 3){
@@ -410,9 +417,15 @@ try{
                 &$add
                 $list.SelectedIndex=0
                 &$remove
+                foreach($packetIndex in @(1,2)){
+                    $list.SelectedIndex=0;$prefixMode.SelectedIndex=$packetIndex;&$changeMode
+                    Check ($rows[0].mode -ceq @('wg','awg2-fast','awg2-strong')[$packetIndex]) 'external editor lost the selected paired transport'
+                    $list.SelectedIndex=1;&$changeMode
+                    Check ($rows[1].mode -ceq 'shadowsocks') 'external editor replaced an imported transport'
+                }
                 $saved8=&$captureEditor
                 $editorBody8=New-RouterVPNOrderedConnectPayload $saved8 $store
-                Check ($editorBody8.external_final -and $editorBody8.nodes.Count -eq 3 -and $editorBody8.nodes[-1].id -ceq $externalRows[-1].id) 'external exit editor substituted the final row or removed the first control'
+                Check ($editorBody8.external_final -and $editorBody8.nodes.Count -eq 3 -and $editorBody8.nodes[0].mode -ceq 'awg2-strong' -and $editorBody8.nodes[-1].id -ceq $externalRows[-1].id) 'external exit editor substituted the final row or removed the first control'
                 $dialog.FindName('Final').Tag=$null
                 $store=$previousStore;$id=$previousID;$rows=$previousRows
             }
@@ -437,7 +450,36 @@ try{
             $script:DraftFault='recapture';$script:CurrentStore=$previousAPI;$dialog.FindName('Final').Tag=$null
             $store=$previousStore;$id=$previousID;$RouterCombo.SelectedValue=$id;$rows=$previousRows;$selected=$previousSelected
             $body8=New-RouterVPNOrderedConnectPayload $draft8 $catalog8
-            Check ($body8.external_final -is [bool] -and $body8.external_final -and $body8.expected_selected_node_id -ceq $externalRows[0].id -and $body8.nodes[-1].id -ceq $externalRows[-1].id -and $body8.expected_profile_tokens.Count -eq $externalCount) 'external final lost its independent control or tokens'
+            Check ($body8.external_final -is [bool] -and $body8.external_final -and $body8.expected_selected_node_id -ceq $externalRows[0].id -and $body8.nodes[0].mode -ceq $entryMode -and $body8.nodes[-1].id -ceq $externalRows[-1].id -and $body8.expected_profile_tokens.Count -eq $externalCount) 'external final lost its independent control or tokens'
+            Check ($null -eq (Get-RouterVPNOrderedValue $body8 'start_layer') -and $body8.expected_profile_tokens[$externalRows[0].id] -ceq $externalTokens[$externalRows[0].id]) 'external route did not keep the Start Layer on its original entry revision'
+            if($entryLayer -cne 'off'){
+                $owner8=[pscustomobject]@{Controls=@{
+                    UnifiedOrdered=[pscustomobject]@{IsChecked=$true};UnifiedMultihop=[pscustomobject]@{IsChecked=$true}
+                    UnifiedNodeChainButton=[pscustomobject]@{Tag=$draft8};UnifiedNodeCombo=[pscustomobject]@{SelectedValue=$draft8.control_id}
+                    UnifiedExecution=$rootControls['UnifiedExecution']
+                }}
+                $owner8|Add-Member ScriptMethod FindName {param($name) return $this.Controls[$name]}
+                $snapshot8=Get-RouterVPNOrderedConnectionSnapshot $owner8
+                $snapshot8.selected_node_id=$draft8.control_id
+                $snapshot8.profile_tokens=$externalTokens
+                $owner8.Controls.UnifiedNodeChainButton.Tag=$null
+                Set-RouterVPNLoadedOrderedSnapshot $owner8 ($snapshot8|ConvertTo-Json -Depth 8|ConvertFrom-Json)
+                $reopened8=$owner8.Controls.UnifiedNodeChainButton.Tag
+                $replayed8=New-RouterVPNOrderedConnectPayload $reopened8 $catalog8
+                Check ($replayed8.external_final -and $replayed8.nodes[0].mode -ceq $entryMode -and $replayed8.expected_profile_tokens[$draft8.control_id] -ceq $externalTokens[$draft8.control_id]) 'reopened route lost the original layered entry or external exit'
+                foreach($member in @(0,1,($externalCount-1))){
+                    $externalProfiles[$member].start_layer=if($member){$entryLayer}else{'aes+xor'}
+                    $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $draft8 $catalog8)}catch{$refused=$true}
+                    Check ($refused -and -not(Test-RouterVPNOrderedCandidatePosition $externalRows 1 'local' $externalProfiles)) 'external route accepted a foreign or unsupported Start Layer'
+                    $externalProfiles[$member].start_layer=if($member){'off'}else{$entryLayer}
+                }
+                $externalProfiles[0].start_layer='off'
+                $externalProfiles[0].profile_token='f'*64
+                $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $reopened8 $catalog8)}catch{$refused=$true}
+                Check $refused 'saved external route followed a replacement entry revision'
+                $externalProfiles[0].start_layer=$entryLayer
+                $externalProfiles[0].profile_token=$externalTokens[$externalRows[0].id]
+            }
             foreach($fault8 in @('server','hint','token')){
                 if($fault8 -ceq 'server'){$draft8.execution='server'}
                 if($fault8 -ceq 'hint'){$externalProfiles[-1].external.ordered_external_final=$false}

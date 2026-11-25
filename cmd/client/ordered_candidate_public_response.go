@@ -96,12 +96,11 @@ func desktopCandidateResponseMetric(metric string) bool {
 func desktopPublicCandidateMembers(members []desktopNodeChainMember, execution string, position int) bool {
 	if execution != "local" || len(members) < 3 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes ||
 		position < 1 || position >= len(members)-1 || !desktopNodeChainHasExternalFinal(members) ||
-		members[0].Mode != "wg" || members[0].Profile.External != nil {
+		!mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[0].Profile.External != nil {
 		return false
 	}
 	for i, member := range members {
-		if member.Profile.StartLayer != "" && member.Profile.StartLayer != "off" ||
-			i > 0 && (member.Mode != "shadowsocks" || !desktopNodeChainImportedExecutionMiddle(member.Profile)) {
+		if i > 0 && (member.Profile.StartLayer != "" && member.Profile.StartLayer != "off" || member.Mode != "shadowsocks" || !desktopNodeChainImportedExecutionMiddle(member.Profile)) {
 			return false
 		}
 	}

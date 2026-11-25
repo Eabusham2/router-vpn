@@ -324,11 +324,11 @@ func edit(_ original:Data,_ action:(inout [String:Any])->Void)throws->Data{var v
 func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Data{
  try edit(original){root in var profiles=root["routerProfiles"] as! [[String:Any]];action(&profiles[0]);root["routerProfiles"]=profiles}
 }
-func externalFinalBundles(_ count:Int,_ dns:String)throws -> [Data] {
+func externalFinalBundles(_ count:Int,_ dns:String,_ mode:String = "wg",_ entryLayer:String = "off")throws -> [Data] {
   var inputs=try sources(count)
   var refs=[[String:Any]]()
   let entryID=try profile(inputs[0])["id"] as! String
-  refs.append(["id":entryID,"mode":"wg"])
+  refs.append(["id":entryID,"mode":mode])
   for position in 1..<count {
    var root=try object(inputs[position]),saved=try profile(inputs[position])
    let id="external-final-test-\(position)",ip="198.51.100.\(120+position)"
@@ -343,7 +343,7 @@ func externalFinalBundles(_ count:Int,_ dns:String)throws -> [Data] {
   }
   inputs[0]=try editProfile(inputs[0]) { p in
    p["name"]=p["id"];p["adguard_ipv6"]="";p["socks_host"]="";p["socks_port"]=0;p["socks_username"]="";p["socks_password"]=""
-   p["multihop_enabled"]=true;p["multihop_nodes"]=refs;p["multihop_execution"]="local"
+   p["start_layer"]=entryLayer;p["multihop_enabled"]=true;p["multihop_nodes"]=refs;p["multihop_execution"]="local"
   }
   return inputs
 }
@@ -353,13 +353,43 @@ func externalFinalBundles(_ count:Int,_ dns:String)throws -> [Data] {
  static func reject(_ name:String,_ action:()throws->Void)throws{do{try action()}catch{checks+=1;return};throw NSError(domain:"ChainRejected",code:1,userInfo:[NSLocalizedDescriptionKey:"ACCEPTED "+name])}
  static func main(){defer{LibboxTestClose()};do{try run();print("Apple ordered native capture: PASS (\(checks) shipping Swift / shared Go checks; no native connection)")}
  catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
- static func externalFinal(_ count:Int,_ dns:String)throws {
-  let inputs=try externalFinalBundles(count,dns), entryID=try profile(inputs[0])["id"] as! String
+ static func externalFinal(_ count:Int,_ dns:String,_ mode:String = "wg",_ entryLayer:String = "off")throws {
+  let inputs=try externalFinalBundles(count,dns,mode,entryLayer), entryID=try profile(inputs[0])["id"] as! String
   let refs=try profile(inputs[0])["multihop_nodes"] as! [[String:Any]]
   let chain=try IOSNodeChainCapture.compile(bundles:inputs);defer{try? chain.plan.close()}
   let saved=try profile(inputs[0]),restored=try IOSNodeChainCapture.reopen(chain.launchInput,selectedProfile:saved);defer{try? restored.plan.close()}
   let final=chain.members[count-1],launch=try object(Data(chain.launchInput.utf8)),members=launch["nodes"] as! [String]
   let typed=try object(Data(members[count-1].utf8)),src=try object(Data((typed["capture"] as! String).utf8))
+  try check("entry identity survives source reopen", chain.controlMember.mode == mode && restored.controlMember.mode == mode && restored.sourceSHA256 == chain.sourceSHA256)
+  if entryLayer != "off" {
+   let root = try JSONDecoder().decode(ClientBundle.self,from:inputs[0])
+   let entry = try object(Data(members[0].utf8)), start = try object(Data((entry["start"] as! String).utf8))
+   try check("selected entry alone retains its exact authenticated layer", start as? [String:String] == root.profiles["shadowsocks"] && chain.controlMember.profile["start_layer"] as? String == entryLayer && chain.members.dropFirst().allSatisfy { $0.startFilesJSON == nil && ($0.profile["start_layer"] as? String ?? "off") == "off" })
+   try check("launch checks original start assets on replay", try restored.controlMember.matchesStartLayer(in:root.profiles))
+   var damaged = inputs
+   damaged[0] = try edit(inputs[0]) { raw in
+    var assets = raw["profiles"] as! [String:[String:String]]
+    assets.removeValue(forKey:"shadowsocks"); raw["profiles"]=assets
+   }
+   try reject("missing independent entry layer cannot fall back to naked packet transport") { _ = try IOSNodeChainCapture.compile(bundles:damaged) }
+   var changed = root.profiles; changed["shadowsocks"]=["sing-box.json":"foreign source"]
+   try check("changed layer cannot inherit owner",try !restored.controlMember.matchesStartLayer(in:changed))
+  }
+  if mode != "wg" {
+   let graph = try object(Data(chain.config.utf8))
+   let endpoints = graph["endpoints"] as! [[String:Any]]
+   try check("exact imported-exit AWG2 parameters", endpoints.contains { endpoint in
+    endpoint["type"] as? String == "routervpn-amneziawg" &&
+     (endpoint["amnezia"] as? [String:String])?["jc"] == (mode == "awg2-fast" ? "3":"8")
+   })
+   var damaged = inputs
+   damaged[0] = try edit(inputs[0]) { root in
+    var assets = root["profiles"] as! [String:[String:String]]
+    assets.removeValue(forKey:mode)
+    root["profiles"] = assets
+   }
+   try reject("missing AWG assets cannot fall back to WG identity") { _ = try IOSNodeChainCapture.compile(bundles:damaged) }
+  }
   try check("external-final original resolver",chain.sourceSchema==8 && restored.launchInput==chain.launchInput && chain.controlMember.id==entryID && final.id==refs[count-1]["id"] as? String && (src["profile"] as? [String:Any])?["dns_mode"] as? String==dns)
   try check("external-final literal public source",typed["kind"] as? String=="routervpn-node-chain-external-final" && (launch["identity_sources"] as? [String])?.last=="")
   try reject("external final acting as the paired control"){ _=try IOSNodeChainCapture.reopen(chain.launchInput,selectedProfile:final.profile) }
@@ -367,6 +397,10 @@ func externalFinalBundles(_ count:Int,_ dns:String)throws -> [Data] {
  }
  static func run()throws {
   try externalFinal(3,"home");try externalFinal(9,"custom")
+  try externalFinal(3,"home","awg2-fast");try externalFinal(9,"custom","awg2-strong")
+  try externalFinal(3,"home","wg","aes-256-gcm")
+  try externalFinal(4,"home","awg2-fast","aes-256-gcm+xor-whitening")
+  try externalFinal(9,"custom","awg2-strong","aes-256-gcm")
   try socksMiddle()
 
   try hostnameMiddle()

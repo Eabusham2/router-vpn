@@ -22,7 +22,20 @@ import (
 // member. These parent/controller tests do not claim encrypted native traffic.
 func desktopExternalFinalFixture(t *testing.T, count int, dns string) (*app, []common.MultihopNodeSelection) {
 	t.Helper()
+	return desktopExternalFinalModeFixture(t, count, dns, "wg")
+}
+
+func desktopExternalFinalModeFixture(t *testing.T, count int, dns, mode string) (*app, []common.MultihopNodeSelection) {
+	t.Helper()
 	a, nodes := desktopNodeChainCaptureFixture(t, count)
+	if mode != "wg" {
+		modes := make([]string, count)
+		for i := range modes {
+			modes[i] = "shadowsocks"
+		}
+		modes[0] = mode
+		installOrderedAWGAssets(t, a, nodes, modes, "off")
+	}
 	a.cfg.StateFile = filepath.Join(clientRoot(a), "external-final-state.json")
 	positions := make([]int, count-1)
 	for i := range positions {
@@ -120,6 +133,150 @@ func TestDesktopExternalFinalCompleteSourceAndProjection(t *testing.T) {
 	}
 }
 
+func installDesktopExternalFinalHost(t *testing.T, a *app) {
+	t.Helper()
+	t.Setenv("HOMEVPN_PORTABLE", "0")
+	manifest := filepath.Join(clientRoot(a), "runtime", "native", "NATIVE-RUNTIME.json")
+	if err := os.MkdirAll(filepath.Dir(manifest), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, []byte("{}\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDesktopExternalFinalAWGCaptureAndRestore(t *testing.T) {
+	for _, mode := range []string{"awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			a, nodes := desktopExternalFinalModeFixture(t, 9, "custom", mode)
+			s := desktopExternalFinalSelection(t, a, nodes)
+			if s.EntryMode != mode || s.Base != "awg" || s.Control.ID != nodes[0].ID || s.Exit.ID != nodes[8].ID {
+				t.Fatal("source changed original AWG variant or control")
+			}
+			for _, target := range []string{"linux", "darwin", "windows"} {
+				launch, err := newDesktopNodeChainLaunch(s, strings.Repeat("a", 32), target)
+				if err != nil {
+					t.Fatal(target, err)
+				}
+				if err := validateDesktopNodeChainLaunch(t.Context(), launch); err != nil {
+					t.Fatal(target, err)
+				}
+				_, meta, capture, err := launch.chain.readPolicy()
+				if err != nil || meta.Prefixes[0].Mode != mode || capture.SelectedDNS.Detour != meta.FinalTag || len(capture.PhysicalRoots) != 1 || meta.ExternalFinal == nil {
+					t.Fatal("actual entry, selected DNS or public final changed", target, err)
+				}
+			}
+			id := saveOrderedConnectionFixture(t, a, nodes)
+			store, err := loadConnectionProfileStore(a)
+			if err != nil || len(store.Profiles) != 1 {
+				t.Fatal("saved AWG external-final route", err)
+			}
+			record := store.Profiles[0]
+			if validateSavedExternalFinalNodeChain(record) != nil || !externalFinalEntrySources(mode, "off", record.NodeChain[0].Sources) {
+				t.Fatal("saved route lost both original sources")
+			}
+			if r := postSetup(t, a, "/api/connection-profile/setup/load", map[string]any{"id": id}); r.Code != http.StatusOK {
+				t.Fatal("reload", r.Code, r.Body.String())
+			}
+			installDesktopExternalFinalHost(t, a)
+			control, _ := a.profileByIDLocked(nodes[0].ID)
+			capture, err := captureStartupNodeChain(a, control, a.profiles.Profiles, nil)
+			if err != nil {
+				t.Fatal("Last", err)
+			}
+			last := startupSelection{RouterID: control.ID, RuntimeMode: "shadowsocks", LogicalMode: "multihop", Base: s.Base, ProfileToken: startupExternalProfileToken(control), UpdatedAt: time.Now().UTC(), PathKind: startupNodeChainPathKind, NodeChain: capture.receipt()}
+			if _, err := captureStartupNodeChain(a, control, a.profiles.Profiles, &last); err != nil {
+				t.Fatal("lost AWG Last sources", err)
+			}
+			last.NodeChain.Nodes[0].Sources = last.NodeChain.Nodes[0].Sources[:1]
+			if validateStartupExternalFinalNodeChain(last) == nil {
+				t.Fatal("AWG Last accepted only the pairing identity")
+			}
+		})
+	}
+}
+
+func TestDesktopExternalFinalEntryLayerRestore(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(mode+"/"+layer, func(t *testing.T) {
+				a, nodes := desktopExternalFinalModeFixture(t, 9, "custom", mode)
+				a.profiles.Profiles[0].StartLayer = layer
+				s := desktopExternalFinalSelection(t, a, nodes)
+				if s.EntryMode != mode || s.Control.StartLayer != layer {
+					t.Fatal("selection changed first packet or layer")
+				}
+				first := s.Native.chain.chain.ProofInventory()[0]
+				if first.StartLayer != layer || first.Mode != mode || !desktopPublicCandidateMembers(s.Nodes, "local", len(nodes)-2) {
+					t.Fatal("public candidate lost original entry layer")
+				}
+				for _, target := range []string{"linux", "darwin", "windows"} {
+					launch, err := newDesktopNodeChainLaunch(s, strings.Repeat("e", 32), target)
+					if err != nil {
+						t.Fatal(target, err)
+					}
+					if err = validateDesktopNodeChainLaunch(t.Context(), launch); err != nil {
+						t.Fatal(target, err)
+					}
+					_, meta, policy, err := launch.chain.readPolicy()
+					if err != nil || meta.Prefixes[0].StartLayer != layer || len(policy.PhysicalRoots) != 1 || policy.SelectedDNS.Detour != meta.FinalTag {
+						t.Fatal(target, err)
+					}
+				}
+				id := saveOrderedConnectionFixture(t, a, nodes)
+				store, err := loadConnectionProfileStore(a)
+				if err != nil || len(store.Profiles) != 1 {
+					t.Fatal("named save", err)
+				}
+				record := store.Profiles[0]
+				if !externalFinalEntrySources(mode, layer, record.NodeChain[0].Sources) {
+					t.Fatal("missing independent layer asset")
+				}
+				a.profiles.Profiles[0].StartLayer = "off"
+				reply := postSetup(t, a, "/api/connection-profile/setup/load", map[string]any{"id": id})
+				if reply.Code != http.StatusOK || a.profiles.Profiles[0].StartLayer != layer {
+					t.Fatal("named restore", reply.Code)
+				}
+				installDesktopExternalFinalHost(t, a)
+				control, _ := a.profileByIDLocked(nodes[0].ID)
+				capture, err := captureStartupNodeChain(a, control, a.profiles.Profiles, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				last := startupSelection{RouterID: control.ID, RuntimeMode: "shadowsocks", LogicalMode: "multihop", Base: s.Base, ProfileToken: startupExternalProfileToken(control), UpdatedAt: time.Now().UTC(), PathKind: startupNodeChainPathKind, NodeChain: capture.receipt()}
+				if last.NodeChain.Nodes[0].StartLayer != layer {
+					t.Fatal("Last discarded first layer")
+				}
+				if _, err = captureStartupNodeChain(a, control, a.profiles.Profiles, &last); err != nil {
+					t.Fatal("exact layered Last", err)
+				}
+				other := "aes-256-gcm"
+				if layer == other {
+					other = "aes-256-gcm+xor-whitening"
+				}
+				last.NodeChain.Nodes[0].StartLayer = other
+				if _, err = captureStartupNodeChain(a, control, a.profiles.Profiles, &last); err == nil {
+					t.Fatal("Last substituted the other layer with the same asset")
+				}
+				last.NodeChain.Nodes[0].StartLayer = ""
+				if validateStartupExternalFinalNodeChain(last) == nil {
+					t.Fatal("Last used a layer asset without its original selection")
+				}
+				layerFile := filepath.Join(clientRoot(a), "generated", control.ID, "shadowsocks", "sing-box.json")
+				if err = os.WriteFile(layerFile, []byte("{}"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if s.Native.chain.currentContext(t.Context(), a) == nil {
+					t.Fatal("live capture accepted a changed layer")
+				}
+				if r := postSetup(t, a, "/api/connection-profile/setup/load", map[string]any{"id": id}); r.Code == http.StatusOK {
+					t.Fatal("named restore accepted a changed layer")
+				}
+			})
+		}
+	}
+}
+
 func TestDesktopExternalFinalExplicitRequestAndRevisions(t *testing.T) {
 	a, nodes := desktopExternalFinalFixture(t, 4, "home")
 	tokens := map[string]string{}
@@ -202,14 +359,7 @@ func TestDesktopExternalFinalSaveLoadAndLast(t *testing.T) {
 				t.Fatal("changed external secret partially restored")
 			}
 			a.profiles = before
-			t.Setenv("HOMEVPN_PORTABLE", "0")
-			manifest := filepath.Join(clientRoot(a), "runtime", "native", "NATIVE-RUNTIME.json")
-			if err := os.MkdirAll(filepath.Dir(manifest), 0700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(manifest, []byte("{}\n"), 0600); err != nil {
-				t.Fatal(err)
-			}
+			installDesktopExternalFinalHost(t, a)
 			control, _ := a.profileByIDLocked(a.profiles.SelectedID)
 			capture, err := captureStartupNodeChain(a, control, a.profiles.Profiles, nil)
 			if err != nil {

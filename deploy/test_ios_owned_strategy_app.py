@@ -693,7 +693,7 @@ def main(negative=True, selected_mutations=None):
     external_selection = external[external.index('    var selectedNodeProfile:'):external.index('    var selectedNodeIsExternal:')]
     source = source.replace('    var selectedNodeProfile: RouterProfile? { selectedRouterProfile }', external_selection)
     external_properties = external[external.index('    var selectedNodeIsExternal:'):external.index('    func nodeRuntimeSummary(')]
-    external_methods = external[external.index('    func connectSelectedExternal() async'):]
+    external_methods = external[external.index('    func connectSelectedExternal(nodeID:'):]
     source += '\n@MainActor extension RouterVPNModel {\n' + external_properties + external_methods
     for text in [selection, (APP / 'Models.swift').read_text(), (APP / 'IOSSessionIdentity.swift').read_text(), wire,
                  (APP / 'IOSSpeedLabOwnership.swift').read_text(),

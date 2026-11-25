@@ -57,7 +57,7 @@ static gboolean linux_oc_public_source(JsonObject *view, JsonObject *draft, int 
         JsonObject *row=linux_oc_root(json_array_get_element(rows,i));
         const char *id=linux_ec_string(row,"id"), *mode=linux_ec_string(row,"mode");
         if (!row || json_object_get_size(row)!=3 || !linux_oc_response_id(id) || !g_hash_table_add(ids,(gpointer)id) ||
-            strcmp(mode,i ? "shadowsocks":"wg") || strcmp(linux_ec_string(row,"kind"),i ? "external":"router-vpn")) return FALSE;
+            (i ? strcmp(mode,"shadowsocks") != 0 : !linux_oc_packet_mode(mode)) || strcmp(linux_ec_string(row,"kind"),i ? "external":"router-vpn")) return FALSE;
         if (draft) {
             JsonObject *node=linux_oc_root(json_array_get_element(nodes,i));
             if (!node || json_object_get_size(node)!=2 || strcmp(linux_ec_string(node,"id"),id) || strcmp(linux_ec_string(node,"mode"),mode)) return FALSE;

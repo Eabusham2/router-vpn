@@ -131,7 +131,13 @@ final class AndroidOrderedPathSelection {
     List<String> prefixModes(String id) throws Exception {
         requireCurrent();AndroidNodeStore.ChainSource source=catalog.source(id);List<String> result=new ArrayList<>();
         if (!members.isEmpty() && members.get(members.size()-1).source.imported) {
-            if (externalExitPrefix() && members.size()<AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH && source.imported && literalSS(source)) result.add("shadowsocks");
+            if (externalExitPrefix()) {
+                if (members.get(0).source.id.equals(id)) {
+                    for (String mode : PREFIX_MODES) if (hasMode(source, mode)) result.add(mode);
+                } else if (members.size()<AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH && source.imported && literalSS(source)) {
+                    result.add("shadowsocks");
+                }
+            }
             return Collections.unmodifiableList(result);
         }
         if (members.size() >= 8) {
@@ -177,9 +183,9 @@ final class AndroidOrderedPathSelection {
         if (!"local".equals(execution) || members.isEmpty()) return false;
         Member first=members.get(0);
         if (!catalog.selectedId.equals(first.source.id) || first.source.imported || !hasMode(first.source,"wg")
-                || !List.of("","off").contains(first.source.profile().optString("start_layer","off"))) return false;
+                || !first.source.supportsExternalExitEntryLayer()) return false;
         if (members.size()==1) return true;
-        if (!"wg".equals(first.mode)) return false;
+        if (!PREFIX_MODES.contains(first.mode) || !hasMode(first.source, first.mode)) return false;
         for (int i=1;i<members.size()-1;i++) {
             Member middle=members.get(i);
             if (!middle.source.imported || !"shadowsocks".equals(middle.mode) || !literalSS(middle.source)) return false;

@@ -341,7 +341,8 @@ def check(read):
     assert ast.unparse(dispatch.body[0]) == "run_node_candidate_phases(root / 'deploy' / external_test)"
     assert ast.unparse(dispatch.orelse[0]) == "subprocess.run([sys.executable, str(root / 'deploy' / external_test)], check=True, timeout=300)", "Apple gates lost their original checked 300-second boundary"
     phase_driver = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'run_node_candidate_phases')
-    assert ast.literal_eval(phase_driver.body[0].value) == {
+    phases = ast.literal_eval(phase_driver.body[0].value)
+    assert phases == {
         'base': ('original', 'public-response', 'capacity'),
         'execution': ('local', 'server', 'auto'),
         'private-response': ('selected-response',),
@@ -352,6 +353,16 @@ def check(read):
         'catalog': ('unsupported-input', 'original-role', 'prefix-frame', 'public-filter', 'public-endpoint', 'receipt-expiry'),
         'proposal': ('proposal-prefix', 'proposal-source', 'proposal-capture'),
     }, 'Apple node candidate case inventory changed'
+    candidate_suite = ast.parse(read("deploy/test_ios_node_candidates.py"))
+    definitions = {node.targets[0].id: node.value for node in candidate_suite.body
+                   if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)}
+    cases_by_phase = {}
+    for phase, name, _ in ast.literal_eval(definitions["POSITIVE_CASES"]):
+        cases_by_phase.setdefault(phase, []).append(name)
+    for phase, controls in ast.literal_eval(definitions["CONTROL_GROUPS"]).items():
+        cases_by_phase.setdefault(phase, []).extend(control[0] for control in controls)
+    assert {phase: tuple(cases) for phase, cases in cases_by_phase.items()} == phases, \
+        "Apple fixture and native caller disagree on candidate phase receipts"
     phase_loop = phase_driver.body[-1]
     assert isinstance(phase_loop, ast.For) and ast.unparse(phase_loop.iter) == 'phases.items()'
     assert ast.unparse(phase_loop.body[0].value) == "subprocess.run([sys.executable, str(script), '--phase', phase], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=300)"
@@ -602,6 +613,8 @@ class AppleCONNECTWorkflowTests(unittest.TestCase):
 
     def test_candidate_phase_inventory_and_verdicts_are_required(self):
         for before, after in (
+                ("'original', 'public-response', 'capacity'", "'original', 'capacity'"),
+                ("'prefix-frame', 'public-filter', 'public-endpoint',", "'prefix-frame',"),
                 ("'private-response': ('selected-response',),", ''),
                 ("'imported-final': ('all-imported', 'earlier-private'),", ''),
                 ("'imported-intermediate': ('insert-imported',),", ''),
@@ -614,6 +627,12 @@ class AppleCONNECTWorkflowTests(unittest.TestCase):
                 ('receipts != list(cases)', 'set(receipts) != set(cases)')):
             with self.subTest(before=before):
                 self.broken(CONTRACT, before, after)
+
+    def test_new_fixture_receipts_must_reach_the_native_caller(self):
+        self.broken("deploy/test_ios_node_candidates.py", "('base', 'capacity',",
+                    "('base', 'additional-positive', 'new verdict'), ('base', 'capacity',")
+        self.broken("deploy/test_ios_node_candidates.py", "('public-filter', 'IOSNodeCandidateCapture.swift'",
+                    "('additional-control',), ('public-filter', 'IOSNodeCandidateCapture.swift'")
 
     def test_native_callers_reject_filtered_optional_or_missing_gates(self):
         for rel in (SMOKE, RELEASE, LIBBOX):

@@ -384,6 +384,30 @@ class JobLifecycleTests(unittest.TestCase):
         manager.finish_delivery(job, True, second["delivery_attempts"])
         self.assertEqual(manager.status(job)["status"], "delivered")
 
+    def test_shutdown_closes_all_delivery_admission_before_joining_any_writer(self):
+        manager = self.manager()
+        first = self.ready(manager)
+        second = self.ready(manager)
+        abort = threading.Event()
+        stream, meta = manager.begin_delivery(first, abort.set)
+        closer = threading.Thread(target=manager.close)
+        closer.start()
+        try:
+            self.assertTrue(abort.wait(2))
+            self.assertEqual(manager.status(second)["status"], "ready")
+            with self.assertRaisesRegex(RuntimeError, "closing"):
+                extra, _ = manager.begin_delivery(second)
+                extra.close()
+            self.assertNotIn("download_url", manager.status(second))
+            self.assertEqual(manager.status(second)["delivery_attempts"], 0)
+        finally:
+            stream.close()
+            manager.finish_delivery(first, False, meta["delivery_attempts"])
+            closer.join(5)
+        self.assertFalse(closer.is_alive())
+        for job in first, second:
+            self.assertEqual(manager.status(job)["status"], "cancelled")
+
     def test_failed_shutdown_keeps_retry_owner_and_closes_admission(self):
         manager = self.manager()
         job = self.ready(manager)

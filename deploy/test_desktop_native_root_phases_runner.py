@@ -164,15 +164,22 @@ class NativeRootPhases(unittest.TestCase):
             original = ROOT / 'mobile/desktop' / (filename.removeprefix('routervpn_desktop_') + '.tmpl')
             (self.source / filename).write_bytes(original.read_bytes())
             roots.extend(names)
-        hysteria = ("TestRouterVPNDesktopNodeChainPhysicalHysteriaCapturesActualBox",
-                    "TestRouterVPNDesktopNodeChainPhysicalHysteriaRejectsSubstitutedBox")
-        roots.extend(hysteria)
-        for system, count in (("linux", 0), ("windows", 4), ("darwin", 8)):
+        all_desktop = ("TestRouterVPNDesktopNodeChainPhysicalCapturesActualBox",
+                       "TestRouterVPNDesktopNodeChainPhysicalHysteriaCapturesActualBox",
+                       "TestRouterVPNDesktopNodeChainPhysicalHysteriaRejectsSubstitutedBox")
+        roots.extend(all_desktop)
+        for system, count in (("linux", 0), ("windows", 4), ("darwin", 7)):
             for architecture in ("amd64", "arm64"):
                 with self.subTest(target=system + '/' + architecture):
                     allowed = GATE.platform_skips(self.source, system + '/' + architecture, roots)
                     self.assertEqual(len(allowed), count)
-                    self.assertTrue(set(hysteria).isdisjoint(allowed))
+                    self.assertTrue(set(all_desktop).isdisjoint(allowed))
+                    for name in all_desktop:
+                        rows = wire([name])
+                        self.assertEqual(GATE.require_phase(encoded(rows), [name]), 2)
+                        rows[-2]["Action"] = "skip"
+                        with self.assertRaises(ValueError):
+                            GATE.require_phase(encoded(rows), [name])
         filename, _, guard, _, _ = GATE.PLATFORM_SKIP_SOURCES[0]
         path = self.source / filename
         original = path.read_text()

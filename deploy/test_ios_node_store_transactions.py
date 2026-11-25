@@ -281,7 +281,15 @@ func temporary(_ source: ClientBundle) -> ClientBundle {
   var multiple = first; multiple.routerProfiles.append(second.routerProfiles[0])
   try model.importBundle(encoded(multiple))
   let recordID = store.records.keys.first!
-  model.selectNode("second")
+  let beforeSelection = store.records
+  try check("missing node cannot report a successful selection", !model.selectNode("absent"))
+  model.profileMutationBlocked = true
+  try check("busy node cannot report a successful selection", !model.selectNode("second"))
+  model.profileMutationBlocked = false
+  store.failWrite = true
+  try check("failed durable selection preserves the original node", !model.selectNode("second") && model.bundle?.selectedRouterID == "first" && store.records == beforeSelection)
+  store.failWrite = false
+  try check("successful node selection is acknowledged", model.selectNode("second"))
   try check("multi-node selection keeps one owning private record", store.records.count == 1 && store.records[recordID] != nil && model.bundle!.selectedRouterID == "second")
   model.selectNode("first")
   try check("both nodes keep exact shared assets after selection", model.bundle!.routerProfiles.count == 2 && model.bundle!.profiles == multiple.profiles)

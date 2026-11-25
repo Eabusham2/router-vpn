@@ -7,7 +7,7 @@ import "encoding/json"
 // Rescue DNS; its original selection retains the user's final resolver.
 func NodeChainExternalFinalFromEntry(entryInput, importedInput string) (string, error) {
 	entry, err := ParseNodeLaunchInput(entryInput)
-	if err != nil || entry.mode != "wg" {
+	if err != nil || !NodeChainPrefixMode(entry.mode) {
 		return "", nodeChainError
 	}
 	member, err := parseNodeChainImportedMember(importedInput)

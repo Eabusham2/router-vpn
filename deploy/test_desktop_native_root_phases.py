@@ -32,7 +32,6 @@ PLATFORM_SKIP_SOURCES = (
          "TestRouterVPNDesktopTorPhysicalRegistrationContext")),
     ("routervpn_desktop_node_chain_box_physical_test.go", ("darwin",),
      'if runtime.GOOS != "linux" && runtime.GOOS != "windows" {', "this physical adapter covers Linux and Windows", (
-         "TestRouterVPNDesktopNodeChainPhysicalCapturesActualBox",
          "TestRouterVPNDesktopNodeChainPhysicalRejectsSubstitutedBox",
          "TestRouterVPNDesktopNodeChainPhysicalAWGModesAndOriginalBox")),
     ("routervpn_desktop_external_box_integration_test.go", ("darwin",),

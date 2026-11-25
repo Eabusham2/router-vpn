@@ -85,10 +85,16 @@ func TestDesktopMultipleImportedExecutionRefusesReplacedOwner(t *testing.T) {
 			if err := execution.attach(launch); err != nil {
 				t.Fatal(err)
 			}
-			changed := *execution
-			original := *launch.chain
-			changed.original = &original
-			original.execution = &changed
+			original := &desktopNodeChainLaunch{
+				policy: launch.chain.policy, selection: launch.chain.selection, input: launch.chain.input,
+			}
+			changed := &desktopNodeChainExecutionLaunch{
+				original: original, preparation: execution.preparation, multiplePhysical: execution.multiplePhysical,
+			}
+			original.execution = changed
+			if err := changed.validateSource(); err != nil {
+				t.Fatal("replacement fixture lost its original source before mutation", err)
+			}
 			switch fault {
 			case "copied-physical":
 				copy := *changed.multiplePhysical

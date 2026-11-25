@@ -625,6 +625,23 @@ func draftRequest(_ path: String, _ q: [String:Any]?, _ timeout: TimeInterval = 
     let task = try RouterVPNMacSpeedLabTransport(url: URL(string:"http://127.0.0.1:8788/api/multihop/draft-candidates"+path)!, body:q, timeout:timeout) { _ in }
     task.cancel()
 }
+for (count,mode) in [(3,"wg"),(9,"wg"),(96,"wg"),(9,"awg2-fast"),(96,"awg2-strong")] {
+    let nodes=(0..<count).map { ["id":"public-\($0)","mode":$0 == 0 ? mode:"shadowsocks"] }
+    let tokens=Dictionary(uniqueKeysWithValues:nodes.enumerated().map { ($0.element["id"]!,String(format:"%064x",$0.offset+1)) })
+    let draft:[String:Any]=["nodes":nodes,"execution":"local","external_final":true,
+                            "expected_profile_tokens":tokens,"expected_selected_node_id":nodes[0]["id"]!]
+    let path="/catalog?prefix_position=\(count-2)&scope=saved-prefix-local"
+    try draftRequest(path,draft);checks+=1
+    for (field,value) in [("external_final",false as Any),("external_final",1 as Any),("execution","server" as Any),
+                          ("expected_selected_node_id",nodes.last!["id"]! as Any),("other",true as Any)] {
+        var changed=draft;changed[field]=value
+        rejected("public candidate draft accepted altered "+field){try draftRequest(path,changed)}
+    }
+    var rows=nodes;rows[1]["mode"]="awg2-fast";var changed=draft;changed["nodes"]=rows
+    rejected("public candidate draft replaced an independent literal import"){try draftRequest(path,changed)}
+    rows=nodes;rows[0]["mode"]="socks5";changed["nodes"]=rows
+    rejected("public candidate draft replaced the paired entry"){try draftRequest(path,changed)}
+}
 for execution in ["local","server","auto"] {
     for count in [3,9,16,96] {
         let proposed=(0..<count).map { ["id":"candidate-\($0)","mode":$0 == 0 ? "wg":"shadowsocks"] }

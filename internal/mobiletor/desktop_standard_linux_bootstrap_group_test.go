@@ -44,8 +44,11 @@ func TestLinuxStandardBootstrapGroupOriginalGeneration(t *testing.T) {
 			}
 			switch fault {
 			case "wrong-owner":
-				copy := *grant.owner
-				grant.owner = &copy
+				owner := grant.owner
+				grant.owner = &desktopLinuxBaselineNetlink{
+					file: owner.file, port: owner.port, seq: owner.seq,
+					uncertain: owner.uncertain, bootstrap: owner.bootstrap,
+				}
 			case "foreign-generation":
 				g.generation++
 			case "rejected":

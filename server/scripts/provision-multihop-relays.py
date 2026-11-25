@@ -715,6 +715,11 @@ def compile_node_chain_source(raw, node):
         raise bad from None
 
 
+def node_chain_member_limit(schema):
+    # The client entry is separate from the operator-owned suffix.
+    return 95 if schema == 6 else 7
+
+
 def compiled_node_chain_source(raw, node, original=None):
     """Validate the shared compiler output for either private input form."""
     bad = ValueError('private ordered source failed shared policy compilation')
@@ -746,10 +751,12 @@ def compiled_node_chain_source(raw, node, original=None):
         if node_chain_source_digest(canonical, captured['schema']) != reference['source_sha256']:
             raise bad
         members = reference['members']
-        if not isinstance(members, list) or not isinstance(captured['nodes'], list) or not 1 <= len(members) <= 7 or len(members) != len(captured['nodes']):
+        if not isinstance(members, list) or not isinstance(captured['nodes'], list) or not 1 <= len(members) <= node_chain_member_limit(captured['schema']) or len(members) != len(captured['nodes']):
             raise bad
         member_fields = {'position', 'profile_id', 'node_id', 'mode', 'start_layer'}
         optional_fields = {'client_public_key', 'server_public_key', 'node_kind', 'proof_kind', 'source_sha256', 'expected_public_ip', 'openvpn_pair_sha256'}
+        if captured['schema'] == 6:
+            optional_fields.add('stream_identity_sha256')
         for position, member in enumerate(members, 1):
             if (not isinstance(member, dict) or not member_fields <= set(member) or set(member) - member_fields - optional_fields or
                     type(member['position']) is not int or member['position'] != position or
@@ -800,7 +807,7 @@ def compile_node_chain_plan(path, node):
         plan = decode(plan_snapshot[1])
         if (not isinstance(plan, dict) or set(plan) != {'schema', 'entry', 'members'} or
                 type(plan['schema']) is not int or plan['schema'] not in (1, 3, 4, 5, 6) or
-                not isinstance(plan['members'], list) or not 1 <= len(plan['members']) <= 7):
+                not isinstance(plan['members'], list) or not 1 <= len(plan['members']) <= node_chain_member_limit(plan['schema'])):
             raise bad
         if plan['schema'] in (3, 4, 5, 6) and len(plan['members']) < 2:
             raise bad

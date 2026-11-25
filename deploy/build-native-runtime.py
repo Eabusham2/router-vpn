@@ -1804,10 +1804,9 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             if target.startswith('darwin/'):
                 run([sys.executable, ROOT/'deploy/test_desktop_darwin_node_chain_lifecycle_runner.py'],
                     env=env, timeout=120)
-                # Intel job 139481669039 outgrew the 1800s control phase.
-                # Keep all six baselines and all 47 compiled controls in three
-                # source-bound phases, with unchanged 1800s parent, 120s test
-                # and 600s compiler/process deadlines.
+                # Intel job 139481669039 exceeded 1800s in the original
+                # 47-control phase. Require all six baselines and both halves
+                # of the controls, each under the same finite parent deadline.
                 lifecycle = load('desktop_darwin_lifecycle_phases', 'test_desktop_darwin_node_chain_lifecycle.py')
                 lifecycle.execute_partitioned(source, ','.join(tags(target)), env, run)
                 # Required low-level utun/route cleanup precedes later installed

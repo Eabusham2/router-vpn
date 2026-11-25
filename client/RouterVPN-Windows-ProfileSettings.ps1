@@ -360,12 +360,17 @@ function global:Test-RouterVPNOrderedPairedShape {
     for($i=0;$i -lt $Nodes.Count-1;$i++){if($Nodes[$i].mode -cne 'wg'){return $false}}
     return $true
 }
-function global:Test-RouterVPNOrderedPairedOff {
-    param($Profile)
+function global:Test-RouterVPNOrderedPairedLayer {
+    param($Profile,[switch]$AllowAuthenticated)
     if($null -eq $Profile){return $false}
     $layer=Get-RouterVPNOrderedValue $Profile 'start_layer' ''
     return (Get-RouterVPNOrderedValue $Profile 'node_kind' '') -cin @('','router-vpn') -and
-        $null -eq (Get-RouterVPNOrderedValue $Profile 'external') -and $layer -is [string] -and $layer -cin @('','off')
+        $null -eq (Get-RouterVPNOrderedValue $Profile 'external') -and $layer -is [string] -and
+        ($layer -cin @('','off') -or ($AllowAuthenticated -and $layer -cin @('aes-256-gcm','aes-256-gcm+xor-whitening')))
+}
+function global:Test-RouterVPNOrderedPairedOff {
+    param($Profile)
+    return Test-RouterVPNOrderedPairedLayer $Profile
 }
 
 function global:Test-RouterVPNOrderedLiteralOff {
@@ -391,7 +396,7 @@ function global:Test-RouterVPNOrderedCustomEntryShape {
 function global:Test-RouterVPNOrderedExternalFinalShape {
     param($Nodes,[string]$Control)
     if($Nodes.Count -lt 3 -or $Nodes.Count -gt (Get-RouterVPNOrderedPhysicalTraversalDepth) -or
-        $Nodes[0].id -cne $Control -or $Nodes[0].mode -cne 'wg'){return $false}
+        $Nodes[0].id -cne $Control -or -not (Test-RouterVPNOrderedPrefixMode $Nodes[0].mode)){return $false}
     for($i=1;$i -lt $Nodes.Count;$i++){if($Nodes[$i].mode -cne 'shadowsocks'){return $false}}
     return $true
 }
@@ -599,7 +604,7 @@ function global:Test-RouterVPNOrderedCandidatePosition {
     $index=Get-RouterVPNOrderedProfileIndex $Profiles
     if((Get-RouterVPNOrderedValue $index[$Nodes[-1].id] 'node_kind') -ceq 'external'){
         if($Execution -cne 'local' -or -not(Test-RouterVPNOrderedExternalFinalShape $Nodes $Nodes[0].id) -or
-           -not(Test-RouterVPNOrderedPairedOff $index[$Nodes[0].id]) -or -not(Test-RouterVPNOrderedExternalFinalProfile $index[$Nodes[-1].id])){return $false}
+           -not(Test-RouterVPNOrderedPairedLayer $index[$Nodes[0].id] -AllowAuthenticated) -or -not(Test-RouterVPNOrderedExternalFinalProfile $index[$Nodes[-1].id])){return $false}
         for($i=1;$i -lt $Nodes.Count-1;$i++){if(-not(Test-RouterVPNOrderedLiteralOff $index[$Nodes[$i].id])){return $false}}
         return $true
     }
@@ -683,8 +688,8 @@ function global:New-RouterVPNOrderedConnectPayload {
     $externalFinal=$nodes[0].id -ceq $control
     if($externalFinal){
         if($execution -cne 'local' -or -not(Test-RouterVPNOrderedExternalFinalShape $nodes $control) -or
-           -not(Test-RouterVPNOrderedPairedOff $profileIndex[$control]) -or -not(Test-RouterVPNOrderedExternalFinalProfile $profileIndex[$nodes[-1].id])){
-            throw 'An external exit requires a paired WireGuard entry and an independently linked literal Shadowsocks exit in Local.'
+           -not(Test-RouterVPNOrderedPairedLayer $profileIndex[$control] -AllowAuthenticated) -or -not(Test-RouterVPNOrderedExternalFinalProfile $profileIndex[$nodes[-1].id])){
+            throw 'An external exit requires a paired WireGuard or AmneziaWG entry and an independently linked literal Shadowsocks exit in Local.'
         }
         for($i=1;$i -lt $nodes.Count-1;$i++){if(-not(Test-RouterVPNOrderedLiteralOff $profileIndex[$nodes[$i].id])){throw 'Choose a linked literal Shadowsocks intermediate.'}}
     }

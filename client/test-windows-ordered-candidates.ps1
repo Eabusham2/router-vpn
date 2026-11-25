@@ -516,9 +516,9 @@ function Assert-PublicRefused($state,$value,$phase,$why){
  try {ReceiveOrderedCandidates $state $value $phase} catch {$refused=$true}
  Assert-Candidate $refused $why
 }
-foreach($layout in @(@(3,1),@(4,1),@(4,2),@(9,1),@(9,7),@(96,1),@(96,94))){
- $depth,$position=$layout
- $nodes=@(for($i=0;$i -lt $depth;$i++){@{id="public-member-$i";mode=$(if($i){'shadowsocks'}else{'wg'})}})
+foreach($layout in @(@(3,1,'wg'),@(4,1,'wg'),@(4,2,'wg'),@(9,1,'wg'),@(9,7,'wg'),@(96,1,'wg'),@(96,94,'wg'),@(9,7,'awg2-fast'),@(96,94,'awg2-strong'))){
+ $depth,$position,$entryMode=$layout
+ $nodes=@(for($i=0;$i -lt $depth;$i++){@{id="public-member-$i";mode=$(if($i){'shadowsocks'}else{$entryMode})}})
  $source=@(for($i=0;$i -lt $depth;$i++){@{}+$nodes[$i]+@{kind=$(if($i){'external'}else{'router-vpn'})}})
  $candidate='measured-public-import'
  $path=@($nodes[0..$position])+@(@{id=$candidate;mode='shadowsocks'})+@($nodes[($position+1)..($depth-1)])
@@ -547,7 +547,7 @@ foreach($layout in @(@(3,1),@(4,1),@(4,2),@(9,1),@(9,7),@(96,1),@(96,94))){
      'server' {$bad.requested_execution='server'}
      'epoch' {$bad.selection_epoch=1L}
      'owner' {$bad.response_source_nodes=$source}
-     'wrong-entry' {$bad.public_response_source_nodes=@($source.Clone());$bad.public_response_source_nodes[0]=@{}+$source[0];$bad.public_response_source_nodes[0].mode='awg2-fast'}
+     'wrong-entry' {$bad.public_response_source_nodes=@($source.Clone());$bad.public_response_source_nodes[0]=@{}+$source[0];$bad.public_response_source_nodes[0].mode='openvpn'}
      'private-final' {$bad.public_response_source_nodes=@($source.Clone());$bad.public_response_source_nodes[-1]=@{}+$source[-1];$bad.public_response_source_nodes[-1].kind='router-vpn'}
      'missing-map' {$bad.Remove('public_response_source_nodes')}
      'duplicate' {$bad.candidates=@($choice,$choice)}
@@ -558,6 +558,11 @@ foreach($layout in @(@(3,1),@(4,1),@(4,2),@(9,1),@(9,7),@(96,1),@(96,94))){
     }
     Assert-PublicRefused $S $bad 'catalog' "public catalog $context accepted $fault"
    }
+  }
+  if($purpose -ceq 'draft'){
+   $switched=@{}+$offer;$switched.public_response_source_nodes=@($source.Clone());$switched.public_response_source_nodes[0]=@{}+$source[0]
+   $switched.public_response_source_nodes[0].mode=if($entryMode -ceq 'awg2-fast'){'awg2-strong'}else{'awg2-fast'}
+   Assert-PublicRefused $S $switched 'catalog' "public draft $context accepted a different paired transport"
   }
   ReceiveOrderedCandidates $S $offer 'catalog'
   Assert-Candidate ($S.Rows.Count -eq 1 -and $S.Rows[0].ID -ceq $candidate) "public catalog $context lost sole independent import"

@@ -693,8 +693,10 @@ function TestOrderedCandidatePublicSource($S,$View){
  $ids=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
  for($i=0;$i -lt $rows.Count;$i++){
   $row=$rows[$i];$keys=if($row -is [Collections.IDictionary]){$row.Keys}else{$row.PSObject.Properties.Name}
-  $mode=if($i -eq 0){'wg'}else{'shadowsocks'};$kind=if($i -eq 0){'router-vpn'}else{'external'}
-  if(@($keys).Count -ne 3 -or $row.id -isnot [string] -or $row.id -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or -not $ids.Add($row.id) -or $row.mode -cne $mode -or $row.kind -cne $kind){return $false}
+  $mode=$row.mode
+  if($mode -isnot [string] -or ($i -eq 0 -and $mode -cnotin @('wg','awg2-fast','awg2-strong')) -or ($i -gt 0 -and $mode -cne 'shadowsocks')){return $false}
+  $kind=if($i -eq 0){'router-vpn'}else{'external'}
+  if(@($keys).Count -ne 3 -or $row.id -isnot [string] -or $row.id -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or -not $ids.Add($row.id) -or $row.kind -cne $kind){return $false}
   if($null -ne $draft){
    $node=$draft.nodes[$i];$keys=if($node -is [Collections.IDictionary]){$node.Keys}else{$node.PSObject.Properties.Name}
    if(@($keys).Count -ne 2 -or $node.id -cne $row.id -or $node.mode -cne $mode){return $false}

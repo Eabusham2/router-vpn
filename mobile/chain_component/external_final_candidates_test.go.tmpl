@@ -137,6 +137,9 @@ func measureExternalCandidate(t *testing.T, f *multipleImportedFixture, position
 		}
 	}
 	defer s.Close()
+	if mode := f.chain.ProofInventory()[0].Mode; mode != "wg" {
+		f.checkExternalAWGEntry(t, mode, false)
+	}
 	if fault == "late-catalog" {
 		p.mutex.Lock()
 		p.afterResponse = func(n int) {
@@ -232,15 +235,18 @@ func measureExternalCandidate(t *testing.T, f *multipleImportedFixture, position
 
 func TestRouterVPNExternalFinalPublicCandidates(t *testing.T) {
 	for _, spec := range []struct {
-		name            string
-		count, position int
-		dns             string
-		closed          bool
-		fault           string
+		name               string
+		count, position    int
+		dns                string
+		closed             bool
+		fault, mode, layer string
 	}{
-		{"home-retained-suffix", 4, 1, "home", true, "original"}, {"custom-retained-final", 3, 1, "custom", false, "original"},
-		{"nine-late-import", 9, 7, "custom", true, "original"}, {"wrong-key", 4, 1, "home", false, "wrong-key"},
-		{"wrong-exit", 4, 2, "custom", true, "wrong-exit"}, {"late-catalog", 4, 1, "home", false, "late-catalog"}, {"cancel-close", 4, 2, "home", true, "cancel-close"},
+		{"home-retained-suffix", 4, 1, "home", true, "original", "wg", ""}, {"custom-retained-final", 3, 1, "custom", false, "original", "wg", ""},
+		{"nine-late-import", 9, 7, "custom", true, "original", "wg", ""}, {"wrong-key", 4, 1, "home", false, "wrong-key", "wg", ""},
+		{"wrong-exit", 4, 2, "custom", true, "wrong-exit", "wg", ""}, {"late-catalog", 4, 1, "home", false, "late-catalog", "wg", ""}, {"cancel-close", 4, 2, "home", true, "cancel-close", "wg", ""},
+		{"fast-closed", 4, 1, "home", true, "original", "awg2-fast", ""}, {"strong-connected", 3, 1, "custom", false, "original", "awg2-strong", ""},
+		{"fast-xor-closed", 4, 1, "home", true, "original", "awg2-fast", "aes-256-gcm+xor-whitening"},
+		{"strong-aes-connected", 3, 1, "custom", false, "original", "awg2-strong", "aes-256-gcm"},
 	} {
 		t.Run(spec.name, func(t *testing.T) {
 			var first, second *externalCandidatePeer
@@ -255,10 +261,12 @@ func TestRouterVPNExternalFinalPublicCandidates(t *testing.T) {
 				next := f.members[position+1]
 				second = newExternalCandidatePeer(t, f, cert, 43, "original")
 				first = newExternalCandidatePeer(t, f, cert, 42, spec.fault, desktopNodeLayerRoute{"tcp", next.virtual, next.physical}, desktopNodeLayerRoute{"udp", next.virtual, next.physical}, second.route())
-				return []desktopNodeLayerRoute{first.route()}
+				// Once chosen, this peer carries both the HTTPS proofs and
+				// the retained final's selected UDP resolver.
+				return []desktopNodeLayerRoute{first.route(), {"udp", first.virtual, first.physical}}
 			}
 			marker := multipleImportedCandidateSetup{position: -1, closed: spec.closed}
-			f := newMultipleImportedFixtureWithRoutes(t, multipleImportedLayout{"external-final-" + spec.dns, spec.count, inputs}, "wg", "off", "", nil, nil, nil, makeRoutes, marker)
+			f := newMultipleImportedFixtureWithLayerRoutes(t, multipleImportedLayout{"external-final-" + spec.dns, spec.count, inputs}, spec.mode, "off", "", nil, nil, nil, makeRoutes, spec.layer, marker)
 			measureExternalCandidate(t, f, spec.position, first, spec.closed, spec.fault)
 			rounds := 0
 			if spec.fault == "original" {
@@ -289,8 +297,15 @@ func TestRouterVPNExternalFinalPublicCandidates(t *testing.T) {
 				field := runtime.FieldByName("testTLS")
 				*(**tls.Config)(unsafe.Pointer(field.UnsafeAddr())) = f.tls.Clone()
 				f.startBox(t, f.physical)
+				beforeDNS, beforePackets := f.dns.Load(), first.provider.stats().Packets
 				measureExternalCandidate(t, f, pos, second, false, "original")
+				if spec.dns == "custom" && (f.dns.Load() <= beforeDNS || first.provider.stats().Packets <= beforePackets) {
+					t.Fatal("retained custom DNS did not traverse the newly chosen encrypted peer")
+				}
 				rounds = 2
+			}
+			if spec.layer != "" {
+				f.checkExternalEntryLayer(t, spec.layer, "")
 			}
 			if err := f.close(); err != nil {
 				t.Fatal(err)
@@ -303,6 +318,9 @@ func TestRouterVPNExternalFinalPublicCandidates(t *testing.T) {
 				if !joined {
 					t.Fatal("independent candidate peer retained native work after Close")
 				}
+			}
+			if spec.mode != "wg" {
+				t.Logf("AWG_EXTERNAL_ENTRY case=%s mode=%s mismatch=false readback=true", spec.name, spec.mode)
 			}
 			t.Logf("PUBLIC_CANDIDATE case=%s nodes=%d position=%d rounds=%d samples=%d retained=true joined=true", spec.name, spec.count, spec.position, rounds, rounds*50)
 		})

@@ -83,6 +83,18 @@ func (c *NodeChain) publicCandidateUses(candidates []candidatePublicResponseSour
 	for _, egress := range c.physical {
 		u.endpoints[net.JoinHostPort(egress.Host, strconv.Itoa(egress.Port))]++
 	}
+	if c.proofs[0].StartLayer != "off" {
+		entry, err := nodeMultihopPredecessor(c.nodes[0])
+		if err != nil {
+			return u, err
+		}
+		inner, key, err := externalFinalLayerTransport(entry)
+		if err != nil || !inner.IsValid() {
+			return u, nodeChainError
+		}
+		u.endpoints[inner.String()]++
+		u.keys[key]++
+	}
 	for _, member := range c.importedNodes.members[1:] {
 		s, err := publicCandidateMember(member)
 		if err != nil {

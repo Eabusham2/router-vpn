@@ -42,7 +42,8 @@ struct IOSNodeChainEditorView: View {
                                 }
                                 let exits = available.filter { profile in
                                     var proposed = draft
-                                    return (try? proposed.chooseExternalFinal(profile, profiles: available, execution: execution)) != nil
+                                    return (try? proposed.chooseExternalFinal(profile, profiles: available, execution: execution)) != nil &&
+                                        !proposed.externalEntryModes(in: model.bundle).isEmpty
                                 }
                                 if !exits.isEmpty {
                                     Menu("Choose an imported exit") {
@@ -69,7 +70,19 @@ struct IOSNodeChainEditorView: View {
                                 }
                             }
                         } else if position < draft.firstEditablePrefix {
-                            LabeledContent("WireGuard entry", value: available.first(where: { $0.id == node.id })?.name ?? node.id)
+                            LabeledContent("Paired entry", value: available.first(where: { $0.id == node.id })?.name ?? node.id)
+                            Picker("Entry transport", selection: Binding(
+                                get: { node.mode },
+                                set: { mode in change(measureAfter: position) { try draft.chooseExternalEntryMode(mode, in: model.bundle) } }
+                            )) {
+                                ForEach(draft.externalEntryModes(in: model.bundle), id: \.self) { mode in
+                                    Text(IOSMultihopNodeSelection.transportName(mode)).tag(mode)
+                                }
+                                if !draft.externalEntryModes(in: model.bundle).contains(node.mode) {
+                                    Text("Unavailable: \(IOSMultihopNodeSelection.transportName(node.mode))")
+                                        .tag(node.mode).disabled(true)
+                                }
+                            }
                         } else {
                         Picker("Node \(position + 1)", selection: Binding(
                             get: { draft.nodes[position].id },
@@ -160,7 +173,7 @@ struct IOSNodeChainEditorView: View {
                 }
                 Text("Server and Compare support paired WireGuard or AWG2 preceding nodes and a paired Shadowsocks or Hysteria2 final, with two to eight nodes total. Hysteria2 keeps an independent Off, AES or AES with XOR whitening layer on the final node and retains its saved TLS trust, password and Salamander settings. Longer Server and Compare routes support one WireGuard, AWG2 Fast, or AWG2 Strong entry, literal Shadowsocks imports, and a paired Shadowsocks final, with Start Layer Off throughout. A single imported Shadowsocks hostname can go immediately before a paired Shadowsocks final on a four-to-eight-node route with its saved Custom TCP resolver and explicit resolver IP address and port. HTTP/HTTPS CONNECT can follow one to six paired nodes (three to eight nodes total). Its paired final node keeps its selected Off, AES or AES with XOR whitening layer. SOCKS5 and separately paired OpenVPN also support Server and Compare after one to six paired nodes before the Shadowsocks final. OpenVPN needs independent Local and Server provider credentials with the same captured transport policy. Compare proves both choices before retaining a winner.")
                 Text("Traffic follows this order through one VPN connection. Paired packet nodes use WireGuard or AWG2. A Local route can also mix paired Shadowsocks 2022 nodes and imported streams when every node uses Start Layer Off. One imported stream can use its saved hostname and Custom TCP resolver immediately after the packet nodes. It can also follow a literal import when there is one packet entry and all interior streams are imports. When you measure through a stream node before the penultimate node, you can save the candidate in a named profile that keeps the remaining route and final. On a paired-final route, measuring through the penultimate node offers the candidate as the new final. A Local route with an imported exit keeps that exit when you save the candidate. The selected final Router node can use Shadowsocks 2022 or Hysteria2; Hysteria2 keeps an independent Off, AES or AES with XOR whitening layer on that final node. Local, Server and Compare both support independently saved Shadowsocks 2022 nodes at any interior position between a paired packet entry and a paired Shadowsocks 2022 final. With a WireGuard, AWG2 Fast, or AWG2 Strong entry and a literal import at the next position, Server and Compare can use independent paired Shadowsocks nodes and literal imports throughout the remaining middle positions. Keep every Start Layer Off. Each keeps its original credentials and public proof. A three-node Local route can also start with two literal Shadowsocks 2022 imports, both with Start Layer Off, followed by a paired Shadowsocks 2022 final. A single saved Shadowsocks 2022, SOCKS5, HTTP/HTTPS CONNECT or OpenVPN node can also follow one to six paired prefixes (three to eight nodes total), with Start Layer Off on that custom node and a Shadowsocks 2022 final. An imported Shadowsocks hostname retains its saved Custom TCP transport resolver through the original preceding prefix; application DNS remains on the final node. OpenVPN retains its original single literal TCP or UDP remote and connected native owner. SOCKS5 and CONNECT retain their original literal server address and credentials; HTTPS CONNECT also retains verified TLS and SNI. CONNECT requires the paired final node’s captured SS UoT-v2 service declaration and preserves its selected DNS.")
-                Text("Each node keeps its saved credentials, Start Layer and protection settings. An imported exit uses its saved DNS choice. Home DNS stays on the original WireGuard entry. Every node must pass verification before Connected.")
+                Text("Each node keeps its saved credentials, Start Layer and protection settings. For an imported exit, only the paired entry can use AES or AES with XOR whitening. The imported exit keeps its saved DNS choice. Home DNS stays on the original paired packet entry. Every node must pass verification before Connected.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Save ordered route") {
                     do { guard let owner else { return }; try model.saveIOSNodeChain(draft.nodes, owner: owner, execution: execution); dismiss() }

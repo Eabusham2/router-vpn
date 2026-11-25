@@ -362,7 +362,7 @@ public final class NodeChainCaptureHarness {
   check(ui.dialog.title.equals("Ordered execution") && Arrays.asList(ui.dialog.labels).equals(List.of("Local","Server","Compare both"))
     && ui.dialog.detail.contains("Local, Server and Compare both support independently saved Shadowsocks 2022 nodes at any interior position")
     && ui.dialog.detail.contains("literal IP address and Start Layer Off") && ui.dialog.detail.contains("starting with two imported Shadowsocks nodes requires Local")
-    && ui.dialog.detail.contains("Longer Server and Compare paths require one paired WireGuard entry") && ui.dialog.detail.contains("keeps the remaining route in order"),
+    && ui.dialog.detail.contains("one paired WireGuard, AWG2 Fast, or AWG2 Strong entry") && ui.dialog.detail.contains("Only the paired entry can use AES or AES with XOR whitening") && ui.dialog.detail.contains("keeps the remaining route in order"),
     "execution picker misstates independent imported node placement");
   ui.dialog.negative.run(null,0);
   ui.choose(0);ui.choose(0);check(ui.dialog.labels[0].toString().contains(profile(f.original.get(1)).optString("name",profile(f.original.get(1)).getString("id"))),"shipping ordered editor did not move the original first node later");

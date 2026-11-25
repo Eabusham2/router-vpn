@@ -612,7 +612,7 @@ struct IOSUnifiedProductView: View {
 
     private func selectSpecific(_ profile: RouterProfile) {
         guard !model.profileMutationBlocked, !externalComparison.running, !externalBenchmark.running else { return }
-        model.selectNode(profile.id)
+        guard model.selectNode(profile.id) else { return }
         model.message = "Selected \(profile.name.isEmpty ? profile.id : profile.name). Press Connect when ready."
     }
     private var externalComparisonUnavailable: Bool {
@@ -635,7 +635,7 @@ struct IOSUnifiedProductView: View {
         guard let winner = results.first else { model.message = telemetry.lastError; return }
         do { try telemetry.requireDirectResultCurrent(model: model) }
         catch { model.message = "The selected source or network changed after Fastest measured; retest before selecting its result."; return }
-        model.selectNode(winner.id)
+        guard model.selectNode(winner.id) else { return }
         model.message = "Selected fastest Router: \(winner.name) • \(String(format: "%.1f", winner.trimmedMeanMs)) ms, 50 TCP samples, 10% trimmed mean. Press Connect when ready with \(selectedModeTitle)."
     }
     private func connectOrDisconnect() {
@@ -644,7 +644,7 @@ struct IOSUnifiedProductView: View {
         if !model.connected, selectedProfile?.multihopEnabled == true { Task { await model.connect() }; return }
         if model.connected { model.disconnect(); return }
         guard let profile = selectedProfile else { showingNodes = true; return }
-        if profile.normalizedNodeKind == "external" { Task { await model.connectSelectedExternal() }; return }
+        if profile.normalizedNodeKind == "external" { Task { await model.connectSelectedExternal(nodeID: profile.id) }; return }
         if selectedMode == IOSUnifiedModeSelection.smart { Task { await model.runUnifiedIOSSmartAuto() }; return }
         if selectedMode == IOSUnifiedModeSelection.auto { Task { await model.runUnifiedIOSAuto() }; return }
         if let name = IOSCustomPresetName.suffix(in: selectedMode) {

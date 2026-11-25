@@ -128,6 +128,20 @@ TESTS = r'''
    var ordinary=bundle;ordinary.routerProfiles[0].multihopNodes=nil
    try reject("ordered source with ordinary selection"){_ = try IOSStartupCapture(bundle:ordinary,entry:nil,generation:model.iosConnectGeneration,nodeChainSource:source.nodeChainSource)}
   }
+  for (packet, layer) in [("awg2-fast","aes-256-gcm"),("awg2-strong","aes-256-gcm+xor-whitening")] {
+   let bundles = try externalFinalBundles(3,"home",packet,layer).map { try JSONDecoder().decode(ClientBundle.self,from:$0) }
+   IOSNodeBundleStore.shared.records=[:]
+   let model=RouterVPNModel();model.bundle=bundles[0]
+   for member in bundles { IOSNodeBundleStore.shared.records[member.selectedRouterID]=try JSONEncoder().encode(member) }
+   let initial=try model.capture(), intent=IOSStartupIntent(initial)
+   try check("Last captures the original layered packet and all imported members", initial.nodeChainSource != nil && initial.entry == nil && model.matches(intent))
+   await model.start("last",intent:intent)
+   try check("Last dispatches only the layered ordered connection",model.events==["ordered"])
+   model.events=[];model.bundle?.profiles.removeValue(forKey:"shadowsocks")
+   try check("changed outer credential invalidates the original Last intent",!model.matches(intent))
+   await model.start("last",intent:intent)
+   try check("stale layered Last never selects a direct packet fallback",model.events.isEmpty)
+  }
  }
 }
 '''
@@ -149,6 +163,8 @@ def main():
         '    private func runIOSRouterStartup(', '    private func iosStartupCapture()',
         '    private func iosStartupMatches(_ captured:', '    private func iosStartupMatches(_ intent:')))
     tests = TESTS.replace('// ORIGINAL_COMPILER_SOURCES', S.member(L.TESTS, ' static func sources('))
+    helpers = ('func data(', 'func object(', 'func profile(', 'func sources(', 'func edit(', 'func editProfile(', 'func externalFinalBundles(')
+    tests = '\n'.join(S.member(C.SWIFT, signature) for signature in helpers) + '\n' + tests
     policy = (APP / 'IOSStartupPolicy.swift').read_text()
     with tempfile.TemporaryDirectory(prefix='.ios-chain-startup-', dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-chain-startup-') as directory:
         go_dir, work = Path(go_dir), Path(directory)

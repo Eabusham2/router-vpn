@@ -192,6 +192,14 @@ func TestRouterVPNOperatorPairingSources(t *testing.T) {
    plans = append(plans, planRow{name,original,policy.Source(),policy.Descriptor()})
   }
  }
+ layout := selectedPrivateStreamLayout(9,2)
+ original, _ := multipleImportedServerPlanFixture(t, layout, "awg2-fast", "")
+ extended, err := NewNodeChainMultipleImportedServerPlan(startJSON(t,original))
+ if err != nil { t.Fatal("extended private-stream plan",err) }
+ if d:=extended.Descriptor(); len(d.Members)!=8 || !d.PrivateStreamAt(2) || d.Members[1].StreamIdentitySHA256=="" {t.Fatal("extended plan lost original private stream")}
+ name := "multiple/awg2-fast/extended-private-stream"
+ add(name,extended)
+ plans = append(plans,planRow{name,original,extended.Source(),extended.Descriptor()})
  encoded, err := json.Marshal(struct{ Rows []row `json:"rows"`; Digests []digestRow `json:"digests"`; Plans []planRow `json:"plans"` }{rows, vectors, plans}); if err != nil { t.Fatal(err) }
  if err = os.WriteFile(path, encoded, 0600); err != nil { t.Fatal(err) }
 }
@@ -230,7 +238,7 @@ import (
 func TestRouterVPNOperatorOriginalPrivateReader(t *testing.T) {
  raw, err := os.ReadFile(os.Getenv("ROUTERVPN_ORDERED_PAIRING_FIXTURES")); if err != nil { t.Fatal(err) }
  var input struct { Rows []struct { Name string `json:"name"`; SourceJSON string `json:"source_json"`; Reference multihoprelay.NodeChainDescriptor `json:"reference"` } `json:"rows"` }
- if json.Unmarshal(raw, &input) != nil || len(input.Rows) != 45 { t.Fatal("complete original source fixture inventory") }
+ if json.Unmarshal(raw, &input) != nil || len(input.Rows) != 46 { t.Fatal("complete original source fixture inventory") }
  directory := t.TempDir()
  runner := &relayNodeChainExecRunner{sources:directory}
  connect, socks, openvpn, multiple := 0, 0, 0, 0
@@ -278,7 +286,7 @@ func TestRouterVPNOperatorOriginalPrivateReader(t *testing.T) {
     positions, public := []int{0}, 0
     for index,member := range row.Reference.Members {
      if member.NodeKind=="external" {public++; if member.NodeID!=""||member.ClientPublicKey!=""||member.ServerPublicKey!=""||member.ProofKind!="public-path" {t.Fatal("import acquired packet or private proof identity")}}
-     if index<len(row.Reference.Members)-1&&member.NodeKind=="" {positions=append(positions,member.Position)}
+     if index<len(row.Reference.Members)-1&&member.NodeKind==""&&!row.Reference.PrivateStreamAt(member.Position) {positions=append(positions,member.Position)}
     }
     if public<2||len(positions)!=len(capture.Request.LocalPacketPositions)||len(positions)!=len(capture.Request.LocalPacketPublicKeys)||policy.NativeCarrierRequired()!=(row.Reference.Members[0].NodeKind=="") {t.Fatal("multiple-import original sparse packet authority changed")}
     for index,position:=range positions {if capture.Request.LocalPacketPositions[index]!=position {t.Fatal("multiple-import packet position changed")}}
@@ -292,7 +300,7 @@ func TestRouterVPNOperatorOriginalPrivateReader(t *testing.T) {
  if openvpn != 6 { t.Fatal("missing original OpenVPN reader cases") }
  if socks != 6 { t.Fatal("missing original SOCKS reader cases") }
  if connect != 10 { t.Fatal("missing original CONNECT reader cases") }
- if multiple != 12 { t.Fatal("missing complete multiple-import reader cases") }
+ if multiple != 13 { t.Fatal("missing complete multiple-import reader cases") }
 }
 '''
 
@@ -301,7 +309,7 @@ CONNECT_NAMES = tuple('connect/'+mode+'/'+protocol for mode in ('wg', 'awg2-fast
 SOCKS_NAMES = tuple('socks-prefix/'+str(count)+'/'+('wg', 'awg2-fast', 'awg2-strong')[(count-3)%3] for count in range(3, 9))
 OPENVPN_NAMES = tuple('openvpn/'+mode+'/'+network for mode in ('wg', 'awg2-fast', 'awg2-strong') for network in ('tcp', 'udp'))
 MULTIPLE_IMPORTED_NAMES = tuple('multiple/'+mode+'/'+layout for mode in ('wg', 'awg2-fast', 'awg2-strong')
-                                for layout in ('adjacent', 'separated', 'packet-first', 'maximum'))
+                                for layout in ('adjacent', 'separated', 'packet-first', 'maximum')) + ('multiple/awg2-fast/extended-private-stream',)
 FIXTURE_NAMES = ('paired', 'wg/', 'wg/aes-256-gcm', 'wg/aes-256-gcm+xor-whitening',
                  'awg2-fast/', 'awg2-fast/aes-256-gcm', 'awg2-fast/aes-256-gcm+xor-whitening',
                  'awg2-strong/', 'awg2-strong/aes-256-gcm', 'awg2-strong/aes-256-gcm+xor-whitening',

@@ -225,9 +225,8 @@ func TestOrderedCandidateProposalCapturedExecution(t *testing.T) {
 			if err != nil || actual != requested {
 				t.Fatal("candidate proposal borrowed saved preferences instead of captured execution", actual, err)
 			}
-			copy := *launch
-			copy.chain = &desktopNodeChainLaunch{execution: original}
-			if _, err := orderedCandidateRequestedExecution(&copy); err == nil {
+			launch.chain = &desktopNodeChainLaunch{execution: original}
+			if _, err := orderedCandidateRequestedExecution(launch); err == nil {
 				t.Fatal("candidate proposal adopted a foreign execution parent")
 			}
 		})

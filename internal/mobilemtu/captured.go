@@ -91,7 +91,7 @@ func PrefixCeilings(config string, actual int, tags []string) ([]int, error) {
 // again by NewPlan; public Plan fields cannot forge a packet envelope. The
 // concrete captured compiler supplies its complete ordered prefix inventory.
 func CombinePlans(config string, actual int, prefixes []*Plan) (*Plan, error) {
-	return combinePlans(config, actual, prefixes, nil, 0, false)
+	return combinePlans(config, actual, prefixes, nil, 0, false, nil)
 }
 
 var extendedLocalMTUTag = regexp.MustCompile(`^routervpn-chain-(0|[1-9][0-9]*)-[0-9a-f]{12}-node-[0-9a-f]{12}$`)
@@ -102,7 +102,7 @@ func CombineExtendedImportedLocalPlans(config string, actual int, prefixes []*Pl
 	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(prefixes) != len(originalTags) {
 		return nil, errors.New("extended imported MTU needs every original prefix")
 	}
-	return combinePlans(config, actual, prefixes, originalTags, 1, false)
+	return combinePlans(config, actual, prefixes, originalTags, 1, false, nil)
 }
 
 // CombineExtendedPairedLocalPlans verifies the exact WG endpoint detour
@@ -111,7 +111,7 @@ func CombineExtendedPairedLocalPlans(config string, actual int, prefixes []*Plan
 	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(prefixes) != len(originalTags) {
 		return nil, errors.New("extended paired MTU needs every original prefix")
 	}
-	return combinePlans(config, actual, prefixes, originalTags, len(prefixes)-1, false)
+	return combinePlans(config, actual, prefixes, originalTags, len(prefixes)-1, false, nil)
 }
 
 // CombineExtendedMixedLocalPlans binds a captured packet prefix and stream
@@ -120,10 +120,35 @@ func CombineExtendedMixedLocalPlans(config string, actual int, prefixes []*Plan,
 	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(prefixes) != len(originalTags) || packets < 1 || packets > len(prefixes)-2 {
 		return nil, errors.New("mixed Local MTU lost its original packet and stream inventory")
 	}
-	return combinePlans(config, actual, prefixes, originalTags, packets, true)
+	return combinePlans(config, actual, prefixes, originalTags, packets, true, nil)
 }
 
-func combinePlans(config string, actual int, prefixes []*Plan, originalTags []string, packets int, mixed bool) (*Plan, error) {
+type capturedEntryLayer struct {
+	tag, kind string
+}
+
+// CombineExtendedLayeredExternalPlans verifies the independently captured
+// outer Start Layer before the single original packet endpoint and SS suffix.
+func CombineExtendedLayeredExternalPlans(config string, actual int, prefixes []*Plan, originalTags []string, outerTag, layer string) (*Plan, error) {
+	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(prefixes) != len(originalTags) ||
+		!extendedLocalMTUTag.MatchString(outerTag) || outerTag == originalTags[0] {
+		return nil, errors.New("layered public exit MTU requires its original entry and complete prefix inventory")
+	}
+	entry, _, _ := strings.Cut(originalTags[0], "-node-")
+	outer, _, _ := strings.Cut(outerTag, "-node-")
+	kind := "shadowsocks"
+	if layer == "aes-256-gcm+xor-whitening" {
+		kind = "routervpn-aes-xor"
+	} else if layer != "aes-256-gcm" {
+		return nil, errors.New("layered public exit MTU lost the selected entry layer")
+	}
+	if entry != outer {
+		return nil, errors.New("outer MTU transport belongs to a different captured entry")
+	}
+	return combinePlans(config, actual, prefixes, originalTags, 1, true, &capturedEntryLayer{outerTag, kind})
+}
+
+func combinePlans(config string, actual int, prefixes []*Plan, originalTags []string, packets int, mixed bool, layer *capturedEntryLayer) (*Plan, error) {
 	bad := errors.New("captured MTU needs complete matching prefix plans")
 	if len(prefixes) < 2 || len(prefixes) > 8 && originalTags == nil {
 		return nil, bad
@@ -193,7 +218,7 @@ func combinePlans(config string, actual int, prefixes []*Plan, originalTags []st
 		if err != nil || tag == selected || seen[tag] || i == len(prefixes)-1 && tag != choices[0] {
 			return nil, bad
 		}
-		if originalTags != nil && !extendedMTUPrefix(extendedNodes, originalTags, tag, i, packets, mixed) {
+		if originalTags != nil && !extendedMTUPrefix(extendedNodes, originalTags, tag, i, packets, mixed, layer) {
 			return nil, bad
 		}
 		seen[tag] = true
@@ -231,7 +256,7 @@ func extendedMTUNodes(graph map[string]any) map[string]map[string]any {
 	return nodes
 }
 
-func extendedMTUPrefix(nodes map[string]map[string]any, tags []string, tag string, i, packets int, mixed bool) bool {
+func extendedMTUPrefix(nodes map[string]map[string]any, tags []string, tag string, i, packets int, mixed bool, layer *capturedEntryLayer) bool {
 	node := nodes[tag]
 	if node == nil || tag != tags[i] || !extendedLocalMTUTag.MatchString(tag) || !strings.HasPrefix(tag, "routervpn-chain-"+strconv.Itoa(i)+"-") {
 		return false
@@ -242,6 +267,11 @@ func extendedMTUPrefix(nodes map[string]map[string]any, tags []string, tag strin
 			return false
 		}
 		if i == 0 {
+			if layer != nil {
+				outer := nodes[layer.tag]
+				return node["detour"] == layer.tag && outer != nil && outer["type"] == layer.kind &&
+					outer["method"] == "2022-blake3-aes-256-gcm" && (outer["detour"] == nil || outer["detour"] == "routervpn-node-physical-egress")
+			}
 			return node["detour"] == nil || node["detour"] == "routervpn-node-physical-egress"
 		}
 		return node["detour"] == tags[i-1]

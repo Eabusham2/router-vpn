@@ -8,6 +8,33 @@ import (
 
 const externalFinalInputKind = "routervpn-node-chain-external-final"
 
+// NodeChainExternalFinalEntryLayer accepts the original paired packet entry's layer.
+// The imported streams and the independently captured public final require Off.
+func NodeChainExternalFinalEntryLayer(layer string) bool {
+	return layer == "" || layer == "off" || layer == "aes-256-gcm" || layer == "aes-256-gcm+xor-whitening"
+}
+
+func externalFinalLayerTransport(closure *externalPredecessor) (netip.AddrPort, string, error) {
+	layer := closure.nodes[NativeStartLayerTag]
+	if layer == nil {
+		return netip.AddrPort{}, "", nil
+	}
+	if closure.final["detour"] != NativeStartLayerTag || layer["method"] != NativeStartLayerMethod {
+		return netip.AddrPort{}, "", nodeChainError
+	}
+	peers, ok := closure.final["peers"].([]any)
+	if !ok || len(peers) != 1 {
+		return netip.AddrPort{}, "", nodeChainError
+	}
+	peer, ok := peers[0].(map[string]any)
+	ip, err := netip.ParseAddr(predecessorText(peer, "address"))
+	key := importedSS2022KeyIdentity(NativeStartLayerMethod, predecessorText(layer, "password"))
+	if !ok || err != nil || ip.Zone() != "" || ip.Is4In6() || !externalPort(peer["port"]) || key == "" {
+		return netip.AddrPort{}, "", nodeChainError
+	}
+	return netip.AddrPortFrom(ip, uint16(peer["port"].(float64))), key, nil
+}
+
 // NodeChainExternalFinalInput preserves the original authenticated Router-to-external
 // policy. The ordered constructor separately binds its captured entry to position zero.
 func NodeChainExternalFinalInput(config, capture string) (string, error) {
@@ -46,7 +73,7 @@ func parseNodeChainExternalFinal(input string) (*nodeChainImportedMember, error)
 	}
 	capture, err := policy.DesktopCapture()
 	if err != nil || capture.Protocol != "shadowsocks" || capture.EntryTag != externalEntryTag || capture.ExpectedPublicIP != s.ExpectedPublicIP ||
-		capture.EntryStartLayer != "" && capture.EntryStartLayer != "off" || capture.StartLayer != "" && capture.StartLayer != "off" {
+		!NodeChainExternalFinalEntryLayer(capture.EntryStartLayer) || capture.StartLayer != "" && capture.StartLayer != "off" {
 		return nil, nodeChainError
 	}
 	digest, _ := json.Marshal([]string{externalFinalInputKind, input})
@@ -112,12 +139,12 @@ func (r *nodeChainImportedNodes) compileExternalFinal(nodes []*NodeProfile) (str
 	fail := func(err error) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 		return "", nil, NodeChainDNSCapture{}, nil, err
 	}
-	if len(nodes) < 3 || len(nodes) > NodeChainExtendedLocalMaximumNodes || len(r.members) != len(nodes) || r.customEntry || r.members[0] != nil || nodes[0] == nil || nodes[0].mode != "wg" {
+	if len(nodes) < 3 || len(nodes) > NodeChainExtendedLocalMaximumNodes || len(r.members) != len(nodes) || r.customEntry || r.members[0] != nil || nodes[0] == nil || !NodeChainPrefixMode(nodes[0].mode) {
 		return fail(nodeChainError)
 	}
 	entry, last := nodes[0], len(nodes)-1
 	final := r.members[last]
-	if final == nil || final.selection.PredecessorConfig != entry.Config() || !reflect.DeepEqual(final.selection.Entry, entry.profile) {
+	if final == nil || entry.mode != "wg" && final.selection.Profile["multihop_entry_mode"] != entry.mode || final.selection.PredecessorConfig != entry.Config() || !reflect.DeepEqual(final.selection.Entry, entry.profile) {
 		return fail(nodeChainError)
 	}
 	closures := make([]*externalPredecessor, len(nodes))
@@ -126,6 +153,9 @@ func (r *nodeChainImportedNodes) compileExternalFinal(nodes []*NodeProfile) (str
 	closures[0], err = nodeMultihopPredecessor(entry)
 	if err != nil {
 		return fail(err)
+	}
+	if closures[0].final["type"] != nodeChainPrefixType(entry.mode) {
+		return fail(nodeChainError)
 	}
 	members[0] = nodeChainGraphMember{profile: entry.profile, source: entry.source, mode: entry.mode}
 	var intermediates []map[string]any
@@ -157,6 +187,21 @@ func (r *nodeChainImportedNodes) compileExternalFinal(nodes []*NodeProfile) (str
 		}
 		targets[netip.AddrPortFrom(addr, uint16(root.Port))] = true
 	}
+	inner, layerKey, err := externalFinalLayerTransport(closures[0])
+	if err != nil {
+		return fail(err)
+	}
+	if inner.IsValid() {
+		if targets[inner] {
+			return fail(pairedStreamConflict)
+		}
+		targets[inner] = true
+		for _, closure := range closures[1:] {
+			if importedSS2022KeyIdentity(predecessorText(closure.final, "method"), predecessorText(closure.final, "password")) == layerKey {
+				return fail(pairedStreamConflict)
+			}
+		}
+	}
 	if err := validateExtendedStreamTargets(closures[1:], targets, nil); err != nil {
 		return fail(err)
 	}
@@ -172,14 +217,14 @@ func externalFinalProofs(proofs []NodeChainProof) bool {
 		return false
 	}
 	for i, p := range proofs {
-		if p.Position != i || p.StartLayer != "off" || !proofID.MatchString(p.SourceSHA256) || !exactID.MatchString(p.ProfileID) {
+		if p.Position != i || !proofID.MatchString(p.SourceSHA256) || !exactID.MatchString(p.ProfileID) {
 			return false
 		}
 		if i == 0 {
-			if p.Mode != "wg" || p.NodeKind != "" || p.Kind != "" || !proofID.MatchString(p.NodeID) {
+			if !NodeChainPrefixMode(p.Mode) || p.StartLayer == "" || !NodeChainExternalFinalEntryLayer(p.StartLayer) || p.NodeKind != "" || p.Kind != "" || !proofID.MatchString(p.NodeID) {
 				return false
 			}
-		} else if p.Mode != "shadowsocks" || p.NodeKind != "external" || p.Kind != "public-path" || p.NodeID != "" {
+		} else if p.StartLayer != "off" || p.Mode != "shadowsocks" || p.NodeKind != "external" || p.Kind != "public-path" || p.NodeID != "" {
 			return false
 		}
 	}

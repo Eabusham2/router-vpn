@@ -43,7 +43,7 @@ jobs:
         run: |
           python3 deploy/test_node_chain_multiple_imported_native_runner.py
           python3 deploy/diagnostic-selected-private-response.py precondition "$RUNNER_TEMP"
-      - name: Exercise 76 selected responses, six public exits and seven public candidate cases
+      - name: Exercise 76 selected responses, nineteen public exits and eleven public candidate cases
         run: python3 deploy/diagnostic-selected-private-response.py encrypted "$RUNNER_TEMP"
       - uses: actions/upload-artifact@v4
         with:

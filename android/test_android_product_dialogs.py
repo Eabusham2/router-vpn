@@ -423,7 +423,8 @@ interface Editor{Editor putString(String key,String value);Editor putBoolean(Str
         sources["com/eabusham/routervpn/ProductBoundaries.java"] = (BOUNDARIES.replace("  // SHIPPING_VIA_RANKING", "\n".join(ranking))
             .replace('// SHIPPING_LITERAL_IMPORTED_SS',block((JAVA/'AndroidNodeChainCapture.java').read_text(),'    static void requireLiteralImportedSS('))
             .replace('// SHIPPING_EXTERNAL_PROTOCOL',block((JAVA/'AndroidExternalPolicy.java').read_text(),'    static String protocol('))
-            .replace('// SHIPPING_PAIRED_IDENTITY',block(node_source,'        void requirePairedIdentity('))
+            .replace('// SHIPPING_PAIRED_IDENTITY','\n'.join(block(node_source,signature) for signature in (
+                '        void requirePairedIdentity(', '        boolean supportsExternalExitEntryLayer(')))
             .replace('// SHIPPING_NODE_IDENTITY_HELPERS',identity_helpers))
         sources['android/util/Base64.java']='package android.util;public final class Base64{public static final int DEFAULT=0;public static byte[] decode(String value,int flags){return java.util.Base64.getMimeDecoder().decode(value);}}'
         sources['com/eabusham/routervpn/AndroidProfileSelection.java']=(JAVA/'AndroidProfileSelection.java').read_text()
@@ -442,7 +443,7 @@ interface Editor{Editor putString(String key,String value);Editor putBoolean(Str
             +constants+selection_keys+fields+profile_methods
             +'AndroidNodeStore.ChainCapture orderedEditorPath(){throw new IllegalStateException("Saved ordered replay requires the complete profile fixture");}}')
         ordered_source=(JAVA/'AndroidOrderedPathSelection.java').read_text()
-        ordered_fields=ordered_source[ordered_source.index('    static final class Member'):ordered_source.index('    AndroidOrderedPathSelection(')]
+        ordered_fields=ordered_source[ordered_source.index('    private static final List<String> PREFIX_MODES='):ordered_source.index('    AndroidOrderedPathSelection(')]
         ordered_methods="\n".join(block(ordered_source,marker) for marker in (
             '    AndroidOrderedPathSelection(', '    List<Member> members(', '    List<String> finalModes(',
             '    void requireCurrent(', '    private boolean externalExitPrefix(', '    private static boolean literalSS(', '    private static boolean hasCapturedHysteriaFinal(', '    private static boolean hasMode('))

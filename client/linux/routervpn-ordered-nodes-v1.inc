@@ -157,8 +157,9 @@ static gboolean linux_ordered_external_final_shape_v1(JsonArray *nodes, const ch
         JsonNode *raw = json_array_get_element(nodes, i);
         if (!raw || !JSON_NODE_HOLDS_OBJECT(raw)) return FALSE;
         JsonObject *row = json_node_get_object(raw);
-        if ((!i && g_strcmp0(linux_ordered_string_v1(row, "id"), control)) ||
-            strcmp(linux_ordered_string_v1(row, "mode"), i ? "shadowsocks" : "wg")) return FALSE;
+        const char *mode = linux_ordered_string_v1(row, "mode");
+        if (i == 0 ? g_strcmp0(linux_ordered_string_v1(row, "id"), control) || !linux_ordered_prefix_v1(mode)
+                   : g_strcmp0(mode, "shadowsocks") != 0) return FALSE;
     }
     return TRUE;
 }
@@ -245,13 +246,18 @@ static gboolean linux_ordered_router_v1(JsonObject *profile) {
     return value != NULL && (!value[0] || strcmp(value, "router-vpn") == 0);
 }
 
-static gboolean linux_ordered_paired_off_v1(JsonObject *profile) {
+static gboolean linux_ordered_paired_layer_v1(JsonObject *profile, gboolean allow_authenticated) {
     if (!linux_ordered_router_v1(profile)) return FALSE;
     if (!json_object_has_member(profile, "start_layer")) return TRUE;
     JsonNode *layer = json_object_get_member(profile, "start_layer");
     if (layer == NULL || !JSON_NODE_HOLDS_VALUE(layer) || json_node_get_value_type(layer) != G_TYPE_STRING) return FALSE;
     const char *value = json_node_get_string(layer);
-    return value != NULL && (!value[0] || strcmp(value, "off") == 0);
+    return value != NULL && (!value[0] || strcmp(value, "off") == 0 ||
+        (allow_authenticated && (!strcmp(value, "aes-256-gcm") || !strcmp(value, "aes-256-gcm+xor-whitening"))));
+}
+
+static gboolean linux_ordered_paired_off_v1(JsonObject *profile) {
+    return linux_ordered_paired_layer_v1(profile, FALSE);
 }
 
 static gboolean linux_ordered_extended_paired_path_v1(const LinuxOrderedSelectionV1 *selection, JsonObject *catalog) {
@@ -419,7 +425,7 @@ static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selectio
             JsonObject *row = json_array_get_object_element(selection->nodes, i);
             const char *id = linux_ordered_string_v1(row, "id");
             JsonObject *profile = external_source_profile_v24(catalog, id);
-            gboolean eligible = !i ? linux_ordered_paired_off_v1(profile) : i + 1 == count ?
+            gboolean eligible = !i ? linux_ordered_paired_layer_v1(profile, TRUE) : i + 1 == count ?
                 linux_ordered_external_final_profile_v1(profile) : linux_ordered_literal_import_off_v1(profile);
             if (!eligible || strcmp(linux_ordered_string_v1(profile, "profile_token"), linux_ordered_string_v1(selection->tokens, id))) return FALSE;
         }
@@ -965,7 +971,7 @@ static void linux_ordered_selected_v1(GtkListBox *box, GtkListBoxRow *row, gpoin
     editor->syncing = TRUE;
     gtk_combo_box_set_active_id(GTK_COMBO_BOX(editor->transport), prefix ? g_ptr_array_index(editor->modes, index) : linux_ordered_editor_final_mode_v1(editor));
     editor->syncing = FALSE;
-    gtk_widget_set_sensitive(editor->transport, !editor->external_exit && valid && index >= 0 && (guint)index <= editor->ids->len);
+    gtk_widget_set_sensitive(editor->transport, (!editor->external_exit || index == 0) && valid && index >= 0 && (guint)index <= editor->ids->len);
     gtk_widget_set_sensitive(editor->remove, valid && prefix && (!editor->external_exit || index > 0));
     gtk_widget_set_sensitive(editor->up, valid && prefix && index > (editor->external_exit ? 1 : 0));
     gtk_widget_set_sensitive(editor->down, valid && prefix && (!editor->external_exit || index > 0) && (guint)(index + 1) < editor->ids->len);
@@ -1003,15 +1009,15 @@ static void linux_ordered_choose_external_exit_v1(GtkButton *button, gpointer da
     JsonObject *catalog = json_node_get_object(editor->catalog);
     const char *id = gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->candidate));
     if (!linux_ordered_editable_v1(editor) || !id || !linux_ordered_external_final_profile_v1(external_source_profile_v24(catalog, id)) ||
-        !linux_ordered_paired_off_v1(external_source_profile_v24(catalog, editor->control)) ||
+        !linux_ordered_paired_layer_v1(external_source_profile_v24(catalog, editor->control), TRUE) ||
         g_strcmp0(gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->execution)), "local")) {
-        gtk_label_set_text(GTK_LABEL(editor->status), "Choose a linked literal Shadowsocks exit with a WireGuard entry in Local.");
+        gtk_label_set_text(GTK_LABEL(editor->status), "Choose a linked literal Shadowsocks exit with a paired WireGuard or AmneziaWG entry in Local.");
         return;
     }
     for (guint i = editor->external_exit ? 1u : 0u; i < editor->ids->len; i++) {
         const char *node = g_ptr_array_index(editor->ids, i);
         if (!strcmp(node, id) || !linux_ordered_literal_import_off_v1(external_source_profile_v24(catalog, node))) {
-            gtk_label_set_text(GTK_LABEL(editor->status), "Choose a different exit and keep only literal Shadowsocks imports after the WireGuard entry.");
+            gtk_label_set_text(GTK_LABEL(editor->status), "Choose a different exit and keep only literal Shadowsocks imports after the paired entry.");
             return;
         }
     }
@@ -1065,7 +1071,7 @@ static void linux_ordered_mode_v1(GtkComboBox *combo, gpointer data) {
     LinuxOrderedEditorV1 *editor = data; int index = linux_ordered_index_v1(editor);
     const char *mode = gtk_combo_box_get_active_id(combo);
     if (editor->syncing || !linux_ordered_editable_v1(editor)) return;
-    if (editor->external_exit) { linux_ordered_selected_v1(NULL, NULL, editor); return; }
+    if (editor->external_exit && (index != 0 || !linux_ordered_prefix_v1(mode))) { linux_ordered_selected_v1(NULL, NULL, editor); return; }
     if (index >= 0 && (guint)index == editor->ids->len) {
         if (!linux_ordered_editor_final_allowed_v1(editor, mode)) {
             linux_ordered_selected_v1(NULL, NULL, editor);
@@ -1262,7 +1268,7 @@ static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
     g_signal_connect(editor.dialog, "destroy", G_CALLBACK(linux_ordered_closed_v1), &editor);
     gtk_window_set_default_size(GTK_WINDOW(editor.dialog), 660, 480);
     GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(editor.dialog)); gtk_container_set_border_width(GTK_CONTAINER(box), 12);
-    GtkWidget *note = gtk_label_new("Choose the entry and each hop in order. Paired entries can use supported Shadowsocks 2022 imports at any interior position. Server and Compare require support from every import and the native controller. A custom entry uses Local with two distinct Shadowsocks imports and a paired Shadowsocks exit. SOCKS5, CONNECT and OpenVPN keep their single position immediately before a Shadowsocks final. A paired Hysteria2 final retains its selected Start Layer after paired WireGuard or AWG2 prefixes. Apply saves the choices; Connect proves the complete path.");
+    GtkWidget *note = gtk_label_new("A Local route to an imported exit uses the paired entry’s saved Start Layer. Keep the imported hops and exit set to Off. Paired entries can use supported Shadowsocks 2022 imports at any interior position. Server and Compare require support from every import and the native controller. A custom entry uses Local with two distinct Shadowsocks imports and a paired Shadowsocks exit. SOCKS5, CONNECT and OpenVPN keep their single position immediately before a Shadowsocks final. A paired Hysteria2 final retains its selected Start Layer after paired WireGuard or AWG2 prefixes. Apply saves the choices; Connect proves the complete path.");
     gtk_label_set_line_wrap(GTK_LABEL(note), TRUE); gtk_box_pack_start(GTK_BOX(box), note, FALSE, FALSE, 6);
     GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL); gtk_widget_set_size_request(scroll, -1, 190);
     editor.list = gtk_list_box_new(); gtk_container_add(GTK_CONTAINER(scroll), editor.list); gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 6);

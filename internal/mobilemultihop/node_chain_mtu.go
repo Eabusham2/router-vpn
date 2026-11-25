@@ -77,7 +77,15 @@ func (c *NodeChain) PlanForMTU(config string, actual int) (*mobilemtu.Plan, erro
 		if c.ExtendedLocalNodeCount() != len(plans) {
 			return nil, nodeChainError
 		}
-		combined, err = mobilemtu.CombineExtendedImportedLocalPlans(config, actual, plans, c.PrefixTags())
+		if c.HasExternalFinal() && c.proofs[0].StartLayer != "off" {
+			first := c.proofs[0]
+			outer := nodeChainNamespace(0, first.SourceSHA256, "node", NativeStartLayerTag)
+			combined, err = mobilemtu.CombineExtendedLayeredExternalPlans(config, actual, plans, c.PrefixTags(), outer, first.StartLayer)
+		} else if c.HasExternalFinal() && c.proofs[0].Mode != "wg" {
+			combined, err = mobilemtu.CombineExtendedMixedLocalPlans(config, actual, plans, c.PrefixTags(), 1)
+		} else {
+			combined, err = mobilemtu.CombineExtendedImportedLocalPlans(config, actual, plans, c.PrefixTags())
+		}
 	} else {
 		combined, err = mobilemtu.CombinePlans(config, actual, plans)
 	}

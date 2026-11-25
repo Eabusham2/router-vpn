@@ -319,8 +319,14 @@ enum RouterVPNOrderedNodes {
         NSError(domain: "RouterVPN.OrderedNodes", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
     }
     static func externalFinalShape(_ rows: [[String: String]], control: String) -> Bool {
-        (3...physicalTraversalDepth).contains(rows.count) && rows.first?["id"] == control && rows.first?["mode"] == "wg" &&
+        (3...physicalTraversalDepth).contains(rows.count) && rows.first?["id"] == control && prefixModes.contains(rows.first?["mode"] ?? "") &&
             rows.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" }
+    }
+    static func externalFinalEntry(_ profile: [String: Any]) -> Bool {
+        guard finalProfile(profile, mode: "shadowsocks") else { return false }
+        guard let raw = profile["start_layer"] else { return true }
+        guard let entryLayer = raw as? String else { return false }
+        return ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(entryLayer)
     }
     static func literalExternal(_ profile: [String: Any], final: Bool) -> Bool {
         guard importedMiddleMode(profile) == "shadowsocks", startLayerOff(profile),
@@ -334,7 +340,7 @@ enum RouterVPNOrderedNodes {
             let matches = profiles.filter { $0["id"] as? String == row["id"] }
             guard matches.count == 1 else { return false }
             if i == 0 {
-                guard finalProfile(matches[0], mode: "shadowsocks"), startLayerOff(matches[0]) else { return false }
+                guard externalFinalEntry(matches[0]) else { return false }
             } else if !literalExternal(matches[0], final: i == rows.count - 1) { return false }
         }
         return true
@@ -368,7 +374,7 @@ enum RouterVPNOrderedNodes {
         }
         let externalFinal = rows.first?["id"] == selection.selectedNodeID
         if externalFinal && (selection.execution != "local" || !externalFinalPath(rows, control: selection.selectedNodeID, profiles: profiles)) {
-            throw issue("An external exit requires the selected WireGuard entry and linked literal Shadowsocks imports in Local.")
+            throw issue("An external exit requires the selected WireGuard or AmneziaWG entry and linked literal Shadowsocks imports in Local.")
         }
         let localImported = selection.execution == "local" && (externalFinal || localImportedPath(rows, profiles: profiles))
         let multipleImported = selection.execution != "local" && localImportedPath(rows, profiles: profiles, selectedExecution: true)
@@ -474,18 +480,21 @@ struct RouterVPNOrderedNodeDraft {
     mutating func chooseExternalExit(_ id: String) throws {
         guard execution == "local", candidates.contains(id), !prefixes.contains(id),
               let exit = capturedCatalog.first(where: { $0["id"] as? String == id }), RouterVPNOrderedNodes.literalExternal(exit, final: true),
-              let entry = capturedCatalog.first(where: { $0["id"] as? String == control }), RouterVPNOrderedNodes.startLayerOff(entry),
+              let entry = capturedCatalog.first(where: { $0["id"] as? String == control }), RouterVPNOrderedNodes.externalFinalEntry(entry),
               prefixes.filter({ $0 != control }).allSatisfy({ member in
                   capturedCatalog.contains { $0["id"] as? String == member && RouterVPNOrderedNodes.literalExternal($0, final: false) }
               }), prefixes.count < RouterVPNOrderedNodes.physicalTraversalDepth - 1 || externalExit != nil else {
-            throw RouterVPNOrderedNodes.issue("Choose a separate literal Shadowsocks exit and use only literal Shadowsocks imports after the selected WireGuard entry in Local.")
+            throw RouterVPNOrderedNodes.issue("Choose a separate literal Shadowsocks exit and use only literal Shadowsocks imports after the selected WireGuard or AmneziaWG entry in Local.")
         }
         if externalExit == nil { prefixes.insert(control, at: 0); modes.insert("wg", at: 0) }
         externalExit = id
         finalMode = "shadowsocks"
     }
     func allowedModes(at index: Int) -> [String] {
-        if externalExit != nil { return index == 0 ? ["wg"] : ["shadowsocks"] }
+        if externalExit != nil {
+            guard (0...prefixes.count).contains(index) else { return [] }
+            return index == 0 ? RouterVPNOrderedNodes.prefixModes : ["shadowsocks"]
+        }
         if execution != "local", index >= 2, prefixes.indices.contains(index), !importedIDs.contains(prefixes[index]) {
             var proposed = nodes
             proposed[index]["mode"] = "shadowsocks"
@@ -1405,7 +1414,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         super.init(window: window)
         let root = NSStackView(); root.orientation = .vertical; root.alignment = .leading; root.spacing = 12
         root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        let note = NSTextField(wrappingLabelWithString: "Choose the entry and preceding hops. Longer Local packet paths use paired WireGuard nodes and a paired Shadowsocks 2022 final, all with Start Layer Off. Longer Local routes can also begin with paired WireGuard or AWG2 nodes followed by literal Shadowsocks 2022 imports. Keep every Start Layer Off. Each packet layer must fit the route MTU. Choose Shadowsocks 2022 or Hysteria2 for the selected final exit; Hysteria2 keeps its own Start Layer. An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN middle requires a Shadowsocks 2022 final. With a paired entry, supported SS2022 imports can occupy any interior position. Server and Compare require support from every import and the native controller. An OpenVPN middle also needs its own private pairing. Each node keeps its own linked credentials and settings.")
+        let note = NSTextField(wrappingLabelWithString: "Choose the entry and preceding hops. Longer Local packet paths use paired WireGuard nodes and a paired Shadowsocks 2022 final, all with Start Layer Off. Longer Local routes can also begin with paired WireGuard or AWG2 nodes followed by literal Shadowsocks 2022 imports. For a paired final, keep every Start Layer Off on these longer routes. A Local route to an imported exit uses the paired entry’s saved Start Layer and requires Off on every import. Each packet layer must fit the route MTU. Choose Shadowsocks 2022 or Hysteria2 for the selected final exit; Hysteria2 keeps its own Start Layer. An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN middle requires a Shadowsocks 2022 final. With a paired entry, supported SS2022 imports can occupy any interior position. Server and Compare require support from every import and the native controller. An OpenVPN middle also needs its own private pairing. Each node keeps its own linked credentials and settings.")
         root.addArrangedSubview(note)
         path.setAccessibilityLabel("Ordered path"); path.target = self; path.action = #selector(selectedHopChanged); root.addArrangedSubview(path)
         transport.setAccessibilityLabel("Selected node transport")

@@ -147,6 +147,7 @@ static void selected_draft_choice(App*app,GtkWindow*parent,const char*raw,int po
     check(linux_ordered_adopt_measured_v1(parent,raw,position,response)&&editor->ids->len==3&&!strcmp(g_ptr_array_index(editor->ids,1),"n3")&&!strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->execution)),execution),"selected editor did not insert measured hop in original route");
     json_object_unref(response);json_node_free(captured);
 }
+static const char *public_editor_mode = "wg";
 enum { FOLLOW_INSERTED = 13, CHANGE_ROW, RELINK_SUFFIX, PREVIOUS_DIALOG, CHANGE_OWNER, CLOSE_EDITOR, PUBLIC_INSERTED, PUBLIC_AT_BOUND };
 static guint response_draft_deliveries;
 static void selected_response_draft_choice(App *app, GtkWindow *parent, const char *raw, int position) {
@@ -159,6 +160,8 @@ static void selected_response_draft_choice(App *app, GtkWindow *parent, const ch
     guint original_count = editor_case==PUBLIC_AT_BOUND?95u:(public?3u:4u);
     check(!strcmp(obj_string(body,"execution"),public?"local":"auto") &&
           linux_ordered_flag_v1(body,"external_final")==public && !strcmp(obj_string(body,"expected_selected_node_id"),"exit"),"unsaved response lost original editor owner");
+    if(public) check(!strcmp(obj_string(json_array_get_object_element(original,0),"mode"),
+                             public_editor_mode),"public editor replaced the original paired transport");
     if(response_draft_deliveries++){
         check(position==2 && json_array_get_length(original)==original_count+1 && json_object_get_size(tokens)==original_count+1 &&
               !strcmp(obj_string(json_array_get_object_element(original,2),"id"),"n3") &&
@@ -198,6 +201,9 @@ static gboolean drive_editor(gpointer data) {
     } else if(editor_case>=FOLLOW_INSERTED && editor_case<=PUBLIC_AT_BOUND) {
         if (editor_case >= PUBLIC_INSERTED) {
             choose(candidate,"n4");click(d,"Use as external exit");choose(candidate,"n2");click(d,"Add entry / hop");
+            select_row(list,0);check(gtk_widget_get_sensitive(transport),"public editor disabled its paired transport");
+            choose(transport,public_editor_mode);
+            select_row(list,1);check(!gtk_widget_get_sensitive(transport),"public editor unlocked an imported transport");
             if(editor_case==PUBLIC_AT_BOUND) {
                 LinuxOrderedEditorV1 *large=g_object_get_data(G_OBJECT(d),"ordered-live-editor");
                 for(guint i=0;i<92;i++) {
@@ -1117,9 +1123,15 @@ static void selected_private_stream_model(void) {
 }
 
 static void external_final_source_fixture(void) {
-    const guint sizes[] = {3,4,9,96};
-    for (guint size=0; size<G_N_ELEMENTS(sizes); size++) {
-        guint count=sizes[size];
+    const struct { guint count; const char *mode, *layer; } paths[] = {
+        {3,"wg","off"}, {4,"wg","off"}, {9,"wg","off"}, {96,"wg","off"}, {9,"awg2-fast","off"}, {96,"awg2-strong","off"},
+        {3,"wg","aes-256-gcm"}, {9,"wg","aes-256-gcm+xor-whitening"},
+        {3,"awg2-fast","aes-256-gcm"}, {9,"awg2-fast","aes-256-gcm+xor-whitening"},
+        {3,"awg2-strong","aes-256-gcm"}, {9,"awg2-strong","aes-256-gcm+xor-whitening"}
+    };
+    for (guint size=0; size<G_N_ELEMENTS(paths); size++) {
+        guint count=paths[size].count;
+        const char *entry_mode=paths[size].mode;
         g_autoptr(JsonObject) store = json_object_new(), tokens = json_object_new();
         g_autoptr(JsonArray) nodes = json_array_new();
         JsonArray *profiles = json_array_new(); json_object_set_array_member(store, "profiles", profiles);
@@ -1127,7 +1139,7 @@ static void external_final_source_fixture(void) {
         for (guint i = 0; i < count; i++) {
             g_autofree char *id = g_strdup_printf("external-route-%u", i), *token = g_strdup_printf("%064x", i+1);
             JsonObject *profile = json_object_new(), *row = json_object_new();
-            json_object_set_string_member(row,"id",id); json_object_set_string_member(row,"mode",i ? "shadowsocks" : "wg");
+            json_object_set_string_member(row,"id",id); json_object_set_string_member(row,"mode",i ? "shadowsocks" : entry_mode);
             json_array_add_object_element(nodes,row);
             json_object_set_string_member(profile,"id",id); json_object_set_string_member(profile,"profile_token",token); json_object_set_string_member(tokens,id,token);
             json_object_set_string_member(profile,"node_kind",i ? "external" : "router-vpn");
@@ -1138,6 +1150,8 @@ static void external_final_source_fixture(void) {
             }
             json_array_add_object_element(profiles,profile);
         }
+        JsonObject *entry = json_array_get_object_element(profiles,0);
+        json_object_set_string_member(entry,"start_layer",paths[size].layer);
         LinuxOrderedSelectionV1 *selection = linux_ordered_selection_v1("external-route-0",nodes,tokens);
         check(selection && linux_ordered_current_v1(selection,store),"external final failed original entry and exit binding");
         for (guint position=0;position<count-1;position++)
@@ -1146,6 +1160,29 @@ static void external_final_source_fixture(void) {
         g_autofree char *raw = linux_ordered_connect_body_v1(selection);
         g_autoptr(JsonNode) request = parse_json(raw);
         check(request && linux_ordered_flag_v1(json_node_get_object(request),"external_final"),"external final Connect lost its discriminator");
+        JsonArray *captured = linux_ordered_array_v1(json_node_get_object(request),"nodes");
+        check(captured && !strcmp(obj_string(json_array_get_object_element(captured,0),"mode"),entry_mode),"public Connect changed the paired entry transport");
+        check(!json_object_has_member(json_node_get_object(request),"start_layer"),"public Connect copied the paired layer outside its source");
+        g_autoptr(JsonObject) saved = linux_ordered_value_v1(selection);
+        LinuxOrderedSelectionV1 *replay = linux_ordered_decode_v1(saved);
+        check(replay && linux_ordered_current_v1(replay,store),"saved external route lost its original entry layer");
+        if (strcmp(paths[size].layer,"off")) {
+            const guint positions[] = {0,1,count-1};
+            for (guint index=0;index<G_N_ELEMENTS(positions);index++) {
+                guint pos=positions[index];
+                JsonObject *member=json_array_get_object_element(profiles,pos);
+                json_object_set_string_member(member,"start_layer",pos ? paths[size].layer : "aes+xor");
+                check(!linux_ordered_current_v1(replay,store) && !linux_ordered_measurement_prefix_v1(replay,store,1),
+                      "saved external route admitted a misplaced or unsupported layer");
+                json_object_set_string_member(member,"start_layer",pos ? "off" : paths[size].layer);
+            }
+            json_object_set_string_member(entry,"start_layer","off");
+            json_object_set_string_member(entry,"profile_token",obj_string(json_array_get_object_element(profiles,1),"profile_token"));
+            check(!linux_ordered_current_v1(replay,store),"saved external route followed a replacement entry revision");
+            json_object_set_string_member(entry,"profile_token",obj_string(tokens,"external-route-0"));
+            json_object_set_string_member(entry,"start_layer",paths[size].layer);
+        }
+        linux_ordered_selection_free_v1(replay);
         check(!linux_ordered_execution_v1(selection,"server"),"external final accepted Server");
         JsonObject *final = json_array_get_object_element(profiles,count-1);
         json_object_set_boolean_member(json_object_get_object_member(final,"external"),"ordered_external_final",FALSE);
@@ -1323,6 +1360,10 @@ int main(int argc,char **argv) {
         json_object_set_string_member(new_import,"node_kind","external");
         json_object_set_object_member(new_import,"external",json_object_ref(hint));
         refresh_all(&app);edit(PUBLIC_INSERTED,TRUE);
+        JsonObject *paired_entry=external_source_profile_v24(json_node_get_object(catalog),"exit");
+        json_object_set_string_member(paired_entry,"start_layer","aes-256-gcm");
+        public_editor_mode="awg2-fast";edit(PUBLIC_INSERTED,TRUE);
+        json_object_set_string_member(paired_entry,"start_layer","off");
         JsonArray *public_profiles=linux_ordered_array_v1(json_node_get_object(catalog),"profiles");
         guint original_total=json_array_get_length(public_profiles);
         for(guint i=0;i<92;i++) {
@@ -1333,7 +1374,10 @@ int main(int argc,char **argv) {
             json_object_set_string_member(profile,"node_kind","external");json_object_set_object_member(profile,"external",json_object_ref(hint));
             json_array_add_object_element(public_profiles,profile);
         }
-        refresh_all(&app);edit(PUBLIC_AT_BOUND,TRUE);
+        refresh_all(&app);public_editor_mode="wg";edit(PUBLIC_AT_BOUND,TRUE);
+        json_object_set_string_member(paired_entry,"start_layer","aes-256-gcm+xor-whitening");
+        public_editor_mode="awg2-strong";edit(PUBLIC_AT_BOUND,TRUE);
+        json_object_set_string_member(paired_entry,"start_layer","off");
         while(json_array_get_length(public_profiles)>original_total)json_array_remove_element(public_profiles,original_total);
         json_object_set_string_member(new_import,"node_kind","router-vpn");json_object_remove_member(new_import,"external");
         linux_ordered_present_measurement_v1=NULL;

@@ -89,7 +89,7 @@ struct IOSNodeChainCapture {
             throw issue("This source cannot extend the selected route beyond eight members.")
         }
         if publicExit && !IOSMultihopNodeSelection.externalExitReferences(selectedNodes, controlID: finalID, execution: selectionExecution) {
-            throw issue("An imported final requires the original Local WireGuard entry and distinct literal Shadowsocks sources.")
+            throw issue("An imported final requires the original Local packet entry and distinct literal Shadowsocks sources.")
         }
         let importedEntry = selectionExecution == "local" && IOSMultihopNodeSelection.usesLocalImportedEntry(selectedNodes)
         if multipleExecution && !IOSMultihopNodeSelection.supportsMultipleImportedExecution(selectedNodes) {
@@ -153,7 +153,7 @@ struct IOSNodeChainCapture {
             // the selected transport, including AWG's separate packet keys.
             identitySources.append(try json(identity, maximum: 16 * 1024 * 1024))
             let layer = try IOSMultihopStartLayer.capture(profile: profile, profiles: assets)
-            guard bundles.count <= IOSMultihopNodeSelection.maximumNodes || layer.mode == "off" else {
+            guard bundles.count <= IOSMultihopNodeSelection.maximumNodes || layer.mode == "off" || publicExit && position == 0 else {
                 throw issue("Every paired node in this longer route must use Start Layer Off.")
             }
             var start = ""
@@ -177,7 +177,7 @@ struct IOSNodeChainCapture {
             var failure: NSError?
             let last = inputs.count-1
             let final: String? = LibboxRouterNodeChainExternalFinalFromEntry(inputs[0], inputs[last], &failure)
-            guard let final, !final.isEmpty, failure == nil else { throw failure ?? issue("The original imported exit could not be bound to its WireGuard control.") }
+            guard let final, !final.isEmpty, failure == nil else { throw failure ?? issue("The original imported exit could not be bound to its paired packet entry.") }
             inputs[last] = final
         }
         let source = try json(["schema": publicExit ? 8 : importedEntry ? 7 : importedNodes ? 6 : importedOpenVPN ? 5 : imported ? 2 : 1, "execution": "local", "nodes": inputs,
@@ -272,7 +272,7 @@ struct IOSNodeChainCapture {
             lan = lan && (profile["home_lan_access"] as? Bool ?? true)
             members.append(Member(id: id, mode: mode, profileJSON: profileJSON, filesJSON: filesJSON, profile: profile, startFilesJSON: node["start"] as? String))
         }
-        guard let final = (schema == 8 ? members.first : members.last), schema != 8 || final.mode == "wg", schema != 7 || final.mode == "shadowsocks",
+        guard let final = (schema == 8 ? members.first : members.last), schema != 8 || IOSMultihopNodeSelection.supportsNativePrefix(final.mode), schema != 7 || final.mode == "shadowsocks",
               let enabled = final.profile["multihop_enabled"] as? NSNumber, CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue,
               final.profile["multihop_execution"] as? String == selectionExecution,
               ["multihop_entry_id", "multihop_entry_mode", "multihop_exit_id", "multihop_exit_mode"].allSatisfy({ final.profile[$0] == nil || final.profile[$0] as? String == "" }),

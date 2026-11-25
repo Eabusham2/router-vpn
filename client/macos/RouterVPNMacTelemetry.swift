@@ -1179,7 +1179,7 @@ private enum RouterVPNOrderedCandidateDisplay {
         var ids=Set<String>()
         for (i,row) in rows.enumerated() {
             guard row.count==3, let id=row["id"], id.range(of:#"\A[A-Za-z0-9_-]{1,64}\z"#,options:.regularExpression) != nil,
-                  ids.insert(id).inserted, row["mode"] == (i==0 ? "wg":"shadowsocks"),
+                  ids.insert(id).inserted, (i == 0 ? ["wg", "awg2-fast", "awg2-strong"].contains(row["mode"] ?? "") : row["mode"] == "shadowsocks"),
                   row["kind"] == (i==0 ? "router-vpn":"external") else { return nil }
         }
         if let draft {

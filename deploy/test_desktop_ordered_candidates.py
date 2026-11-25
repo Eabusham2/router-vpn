@@ -668,9 +668,9 @@ for fault in ["kind","endpoint","samples","disposition"] {
     inner["benchmark"]=b;value["results"]=[inner]
     check(RouterVPNOrderedCandidateDisplay.score(value,measurement:publicMetric,now:now)==nil,"public receipt borrowed a foreign benchmark: "+fault)
 }
-for depth in [3,4,9,96] {
+for (depth,entryMode) in [(3,"wg"),(4,"wg"),(9,"wg"),(96,"wg"),(9,"awg2-fast"),(96,"awg2-strong")] {
     for pos in Set([1,depth-2]).sorted() {
-        let nodes=(0..<depth).map { ["id":$0==0 ? "entry" : $0==depth-1 ? "public-final":"public-\($0)","mode":$0==0 ? "wg":"shadowsocks"] }
+        let nodes=(0..<depth).map { ["id":$0==0 ? "entry" : $0==depth-1 ? "public-final":"public-\($0)","mode":$0==0 ? entryMode:"shadowsocks"] }
         let source=nodes.enumerated().map { i,node in node.merging(["kind":i==0 ? "router-vpn":"external"]) {_,new in new} }
         let insertion=Array(nodes[...pos])+[["id":"custom","mode":"shadowsocks"]]+Array(nodes[(pos+1)...])
         let draft:[String:Any]=["execution":"local","external_final":true,"expected_selected_node_id":"entry","nodes":nodes]
@@ -685,6 +685,9 @@ for depth in [3,4,9,96] {
             var bad=offer;bad[field]=wrong
             check(RouterVPNOrderedCandidateDisplay.metric(bad,position:pos)==nil,"public catalog acquired another execution owner: "+field)
         }
+        var switched=source;switched[0]["mode"] = entryMode == "awg2-fast" ? "awg2-strong" : "awg2-fast"
+        var changedEntry=offer;changedEntry["public_response_source_nodes"]=switched
+        check(RouterVPNOrderedCandidateDisplay.publicSource(changedEntry,position:pos,draft:draft)==nil,"public draft accepted a different paired transport")
         var crossed=source;crossed[depth-1]["kind"]="router-vpn"
         var malformed=offer;malformed["public_response_source_nodes"]=crossed
         check(RouterVPNOrderedCandidateDisplay.metric(malformed,position:pos)==nil,"public catalog replaced its original external final")
@@ -1273,8 +1276,10 @@ def linux_form(directory):
     public_row['results'][0].update(kind='public-exit-response')
     public_row['results'][0]['benchmark'].update(measurement=public_metric,endpoint='https://1.1.1.1/cdn-cgi/trace')
     (directory/'public-row.json').write_text(json.dumps(public_row))
-    for depth,position in [(3,1),(4,1),(4,2),(9,7),(96,1),(96,94)]:
-        nodes=[dict(id='entry' if i==0 else 'final' if i==depth-1 else f'public-{i}',mode='wg' if i==0 else 'shadowsocks') for i in range(depth)]
+    public_cases = [(3,1,'wg'),(4,1,'wg'),(4,2,'wg'),(9,7,'wg'),(96,1,'wg'),(96,94,'wg'),
+                    (9,1,'awg2-fast'),(96,93,'awg2-strong')]
+    for depth,position,entry in public_cases:
+        nodes=[dict(id='entry' if i==0 else 'final' if i==depth-1 else f'public-{i}',mode=entry if i==0 else 'shadowsocks') for i in range(depth)]
         draft=dict(execution='local',external_final=True,expected_selected_node_id='entry',nodes=nodes)
         offer=json.loads(json.dumps(response_catalog))
         offer.update(measurement=public_metric,external_final=True,requested_execution='local',prefix_position=position,
@@ -1351,7 +1356,15 @@ static void public_fixture(App *app, guint count, int position, gboolean save, g
  check(form->job && linux_oc_catalog_measurement(view,position),"captured public source missing in editor");
  json_object_set_string_member(view,"selected_execution","server");
  check(!linux_oc_receive(form,view,1),"public source trusted a Server winner");json_object_remove_member(view,"selected_execution");
- JsonObject *final=json_array_get_object_element(linux_ec_array(view,"public_response_source_nodes"),count-1);
+ JsonArray *members=linux_ec_array(view,"public_response_source_nodes");
+ if(draft){
+    JsonObject *entry=json_array_get_object_element(members,0);
+    g_autofree char *original_mode=g_strdup(linux_ec_string(entry,"mode"));
+    json_object_set_string_member(entry,"mode",strcmp(original_mode,"awg2-fast")?"awg2-fast":"awg2-strong");
+    check(!linux_oc_receive(form,view,1),"public draft accepted a different paired transport");
+    json_object_set_string_member(entry,"mode",original_mode);
+ }
+ JsonObject *final=json_array_get_object_element(members,count-1);
  json_object_set_string_member(final,"kind","router-vpn");
  check(!linux_oc_receive(form,view,1),"public catalog trusted a private exit");
  json_object_set_string_member(final,"kind","external");
@@ -1800,6 +1813,8 @@ int main(int argc,char**argv){
  public_fixture(&app,9,7,FALSE,TRUE);
  public_fixture(&app,96,1,FALSE,TRUE);
  public_fixture(&app,96,94,FALSE,TRUE);
+ public_fixture(&app,9,1,FALSE,TRUE);
+ public_fixture(&app,96,93,FALSE,TRUE);
  check(freed==paths->len,"owned HTTP worker leaked");json_node_free(catalog);json_node_free(row);json_node_free(result);json_node_free(saved);json_node_free(cancel);gtk_widget_destroy(app.window);g_ptr_array_free(paths,TRUE);g_ptr_array_free(bodies,TRUE);printf("Shipping GTK ordered-candidate controls: %u checks PASS; real widgets, controlled HTTP delivery.\n",checks);return 0;
 }
 '''.replace('HELPERS',helpers).replace('METHODS',methods)

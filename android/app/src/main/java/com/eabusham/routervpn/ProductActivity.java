@@ -399,7 +399,7 @@ public final class ProductActivity extends Activity {
     private void showNodeSort(){
         choiceDialog("Node order","Lowest latency ranks only source-matching saved 50-sample direct benchmarks with no failed samples. Quick RTT and current VPN measurements cannot replace them.")
             .setItems(new String[]{"Current node first","Last used","Name","Lowest latency order","Select lowest measured latency","Most used"},(d,w)->{
-                if(w==4){if(mutationBusy()){toast("Disconnect/finish before changing the selected node.");return;}try{AndroidUnifiedNodeCatalog.Item lowest=catalog.lowestLatency();if(lowest==null){toast("Measure at least two Router nodes with 50 successful samples first.");return;}selectCatalog(lowest);toast("Selected "+lowest.name+" from saved 50-sample trimmed means. Saved times/networks may differ; use Fastest for a current comparison. Press Connect when ready.");}catch(Exception error){toast(safe(error));}return;}
+                if(w==4){if(mutationBusy()){toast("Disconnect/finish before changing the selected node.");return;}try{AndroidUnifiedNodeCatalog.Item lowest=catalog.lowestLatency();if(lowest==null){toast("Measure at least two Router nodes with 50 successful samples first.");return;}if(!selectCatalog(lowest))return;toast("Selected "+lowest.name+" from saved 50-sample trimmed means. Saved times/networks may differ; use Fastest for a current comparison. Press Connect when ready.");}catch(Exception error){toast(safe(error));}return;}
                 if(w==5){AndroidConnectionProfileStore.applySelection(prefs(),prefs().edit().putString("node_sort",AndroidUnifiedNodeCatalog.SORT_MOST_USED));showNodes();return;}
                 AndroidConnectionProfileStore.applySelection(prefs(),prefs().edit().putString("node_sort",new String[]{AndroidUnifiedNodeCatalog.SORT_CURRENT,AndroidUnifiedNodeCatalog.SORT_LAST_USED,AndroidUnifiedNodeCatalog.SORT_NAME,AndroidUnifiedNodeCatalog.SORT_LATENCY}[w]));showNodes();
             }).setNegativeButton("Close",null).show();
@@ -682,7 +682,28 @@ public final class ProductActivity extends Activity {
     private void refreshMap(){refreshNodes();}
     private AndroidUnifiedNodeCatalog.Item selectedCatalogItem(){try{String kind=prefs().getString(SELECTED_KIND,"router-vpn"),id=prefs().getString(SELECTED_ID,nodeStore.activeId());for(AndroidUnifiedNodeCatalog.Item item:catalog.list(AndroidUnifiedNodeCatalog.SORT_CURRENT))if(item.kind.equals(kind)&&item.id.equals(id))return item;}catch(Exception ignored){}return null;}
     private void selectCatalog(String kind,String id){try{for(AndroidUnifiedNodeCatalog.Item item:catalog.list(AndroidUnifiedNodeCatalog.SORT_CURRENT))if(item.kind.equals(kind)&&item.id.equals(id)){selectCatalog(item);return;}}catch(Exception error){toast(safe(error));}}
-    private void selectCatalog(AndroidUnifiedNodeCatalog.Item item){if(mutationBusy()){toast("Disconnect/finish the current VPN operation before changing the selected node; live/probe identity is frozen.");return;}try{synchronized(prefs()){if(item.isRouterVpn())nodeStore.select(item.id);android.content.SharedPreferences.Editor selected=prefs().edit().putString(SELECTED_KIND,item.kind).putString(SELECTED_ID,item.id);if(!item.kind.equals(prefs().getString(SELECTED_KIND,""))||!item.id.equals(prefs().getString(SELECTED_ID,"")))selected.putBoolean(MULTI_ON,false).putString(MULTI_ENTRY,"").putString(MULTI_EXIT,"").putString("multihop_nodes","");AndroidConnectionProfileStore.applySelection(prefs(),selected);}refreshAll();}catch(Exception error){toast(safe(error));}}
+    private boolean selectCatalog(AndroidUnifiedNodeCatalog.Item item) {
+        if (mutationBusy()) {
+            toast("Disconnect/finish the current VPN operation before changing the selected node; live/probe identity is frozen.");
+            return false;
+        }
+        try {
+            synchronized (prefs()) {
+                if (item.isRouterVpn()) nodeStore.select(item.id);
+                android.content.SharedPreferences.Editor selected = prefs().edit()
+                        .putString(SELECTED_KIND, item.kind).putString(SELECTED_ID, item.id);
+                if (!item.kind.equals(prefs().getString(SELECTED_KIND, "")) || !item.id.equals(prefs().getString(SELECTED_ID, ""))) {
+                    selected.putBoolean(MULTI_ON, false).putString(MULTI_ENTRY, "").putString(MULTI_EXIT, "").putString("multihop_nodes", "");
+                }
+                AndroidConnectionProfileStore.applySelection(prefs(), selected);
+            }
+            refreshAll();
+            return true;
+        } catch (Exception error) {
+            toast(safe(error));
+            return false;
+        }
+    }
     private void showNodes(){try{List<AndroidUnifiedNodeCatalog.Item>items=catalog.list(prefs().getString("node_sort",AndroidUnifiedNodeCatalog.SORT_CURRENT));if(items.isEmpty()){new AlertDialog.Builder(this).setTitle("Nodes").setMessage("No nodes yet. Pair a Router securely on your LAN, import its complete JSON bundle, or add a Custom / external exit.").setPositiveButton("Add Router node",(d,w)->showAddRouter()).setNeutralButton("Add custom",(d,w)->openStandardExits()).setNegativeButton("Close",null).show();return;}String[]labels=new String[items.size()];for(int i=0;i<items.size();i++){AndroidUnifiedNodeCatalog.Item item=items.get(i);double ms=item.hasMeasuredLatency()?item.latencyMedianMs:item.isRouterVpn()?telemetry.cachedMedian(item.id):0;labels[i]=(item.isRouterVpn()?"Router • ":"Custom • ")+item.name+(item.location.isEmpty()?"":" • "+item.location)+(!item.usageAvailable?" • usage unavailable":item.useCount>0?" • used "+item.useCount:"")+(ms>0?String.format(Locale.US,item.hasMeasuredLatency()?" • %.1f ms / 50 samples":" • quick %.1f ms",ms):"")+(item.hasCoordinates()?"":" • list only");}choiceDialog("Choose node",mutationBusy()?"The current live/probe identity is frozen. Disconnect/finish before selecting another node.":"One node is selected by default. Only real stored coordinates appear on the globe; no IP geolocation/fake pins.").setItems(labels,(d,w)->selectCatalog(items.get(w))).setPositiveButton("Add Router node",(d,w)->showAddRouter()).setNeutralButton("Sort / Lowest latency",(d,w)->showNodeSort()).setNegativeButton("Close",null).show();}catch(Exception error){toast(safe(error));}}
 
     private void showConnectionProfiles(){
@@ -767,7 +788,8 @@ public final class ProductActivity extends Activity {
             if(mutationBusy())throw new IllegalStateException("Finish the current VPN operation before choosing execution.");
             draft.requireCurrent();
             choiceDialog("Ordered execution","For paths of up to eight nodes, Local, Server and Compare both support independently saved Shadowsocks 2022 nodes at any interior position between a paired WireGuard or AmneziaWG entry and a paired Shadowsocks 2022 final. Each imported node needs a literal IP address and Start Layer Off. A route with only paired packet hops can also use a paired Hysteria2 final.\n\n"
-                    +"Use in draft inserts a measured paired Shadowsocks node after the chosen hop and keeps the remaining route in order. Longer Server and Compare paths require one paired WireGuard entry when mixing paired and imported Shadowsocks streams. Keep a literal import directly after the entry and a paired Shadowsocks final. Later intermediates can each be paired or imported. Keep every Start Layer Off. After Compare selects Local, each measured insertion keeps the original final. The request must fit the original lease limits.\n\n"
+                    +"Use in draft inserts a measured paired Shadowsocks node after the chosen hop and keeps the remaining route in order. Longer Server and Compare paths with paired and imported Shadowsocks streams use one paired WireGuard, AWG2 Fast, or AWG2 Strong entry. Keep a literal import directly after the entry and a paired Shadowsocks final. Later intermediates can each be paired or imported. Keep every Start Layer Off. After Compare selects Local, each measured insertion keeps the original final. The request must fit the original lease limits.\n\n"
+                    +"A Local route with an imported exit uses literal Shadowsocks 2022 imports after the paired packet entry. Only the paired entry can use AES or AES with XOR whitening.\n\n"
                     +"A single SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node goes immediately before the Shadowsocks final. A single Shadowsocks hostname can use that position after at least two paired hops with its saved Custom TCP resolver. A route starting with two imported Shadowsocks nodes requires Local execution.\n\n"
                     +"Compare both tests the same external endpoint through Local and Server, averages each path’s final-node and external HTTP response times, then verifies the winner. Failed paths receive no score.")
                     .setItems(new String[]{"Local","Server","Compare both"},(d,w)->{

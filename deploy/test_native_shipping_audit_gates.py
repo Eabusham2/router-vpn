@@ -102,13 +102,45 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.changes[request] += "\n// " + before.replace("\n", "\n// ") + "\n"
                 self.assertFalse(_NATIVE.native_multihop_request_admission(self.body))
 
+    def test_external_final_request_checks_every_selected_stream(self):
+        source = "cmd/client/multihop_node_chain_external_final.go"
+        changes = (
+            ('!mobilemultihop.NodeChainPrefixMode(nodes[0].Mode)', 'false'),
+            ('for _, node := range nodes[1:]', 'for _, node := range nodes[2:]'),
+        )
+        for before, after in changes:
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.assertEqual(self.body(source).count(before), 1)
+                self.replace(source, before, after)
+                self.assertFalse(_NATIVE.native_multihop_request_admission(self.body))
+
+    def test_request_and_owner_require_exact_packet_entry_modes(self):
+        source = "internal/mobilemultihop/node_chain.go"
+        changes = (
+            ('return nodeChainPrefixType(mode) != ""', 'return true'),
+            ('case "awg2-fast", "awg2-strong":', 'case "awg2-fast":'),
+            ('case "awg2-fast", "awg2-strong":', 'case "awg2-fast", "awg2-strong", "shadowsocks":'),
+        )
+        for before, after in changes:
+            with self.subTest(after=after):
+                self.changes.clear()
+                self.assertEqual(self.body(source).count(before), 1)
+                self.replace(source, before, after)
+                self.assertFalse(_NATIVE.native_multihop_request_admission(self.body))
+                self.assertFalse(_NATIVE.native_multihop_ordered_owner(self.body))
+
     def test_external_final_source_cannot_exchange_the_entry_and_exit(self):
         source = "cmd/client/multihop_node_chain_external_final.go"
         self.assertTrue(_NATIVE.native_multihop_ordered_owner(self.body))
         changes = (
             ('len(members) < 3', 'len(members) < 2'),
-            ('members[0].Mode != "wg"', 'false'),
-            ('p.StartLayer != "" && p.StartLayer != "off"', 'false'),
+            ('!mobilemultihop.NodeChainPrefixMode(members[0].Mode)', 'false'),
+            ('entry.Mode == selection.Nodes[0].Mode', 'true'),
+            ('entry.Mode == selection.Nodes[0].Mode', 'entry.Mode == "wg"'),
+            ('!mobilemultihop.NodeChainExternalFinalEntryLayer(p.StartLayer)', 'false'),
+            ('i > 0 && p.StartLayer != "" && p.StartLayer != "off"', 'false'),
+            ('i > 0 && p.StartLayer != "" && p.StartLayer != "off"', 'i > 1 && p.StartLayer != "" && p.StartLayer != "off"'),
             ('original := desktopNodeChainControlProfile(members)', 'original := control'),
             ('return members[0].Profile', 'return members[len(members)-1].Profile'),
             ('return members[len(members)-1].Profile', 'return members[0].Profile'),
@@ -123,6 +155,16 @@ class NativeShippingAuditTests(unittest.TestCase):
                 self.assertEqual(self.body(source).count(before), 1)
                 self.replace(source, before, after)
                 self.changes[source] += "\n// " + before + "\n"
+                self.assertFalse(_NATIVE.native_multihop_ordered_owner(self.body))
+
+    def test_external_final_entry_rejects_unknown_or_missing_start_layer_modes(self):
+        source = "internal/mobilemultihop/node_chain_external_final.go"
+        guard = 'return layer == "" || layer == "off" || layer == "aes-256-gcm" || layer == "aes-256-gcm+xor-whitening"'
+        for changed in ('return true', 'return layer == "" || layer == "off"', guard + ' || layer == "xor"'):
+            with self.subTest(changed=changed):
+                self.changes.clear()
+                self.assertEqual(self.body(source).count(guard), 1)
+                self.replace(source, guard, changed)
                 self.assertFalse(_NATIVE.native_multihop_ordered_owner(self.body))
 
     def test_ordered_dns_status_requires_original_selected_native_proof(self):

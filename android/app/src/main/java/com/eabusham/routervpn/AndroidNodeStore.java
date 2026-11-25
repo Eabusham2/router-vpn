@@ -118,6 +118,15 @@ final class AndroidNodeStore {
         }
         String identityKey() { return imported?"external:"+profileId:"router:"+proofId; }
         byte[] bytes() { return original.clone(); }
+        boolean supportsExternalExitEntryLayer() throws Exception {
+            if (imported) return false;
+            String layer = profile().optString("start_layer", "off");
+            if (layer.isEmpty() || layer.equals("off")) return true;
+            if (!List.of("aes-256-gcm", "aes-256-gcm+xor-whitening").contains(layer)) return false;
+            JSONObject start = bundle().getJSONObject("profiles").optJSONObject("shadowsocks");
+            return start != null && !start.optString("sing-box.json", "").isEmpty();
+        }
+
         JSONObject bundle() throws Exception {
             if(imported)throw new IllegalStateException("An imported ordered source has no paired Router bundle.");
             String source = StandardCharsets.UTF_8.newDecoder()
@@ -559,7 +568,7 @@ final class AndroidNodeStore {
         boolean response=AndroidNodeChainCapture.responsePrefix(sources,modes,prefix,"local");
         boolean externalExit = sources.get(sources.size()-1).imported;
         if (externalExit && (!catalog.selectedId.equals(sources.get(0).id) || prefix!=0 && !response))
-            throw new IllegalStateException("An imported final measures candidates through its original WireGuard control.");
+            throw new IllegalStateException("An imported final measures candidates through its original paired packet entry.");
         if (!externalExit&&!extended&&!response&&prefix!=sources.size()-2)
             throw new IllegalStateException("The complete draft or intended next position changed.");
         if (extended||response||externalExit) AndroidNodeChainCapture.requireCompleteShape(sources, modes, "local");
@@ -698,10 +707,10 @@ final class AndroidNodeStore {
         if (!profile.getString("id").equals(selected.getJSONObject(selected.length() - 1).getString("id"))) {
             if (!"local".equals(profile.getString("multihop_execution")) || selected.length() < 3
                     || !profile.getString("id").equals(selected.getJSONObject(0).getString("id"))
-                    || !"wg".equals(selected.getJSONObject(0).getString("mode")))
-                throw new IllegalStateException("The selected control must own the final Router or the WireGuard entry of an imported exit.");
+                    || !List.of("wg","awg2-fast","awg2-strong").contains(selected.getJSONObject(0).getString("mode")))
+                throw new IllegalStateException("The selected control must own the final Router or the paired packet entry of an imported exit.");
             for (int i=1;i<selected.length();i++) if (!"shadowsocks".equals(selected.getJSONObject(i).getString("mode")))
-                throw new IllegalStateException("Every node after the original WireGuard control must use Shadowsocks 2022.");
+                throw new IllegalStateException("Every node after the original paired packet entry must use Shadowsocks 2022.");
         }
         if (!"local".equals(profile.getString("multihop_execution"))) {
             boolean hysteriaFinal="hysteria2".equals(selected.getJSONObject(selected.length()-1).getString("mode"));

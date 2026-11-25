@@ -412,7 +412,7 @@ func (capture *startupNodeChainCapture) receipt() *startupNodeChainSelection {
 				node.CompilerHistory = history
 			}
 		}
-		if member.Mode == "hysteria2" && member.Profile.StartLayer != "" && member.Profile.StartLayer != "off" {
+		if (member.Mode == "hysteria2" || schema == 8 && i == 0) && member.Profile.StartLayer != "" && member.Profile.StartLayer != "off" {
 			node.StartLayer = member.Profile.StartLayer
 		}
 		if member.Profile.NodeKind == "external" {

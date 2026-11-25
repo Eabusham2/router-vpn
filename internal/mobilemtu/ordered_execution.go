@@ -119,7 +119,7 @@ func combineExecutionPlans(config string, actual int, prefixes []*Plan, original
 		}
 		tag, err := stringField(projectedRoute, "final", "")
 		if err != nil || !executionLocalMTUTag.MatchString(tag) || !strings.HasPrefix(tag, "routervpn-chain-"+strconv.Itoa(i)+"-") ||
-			originalTags != nil && !extendedMTUPrefix(extendedNodes, originalTags, tag, i, 1, amnezia) || seen[tag] || i == len(prefixes)-1 && tag != local || i == 0 && final["detour"] != tag {
+			originalTags != nil && !extendedMTUPrefix(extendedNodes, originalTags, tag, i, 1, amnezia, nil) || seen[tag] || i == len(prefixes)-1 && tag != local || i == 0 && final["detour"] != tag {
 			return nil, bad
 		}
 		seen[tag] = true

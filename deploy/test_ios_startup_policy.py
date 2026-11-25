@@ -196,6 +196,34 @@ TESTS = r'''
   m.bundle!.routerProfiles[0].multihopExitID="exit";m.bundle!.routerProfiles[0].multihopExitMode=m.bundle!.routerProfiles[0].external!.protocolName
   m.bundle!.routerProfiles[0].multihopExecution=execution
  }
+ static func explicitNodeConnection()async throws {
+  let tapped = profile()
+  var replacement = tapped; replacement.id = "replacement"
+  let stale = model(replacement)
+  var staleInvalidations = 0
+  var newToken: UUID?
+  let newerOwner = try stale.iosSpeedLabOwnership.begin(onSuperseded: {
+   staleInvalidations += 1
+   if let newToken { stale.iosSpeedLabOwnership.finish(newToken) }
+  })
+  newToken = newerOwner
+  await stale.connectSelectedExternal(nodeID: tapped.id)
+  stale.iosSpeedLabOwnership.finish(newerOwner)
+  try check("stale external row preserves a newer temporary owner", staleInvalidations == 0)
+  try check("stale external row cannot open a different node", NETunnelProviderManager.loads == 0 && NETunnelProviderManager.starts == 0)
+  let waiting = model(tapped)
+  var admissionStarted = false
+  let owner = try waiting.iosSpeedLabOwnership.begin(onSuperseded: { admissionStarted = true })
+  let connect = Task { await waiting.connectSelectedExternal(nodeID: tapped.id) }
+  while !admissionStarted { await Task.yield() }
+  waiting.bundle = bundle(replacement)
+  waiting.iosSpeedLabOwnership.finish(owner)
+  await connect.value
+  try check("external row rechecks selection after a suspended admission", NETunnelProviderManager.loads == 0 && NETunnelProviderManager.starts == 0)
+  let current = model(tapped)
+  await current.connectSelectedExternal(nodeID: tapped.id)
+  try check("current external row starts its own node", NETunnelProviderManager.starts == 1)
+ }
  static func ordinary()async throws {
   for kind in ["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn","tor","tor-bridge"] {
    for choice in ["smart-auto","auto","last"] {
@@ -418,7 +446,7 @@ TESTS = r'''
   IOSMTUControl.hook=nil;IOSPrivateJSONStore.failWrite=false;IOSPrivateJSONStore.value=nil
  }
  static func main()async {
-  do {try await ordinary();try await disabled();try await stale();try settings();try await router();try await lastChoice();print("iOS cold-launch startup and external Settings: \(checks) executable checks PASS")}
+  do {try await explicitNodeConnection();try await ordinary();try await disabled();try await stale();try settings();try await router();try await lastChoice();print("iOS cold-launch startup and external Settings: \(checks) executable checks PASS")}
   catch {FileHandle.standardError.write(Data(("FAIL: "+error.localizedDescription+"\n").utf8));exit(1)}
  }
 }
@@ -435,7 +463,7 @@ def source():
         'private func iosStartupMatches(_ captured:', 'private func iosStartupMatches(_ intent:')]
     snippets += [member(external, signature) for signature in (
         'var selectedNodeProfile:', 'var selectedNodeIsExternal:', 'var selectedExternalProtocol:',
-        'var selectedExternalSupportedOnIOS:', 'func connectSelectedExternal()',
+        'var selectedExternalSupportedOnIOS:', 'func connectSelectedExternal(nodeID:',
         'func connectSelectedExternal(startupAdmission:',
         'func rememberIOSMultihopExecution(',
         'private func requireExternalPreparation(', 'func externalTorEntryData(',
@@ -484,6 +512,14 @@ def test(negative=True, selected_mutations=None):
     assert 'let iosStartupPolicy = IOSStartupPolicy()' in model
     assert 'iosConnectGeneration = UUID()' in member(model, 'func disconnect()')
     assert 'await model.applyIOSStartupPolicyIfNeeded()' in unified
+    node_manager = (APP / 'NodeManagerSheet.swift').read_text()
+    external_action = member(node_manager, 'Button("Connect external")')
+    selection = 'guard model.selectNode(profile.id) else { return }'
+    connect = 'await model.connectSelectedExternal(nodeID: profile.id)'
+    assert external_action.index(selection) < external_action.index(connect)
+    assert connect in member(unified, 'private func connectOrDisconnect()')
+    assert selection in member(unified, 'private func selectSpecific(')
+    assert 'guard model.selectNode(winner.id) else { return }' in member(unified, 'private func selectFastest()')
     assert 'if externalNode {' in settings and 'Section("Startup")' in settings
     assert 'Section("Live MTU")' in settings and settings.index('Section("Live MTU")') < settings.index('Section("Startup")')
     # These controls belong to both node kinds, after both branches of the form.
@@ -505,6 +541,7 @@ def test(negative=True, selected_mutations=None):
         run_fixture(root / 'shipping', shipping)
         if negative:
             mutations = (
+                ('external-row-selection', 'if let expectedNodeID, profile.id != expectedNodeID { return }', '', 'external row rechecks selection after a suspended admission'),
                 ('router-only', 'if profile.normalizedNodeKind == "external" {\n            // An imported', 'if profile.normalizedNodeKind == "external" { return }\n        if profile.normalizedNodeKind == "external" {\n            // An imported', 'external startup dispatch'),
                 ('stale-source', 'return (try? iosStartupCapture()) == captured', 'return true', 'changed startup capture rejected: dns'),
                 ('ignore-off', 'profile.autoConnect == true else { return }', 'true else { return }', 'Off or Manual makes no VPN preference request'),

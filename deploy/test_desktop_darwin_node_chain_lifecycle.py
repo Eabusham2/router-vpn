@@ -469,12 +469,19 @@ def require_control(label, package, code, output, witness, message):
         raise ValueError("Darwin lifecycle causal control failed: " + label + ": " + str(error)) from error
 
 
+def phase_controls(phase):
+    boundary = (len(MUTATIONS) + 1) // 2
+    return {"baselines": (), "controls-1": MUTATIONS[:boundary], "controls-2": MUTATIONS[boundary:],
+            "complete": MUTATIONS, "controls": MUTATIONS}[phase]
+
+
 def phase_inventory():
     controls = [item[0] for item in MUTATIONS]
     if len(controls) != len(set(controls)):
         raise ValueError("Darwin lifecycle control labels must be unique across all phases")
-    middle = (len(controls) + 1) // 2
-    names = {"baselines": list(PHASES), "controls-1": controls[:middle], "controls-2": controls[middle:]}
+    names = {"baselines": list(PHASES)}
+    for phase in ("controls", *SOURCE_PHASES[1:]):
+        names[phase] = [item[0] for item in phase_controls(phase)]
     for values in names.values():
         if not values or len(values) != len(set(values)):
             raise ValueError("Darwin lifecycle phase inventory is empty or duplicated")
@@ -483,7 +490,7 @@ def phase_inventory():
 
 def validate_phase(value, phase, source_hash, architecture, tags):
     names = phase_inventory()
-    if (phase not in SOURCE_PHASES or not isinstance(value, dict) or
+    if (phase not in names or not isinstance(value, dict) or
             set(value) != {"format", "phase", "source_sha256", "architecture", "tags", "completed", "images", "verdicts"} or
             value["format"] != "routervpn-darwin-lifecycle-phase-v1" or value["phase"] != phase or
             value["source_sha256"] != source_hash or not re.fullmatch(r"[0-9a-f]{64}", source_hash) or
@@ -526,13 +533,13 @@ def execute_partitioned(source, tags, env, runner):
                 raise ValueError("Darwin lifecycle source changed during its original phase")
             results.append(value)
     if [value["phase"] for value in results] != list(SOURCE_PHASES):
-        raise ValueError("Darwin lifecycle requires all complete original phases")
+        raise ValueError("Darwin lifecycle requires every original phase")
     print("Darwin ordered component lifecycle: all baseline and control phases passed", flush=True)
     return results
 
 
 def check(source, tags="", *, phase="complete", receipt_path=None):
-    if (phase not in ("complete", *SOURCE_PHASES) or
+    if (phase not in ("complete", "controls", *SOURCE_PHASES) or
             (phase == "complete") != (receipt_path is None)):
         raise ValueError("Darwin lifecycle cannot publish a partial complete receipt")
     if receipt_path is not None and (receipt_path.exists() or receipt_path.is_symlink()):
@@ -558,11 +565,11 @@ def check(source, tags="", *, phase="complete", receipt_path=None):
                 if code != 0:
                     raise ValueError("Darwin lifecycle baseline did not exit successfully")
                 verdicts[package] += validator.require_pass(output, group)
-            images[package] = hashlib.sha256(image.read_bytes()).hexdigest()
+            with image.open("rb") as compiled:
+                images[package] = hashlib.file_digest(compiled, "sha256").hexdigest()
+            image.unlink()
             print("Darwin lifecycle baseline passed: " + package + " (%.3fs)" % (time.monotonic() - started), flush=True)
-        controls = (MUTATIONS if phase == "complete" else
-                    [item for item in MUTATIONS if item[0] in phase_inventory()[phase]] if phase != "baselines" else ())
-        for label, package, relative, before, after, witness, message in controls:
+        for label, package, relative, before, after, witness, message in phase_controls(phase):
             started = time.monotonic()
             print("Darwin lifecycle control start: " + label, flush=True)
             target = source / relative
@@ -577,7 +584,9 @@ def check(source, tags="", *, phase="complete", receipt_path=None):
                 selector = "/".join("^" + re.escape(part) + "$" for part in witness.split("/"))
                 code, output = execute(source, package, image, selector, env, failure=True)
                 require_control(label, package, code, output, witness, message)
-                control_images[label] = hashlib.sha256(image.read_bytes()).hexdigest()
+                with image.open("rb") as compiled:
+                    control_images[label] = hashlib.file_digest(compiled, "sha256").hexdigest()
+                image.unlink()
                 print("Rejected Darwin lifecycle control: " + label + " (%.3fs)" % (time.monotonic() - started), flush=True)
             finally:
                 target.write_bytes(original)
@@ -605,7 +614,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("--tags", default="")
-    parser.add_argument("--phase", choices=("complete", *SOURCE_PHASES), default="complete")
+    parser.add_argument("--phase", choices=("complete", "controls", *SOURCE_PHASES), default="complete")
     parser.add_argument("--receipt", type=Path)
     arguments = parser.parse_args()
     check(arguments.source, arguments.tags, phase=arguments.phase, receipt_path=arguments.receipt)

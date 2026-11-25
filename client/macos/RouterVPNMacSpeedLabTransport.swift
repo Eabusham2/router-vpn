@@ -233,13 +233,21 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
             }
         case candidateBase + "/catalog":
             if isDraft {
-                guard draftCatalog, let body, Set(body.keys) == ["nodes", "execution", "expected_selected_node_id", "expected_profile_tokens"],
+                guard draftCatalog, let body,
                       let nodes = candidatePath(body["nodes"]), let execution = body["execution"] as? String,
                       let prefix = selectedPosition,
                       nodes.indices.contains(prefix), prefix < nodes.count - 1,
                       let tokens = body["expected_profile_tokens"] as? [String: String] else { throw URLError(.badURL) }
-                let importedLong = nodes.count > 8 && ["wg", "awg2-fast", "awg2-strong"].contains(nodes.first?["mode"] ?? "") && nodes.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" }
-                guard nodes.count <= 8 || importedLong || execution == "local" else { throw URLError(.badURL) }
+                let ordinaryKeys: Set<String> = ["nodes", "execution", "expected_selected_node_id", "expected_profile_tokens"]
+                let packetEntryWithStreams = nodes.count >= 3 && ["wg", "awg2-fast", "awg2-strong"].contains(nodes.first?["mode"] ?? "") &&
+                    nodes.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" }
+                let externalFinal = body.keys.contains("external_final")
+                if externalFinal {
+                    guard Set(body.keys) == ordinaryKeys.union(["external_final"]),
+                          let flag = body["external_final"] as? NSNumber, CFGetTypeID(flag) == CFBooleanGetTypeID(), flag.boolValue,
+                          execution == "local", !serverResponse, packetEntryWithStreams else { throw URLError(.badURL) }
+                } else if Set(body.keys) != ordinaryKeys { throw URLError(.badURL) }
+                guard nodes.count <= 8 || packetEntryWithStreams || execution == "local" else { throw URLError(.badURL) }
                 let packet = ["wg", "awg2-fast", "awg2-strong"].contains(nodes[prefix]["mode"] ?? "")
                 let packets = nodes.prefix(prefix + 1).prefix(while: { ["wg", "awg2-fast", "awg2-strong"].contains($0["mode"] ?? "") }).count
                 let stream = execution == "local" && packets > 0 && packets <= prefix &&
@@ -253,7 +261,7 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                 let scope = execution == "local" ? "saved-prefix-local" : "draft-complete-selected"
                 performanceValid = ["local", "server", "auto"].contains(execution) && parts.last == "scope=" + scope && serverQueryAllowed &&
                     Set(tokens.keys) == Set(nodes.compactMap { $0["id"] }) && tokens.values.allSatisfy { $0.range(of: #"\A[a-f0-9]{64}\z"#, options: .regularExpression) != nil } &&
-                    body["expected_selected_node_id"] as? String == nodes.last?["id"] && bounded(25)
+                    body["expected_selected_node_id"] as? String == (externalFinal ? nodes.first?["id"] : nodes.last?["id"]) && bounded(25)
             } else { performanceValid = candidateCatalog && body == nil && bounded(25) }
         case candidateBase, candidateBase + "/cancel", savePath:
             func token(_ key: String, _ count: Int) -> Bool { guard let id = identifier(key) else {return false};return id.utf8.count == count && id.range(of:"^[a-f0-9]+$",options:.regularExpression) != nil }

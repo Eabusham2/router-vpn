@@ -682,9 +682,14 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
             extendedLocalModes(modes, execution: execution) || ["server", "auto"].contains(execution ?? "") && extendedSelectedModeShape(modes)
     }
 
+    static func supportsExternalExitEntry(_ profile: RouterProfile) -> Bool {
+        profile.normalizedNodeKind == "router-vpn" && profile.external == nil &&
+            [nil, "", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(profile.startLayer)
+    }
+
     static func externalExitReferences(_ nodes: [Self], controlID: String, execution: String?) -> Bool {
         execution == "local" && (3...physicalTraversalDepth).contains(nodes.count) &&
-            nodes.first?.id == controlID && nodes.first?.mode == "wg" &&
+            nodes.first?.id == controlID && supportsNativePrefix(nodes.first?.mode ?? "") &&
             nodes.dropFirst().allSatisfy { $0.mode == "shadowsocks" }
     }
 

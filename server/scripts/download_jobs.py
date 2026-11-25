@@ -92,7 +92,7 @@ class DownloadJobManager:
         deadline = float(job.get("retention_deadline_epoch") or 0)
         if deadline > 0:
             out["retained_until"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(deadline))
-        if job.get("status") in RETAINED and out["expires_in_seconds"] > 0 and job.get("path"):
+        if not self.closed.is_set() and job.get("status") in RETAINED and out["expires_in_seconds"] > 0 and job.get("path"):
             out["download_url"] = f"/api/download-jobs/{job['id']}/file"
         return out
 
@@ -440,6 +440,8 @@ class DownloadJobManager:
     def begin_delivery(self, job_id: str, abort: Callable | None = None) -> tuple[BinaryIO, dict]:
         self.reap_expired()
         with self.lock:
+            if self.closed.is_set():
+                raise RuntimeError("download service is closing")
             job = self.jobs.get(job_id)
             if not job:
                 raise KeyError(job_id)
@@ -562,8 +564,8 @@ class DownloadJobManager:
             self.wake_reaper.wait(delay)
 
     def close(self, timeout: float = 10) -> None:
-        self.closed.set()
         with self.lock:
+            self.closed.set()
             ids = list(self.jobs)
         for job_id in ids:
             try:

@@ -115,7 +115,15 @@ func verifyExtendedClientAWG(t *testing.T, native *box.Box, tag, entry, expected
 		t.Fatal("selected Box lost its original physical endpoint")
 	}
 	client, ok := bound.Endpoint.(*Endpoint)
-	if !ok || (entry != "awg2-fast" && entry != "awg2-strong") || len(expected) != 64 {
+	if !ok {
+		t.Fatal("original physical endpoint is not a live AWG transport")
+	}
+	verifyExtendedAWGDevice(t, client, entry, expected)
+}
+
+func verifyExtendedAWGDevice(t *testing.T, client *Endpoint, entry, expected string) {
+	t.Helper()
+	if client == nil || (entry != "awg2-fast" && entry != "awg2-strong") || len(expected) != 64 {
 		t.Fatal("selected client lost its original AWG endpoint")
 	}
 	client.life.Lock()

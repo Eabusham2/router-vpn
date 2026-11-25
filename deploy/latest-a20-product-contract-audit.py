@@ -74,7 +74,18 @@ need('android/test_android_via_entry_latency_contract.py','AndroidVpnMutationGua
 
 # A20-9: forwarding master is narrow/private and does not export Setup Center admin credentials.
 need('cmd/router-agent/client_forwarding_master.go','/api/forwarding/master','Setup Center admin token never','authenticated tunnel peers','loopback-only')
-need('android/app/src/main/java/com/eabusham/routervpn/AndroidForwardingMaster.java','/api/forwarding/master','VPN session/path changed')
+# The confirmation owns the captured Router, session, path generation, network
+# and paired token; a status-message spelling cannot certify that boundary.
+need('android/app/src/main/java/com/eabusham/routervpn/AndroidForwardingMaster.java',
+     '/api/forwarding/master',
+     '!state.sessionId.equals(after.sessionId) || after.pathGeneration!=state.pathGeneration',
+     'verified.vpn.equals(ownedVpnNetwork())',
+     '!displayed.token.equals(token)',
+     'if (!isCurrent(displayed)) throw changed();',
+     'if (!isCurrent(result)) throw changed();')
+need('android/test_android_forwarding_master.py',
+     '"stale confirmation wrote: before-send"', '"stale confirmation wrote: token"',
+     'late PUT response updated the replacement session')
 need('ios/RouterVPN/App/IOSUnifiedProductView.swift','IOSForwardingMasterButton().environmentObject(model)')
 need('ios/RouterVPN/App/IOSForwardingMasterView.swift','sendProviderMessage','session.status == .connected','session_id','Server forwarding master')
 # Swift owns the session/HTTP state machine; its Objective-C adapter owns the

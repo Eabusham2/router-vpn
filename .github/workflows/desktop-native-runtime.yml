@@ -126,7 +126,10 @@ jobs:
     # bounded CONNECT14 stage after original prefix6/SOCKS8; inner limits remain.
     # Added schema6 native ceilings total 6,225s (103.75min); retain the prior
     # 200min Linux allocation plus 110min for these exact cases and validation.
-    timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 60 || startsWith(matrix.target, 'linux/') && 310 || 220 }}
+    # Job 139481669110 exhausted the old hour in the shared controller checks,
+    # before final protocol, package and host acceptance. Give both native Mac
+    # builds the six-hour hosted job ceiling. Each child keeps its own deadline.
+    timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 360 || startsWith(matrix.target, 'linux/') && 310 || 220 }}
     steps:
       - uses: actions/checkout@v4
         with:

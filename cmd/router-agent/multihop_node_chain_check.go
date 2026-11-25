@@ -160,7 +160,7 @@ func relayNodeChainValidationCapture(source multihoprelay.NodeChainDescriptor, h
 		// packet positions, including the client entry omitted from the suffix.
 		request.LocalPacketPositions = []int{0}
 		for _, member := range source.Members[:len(source.Members)-1] {
-			if member.NodeKind == "" {
+			if member.ClientPublicKey != "" {
 				request.LocalPacketPositions = append(request.LocalPacketPositions, member.Position)
 			}
 		}

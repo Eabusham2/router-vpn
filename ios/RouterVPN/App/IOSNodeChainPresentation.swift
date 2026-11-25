@@ -102,7 +102,9 @@ enum IOSNodeChainPresentation {
                     ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(profile.startLayer ?? "") &&
                     points.allSatisfy({ $0.kind == "router-vpn" && IOSMultihopNodeSelection.supportsNativePrefix($0.mode ?? "") }) : IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || pairedStreams.contains(position)) ||
                    (publicExit ? position > 0 && IOSImportedShadowsocksSource.eligibleLiteral(profile) : independentImports ? IOSMultihopNodeSelection.supportsLocalImportedNode(node.mode, position: position, count: nodes.count, importedEntry: importedEntry) && IOSImportedShadowsocksSource.eligibleIndependent(profile, position: position, hostnamePosition: streams?.hostname) : IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count)) && (node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || node.mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || node.mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile)))) else { return nil }
-            if nodes.count > IOSMultihopNodeSelection.maximumNodes {
+            if publicExit && position == 0 {
+                guard IOSMultihopNodeSelection.supportsExternalExitEntry(profile) else { return nil }
+            } else if nodes.count > IOSMultihopNodeSelection.maximumNodes {
                 if IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || position == nodes.count - 1 && !publicExit || pairedStreams.contains(position) {
                     guard profile.normalizedNodeKind == "router-vpn", [nil, "", "off"].contains(profile.startLayer) else { return nil }
                 } else {

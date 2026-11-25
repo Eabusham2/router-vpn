@@ -8,10 +8,57 @@ recursive Compare-selected Local measurements. The original source, native
 owner, credentials, selected execution, and cleanup boundary remain separate
 from public presentation metadata.
 
+## Paired entry Start Layers for Local external-final routes
+
+A paired WireGuard, AWG2 Fast or AWG2 Strong entry can use its original AES-256-GCM
+or AES-256-GCM + XOR whitening Start Layer. The entry retains its own private
+packet service, the selected native packet transport and the independently
+captured encrypted UDP transport to the outer service. Every later Shadowsocks
+2022 import, including the final, keeps Start Layer Off. Home DNS goes through
+the paired entry. Custom DNS goes through the retained public final.
+
+The named and Last records bind the WG pairing source, selected AWG variant
+when applicable, and the separate Shadowsocks Start Layer asset in that order.
+The original outer address, packet service and layer credential are excluded
+from the imported route and candidate inventory. Per-position MTU validation
+checks the original packet-to-layer detour, transport kind, physical owner
+and complete stream suffix. The Linux worker checks independently running
+packet and outer peers, refusal with a changed outer key, whitening key or
+private packet destination, and successive candidate measurements through
+the same original entry.
+
+All eleven new cases passed on a Linux amd64 race-enabled native peer image.
+The nine-member Strong/XOR route completed 450 prefix samples. Fast/XOR
+completed two 50-response candidate rounds from a closed prefix and Strong/AES
+completed two through the connected original owner. The prepared Go tree had
+SHA-256 `dc74b0a6a86756407db32b7ef66508546255cacfca88ff25acdbd99689e81303` and
+the peer image had SHA-256 `f85352d704eccc7d19ca8bef7dc3d8df34bfdebd3de998560b0bba25f211a289`.
+The eleven raw transcripts cover this Linux run. The complete 106-case hosted
+diagnostic and installed platform qualification require separate evidence.
+
+## Paired AWG2 entries for Local external-final routes
+
+The Local ordered compiler now accepts paired WireGuard, AWG2 Fast and AWG2
+Strong entries with independently imported literal SS2022 interiors and final.
+The first AWG qualification used Start Layer Off. Fast and Strong retain the selected native AWG
+endpoint parameters and the original WireGuard pairing identity. The external
+final's captured predecessor must match the selected entry configuration and
+exact AWG variant. Home DNS traverses that entry, while an explicitly selected
+custom resolver traverses the public final.
+
+Desktop saved and Last records require both the WG identity asset and selected
+AWG transport asset in their original order. The two variants share the
+`awg` base and retain independent mode names and source digests. The native
+worker inventory adds Fast/Home and Strong/Custom routes, a mismatched
+handshake-header control for each variant, and closed and connected candidate
+continuations. Its acceptance parser requires the real peer's AWG parameter
+readback and joined cleanup. The earlier WG and selected-private receipts
+below apply only to their recorded inputs.
+
 ## Ordered paths with an independently imported final
 
-The new source schema supports Local paths with 3–96 members. The first member
-is an original paired WireGuard entry. Each following member, including the
+The original qualification used Local paths with 3–96 members. The first member
+was a paired WireGuard entry. Each following member, including the
 final, is an independently imported literal-address Shadowsocks 2022 node.
 Every Start Layer is Off. The compiler retains each complete source and rejects
 duplicate identities, dependent keys, changed captures, incompatible DNS, or
@@ -51,11 +98,11 @@ and request. Live response and the 8 MiB throughput result retain the same
 actual exit. The desktop Performance capture binds every original node ID,
 including short three-node paths.
 
-This source family does not establish arbitrary protocol combinations. AWG
-entries, private interior nodes, hostname exits, non-Shadowsocks imports,
-additional Start Layers, and Server/Compare execution remain outside this
+The initial WireGuard implementation described here preceded the AWG2 and paired
+entry-layer continuations above. Private interior nodes, hostname exits, non-Shadowsocks imports,
+layers on imported members, and Server/Compare execution remain outside this
 external-final constructor. Its closed candidate preparation measures TCP
-through the original WireGuard entry, and the public-response continuation
+through the original paired packet entry, and the public-response continuation
 below measures independent imported candidates through later stream prefixes.
 These are explicit functional boundaries, not evidence of universal
 ordered-path support.

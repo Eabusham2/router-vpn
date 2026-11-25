@@ -278,9 +278,8 @@ class DarwinLifecyclePhases(unittest.TestCase):
         self.assertEqual([item["phase"] for item in result], ["baselines", "controls-1", "controls-2"])
         self.assertEqual(sum(result[0]["verdicts"].values()), 404)
         self.assertEqual(len(result[0]["images"]), 6)
-        self.assertEqual(len(result[1]["images"]), 24)
-        self.assertEqual(len(result[2]["images"]), 23)
-        self.assertEqual(result[1]["completed"] + result[2]["completed"], [item[0] for item in RUNNER.MUTATIONS])
+        self.assertEqual([len(item["images"]) for item in result[1:]], [24, 23])
+        self.assertEqual(result[1]["completed"] + result[2]["completed"], [m[0] for m in RUNNER.MUTATIONS])
         self.assertEqual(RUNNER.TEST_TIMEOUT, "120s")
         self.assertEqual(RUNNER.PROCESS_TIMEOUT, 600)
 
@@ -303,13 +302,13 @@ class DarwinLifecyclePhases(unittest.TestCase):
                     self.assertEqual(self.calls, list(RUNNER.SOURCE_PHASES[:RUNNER.SOURCE_PHASES.index(phase) + 1]))
 
     def test_partial_invocation_cannot_publish_full_completion(self):
-        for phase, path in (("unknown", None), ("baselines", None), ("controls-1", None), ("controls-2", None), ("complete", self.source / "result.json")):
+        for phase, path in (("unknown", None), ("baselines", None), ("controls", None), ("complete", self.source / "result.json")):
             with self.subTest(phase=phase), self.assertRaisesRegex(ValueError, "partial complete"):
                 RUNNER.check(self.source, phase=phase, receipt_path=path)
         path = self.source / "result.json"
         path.write_text("original receipt")
         with self.assertRaisesRegex(ValueError, "fresh owned"):
-            RUNNER.check(self.source, phase="controls-1", receipt_path=path)
+            RUNNER.check(self.source, phase="controls", receipt_path=path)
         self.assertEqual(path.read_text(), "original receipt")
 
     def test_phase_writer_executes_exact_original_tests_and_restores_every_mutant(self):
@@ -320,14 +319,15 @@ class DarwinLifecyclePhases(unittest.TestCase):
         cases = {"TestOriginal": ("child",)}
         phases = {"protocol/tun": cases}
         mutation = ("omitted-owner", "protocol/tun", "target.go", "original", "defective", "TestOriginal/child", "original owner omitted")
-        second_mutation = ("replaced-owner", *mutation[1:])
-        for phase in RUNNER.SOURCE_PHASES:
+        second = ("changed-owner", *mutation[1:4], "replacement", *mutation[5:])
+        for phase in (*RUNNER.SOURCE_PHASES, "controls"):
             builds, runs = [], []
             destination = self.source / (phase + ".json")
             def compile_image(source, package, image, tags, env):
                 builds.append(before.read_text())
                 image.write_bytes(before.read_bytes())
             def execute(source, package, image, selection, env, failure=False):
+                self.assertFalse(any(path != image for path in image.parent.glob("*.test")))
                 runs.append((selection, failure))
                 if failure:
                     rows = wire(package, cases)
@@ -338,7 +338,7 @@ class DarwinLifecyclePhases(unittest.TestCase):
                 return 0, "\n".join(json.dumps(row) for row in wire(package, cases))
             validator = RUNNER.receipt("protocol/tun")
             validator.run = lambda *args, **kwargs: (0, "TestOriginal\n")
-            with patch.object(RUNNER, "PHASES", phases), patch.object(RUNNER, "MUTATIONS", (mutation, second_mutation)), \
+            with patch.object(RUNNER, "PHASES", phases), patch.object(RUNNER, "MUTATIONS", (mutation, second)), \
                  patch.object(RUNNER, "checked_source", return_value=self.digest), \
                  patch.object(RUNNER, "compile_image", side_effect=compile_image), \
                  patch.object(RUNNER, "execute", side_effect=execute), \
@@ -346,9 +346,10 @@ class DarwinLifecyclePhases(unittest.TestCase):
                  patch.dict(os.environ, {"GOARCH": "amd64"}), contextlib.redirect_stdout(io.StringIO()):
                 result = RUNNER.check(self.source, "original-tags", phase=phase, receipt_path=destination)
             self.assertEqual(result, json.loads(destination.read_text()))
-            self.assertEqual(builds, ["original"] if phase == "baselines" else ["defective"])
-            self.assertEqual(len(runs), 1)
-            self.assertEqual(runs[0][1], phase != "baselines")
+            expected = {"baselines": ["original"], "controls-1": ["defective"],
+                        "controls-2": ["replacement"], "controls": ["defective", "replacement"]}
+            self.assertEqual(builds, expected[phase])
+            self.assertEqual([failure for _, failure in runs], [phase != "baselines"] * len(builds))
             self.assertEqual(before.read_text(), "original")
 
 

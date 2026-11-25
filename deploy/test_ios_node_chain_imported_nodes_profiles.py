@@ -10,9 +10,11 @@ import test_ios_node_chain_connect_profiles as C
 ROUNDTRIP=r'''
  static func independentRoundtrip()throws {
   let choice=CommandLine.arguments.last!, count=Int(choice) ?? (["private-sixteen","all-imported-sixteen"].contains(choice) ? 16:9)
-  if choice == "external-final" {
+  if ["external-final","external-final-fast-aes","external-final-strong-xor"].contains(choice) {
+   let mode = choice == "external-final-fast-aes" ? "awg2-fast" : choice == "external-final-strong-xor" ? "awg2-strong" : "wg"
+   let layer = mode == "wg" ? "off" : mode == "awg2-fast" ? "aes-256-gcm" : "aes-256-gcm+xor-whitening"
    let (model,ids)=try setupTyped(9),store=IOSNodeBundleStore.shared
-   let refs=ids.enumerated().map { IOSMultihopNodeSelection(id:$0.element,mode:$0.offset==0 ? "wg":"shadowsocks") }
+   let refs=ids.enumerated().map { IOSMultihopNodeSelection(id:$0.element,mode:$0.offset==0 ? mode:"shadowsocks") }
    for i in 1..<ids.count {
     var value=try stored(ids[i]),profile=value.routerProfiles[0]
     profile.nodeKind="external";profile.nodeProofID=nil;profile.apiToken="";profile.routerAPI="";profile.startLayer="off"
@@ -22,7 +24,7 @@ ROUNDTRIP=r'''
     profile.external=try JSONDecoder().decode(ExternalNodeConfig.self,from:JSONSerialization.data(withJSONObject:raw))
     value.routerProfiles=[profile];value.profiles=[:];try store.save(value)
    }
-   var selected=try stored(ids[0]);selected.routerProfiles[0].startLayer="off"
+   var selected=try stored(ids[0]);selected.routerProfiles[0].startLayer=layer
    selected.routerProfiles[0].multihopNodes=refs;selected.routerProfiles[0].multihopEnabled=true;selected.routerProfiles[0].multihopExecution="local"
    selected.routerProfiles[0].multihopEntryID=nil;selected.routerProfiles[0].multihopEntryMode=nil
    selected.routerProfiles[0].multihopExitID=nil;selected.routerProfiles[0].multihopExitMode=nil
@@ -42,12 +44,12 @@ ROUNDTRIP=r'''
    }
    let before=try encoded(restored)
    let future=try IOSConnectionProfileStore.appendCandidate(name:"Measured public import",profiles:proposed,current:{})
-   try check("public candidate Save retained first control and all distinct imported policies",future.nodeID==ids[0] && future.mode=="wg" && future.chainPolicies?.map(\.nodeID)==ids && future.preferences?.multihopNodes==refs)
+   try check("public candidate Save retained first control and all distinct imported policies",future.nodeID==ids[0] && future.mode==mode && future.preferences?.startLayer==layer && future.chainPolicies?.map(\.nodeID)==ids && future.preferences?.multihopNodes==refs)
    try check("public candidate Save left live selection intact",try encoded(model.bundle!)==before)
    _=try IOSConnectionProfileStore.load(model:model,id:future.id)
    let retained=try model.iosNodeChainBundles(for:model.bundle!),compiled=try IOSNodeChainCapture.compile(bundles:retained.map{try encoded($0)})
    defer{try? compiled.plan.close()}
-   try check("named public candidate Load reproduced original control and public final",compiled.sourceSchema==8 && compiled.sourceSHA256==native.sourceSHA256 && compiled.controlMember.id==ids[0] && compiled.members.last!.id==ids.last!)
+   try check("named public candidate Load reproduced original control and public final",compiled.sourceSchema==8 && compiled.sourceSHA256==native.sourceSHA256 && compiled.controlMember.id==ids[0] && compiled.controlMember.mode==mode && compiled.controlMember.profile["start_layer"] as? String==layer && compiled.members.last!.id==ids.last!)
    try IOSConnectionProfileStore.delete(model:model,id:future.id)
 
    return
@@ -288,5 +290,5 @@ def main():
     C.P.BOUNDARIES='import CoreFoundation\n'+C.P.BOUNDARIES+'\nenum ProfileProgress {\n'+boolean+'\n'+progress+'\n}\n'
     C.P.BOUNDARIES+='\n'+C.L.S.member((C.P.APP/'IOSNodeChainEditor.swift').read_text(),'struct IOSNodeChainDraft {')+'\n'
     C.TYPED=source
-    C.main(label='independent Local imports',roundtrip='independentRoundtrip',binary_cases=[("external-final",)]+[(str(n),) for n in range(3,10)]+[("private-nine",),("private-sixteen",),("all-imported-sixteen",),("insert-nine",),("later-nine",)],extra_source_names=("IOSSessionIdentity.swift",))
+    C.main(label='independent Local imports',roundtrip='independentRoundtrip',binary_cases=[("external-final",),("external-final-fast-aes",),("external-final-strong-xor",)]+[(str(n),) for n in range(3,10)]+[("private-nine",),("private-sixteen",),("all-imported-sixteen",),("insert-nine",),("later-nine",)],extra_source_names=("IOSSessionIdentity.swift",))
 if __name__=='__main__':main()

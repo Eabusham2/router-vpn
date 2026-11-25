@@ -27,13 +27,22 @@ def transcript(root, leaf=None, failed=False, witness=''):
     rows = [row('start'), row('run', root)]
     for name in names[1:]:
         rows.append(row('run', name))
+        if root in (RUN.EXTERNAL_FINAL_ROOT, RUN.PUBLIC_CANDIDATE_ROOT) and leaf in RUN.EXTERNAL_ENTRY_LAYERS:
+            mode, layer, fault = RUN.EXTERNAL_ENTRY_LAYERS[leaf]
+            rows.append(row('output', name, Output=f'EXTERNAL_PACKET_LAYER mode={mode} layer={layer} fault={fault} udp_on_original=true complete={str(fault == "original").lower()}'))
+        if root in (RUN.EXTERNAL_FINAL_ROOT, RUN.PUBLIC_CANDIDATE_ROOT) and leaf.startswith(('fast-', 'strong-')):
+            mode = 'awg2-fast' if leaf.startswith('fast-') else 'awg2-strong'
+            mismatch = 'true' if leaf.endswith('wrong-entry') else 'false'
+            for _ in range(2 if root == RUN.PUBLIC_CANDIDATE_ROOT else 1):
+                rows.append(row('output', name, Output=f'QUALIFIED_SELECTED_CLIENT_AWG entry={mode} parameters_current=true other_mode_refused=true'))
+            rows.append(row('output', name, Output=f'AWG_EXTERNAL_ENTRY case={leaf} mode={mode} mismatch={mismatch} readback=true'))
         if root == RUN.PUBLIC_CANDIDATE_ROOT:
             count, position, rounds = RUN.PUBLIC_CANDIDATE_CASES[leaf]
             rows.append(row('output', name, Output=f'PUBLIC_CANDIDATE case={leaf} nodes={count} position={position} rounds={rounds} samples={50*rounds} retained=true joined=true'))
         if root == RUN.EXTERNAL_FINAL_ROOT:
             count, dns = RUN.EXTERNAL_FINAL_CASES[leaf]
             rows.append(row('output', name, Output=f'QUALIFIED_EXTERNAL_FINAL case={leaf} nodes={count} dns={dns} owner_joined=true private_exit_calls=0'))
-            if leaf == 'nine-custom-fifty':
+            if leaf in ('nine-custom-fifty', 'strong-custom-fifty', 'strong-xor-custom-fifty'):
                 rows.append(row('output', name, Output='QUALIFIED_LATENCY_HISTORY nodes=9 receipts=9 samples=450'))
         if root == RUN.POSITIVE_ROOT and leaf in ('wg/extended-nine/off', 'wg/extended-sixteen/off'):
             count = 9 if leaf == 'wg/extended-nine/off' else 16
@@ -640,21 +649,60 @@ class MultipleImportedNativeRunner(unittest.TestCase):
         self.assertEqual(receipt['target'], 'linux/amd64')
         self.assertEqual(set(receipt['encrypted']), set(RUN.STRONG_SELECTED_CASES))
 
+    def test_encrypted_external_final_and_candidate_selections_cover_the_native_tables(self):
+        families = (
+            (RUN.EXTERNAL_FINAL_ROOT, RUN.EXTERNAL_FINAL_TEMPLATE, 19),
+            (RUN.PUBLIC_CANDIDATE_ROOT, RUN.PUBLIC_CANDIDATE_TEMPLATE, 11),
+        )
+        for root, template, count in families:
+            source = (ROOT / template).read_text().split('func ' + root + '(t *testing.T) {', 1)[1]
+            table = source.split('t.Run(', 1)[0]
+            declared = re.findall(r'\{"([a-z][a-z0-9-]+)",\s*\d+,', table)
+            with self.subTest(root=root):
+                self.assertEqual(len(declared), count)
+                self.assertCountEqual(declared, RUN.PEER_CASES[root])
+
     def test_ordered_external_final_requires_original_exit_and_full_measurements(self):
         root = RUN.EXTERNAL_FINAL_ROOT
         for leaf in RUN.EXTERNAL_FINAL_CASES:
             rows = transcript(root, leaf)
             self.assertEqual(RUN.verdict(output(rows), root, leaf), 2)
-            for token in ('owner_joined=true', 'private_exit_calls=0', 'QUALIFIED_LATENCY_HISTORY') if leaf == 'nine-custom-fifty' else ('owner_joined=true', 'private_exit_calls=0'):
+            for token in ('owner_joined=true', 'private_exit_calls=0', 'QUALIFIED_LATENCY_HISTORY') if leaf in ('nine-custom-fifty', 'strong-custom-fifty', 'strong-xor-custom-fifty') else ('owner_joined=true', 'private_exit_calls=0'):
                 changed = [dict(row, Output=row['Output'].replace(token, 'unqualified')) if token in row.get('Output', '') else row for row in rows]
                 with self.subTest(leaf=leaf, token=token), self.assertRaises(ValueError):
                     RUN.verdict(output(changed), root, leaf)
         self.assertIn(ROOT/RUN.EXTERNAL_FINAL_TEMPLATE, set(RUN.load('build-native-runtime.py').inputs()))
 
+    def test_external_final_awg_receipts_require_the_exact_device_readback(self):
+        cases = {RUN.EXTERNAL_FINAL_ROOT: {'fast-home', 'strong-custom-fifty', 'fast-wrong-entry', 'strong-wrong-entry'},
+                 RUN.PUBLIC_CANDIDATE_ROOT: {'fast-closed', 'strong-connected'}}
+        for root, leaves in cases.items():
+            self.assertTrue(leaves.issubset(RUN.PEER_CASES[root]))
+            for leaf in leaves:
+                rows = transcript(root, leaf)
+                incomplete = list(rows)
+                incomplete.pop(next(i for i, r in enumerate(rows) if 'QUALIFIED_SELECTED_CLIENT_AWG' in r.get('Output', '')))
+                with self.assertRaises(ValueError):
+                    RUN.verdict(output(incomplete), root, leaf)
+                for field in ('mode=', 'mismatch=', 'readback=true'):
+                    changed = [dict(r, Output=r['Output'].replace(field, 'substituted')) if 'AWG_EXTERNAL_ENTRY' in r.get('Output', '') else r for r in rows]
+                    with self.subTest(leaf=leaf, field=field), self.assertRaises(ValueError):
+                        RUN.verdict(output(changed), root, leaf)
+
+    def test_layered_external_routes_require_their_actual_outer_protocol_and_fault(self):
+        self.assertEqual(len(RUN.EXTERNAL_ENTRY_LAYERS), 11)
+        for leaf, (mode, layer, fault) in RUN.EXTERNAL_ENTRY_LAYERS.items():
+            root = RUN.PUBLIC_CANDIDATE_ROOT if leaf in RUN.PUBLIC_CANDIDATE_CASES else RUN.EXTERNAL_FINAL_ROOT
+            records = transcript(root, leaf)
+            for token in (mode, layer, fault, 'udp_on_original=true', 'complete='):
+                changed = [dict(row, Output=row['Output'].replace(token, 'different')) if 'EXTERNAL_PACKET_LAYER' in row.get('Output', '') else row for row in records]
+                with self.subTest(leaf=leaf, token=token), self.assertRaises(ValueError):
+                    RUN.verdict(output(changed), root, leaf)
+
     def test_public_candidates_require_original_positions_rounds_and_retirement(self):
         root = RUN.PUBLIC_CANDIDATE_ROOT
         self.assertEqual(set(RUN.PUBLIC_CANDIDATE_CASES), {'home-retained-suffix', 'custom-retained-final',
-                         'nine-late-import', 'wrong-key', 'wrong-exit', 'late-catalog', 'cancel-close'})
+                         'nine-late-import', 'wrong-key', 'wrong-exit', 'late-catalog', 'cancel-close', 'fast-closed', 'strong-connected', 'fast-xor-closed', 'strong-aes-connected'})
         for leaf in RUN.PUBLIC_CANDIDATE_CASES:
             rows = transcript(root, leaf)
             self.assertEqual(RUN.verdict(output(rows), root, leaf), 2)
@@ -686,7 +734,7 @@ class MultipleImportedNativeRunner(unittest.TestCase):
         workflow = (ROOT/'.github/workflows/desktop-native-runtime.yml').read_text()
         self.assertEqual(workflow.count('python3 deploy/test_node_chain_multiple_imported_native_runner.py'), 1)
         self.assertEqual(workflow.count('python3 deploy/build-native-runtime.py "${runtime_args[@]}"'), 1)
-        self.assertIn("timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 60 || startsWith(matrix.target, 'linux/') && 310 || 220 }}", workflow)
+        self.assertIn("timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 360 || startsWith(matrix.target, 'linux/') && 310 || 220 }}", workflow)
         for architecture in ('amd64', 'arm64'):
             self.assertIn("('linux', '"+architecture+"',", workflow)
 

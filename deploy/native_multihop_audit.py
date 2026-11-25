@@ -56,6 +56,23 @@ def _ordered_once(tokens: list[str] | None, *fragments: str) -> bool:
     return True
 
 
+_PACKET_PREFIX_FUNCTIONS = (
+    ('internal/mobilemultihop/node_chain.go', 'func NodeChainPrefixMode(mode string) bool', r'''
+        return nodeChainPrefixType(mode) != ""
+    '''),
+    ('internal/mobilemultihop/node_chain.go', 'func nodeChainPrefixType(mode string) string', r'''
+        switch mode {
+        case "wg":
+            return "wireguard"
+        case "awg2-fast", "awg2-strong":
+            return AmneziaType
+        default:
+            return ""
+        }
+    '''),
+)
+
+
 def native_multihop_ordered_owner(read) -> bool:
     """Trace complete source, concrete native owner and fresh typed child proof.
 
@@ -65,6 +82,7 @@ def native_multihop_ordered_owner(read) -> bool:
     if not callable(read):
         return False
     expected = (
+        *_PACKET_PREFIX_FUNCTIONS,
         ('cmd/client/desktop_node_chain_policy_dispatch.go', 'func (c *desktopNodeChainLaunch) hasPolicy() bool', r'''
 	if c == nil {
 		return false
@@ -754,10 +772,13 @@ if launch != nil && launch.chain != nil {
 	return ctx.Err()
 
         '''),
+        ('internal/mobilemultihop/node_chain_external_final.go', 'func NodeChainExternalFinalEntryLayer(layer string) bool', r'''
+            return layer == "" || layer == "off" || layer == "aes-256-gcm" || layer == "aes-256-gcm+xor-whitening"
+        '''),
         ('cmd/client/multihop_node_chain_external_final.go', 'func desktopNodeChainExternalFinalSchema(members []desktopNodeChainMember) (int, error)', r'''
-	bad := errors.New("ordered external final requires Local WireGuard entry and independently captured literal SS2022 streams")
+	bad := errors.New("ordered external final requires a Local WireGuard or AWG2 entry and independently captured literal SS2022 streams")
 	if len(members) < 3 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes ||
-		members[0].Mode != "wg" || members[0].Profile.External != nil ||
+		!mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[0].Profile.External != nil ||
 		members[0].Profile.NodeKind != "" && members[0].Profile.NodeKind != "router-vpn" ||
 		!common.ValidNodeProofID(members[0].Profile.NodeProofID) {
 		return 0, bad
@@ -765,7 +786,7 @@ if launch != nil && launch.chain != nil {
 	seen := make(map[string]bool, len(members))
 	for i, member := range members {
 		p := member.Profile
-		if !validProfileID(p.ID) || seen[p.ID] || p.StartLayer != "" && p.StartLayer != "off" {
+		if !validProfileID(p.ID) || seen[p.ID] || !mobilemultihop.NodeChainExternalFinalEntryLayer(p.StartLayer) || i > 0 && p.StartLayer != "" && p.StartLayer != "off" {
 			return 0, bad
 		}
 		seen[p.ID] = true
@@ -806,7 +827,7 @@ if launch != nil && launch.chain != nil {
 		return false
 	}
 	entry, final := meta.Prefixes[0], meta.Prefixes[len(meta.Prefixes)-1]
-	return entry.ProfileID == selection.Control.ID && entry.NodeID == selection.Control.NodeProofID && entry.NodeKind == "" && entry.Mode == "wg" &&
+	return entry.ProfileID == selection.Control.ID && entry.NodeID == selection.Control.NodeProofID && entry.NodeKind == "" && entry.Mode == selection.Nodes[0].Mode &&
 		final.ProfileID == selection.Exit.ID && final.NodeID == "" && final.NodeKind == "external" && final.Kind == "public-path" &&
 		final.Mode == "shadowsocks" && final.Tag == meta.FinalTag && meta.ExternalFinal.SourceSHA256 == final.SourceSHA256
         '''),
@@ -1328,6 +1349,19 @@ def native_multihop_request_admission(read) -> bool:
     if not callable(read):
         return False
     expected = (
+        *_PACKET_PREFIX_FUNCTIONS,
+        ('cmd/client/multihop_node_chain_external_final.go', 'func desktopExternalFinalReferences(nodes []common.MultihopNodeSelection) bool', r'''
+            if len(nodes) < 3 || len(nodes) > mobilemultihop.NodeChainExtendedLocalMaximumNodes ||
+                !mobilemultihop.NodeChainPrefixMode(nodes[0].Mode) || common.ValidateMultihopNodes(nodes) != nil {
+                return false
+            }
+            for _, node := range nodes[1:] {
+                if node.Mode != "shadowsocks" {
+                    return false
+                }
+            }
+            return true
+        '''),
         ('cmd/client/multihop_node_chain_request.go', 'func (q multihopConnectRequest) ordered() bool', r'''
 return q.nodesPresent || q.Nodes != nil
         '''),
@@ -1347,7 +1381,7 @@ if err := desktopOrderedExecutionSelection(q.Nodes, q.Execution); err != nil {
 }
 if q.ExternalFinal {
 	if q.Execution != "local" || !desktopExternalFinalReferences(q.Nodes) || q.Nodes[0].ID != *q.ExpectedSelectedNodeID {
-		return errors.New("ordered external final requires its original selected WireGuard entry and Local execution")
+		return errors.New("ordered external final requires its original selected WireGuard or AWG2 entry and Local execution")
 	}
 } else if q.Nodes[len(q.Nodes)-1].ID != *q.ExpectedSelectedNodeID {
 	return errors.New("ordered Connect must end at its original selected node")

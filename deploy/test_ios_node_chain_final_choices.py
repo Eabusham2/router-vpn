@@ -78,6 +78,30 @@ enum IOSImportedOpenVPNSource { static func eligible(_ profile: RouterProfile) -
   try check("only unused literal imports remain available for the intermediate",IOSNodeChainEditorVisible.candidates(catalog,nodes:draft.nodes,position:1).map(\.id) == [middle.id])
   try draft.choose(middle.id,at:1)
   try check("external final is an eligible complete Local draft",draft.canSave && draft.hasExternalFinal)
+  var paired = ClientBundle.empty
+  paired.selectedRouterID=entry.id;paired.routerProfiles=[entry]
+  paired.profiles=["wg":["wg.conf":"original WG"],"awg2-fast":["awg.conf":"original fast"],"awg2-strong":["awg.conf":"original strong"]]
+  var transport = ChoiceSurface(draft:draft,available:catalog);transport.model.bundle=paired
+  try check("paired entry picker offers each original packet transport",transport.entryChoices == ["wg","awg2-fast","awg2-strong"])
+  for mode in ["awg2-fast","awg2-strong","wg"] {
+   try transport.chooseEntry(mode)
+   try check("paired entry callback changes only the selected mode",transport.draft.nodes[0] == .init(id:entry.id,mode:mode) && transport.draft.nodes.dropFirst() == draft.nodes.dropFirst())
+  }
+  transport.model.bundle?.profiles.removeValue(forKey:"awg2-strong")
+  try reject("missing selected AWG file cannot reuse WG") { try transport.chooseEntry("awg2-strong") }
+  transport.model.bundle?.selectedRouterID=middle.id
+  try reject("foreign control cannot select a packet transport") { try transport.chooseEntry("awg2-fast") }
+  for layer in ["aes-256-gcm","aes-256-gcm+xor-whitening"] {
+   var layered=paired;layered.routerProfiles[0].startLayer=layer
+   transport.model.bundle=layered
+   try check("a saved layer needs its independent asset before showing the entry transport",transport.entryChoices.isEmpty)
+   layered.profiles["shadowsocks"]=["sing-box.json":"original authenticated outer"]
+   transport.model.bundle=layered
+   try transport.chooseEntry("awg2-fast")
+   try check("qualified layer keeps original paired mode and exit",transport.draft.nodes[0] == .init(id:entry.id,mode:"awg2-fast") && transport.draft.nodes.last?.id==exit.id)
+  }
+  transport.model.bundle=paired;transport.model.bundle?.profiles.removeValue(forKey:"wg")
+  try check("AWG keeps the independent raw WG identity",transport.entryChoices.isEmpty)
   let captured = draft.nodes
   try reject("clear fixed WireGuard entry") { try draft.choose("",at:0) }
   try reject("change fixed WireGuard transport") { try draft.chooseMode("awg2-fast",at:0) }
@@ -170,6 +194,9 @@ def source(editor, view):
     _, choices = block(view, 'private var finalModes: [String]')
     _, restore = block(view, 'Button("Use paired router as final node")')
     _, restore_callback = block(restore, 'change ')
+    entry_section = view[view.index('Picker("Entry transport"'):view.index(r'Picker("Node \(position + 1)"')]
+    _, entry_callback = block(entry_section, 'mode in change(measureAfter: position)')
+    entry_choice = re.search(r'ForEach\(([^\n]+), id: \\\.self\)', entry_section).group(1)
     section = view[view.index('Picker("Final transport"'):view.index('Picker("Node \\(position + 1)"')]
     _, callback = block(section, 'set: { mode in change ')
     # The outer setter contains the real change closure; execute its body with
@@ -183,7 +210,11 @@ def source(editor, view):
     assert disabled, 'Shipping unavailable final tag or disabled expression changed'
     unavailable_condition = unavailable[:unavailable.index('{')].strip()[3:]
     return 'import Foundation\n' + draft + '\n' + visible + '''
+struct ChoiceModel { var bundle: ClientBundle? }
 struct ChoiceSurface {
+ var model = ChoiceModel()
+ var entryChoices: [String] {''' + entry_choice + '''}
+ mutating func chooseEntry(_ mode: String) throws {''' + entry_callback + '''}
  var draft: IOSNodeChainDraft
  var available: [RouterProfile]
  var finalModes: [String] {''' + choices + '''}
@@ -207,6 +238,7 @@ def main(output=None):
     before = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
     editor, view = paths[1].read_text(), paths[2].read_text()
     edits = [
+        ('entry-packet-source', editor.replace('bundle.profiles[mode]?[mode == "wg" ? "wg.conf" : "awg.conf"]?.isEmpty == false','true',1), view, 'ACCEPTED missing selected AWG file cannot reuse WG'),
         ('unfiltered-picker', editor, view.replace('ForEach(finalModes,', 'ForEach(IOSMultihopNodeSelection.nativeFinalModes,', 1), 'FAIL imported final picker exposes unsupported transport'),
         ('layer-policy', editor.replace('[nil, "", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(profile.startLayer) &&', 'true &&', 1), view, 'FAIL unsupported layer final picker'),
         ('imported-prefix', editor.replace('nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) {', 'true {', 1), view, 'FAIL imported final picker exposes unsupported transport'),

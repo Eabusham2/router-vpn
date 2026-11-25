@@ -81,6 +81,11 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    IOSNodeCandidatePrefix(position:index,profile_id:"source-\(index)",node_id:index==0 ? String(repeating:"a",count:64):"",mode:index==0 ? "wg":"shadowsocks",measurement:index>0 && index<bound-1 ? metric:nil)
   }
   try check("all public interior positions remain measurable at 96",longest.dropFirst().dropLast().allSatisfy{$0.supported(in:longest)} && !longest.last!.supported(in:longest))
+  for mode in ["awg2-fast","awg2-strong"] {
+   var packet = longest
+   packet[0] = IOSNodeCandidatePrefix(position:0,profile_id:longest[0].profile_id,node_id:longest[0].node_id,mode:mode)
+   try check("exact AWG2 public-candidate route remains measurable through 96 nodes", packet.dropFirst().dropLast().allSatisfy { $0.supported(in:packet) })
+  }
   let full=longest.map { IOSMultihopNodeSelection(id:$0.profile_id,mode:$0.mode) }
   var fullDraft=IOSNodeChainDraft(saved:full,finalID:full[0].id)
   try reject("public editor refuses to insert a 97th member"){try fullDraft.insertMeasured("too-deep",after:1,compiled:full)}
@@ -95,6 +100,29 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    let targetID = target["id"] as! String, input = try IOSNodeCandidateCapture.member(profile:target,files:[:])
    var records = [String:Data]()
    for bundle in bundles + [targetBundle] { records[try profile(bundle)["id"] as! String] = bundle }
+   if count == 3 {
+    for (mode, entryLayer) in [("awg2-fast","off"),("awg2-strong","off"),("awg2-fast","aes-256-gcm"),("awg2-strong","aes-256-gcm+xor-whitening")] {
+     let packetBundles = try externalFinalBundles(count, "home", mode, entryLayer)
+     let capture = try IOSNodeChainCapture.compile(bundles:packetBundles)
+     defer { try? capture.plan.close() }
+     let packetSource = IOSNodeCandidateOriginalCapture.ordinary(capture)
+     let nodes = packetSource.candidatePrefixes.map { IOSMultihopNodeSelection(id:$0.profile_id,mode:$0.mode) }
+     let linked = try (packetBundles + [targetBundle]).map { try JSONDecoder().decode(ClientBundle.self,from:$0).routerProfiles[0] }
+     var editor = IOSNodeChainDraft(saved:nodes,finalID:nodes[0].id)
+     try editor.chooseExternalFinal(linked.last!,profiles:linked,execution:"local")
+     try check("changing the public exit preserves the chosen AWG packet source",editor.nodes[0] == nodes[0] && editor.nodes.last?.id == targetID)
+     var packetRecords = records
+     packetRecords[nodes[0].id] = packetBundles[0]
+     let proposal = try IOSNodeCandidateProposal.compile(original:packetSource,records:packetRecords,position:1,candidateID:targetID,measuredInput:input,retainFinal:true)
+     if entryLayer != "off" {
+      let rebuilt = try object(Data(proposal.launchInput.utf8))
+      let originalFirst = try object(Data((try object(Data(capture.launchInput.utf8))["nodes"] as! [String])[0].utf8))
+      let candidateFirst = try object(Data((rebuilt["nodes"] as! [String])[0].utf8))
+      try check("candidate insertion preserves exact outer source and packet assets", candidateFirst["start"] as? String != nil && candidateFirst["start"] as? String == originalFirst["start"] as? String && candidateFirst["files"] as? String == originalFirst["files"] as? String && (try editor.measurementPath(through:1,execution:"local",profiles:linked)).first == nodes.first)
+     }
+     try check("candidate insertion preserves original AWG mode and public final",proposal.orderedNodes?.first == nodes[0] && proposal.orderedNodes?.last == nodes.last)
+    }
+   }
    let stamp=IOSCandidateCatalogPublication.Stamp(schema:1,epoch:UUID().uuidString,generation:1,ready:true,sources_sha256:try IOSCandidateCatalogPublication.sourcesDigest(records))
    try check("public saved route has one paired control and public exit",source.sourceSchema == 8 && !proofs[0].node_id.isEmpty && proofs.last!.node_id.isEmpty)
    for position in 1..<(count-1) {
@@ -785,7 +813,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
 
 POSITIVE_CASES = (
     ('base', 'original', 'Apple candidates: 422 shipping Swift/shared Go capture and receipt checks PASS'),
-    ('base', 'public-response', 'Apple candidate phase public-response: 121 source and receipt checks PASS'),
+    ('base', 'public-response', 'Apple candidate phase public-response: 133 source and receipt checks PASS'),
     ('base', 'capacity', 'Apple candidate phase capacity: 12 source and receipt checks PASS'),
     ('execution', 'local', 'Apple candidate phase local: 140 source and receipt checks PASS'),
     ('execution', 'server', 'Apple candidate phase server: 142 source and receipt checks PASS'),

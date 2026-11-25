@@ -530,7 +530,7 @@ def source():
     declarations = ["var allNodeProfiles:", "var selectedNodeProfile:", "var selectedNodeIsExternal:",
                     "var selectedExternalProtocol:", "var selectedExternalSupportedOnIOS:",
                     "func nodeRuntimeSummary(", "func selectNode(",
-                    "func connectSelectedExternal()", "func connectSelectedExternal(startupAdmission:",
+                    "func connectSelectedExternal(nodeID:", "func connectSelectedExternal(startupAdmission:",
                     "private func requireExternalPreparation(", "func externalTorEntryData(",
                     "func externalRuntimeBundleData(", "private func externalStrict(", "private func waitExternalConnection("]
     text += "\nextension RouterVPNModel {\n" + "\n".join(declaration(external, key) for key in declarations) + "\n}\n"

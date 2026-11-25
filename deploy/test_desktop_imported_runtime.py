@@ -260,21 +260,29 @@ class ImportedDesktopRuntimeGate(unittest.TestCase):
             and child.value.func.id == 'verify_imported_desktop_native_dns' for child in node.body))
         index = next(index for index,node in enumerate(owner.body) if isinstance(node,ast.Expr) and isinstance(node.value,ast.Call)
             and isinstance(node.value.func,ast.Name) and node.value.func.id == 'verify_imported_desktop_native_dns')
-        command_selector = '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU|NodeChain)'
         commands = [node for node in owner.body[:index] if isinstance(node, ast.Expr)
                     and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
-                    and node.value.func.id == 'run' and any(isinstance(value, ast.Constant)
-                    and value.value == command_selector for value in ast.walk(node))]
+                    and node.value.func.id == 'command_contracts']
         self.assertEqual(len(commands), 1, 'native command inventory must precede the imported DNS gate')
         selected = ast.fix_missing_locations(ast.Module(body=copy.deepcopy(commands + owner.body[index:index+3]),
                                                         type_ignores=[]))
+        roots = ['TestRouterVPNNodeChainFixture'+str(index) for index in range(9)]
         for target in N.TARGETS:
-            for fault in ('success','missing','skip','failure','timeout'):
+            for fault in ('success','missing','skip','failure','timeout',
+                          'command-missing','command-failure','command-timeout'):
                 with self.subTest(target=target,fault=fault):
                     calls = []
                     env = {'GOOS':target.split('/')[0],'GOARCH':target.split('/')[1],'ORIGINAL':'captured'}
                     def run(command,**options):
                         calls.append((list(map(str,command)),options))
+                        if '-list' in command:
+                            if command[-1] == N.COMMAND_TEST_SELECTION:
+                                return '\n'.join(roots[:-1] if fault == 'command-missing' else roots)
+                            self.assertEqual(command[-1], '.')
+                            return '\n'.join(roots+['TestUnrelated'])
+                        if '-run' in command and '-json' not in command:
+                            if fault == 'command-failure': raise subprocess.CalledProcessError(24,command)
+                            if fault == 'command-timeout': raise subprocess.TimeoutExpired(command,600)
                         if '-json' not in command: return ''
                         if fault == 'failure': raise subprocess.CalledProcessError(23,command)
                         if fault == 'timeout': raise subprocess.TimeoutExpired(command,300)
@@ -283,17 +291,28 @@ class ImportedDesktopRuntimeGate(unittest.TestCase):
                         if fault == 'skip': events[-2]['Action'] = 'skip'
                         return self.output(events)
                     namespace = dict(source=Path('prepared-core'),target=target,env=env,race=[] if target == 'windows/arm64' else ['-race'],
-                        run=run,tags=N.tags,sys=N.sys,ROOT=ROOT,verify_imported_desktop_native_dns=N.verify_imported_desktop_native_dns,
+                        run=run,tags=N.tags,sys=N.sys,ROOT=ROOT,command_contracts=N.command_contracts,
+                        verify_imported_desktop_native_dns=N.verify_imported_desktop_native_dns,
                         verify_imported_desktop_native_openvpn=lambda *args: None)
-                    with patch.object(N,'native_host_target',return_value=target),patch.object(N,'run',side_effect=run):
+                    with patch.object(N,'native_host_target',return_value=target),patch.object(N,'run',side_effect=run), contextlib.redirect_stdout(io.StringIO()):
                         if fault == 'success': exec(compile(selected,'actual native command and DNS gate','exec'),namespace)
                         else:
                             with self.assertRaises((ValueError,subprocess.CalledProcessError,subprocess.TimeoutExpired)):
                                 exec(compile(selected,'actual native command and DNS gate','exec'),namespace)
-                    self.assertIn('^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU|NodeChain)',calls[0][0])
-                    self.assertEqual(calls[0][1]['timeout'],600)
-                    self.assertIn('-timeout=120s',calls[0][0])
-                    self.assertEqual(len(calls),3 if fault == 'success' else 2)
+                    self.assertEqual(calls[0][0][-2:],['-list',N.COMMAND_TEST_SELECTION])
+                    self.assertEqual(calls[1][0][-2:],['-list','.'])
+                    for command, options in calls[:min(4,len(calls))]:
+                        self.assertEqual(options,{'cwd':Path('prepared-core'),'env':env,'timeout':600})
+                        self.assertEqual('-race' in command,target != 'windows/arm64')
+                    if fault == 'command-missing':
+                        self.assertEqual(len(calls),2)
+                        continue
+                    self.assertEqual(calls[2][0][-4:],['-run','^('+'|'.join(roots[:8])+')$','-count=1','-timeout=120s'])
+                    if fault.startswith('command-'):
+                        self.assertEqual(len(calls),3)
+                        continue
+                    self.assertEqual(calls[3][0][-4:],['-run','^('+roots[8]+')$','-count=1','-timeout=120s'])
+                    self.assertEqual(len(calls),6 if fault == 'success' else 5)
                     if fault == 'success': self.assertEqual(calls[-1][0][1],str(ROOT/'deploy/test_desktop_pt_inventory.py'))
 
     def test_source_preparation_registers_actual_mailbox_and_required_native_cases(self):

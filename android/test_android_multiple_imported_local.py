@@ -22,7 +22,7 @@ def compiler_source(source):
     assert source.count(marker) == 1
     return source.replace(marker, extra + marker)
 
-PHASES = ("external-final-home", "external-final-custom", "selected-private","selected-execution","selected-extended-nine","selected-extended-sixteen","selected-fast-nine","selected-fast-sixteen","selected-strong-nine","selected-strong-sixteen","selected-fast-bounds","hostname-four","hostname-nine","hostname-sixteen", "adjacent", "separated", "single-interior", "maximum", "extended-nine", "extended-sixteen", "awg-fast", "awg-strong", "layers", "refusals", "rollback", "stale", "source-race", "compiler", "preview-receipts", "history", "custom-entry")
+PHASES = ("external-final-entry-aes", "external-final-entry-xor", "external-final-layered-strong", "external-final-home", "external-final-custom", "external-final-fast", "external-final-strong", "selected-private","selected-execution","selected-extended-nine","selected-extended-sixteen","selected-fast-nine","selected-fast-sixteen","selected-strong-nine","selected-strong-sixteen","selected-fast-bounds","hostname-four","hostname-nine","hostname-sixteen", "adjacent", "separated", "single-interior", "maximum", "extended-nine", "extended-sixteen", "awg-fast", "awg-strong", "layers", "refusals", "rollback", "stale", "source-race", "compiler", "preview-receipts", "history", "custom-entry")
 HARNESS = r'''package com.eabusham.routervpn;
 import org.json.*;import java.io.*;import java.nio.file.*;import java.nio.charset.StandardCharsets;import java.util.*;
 public final class MultipleImportedLocalHarness {
@@ -423,8 +423,18 @@ public final class MultipleImportedLocalHarness {
    }
   }
  }
- static void externalFinal(Path root,int count,String dns)throws Exception {
-  var f=new Fixture(root,"2/",count-1);
+ static void externalFinal(Path root,int count,String dns,String mode)throws Exception {
+  externalFinal(root,count,dns,mode,"off");
+ }
+ static void externalFinal(Path root,int count,String dns,String mode,String layer)throws Exception {
+  String fixture=mode.equals("wg")?"2/":"2/awg-fast";
+  var f=new Fixture(root,fixture,count-1);
+  int controlPosition=f.paired.members.size()-1;
+  if (!layer.equals("off")) {
+   JSONObject source=f.paired.bundle(controlPosition);
+   NodeChainCaptureHarness.profile(source).put("start_layer",layer);
+   f.paired.replace(controlPosition,source);
+  }
   var last=f.imports.get(count-2);
   last.policy.put("dns_mode",dns);
   if(dns.equals("custom"))last.policy.put("dns_protocol","tcp").put("dns_host","198.51.100.198").put("dns_port",5353);
@@ -437,7 +447,12 @@ public final class MultipleImportedLocalHarness {
   reject(()->draft.save(),"two-position external final escaped without distinct imported intermediate");
   for(int i=0;i<count-2;i++)draft.addPrefix(f.imports.get(i).id,"shadowsocks");
   reject(()->draft.setExecution("auto"),"external final acquired Compare authority");
-  reject(()->draft.setPrefixMode(0,"awg2-fast"),"external final accepted a swapped entry transport");
+  if (mode.equals("wg")) {
+   reject(()->draft.setPrefixMode(0,"awg2-fast"),"external final accepted a mode missing from the original entry");
+  } else {
+   check(draft.prefixModes(control).contains(mode),"original AWG transport missing from the editor");
+   draft.setPrefixMode(0,mode);
+  }
   var candidateDraft=draft.candidateDraftCapture(0).call();
   try(var graph=AndroidNodeChainCapture.compile(candidateDraft,0)) {
    check(graph.ownsSource(candidateDraft) && new JSONObject(graph.launchInput).getInt("schema")==8 && "routed-tcp-connect".equals(io.nekohasekai.libbox.Libbox.routerIndependentCandidateMetric(graph.launchInput,0)),"closed original WG entry lost its candidate metric");
@@ -463,7 +478,23 @@ public final class MultipleImportedLocalHarness {
    check(graph.finalProfile().getString("id").equals(last.id) && graph.controlProfile().getString("id").equals(reopened.members.get(0).profileId),"entry control and final profile collapsed");
    check(!identities.getString(0).isEmpty() && identities.getString(count-1).isEmpty() && !raw.getJSONObject("profile").has("api_token") && replay.launchInput.equals(graph.launchInput),"imported exit borrowed paired credentials or failed canonical replay");
    JSONArray proofs=new JSONArray(io.nekohasekai.libbox.Libbox.routerIndependentProofs(graph.launchInput));
+   if (!layer.equals("off")) {
+    JSONObject packet=new JSONObject(inputs.getString(0)),original=reopened.members.get(0).bundle().getJSONObject("profiles");
+    check(proofs.getJSONObject(0).getString("start_layer").equals(layer) && replay.controlProfile().getString("start_layer").equals(layer),"named replay lost the original entry layer");
+    check(ConnectionProfilesHarness.sameJSONValue(new JSONObject(packet.getString("start")),original.getJSONObject("shadowsocks")) &&
+         ConnectionProfilesHarness.sameJSONValue(new JSONObject(packet.getString("files")),original.getJSONObject(mode)) &&
+         ConnectionProfilesHarness.sameJSONValue(new JSONObject(identities.getString(0)),original.getJSONObject("wg")),"paired transport, WG identity or outer source changed");
+    for(int i=1;i<count;i++)check("off".equals(proofs.getJSONObject(i).getString("start_layer")),"entry layer copied onto an imported member");
+   }
    JSONObject config=new JSONObject(graph.config),settings=config.getJSONObject("dns"),resolver=NodeChainCaptureHarness.tagged(settings.getJSONArray("servers"),settings.getString("final"));
+   check(reopened.modes.get(0).equals(mode) && proofs.getJSONObject(0).getString("mode").equals(mode) && proofs.getJSONObject(0).getString("node_id").equals(reopened.members.get(0).proofId), "external-final reloaded a different original entry");
+   if (!mode.equals("wg")) {
+    JSONObject endpoint=NodeChainCaptureHarness.tagged(config.getJSONArray("endpoints"),proofs.getJSONObject(0).getString("tag"));
+    JSONObject assets=reopened.members.get(0).bundle().getJSONObject("profiles").getJSONObject(mode);
+    String rawConfig=new String(Base64.getDecoder().decode(assets.getString("awg.conf")),StandardCharsets.UTF_8);
+    String originalJC=java.util.regex.Pattern.compile("(?im)^\\s*Jc\\s*=\\s*([0-9]+)").matcher(rawConfig).results().findFirst().orElseThrow().group(1);
+    check(endpoint.getString("type").equals("routervpn-amneziawg") && endpoint.getJSONObject("amnezia").getString("jc").equals(originalJC),"external-final entry lost its original AWG parameters");
+   }
    check(resolver.getString("detour").equals(proofs.getJSONObject(dns.equals("home")?0:count-1).getString("tag")) && proofs.getJSONObject(count-1).getString("kind").equals("public-path"),"wrong public exit or DNS detour");
    JSONArray roles=new JSONArray();roles.put("private-node");for(int i=1;i<count;i++)roles.put("public-path");
    String req="9".repeat(32);JSONObject receipt=historyReceipt(graph,reopened,count-1,req);
@@ -474,6 +505,19 @@ public final class MultipleImportedLocalHarness {
    check(AndroidOrderedLatencyStore.load(f.paired.context,graph.sourceSHA256,graph.configSHA256,count-1,last.id,"public-path",depth,1,roles.toString()).raw.equals(receipt.toString()),"external final fifty-response history lost original roles");
    reject(()->AndroidOrderedLatencyStore.load(f.paired.context,graph.sourceSHA256,graph.configSHA256,count-1,last.id,"public-path",depth),"ordinary source read external final with no original roles");
    reject(()->AndroidOrderedLatencyStore.completed(historyStatus(receipt,req),receipt.toString(),req,graph.sourceSHA256,graph.configSHA256,count-1,last.id,"public-path"),"ordinary source admitted a public exit receipt");
+  }
+  if (!layer.equals("off")) {
+   var prepared=IndependentLast.prepareOrderedExecution(f.paired.context,reopened);
+   check(prepared!=null,"layered entry Last lost its original source");
+   var home=AndroidHomeStateStore.current;
+   home.sessionId="e".repeat(32);home.connected=true;home.phase="connected";home.pathProof="passed";home.logicalMode="node-chain";home.runtimeMode="node-chain";
+   home.activeNodeId=reopened.control.id;home.activeChain=IndependentLast.members(reopened);
+   check(IndependentLast.recordOrderedExecution(f.paired.context,prepared,home) && "local".equals(IndependentLast.replay(f.paired.context,reopened)),"original layered Last failed reconstruction");
+   home.connected=false;home.phase="off";
+   JSONObject damaged=f.paired.bundle(controlPosition);damaged.getJSONObject("profiles").remove("shadowsocks");
+   Files.writeString(f.paired.control().file.toPath(),damaged.toString());
+   reject(reopened::requireCurrent,"stale public exit retained the lost outer source");
+   reject(()->IndependentLast.replay(f.paired.context,f.paired.profiles.currentOrderedPath()),"Last reused a missing outer source as a direct packet");
   }
   f.paired.profiles.delete(record.id);check(f.paired.profiles.list().isEmpty(),"external-final saved profile deletion failed");
  }
@@ -519,7 +563,7 @@ public final class MultipleImportedLocalHarness {
  }
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);String phase=args[1];
-  switch(phase){case "external-final-home":externalFinal(root,3,"home");break;case "external-final-custom":externalFinal(root,9,"custom");break;case "hostname-four":mixedHostname(root,4);break;case "hostname-nine":mixedHostname(root,9);break;case "hostname-sixteen":mixedHostname(root,16);break;case "selected-fast-nine":selectedExecution(root,9,"2/awg-fast");break;case "selected-fast-sixteen":selectedExecution(root,16,"2/awg-fast");break;case "selected-strong-nine":selectedExecution(root,9,"2/awg-strong");break;case "selected-strong-sixteen":selectedExecution(root,16,"2/awg-strong");break;case "selected-fast-bounds":selectedFastBounds(root);break;case "selected-private":selectedPrivate(root);break;case "selected-execution":selectedExecution(root,0,"3/aes-256-gcm");break;case "selected-extended-nine":selectedExecution(root,9,"2/");break;case "selected-extended-sixteen":selectedExecution(root,16,"2/");break;case "custom-entry":customEntry(root);break;case "extended-nine":case "extended-sixteen":roundtrip(root,phase);mixedExtended(root,phase.equals("extended-nine")?9:16);if(phase.equals("extended-sixteen"))mixedLatePacket(root);break;case "adjacent":case "separated":case "single-interior":case "maximum":case "awg-fast":case "awg-strong":roundtrip(root,phase);break;case "layers":layers(root);break;case "refusals":refusals(root);break;case "rollback":rollback(root);break;case "stale":stale(root);break;case "source-race":sourceRace(root);break;case "compiler":compiler(root);break;case "preview-receipts":previewReceipts(root);break;case "history":history(root);break;default:throw new IllegalArgumentException("unknown complete imported Local phase");}
+  switch(phase){case "external-final-entry-aes":externalFinal(root,3,"home","wg","aes-256-gcm");break;case "external-final-entry-xor":externalFinal(root,4,"home","awg2-fast","aes-256-gcm+xor-whitening");break;case "external-final-layered-strong":externalFinal(root,9,"custom","awg2-strong","aes-256-gcm");break;case "external-final-home":externalFinal(root,3,"home","wg");break;case "external-final-custom":externalFinal(root,9,"custom","wg");break;case "external-final-fast":externalFinal(root,3,"home","awg2-fast");break;case "external-final-strong":externalFinal(root,9,"custom","awg2-strong");break;case "hostname-four":mixedHostname(root,4);break;case "hostname-nine":mixedHostname(root,9);break;case "hostname-sixteen":mixedHostname(root,16);break;case "selected-fast-nine":selectedExecution(root,9,"2/awg-fast");break;case "selected-fast-sixteen":selectedExecution(root,16,"2/awg-fast");break;case "selected-strong-nine":selectedExecution(root,9,"2/awg-strong");break;case "selected-strong-sixteen":selectedExecution(root,16,"2/awg-strong");break;case "selected-fast-bounds":selectedFastBounds(root);break;case "selected-private":selectedPrivate(root);break;case "selected-execution":selectedExecution(root,0,"3/aes-256-gcm");break;case "selected-extended-nine":selectedExecution(root,9,"2/");break;case "selected-extended-sixteen":selectedExecution(root,16,"2/");break;case "custom-entry":customEntry(root);break;case "extended-nine":case "extended-sixteen":roundtrip(root,phase);mixedExtended(root,phase.equals("extended-nine")?9:16);if(phase.equals("extended-sixteen"))mixedLatePacket(root);break;case "adjacent":case "separated":case "single-interior":case "maximum":case "awg-fast":case "awg-strong":roundtrip(root,phase);break;case "layers":layers(root);break;case "refusals":refusals(root);break;case "rollback":rollback(root);break;case "stale":stale(root);break;case "source-race":sourceRace(root);break;case "compiler":compiler(root);break;case "preview-receipts":previewReceipts(root);break;case "history":history(root);break;default:throw new IllegalArgumentException("unknown complete imported Local phase");}
   System.out.println("Android independent imported Local "+phase+": "+checks+" checks PASS");
  }
 }
@@ -608,6 +652,13 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     alternate:=append([]string(nil),modes...);alternate[position]="shadowsocks"
     middle:=nodeChainModeFixtureNodes(t,alternate,layers)[position]
     var ss map[string]string;if err:=json.Unmarshal([]byte(middle.inputs.Files),&ss);err!=nil{t.Fatal(err)};assets["shadowsocks"]=ss
+   }
+   if test.count==2 && test.layer=="awg-fast" && position==test.count-1 {
+    for _,mode:=range []string{"awg2-fast","awg2-strong"} {
+     alternate:=append([]string(nil),modes...);alternate[position]=mode
+     packet:=nodeChainModeFixtureNodes(t,alternate,layers)[position]
+     var files map[string]string;if err:=json.Unmarshal([]byte(packet.inputs.Files),&files);err!=nil{t.Fatal(err)};assets[mode]=files
+    }
    }
    if node.inputs.Start!=""{'''))
     overlay = work / "independent-fixture-overlay.json"
