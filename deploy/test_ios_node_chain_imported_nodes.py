@@ -2,7 +2,7 @@
 """Shipping Apple Local schema-six consumers with the actual shared compiler.
 
 No sockets, native tunnel, selected execution or device acceptance is claimed.
-Every count3..8 and six independently compiled omission controls are required.
+The 3–9 and 16 node cases exercise shipping Swift and the shared compiler.
 """
 from pathlib import Path
 import importlib.util
@@ -59,7 +59,7 @@ CASES=r'''
    var two=bundles;two[later]=try hostnameSource(two[later],"Second.Example.Test")
    try reject("second hostname cannot acquire source authority"){_ = try IOSNodeChainCapture.compile(bundles:two)}
    var misplaced=saved;misplaced[later]=two[later]
-   try reject("only first stream binds the saved packet resolver"){_ = try IOSNodeChainCapture.compile(bundles:misplaced)}
+   try reject("a later hostname cannot cross a paired stream or multiple packet entries"){_ = try IOSNodeChainCapture.compile(bundles:misplaced)}
   }
  }
  static func independentImports(_ count:Int)throws {
@@ -147,9 +147,11 @@ CASES=r'''
    let finalLayer=positions.contains(0) ? (mode=="wg" ? "off":mode=="awg2-fast" ? "aes-256-gcm":"aes-256-gcm+xor-whitening"):"off"
    let bundles=try independentSources(count,positions,mode,finalLayer),value=try IOSNodeChainCapture.compile(bundles:bundles);defer{try? value.plan.close()}
    let launch=try object(Data(value.launchInput.utf8)),inputs=launch["nodes"] as! [String],identities=launch["identity_sources"] as! [String]
+   var capturedCount=0
    if count > 8 {
     let session=try IOSSessionIdentity(connectedAt:Date(),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:bundles[count-1],entryBundleData:nil,nodeChainSource:Data(value.launchInput.utf8))
     try check("extended reply budget belongs to original private session",session.hopMeasurementRows==count)
+    capturedCount=session.hopMeasurementRows
     var invalid=launch,badInputs=inputs;badInputs[count-2]=inputs[0];invalid["nodes"]=badInputs
     try reject("foreign paired source in extended imported position"){_ = try IOSSessionIdentity(connectedAt:Date(),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:bundles[count-1],entryBundleData:nil,nodeChainSource:data(invalid))}
    }
@@ -193,8 +195,10 @@ CASES=r'''
    try check("independent complete captured presentation",path?.map(\.id)==nodes.map(\.id) && path?.enumerated().allSatisfy{positions.contains($0.offset) ? $0.element.kind=="external":$0.element.kind=="router-vpn"}==true)
    var rows:[[String:Any]]=[];for position in 0..<count {rows.append(["position":position,"profile_id":nodes[position].id,"proven":true,"response_ms":1,"kind":positions.contains(position) ? "public-path":"private-node"])}
    let progress:[String:Any]=["execution":"local","stage":"selected","prefixes":rows,"dns_proven":true,"public_proven":true,"ready":true,"complete":true]
-   try check("independent captured public progress",IOSNodeChainPresentation.progress(progress,expected:nodes.map(\.id),expectedPublicPositions:positions)?.contains("Every captured node")==true)
-   try check("independent unowned public progress refused",IOSNodeChainPresentation.progress(progress,expected:nodes.map(\.id),expectedPublicPositions:[])==nil)
+   let capturedNodes=path ?? [],capturedIDs=capturedNodes.map(\.id),publicPositions=Set(capturedNodes.indices.filter{capturedNodes[$0].kind=="external"})
+   try check("independent captured public progress",IOSNodeChainPresentation.progress(progress,expected:capturedIDs,expectedPublicPositions:publicPositions,capturedExtendedCount:capturedCount)?.contains("Every captured node")==true)
+   try check("independent unowned public progress refused",IOSNodeChainPresentation.progress(progress,expected:capturedIDs,expectedPublicPositions:[],capturedExtendedCount:capturedCount)==nil)
+   if capturedCount>8 {try check("extended progress refused a foreign session count",IOSNodeChainPresentation.progress(progress,expected:capturedIDs,expectedPublicPositions:publicPositions,capturedExtendedCount:capturedCount-1)==nil)}
    if positions.contains(1) && count>3 {try check("legacy progress keeps penultimate boundary",IOSNodeChainPresentation.progress(progress,expected:nodes.map(\.id))==nil)}
    var changed=try profile(bundles[count-1]);changed["api_token"]="replacement"
    try reject("independent final substitution"){_ = try IOSNodeChainCapture.reopen(value.launchInput,selectedProfile:changed)}
@@ -215,8 +219,9 @@ CASES=r'''
      }
      var host=profiles;host[position].endpoint="proxy.example";host[position].external!.shadowsocks!.server="proxy.example"
      try check("hostname remains supported for ordinary route",IOSImportedShadowsocksSource.eligible(host[position]))
-     let permitted=packets>=1 && position==packets && ((position==count-2 && count<=8) || (expectedSchema==6 && Set(packets..<count-1)==positions))
-     try check("hostname response requires the whole qualified route and original resolver",((try? editor.measurementPath(through:position,profiles:host))==nodes)==permitted)
+     let firstStream=packets>=1 && position==packets && ((position==count-2 && count<=8) || (expectedSchema==6 && Set(packets..<count-1)==positions))
+     let laterStream=expectedSchema==6 && packets==1 && position>packets && positions==Set(1..<count-1)
+     try check("hostname response requires the whole qualified route and original resolver at \(position) of \(count)",((try? editor.measurementPath(through:position,profiles:host))==nodes)==(firstStream || laterStream))
     }
    }
    if expectedSchema>=6 {
@@ -226,6 +231,29 @@ CASES=r'''
     } else {try reject("independent hostname outside contiguous paired prefix and stream suffix"){_ = try IOSNodeChainCapture.compile(bundles:changed)}}
    }
   }}
+  if count==4 || count==16 {
+   let position=count-2
+   var bundles=try independentSources(count,Set(1..<count-1))
+   bundles[position]=try hostnameSource(bundles[position],"Later.Example.Test")
+   bundles[position]=try editProfile(bundles[position]){$0["dns_host"]="10.91.0.53";$0["dns_port"]=5354}
+   let capture=try IOSNodeChainCapture.compile(bundles:bundles);defer{try? capture.plan.close()}
+   let graph=try object(Data(capture.config.utf8)),outbounds=graph["outbounds"] as! [[String:Any]],dns=graph["dns"] as! [String:Any]
+   let profiles=try bundles.flatMap{try JSONDecoder().decode(ClientBundle.self,from:$0).routerProfiles}
+   let nodes=capture.members.map{IOSMultihopNodeSelection(id:$0.id,mode:$0.mode)},draft=IOSNodeChainDraft(saved:nodes,finalID:nodes.last!.id)
+   let previousHost=profiles[position-1].external!.shadowsocks!.server
+   let previous=outbounds.first{$0["server"] as? String==previousHost}?["tag"] as? String
+   let host=outbounds.first{$0["server"] as? String=="Later.Example.Test"}
+   let resolverTag=(host?["domain_resolver"] as? [String:Any])?["server"] as? String
+   let resolver=(dns["servers"] as! [[String:Any]]).first{$0["tag"] as? String==resolverTag}
+   try check("later hostname and its own TCP resolver use the original literal predecessor",previous != nil && resolverTag != nil && resolverTag != dns["final"] as? String && host?["detour"] as? String==previous && resolver?["detour"] as? String==previous && resolver?["server"] as? String=="10.91.0.53" && resolver?["server_port"] as? Int==5354 && resolver?["type"] as? String=="tcp")
+   try check("later hostname keeps the full route and original response metric",try draft.measurementPath(through:position,profiles:profiles)==nodes && LibboxRouterNodeChainCandidatePrefixMeasurement(capture.plan,Int32(position))=="routed-candidate-response")
+   var lostFinal=profiles;lostFinal.removeLast()
+   try reject("later hostname borrowed a missing suffix"){_ = try draft.measurementPath(through:position,profiles:lostFinal)}
+   var wrongResolver=bundles;wrongResolver[position]=try editProfile(wrongResolver[position]){$0["dns_protocol"]="udp"}
+   try reject("later hostname borrowed a resolver with another protocol"){_ = try IOSNodeChainCapture.compile(bundles:wrongResolver)}
+   var second=bundles;second[position-1]=try hostnameSource(second[position-1],"Second.Example.Test")
+   try reject("later hostname acquired a second hostname predecessor"){_ = try IOSNodeChainCapture.compile(bundles:second)}
+  }
   if count==8 {for layer in ["aes-256-gcm","aes-256-gcm+xor-whitening"] {
    let importSets:[Set<Int>]=[[1],[1,3]]
    for imports in importSets {
@@ -289,8 +317,9 @@ def main():
           ('final-owner','IOSNodeChainCapture.swift','try json(selectedProfile, maximum: 256 * 1024) == json(capture.finalProfile, maximum: 256 * 1024)','true','ACCEPTED independent final substitution'),
           ('public-inventory','IOSNodeChainPresentation.swift','publicPath == expectedPublicPositions.contains(position)','true','independent unowned public progress refused'),
           ('old-presentation-family','IOSNodeChainPresentation.swift','launch.schema == 2 || launch.schema == 5 || launch.schema == 6','launch.schema == 2 || launch.schema == 5','independent complete captured presentation'),
+          ('lost-later-hostname','Models.swift','position == packets || packets == 1 && position > packets && position < nodes.count-1','position == packets','hostname response requires the whole qualified route and original resolver at 2 of 4'),
         ]
-        assert len(controls)==6
+        assert len(controls)==7
         for label,name,before,after,witness in controls:
             assert originals[name].count(before)==1,label
             (work/name).write_text(originals[name].replace(before,after,1));subprocess.run(command,check=True,timeout=90)

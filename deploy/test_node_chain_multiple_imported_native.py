@@ -155,8 +155,10 @@ def private_case(leaf):
     return 4, 2, mode, winner, action, first, last
 
 
-PRIVATE_RESPONSE_CASES = tuple('3-local-private-' + fault for fault in
-                               ('original', 'wrong-candidate-key', 'forged-response', 'wrong-private-id', 'late-catalog', 'late-cancel', 'server-winner'))
+PRIVATE_RESPONSE_FAULTS = ('original', 'wrong-candidate-key', 'forged-response', 'wrong-private-id',
+                           'late-catalog', 'late-cancel', 'server-winner')
+PRIVATE_RESPONSE_CASES = tuple(f'{count}-local-private-{fault}' for count in (3, 4)
+                               for fault in PRIVATE_RESPONSE_FAULTS) + ('9-local-private-original', '16-local-private-original')
 SELECTED_CASES += PRIVATE_RESPONSE_CASES
 RELOADED_PRIVATE_FINAL = 'RELOADED_PRIVATE_FINAL requested=auto winner=local original_prefix=true private=true dns=true application=true joined=true'
 
@@ -171,7 +173,8 @@ SELECTED_TEMPLATES = (
 def selected_marker(leaf):
     if leaf in PRIVATE_RESPONSE_CASES:
         winner = 'server' if leaf.endswith('server-winner') else 'local'
-        return f'QUALIFIED_SELECTED_NATIVE nodes=3 execution=auto winner={winner} samples=0 bytes=0 first=0 last=0 response_samples=0'
+        count = leaf.split('-', 1)[0]
+        return f'QUALIFIED_SELECTED_NATIVE nodes={count} execution=auto winner={winner} samples=0 bytes=0 first=0 last=0 response_samples=0'
     if leaf in AWG_SELECTED_CASES:
         entry = 'awg2-fast' if leaf in FAST_SELECTED_CASES else 'awg2-strong'
         count, tail = leaf.split(f'-{entry}-')
@@ -317,13 +320,19 @@ def verdict(output, root, leaf=None, *, worker_digest=None):
         if len(markers) != 1 or not markers[0].endswith(selected_marker(leaf)):
             raise ValueError('Missing original selected native route, frozen winner or encrypted bytes')
         if leaf in PRIVATE_RESPONSE_CASES:
-            fault = leaf.removeprefix('3-local-private-')
+            raw_count, fault = leaf.split('-local-private-')
+            count = int(raw_count)
             samples = 50 if fault == 'original' else 0
             witness = f'SELECTED_PRIVATE_RESPONSE fault={fault} samples={samples} joined=true'
             matches = [row.get('Output', '').strip() for row in rows if row.get('Test') == name
                        and 'SELECTED_PRIVATE_RESPONSE' in row.get('Output', '')]
             if len(matches) != 1 or not matches[0].endswith(witness):
                 raise ValueError('Missing original private candidate, exact challenge count, or joined refusal')
+            prefix_receipts = [row.get('Output', '').strip() for row in rows if row.get('Test') == name
+                               and 'PRIVATE_RESPONSE_PREFIX' in row.get('Output', '')]
+            prefix = f'PRIVATE_RESPONSE_PREFIX nodes={count} position={count-2} prefixes={count-1} authenticated=50'
+            if (samples and (len(prefix_receipts) != 1 or not prefix_receipts[0].endswith(prefix))) or (not samples and prefix_receipts):
+                raise ValueError('Missing original packet and SS2022 prefix response witnesses')
             reloaded = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and 'RELOADED_PRIVATE_FINAL' in row.get('Output','')]
             if (fault == 'original' and (len(reloaded) != 1 or not reloaded[0].endswith(RELOADED_PRIVATE_FINAL))) or (fault != 'original' and reloaded):
                 raise ValueError('Missing loaded Compare private final, original prefix, DNS, application traffic or joined close')

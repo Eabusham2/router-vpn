@@ -243,7 +243,13 @@ func (a *app) saveOrderedCandidateProfile(w http.ResponseWriter, r *http.Request
 		return
 	}
 	job.accepted = false // one explicit save per receipt, no duplicate retries
-	viaEntryJSON(w, map[string]any{"ok": true, "profile_id": record.ID, "profile_name": record.Name, "proposed_path": nodes, "active_path_changed": false, "note": "Saved for the next connection. Disconnect before loading this complete profile."})
+	response := map[string]any{"ok": true, "profile_id": record.ID, "profile_name": record.Name, "proposed_path": nodes, "active_path_changed": false, "note": "Saved for the next connection. Disconnect before loading this complete profile."}
+	job.view.addResponseSource(response)
+	if len(job.view.responseNodes) != 0 {
+		response["request_id"], response["candidate_id"] = q.RequestID, q.CandidateID
+		response["proposal_action"] = "save-final-profile"
+	}
+	viaEntryJSON(w, response)
 }
 
 // Caller holds the original publication locks. No callback or native observer

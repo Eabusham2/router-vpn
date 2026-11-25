@@ -1,6 +1,7 @@
 ﻿param(
     [string]$Root = (Split-Path $PSScriptRoot -Parent),
     [switch]$TransactionOnly,
+    [ValidateSet('all','pair-local','pair-server','pair-auto','ordered-local','ordered-selected','setup')][string]$Group='all',
     [ValidateSet('shipping','capture-two-modes','load-fallback','connect-fallback','entry-capture-fallback','entry-load-fallback','entry-connect-fallback','startup-deadline','ordered-drop-middle','ordered-execution-capture','ordered-execution-connect','ordered-final-owner','ordered-capability','ordered-source','ordered-locked-source','setup-expectation','setup-current-receipt','setup-response-source','setup-response-order','setup-load-inventory','setup-refresh-retirement','setup-uncertain-owner')][string]$Mutation = 'shipping'
 )
 $ErrorActionPreference='Stop'
@@ -90,12 +91,20 @@ try{
         'ordered-final-owner'{$Helpers=ReplaceOnce $Helpers '$copy[$copy.Count-1].id-cne$ControlID' '$false'}
         'ordered-capability'{$Connect=ReplaceOnce $Connect '$Supported-isnot[bool]-or-not$Supported' '$false'}
         'ordered-source'{$Helpers=ReplaceOnce $Helpers "-or[string](Get-RouterVPNOrderedValue `$profile 'profile_token')-cne`$token" '-or$false'}
-        'ordered-locked-source'{$Helpers=ReplaceOnce $Helpers 'expected_profile_tokens=$tokens' 'expected_profile_tokens=@{}'}
+        'ordered-locked-source'{
+            # Save and Connect share the source-token builder. Keep the original
+            # saved graph available to exercise the mutation at actual Connect.
+            $lockedPayload=ShippingFunction $ProfileSettingsSource 'global:New-RouterVPNOrderedConnectPayload'
+            $brokenLockedPayload=[ScriptBlock]::Create((ReplaceOnce $lockedPayload 'expected_profile_tokens=$tokens' 'expected_profile_tokens=@{}'))
+        }
         'setup-expectation'{$Helpers=ReplaceOnce $Helpers '$request.expected_profile_tokens=$capture.Tokens' '$request.expected_profile_tokens=@{}'}
         'setup-current-receipt'{$Helpers=ReplaceOnce $Helpers '-or(Get-RouterVPNSetupViewKey $Owner)-cne$Capture.ViewKey' '-or$false'}
         'setup-response-source'{$Helpers=ReplaceOnce $Helpers 'if(-not$Capture.Loading-and$token-cne$Capture.Tokens[$id])' 'if($false)'}
         'setup-response-order'{$Helpers=ReplaceOnce $Helpers "if(`$null-eq`$nodes-or`$null-eq`$expectedNodes-or@(`$nodes).Count-ne@(`$expectedNodes).Count-or(@(`$nodes.id)-join',')-cne(@(`$expectedNodes.id)-join',')-or(@(`$nodes.mode)-join',')-cne(@(`$expectedNodes.mode)-join','))" 'if($false)'}
-        'setup-load-inventory'{$Helpers=ReplaceOnce $Helpers 'if($Loading-or[string](Get-RouterVPNOrderedValue $control[0]' 'if($false-or[string](Get-RouterVPNOrderedValue $control[0]'}
+        'setup-load-inventory'{
+            $loadCapture=ShippingFunction $ProfileSettingsSource 'global:Get-RouterVPNSetupCapture'
+            $brokenLoadCapture=[ScriptBlock]::Create((ReplaceOnce $loadCapture 'if($Loading-or[string](Get-RouterVPNOrderedValue $control[0]' 'if($false-or[string](Get-RouterVPNOrderedValue $control[0]'))
+        }
         'setup-refresh-retirement'{$Helpers=ReplaceOnce $Helpers '[void](CancelUnifiedRefreshAsync)' '[void]0'}
         'setup-uncertain-owner'{$Helpers=ReplaceOnce $Helpers 'if($null-ne$Display){Restore-RouterVPNLoadDisplay $Display}' 'if($false){Restore-RouterVPNLoadDisplay $Display}'}
     }
@@ -254,9 +263,17 @@ public sealed class ProfileModeOwner {
         . (Join-Path $Client 'test-windows-profile-load-recovery.ps1')
         return
     }
+    $pairCasesRun=[Collections.Generic.List[int]]::new()
+    $connectCasesRun=[Collections.Generic.List[int]]::new()
+    $orderedCasesRun=[Collections.Generic.List[int]]::new()
+    function CompleteProfileGroup {
+        Write-Output ("Actual WPF profile Add/Load/Update and main Connect callbacks: $script:Count checks PASS")
+        Write-Output ("PROFILE-GROUP $Group pair="+($pairCasesRun -join ',')+" connect="+($connectCasesRun -join ',')+" ordered="+($orderedCasesRun -join ','))
+    }
     ProfileStage 'pair-matrix-start'
     for($m=0;$m-lt$ExpectedModes.Count;$m++){
         for($e=0;$e-lt$ExpectedExecutions.Count;$e++){
+            if($Group -cne 'all' -and $Group -cne ('pair-'+$ExpectedExecutions[$e])){continue}
             $toggle.IsChecked=$true;$entry.SelectedValue='entry_private';$exit.SelectedValue='exit_private'
             $MultihopExitModeCombo.SelectedIndex=$m;$execution.SelectedIndex=$e
             $EntryIndex=($m*3+$e)%$ExpectedEntries.Count;$MultihopEntryModeCombo.SelectedIndex=$EntryIndex
@@ -279,9 +296,11 @@ public sealed class ProfileModeOwner {
             $Before=$script:Requests.Count;& $UpdateCallback
             Check ($script:Requests.Count-eq$Before+1-and$profileStatus.Text.StartsWith('Updated ')) 'Actual Update callback failed'
             VerifyBody $script:Requests[-1].Body $ExpectedModes[$m] $ExpectedExecutions[$e] $true $ExpectedEntries[$EntryIndex]
+            $pairCasesRun.Add($m*$ExpectedExecutions.Count+$e)
         }
     }
     ProfileStage 'pair-matrix-finished'
+    if($Group -cin @('pair-local','pair-server')){CompleteProfileGroup;return}
     # Execute the actual generated Connect callback as well as profile storage.
     . ([ScriptBlock]::Create($Connect))
     . ([ScriptBlock]::Create((ShippingFunction $ProductSource 'UnifiedSelectedProfile')))
@@ -308,70 +327,73 @@ public sealed class ProfileModeOwner {
         Check ($Path-ceq'/api/multihop/connect'-and$Method-ceq'POST') 'Main Connect changed its endpoint'
         $script:ConnectTimeout=$Timeout;$script:ConnectBody=($Body|ConvertTo-Json -Depth 8)|ConvertFrom-Json;return $true
     }
-    for($i=0;$i-lt$ExpectedEntries.Count;$i++){for($e=0;$e-lt3;$e++){
-        $toggle.IsChecked=$true;$entry.SelectedValue='entry_private';$exit.SelectedValue='exit_private'
-        $MultihopEntryModeCombo.SelectedIndex=$i;$MultihopExitModeCombo.SelectedIndex=$i%$ExpectedModes.Count;$execution.SelectedIndex=$e
-        $script:ConnectBody=$null;$script:ConnectLogs.Clear();UnifiedConnect;$body=$script:ConnectBody
-        Check ($null-ne$body) ('Main Connect did not submit its selected path: '+($script:ConnectLogs -join '; '))
-        Check ((@($body.PSObject.Properties.Name|Sort-Object)-join',')-ceq'base,entry_id,entry_mode,execution,exit_id,exit_mode') 'Main Connect copied private fields or omitted graph choices'
-        Check ($body.entry_mode-ceq$ExpectedEntries[$i]-and$body.exit_mode-ceq$ExpectedModes[$i%$ExpectedModes.Count]-and$body.execution-ceq$ExpectedExecutions[$e]) 'Main Connect replaced the captured entry, exit or execution'
-        Check ($body.entry_id-ceq'entry_private'-and$body.exit_id-ceq'exit_private'-and$body.base-ceq'auto') 'Main Connect replaced exact identities or saved base fallback'
-        $KeyModes=@('wg-pq','awg2-pq','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg')
-        $Phases=0;if(-not$ExpectedEntries[$i]-or$ExpectedEntries[$i]-cin$KeyModes){$Phases+=120};if($ExpectedModes[$i%$ExpectedModes.Count]-cin$KeyModes){$Phases+=120}
-        $ExpectedTimeout=if($ExpectedExecutions[$e]-ceq'auto'-and$Phases-gt0){210+$Phases}else{200}
-        Check ($script:ConnectTimeout-eq$ExpectedTimeout) 'Main Connect lost the captured native startup deadline'
-
-    }}
-    ProfileStage 'connect-matrix-finished'
-    foreach($i in @(-1,$ExpectedEntries.Count,100)){
-        $MultihopEntryModeCombo.SelectedIndex=$i;$script:ConnectBody=$null;UnifiedConnect
-        Check ($null-eq$script:ConnectBody) 'Unavailable main entry reached Connect'
-    }
-    $MultihopExitModeCombo.SelectedIndex=0;$execution.SelectedIndex=0
-    foreach($BadEntry in @('stale-mode','WG','wg ', 'auto','OpenVPN','WireGuard','amneziawg ')){
-        $script:Loaded.multihop_exit_mode=$ExpectedModes[0];$script:Loaded.multihop_entry_mode=$BadEntry
+    if($Group -cin @('all','pair-auto')){
+        for($i=0;$i-lt$ExpectedEntries.Count;$i++){for($e=0;$e-lt3;$e++){
+            $toggle.IsChecked=$true;$entry.SelectedValue='entry_private';$exit.SelectedValue='exit_private'
+            $MultihopEntryModeCombo.SelectedIndex=$i;$MultihopExitModeCombo.SelectedIndex=$i%$ExpectedModes.Count;$execution.SelectedIndex=$e
+            $script:ConnectBody=$null;$script:ConnectLogs.Clear();UnifiedConnect;$body=$script:ConnectBody
+            Check ($null-ne$body) ('Main Connect did not submit its selected path: '+($script:ConnectLogs -join '; '))
+            Check ((@($body.PSObject.Properties.Name|Sort-Object)-join',')-ceq'base,entry_id,entry_mode,execution,exit_id,exit_mode') 'Main Connect copied private fields or omitted graph choices'
+            Check ($body.entry_mode-ceq$ExpectedEntries[$i]-and$body.exit_mode-ceq$ExpectedModes[$i%$ExpectedModes.Count]-and$body.execution-ceq$ExpectedExecutions[$e]) 'Main Connect replaced the captured entry, exit or execution'
+            Check ($body.entry_id-ceq'entry_private'-and$body.exit_id-ceq'exit_private'-and$body.base-ceq'auto') 'Main Connect replaced exact identities or saved base fallback'
+            $KeyModes=@('wg-pq','awg2-pq','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg')
+            $Phases=0;if(-not$ExpectedEntries[$i]-or$ExpectedEntries[$i]-cin$KeyModes){$Phases+=120};if($ExpectedModes[$i%$ExpectedModes.Count]-cin$KeyModes){$Phases+=120}
+            $ExpectedTimeout=if($ExpectedExecutions[$e]-ceq'auto'-and$Phases-gt0){210+$Phases}else{200}
+            Check ($script:ConnectTimeout-eq$ExpectedTimeout) 'Main Connect lost the captured native startup deadline'
+            $connectCasesRun.Add($i*$ExpectedExecutions.Count+$e)
+        }}
+        ProfileStage 'connect-matrix-finished'
+        foreach($i in @(-1,$ExpectedEntries.Count,100)){
+            $MultihopEntryModeCombo.SelectedIndex=$i;$script:ConnectBody=$null;UnifiedConnect
+            Check ($null-eq$script:ConnectBody) 'Unavailable main entry reached Connect'
+        }
+        $MultihopExitModeCombo.SelectedIndex=0;$execution.SelectedIndex=0
+        foreach($BadEntry in @('stale-mode','WG','wg ', 'auto','OpenVPN','WireGuard','amneziawg ')){
+            $script:Loaded.multihop_exit_mode=$ExpectedModes[0];$script:Loaded.multihop_entry_mode=$BadEntry
+            & $LoadCallback
+            Check ($profileStatus.Text.StartsWith('Load failed:') -and $script:Tx.state -ceq 'aborted') 'Unsupported prepared mode did not roll back'
+            Apply-RouterVPNLoadedConnectionSnapshot $Owner $script:Loaded
+            Check ($null-eq$MultihopEntryModeCombo.SelectedItem) 'Unsupported loaded entry silently became a valid mode'
+            $Rejected=$false;try{[void](MultihopEntryModeChoice)}catch{$Rejected=$true}
+            Check $Rejected 'Invalid loaded entry accepted by shipping Connect'
+            foreach($Callback in @($AddCallback,$UpdateCallback)){$Before=$script:Requests.Count;&$Callback;Check ($script:Requests.Count-eq$Before) 'Invalid entry reached the profile controller'}
+        }
+        $script:Loaded.PSObject.Properties.Remove('multihop_entry_mode');$MultihopEntryModeCombo.SelectedIndex=4
         & $LoadCallback
-        Check ($profileStatus.Text.StartsWith('Load failed:') -and $script:Tx.state -ceq 'aborted') 'Unsupported prepared mode did not roll back'
-        Apply-RouterVPNLoadedConnectionSnapshot $Owner $script:Loaded
-        Check ($null-eq$MultihopEntryModeCombo.SelectedItem) 'Unsupported loaded entry silently became a valid mode'
-        $Rejected=$false;try{[void](MultihopEntryModeChoice)}catch{$Rejected=$true}
-        Check $Rejected 'Invalid loaded entry accepted by shipping Connect'
-        foreach($Callback in @($AddCallback,$UpdateCallback)){$Before=$script:Requests.Count;&$Callback;Check ($script:Requests.Count-eq$Before) 'Invalid entry reached the profile controller'}
-    }
-    $script:Loaded.PSObject.Properties.Remove('multihop_entry_mode');$MultihopEntryModeCombo.SelectedIndex=4
-    & $LoadCallback
-    Check ((MultihopEntryModeChoice)-ceq'') 'Legacy profile did not clear the previous explicit entry mode'
-    $MultihopEntryModeCombo.SelectedIndex=0
-    foreach($InvalidIndex in @(-1,$ExpectedModes.Count,100)){
-        $MultihopExitModeCombo.SelectedIndex=$InvalidIndex
+        Check ((MultihopEntryModeChoice)-ceq'') 'Legacy profile did not clear the previous explicit entry mode'
+        $MultihopEntryModeCombo.SelectedIndex=0
+        foreach($InvalidIndex in @(-1,$ExpectedModes.Count,100)){
+            $MultihopExitModeCombo.SelectedIndex=$InvalidIndex
+            $Rejected=$false;try{[void](MultihopExitModeChoice)}catch{$Rejected=$true}
+            Check $Rejected 'Out-of-range exit index accepted by the shipping Connect selector'
+            $Rejected=$false;try{[void](Get-RouterVPNVisibleConnectionSnapshot -Owner $Owner)}catch{$Rejected=$true}
+            Check $Rejected 'Out-of-range exit index was captured as a usable profile'
+            foreach($Callback in @($AddCallback,$UpdateCallback)){$Before=$script:Requests.Count;&$Callback;Check ($script:Requests.Count-eq$Before) 'Out-of-range exit index reached the controller'}
+        }
+        foreach($Invalid in @('stale-mode','',$null)){
+            $MultihopExitModeCombo.SelectedIndex=0;$script:Loaded.multihop_exit_mode=$Invalid
+            & $LoadCallback
+            Check ($profileStatus.Text.StartsWith('Load failed:') -and $script:Tx.state -ceq 'aborted') 'Unsupported prepared mode did not roll back'
+            Apply-RouterVPNLoadedConnectionSnapshot $Owner $script:Loaded
+            Check ($null-eq$MultihopExitModeCombo.SelectedItem) 'Unsupported loaded mode silently became a valid exit'
+            $Rejected=$false;try{[void](MultihopExitModeChoice)}catch{$Rejected=$true}
+            Check $Rejected 'Missing exit mode accepted by the shipping Connect selector'
+            $Rejected=$false;try{[void](Get-RouterVPNVisibleConnectionSnapshot -Owner $Owner)}catch{$Rejected=$true}
+            Check $Rejected 'Unsupported loaded mode was captured as a usable profile'
+            foreach($Callback in @($AddCallback,$UpdateCallback)){$Before=$script:Requests.Count;&$Callback;Check ($script:Requests.Count-eq$Before) 'Invalid profile mode reached the controller'}
+        }
+        $BadItem=New-Object ProfileModeItem 'SHADOWSOCKS';$MultihopExitModeCombo.Items.Add($BadItem);$MultihopExitModeCombo.SelectedItem=$BadItem
         $Rejected=$false;try{[void](MultihopExitModeChoice)}catch{$Rejected=$true}
-        Check $Rejected 'Out-of-range exit index accepted by the shipping Connect selector'
-        $Rejected=$false;try{[void](Get-RouterVPNVisibleConnectionSnapshot -Owner $Owner)}catch{$Rejected=$true}
-        Check $Rejected 'Out-of-range exit index was captured as a usable profile'
-        foreach($Callback in @($AddCallback,$UpdateCallback)){$Before=$script:Requests.Count;&$Callback;Check ($script:Requests.Count-eq$Before) 'Out-of-range exit index reached the controller'}
-    }
-    foreach($Invalid in @('stale-mode','',$null)){
-        $MultihopExitModeCombo.SelectedIndex=0;$script:Loaded.multihop_exit_mode=$Invalid
-        & $LoadCallback
-        Check ($profileStatus.Text.StartsWith('Load failed:') -and $script:Tx.state -ceq 'aborted') 'Unsupported prepared mode did not roll back'
-        Apply-RouterVPNLoadedConnectionSnapshot $Owner $script:Loaded
-        Check ($null-eq$MultihopExitModeCombo.SelectedItem) 'Unsupported loaded mode silently became a valid exit'
-        $Rejected=$false;try{[void](MultihopExitModeChoice)}catch{$Rejected=$true}
-        Check $Rejected 'Missing exit mode accepted by the shipping Connect selector'
-        $Rejected=$false;try{[void](Get-RouterVPNVisibleConnectionSnapshot -Owner $Owner)}catch{$Rejected=$true}
-        Check $Rejected 'Unsupported loaded mode was captured as a usable profile'
-        foreach($Callback in @($AddCallback,$UpdateCallback)){$Before=$script:Requests.Count;&$Callback;Check ($script:Requests.Count-eq$Before) 'Invalid profile mode reached the controller'}
-    }
-    $BadItem=New-Object ProfileModeItem 'SHADOWSOCKS';$MultihopExitModeCombo.Items.Add($BadItem);$MultihopExitModeCombo.SelectedItem=$BadItem
-    $Rejected=$false;try{[void](MultihopExitModeChoice)}catch{$Rejected=$true}
-    Check $Rejected 'Malformed current tag accepted by the shipping Connect selector'
-    $script:Busy=$true
-    foreach($Callback in @($AddCallback,$LoadCallback,$UpdateCallback)){$Before=$script:Requests.Count;&$Callback;Check ($script:Requests.Count-eq$Before) 'Busy profile mutation reached the controller'}
-    $script:Busy=$false;$toggle.IsChecked=$false
-    $Disabled=Get-RouterVPNVisibleConnectionSnapshot -Owner $Owner
-    Check (-not$Disabled.multihop_enabled-and$Disabled.multihop_entry_id-ceq''-and$Disabled.multihop_exit_id-ceq''-and$Disabled.multihop_exit_mode-ceq''-and$Disabled.multihop_execution-ceq'') 'Disabled multihop retained another graph'
+        Check $Rejected 'Malformed current tag accepted by the shipping Connect selector'
+        $script:Busy=$true
+        foreach($Callback in @($AddCallback,$LoadCallback,$UpdateCallback)){$Before=$script:Requests.Count;&$Callback;Check ($script:Requests.Count-eq$Before) 'Busy profile mutation reached the controller'}
+        $script:Busy=$false;$toggle.IsChecked=$false
+        $Disabled=Get-RouterVPNVisibleConnectionSnapshot -Owner $Owner
+        Check (-not$Disabled.multihop_enabled-and$Disabled.multihop_entry_id-ceq''-and$Disabled.multihop_exit_id-ceq''-and$Disabled.multihop_exit_mode-ceq''-and$Disabled.multihop_execution-ceq'') 'Disabled multihop retained another graph'
 
-    ProfileStage 'pair-invalid-finished'
+        ProfileStage 'pair-invalid-finished'
+        if($Group -ceq 'pair-auto'){CompleteProfileGroup;return}
+    }
     # Ordered paths execute the same actual Add/Load/Update/Connect callbacks.
     # Widget and HTTP boundaries are doubled; no private node source is copied.
     $Window=$Owner;$ordered=[pscustomobject]@{IsChecked=$true};$chainButton=[pscustomobject]@{Tag=$null}
@@ -389,7 +411,13 @@ public sealed class ProfileModeOwner {
     }}
     foreach($executionChoice in @('server','auto')){foreach($nodeCount in @(2,3,8)){$orderedCases+=[pscustomobject]@{final='shadowsocks';mixed=$true;count=$nodeCount;imported='';prefix='';execution=$executionChoice}}}
     foreach($executionChoice in @('server','auto')){foreach($nodeCount in @(3,4,8)){$orderedCases+=[pscustomobject]@{final='shadowsocks';mixed=$true;count=$nodeCount;imported='shadowsocks';prefix='wg';execution=$executionChoice}}}
-    foreach($orderedCase in $orderedCases){
+    for($caseIndex=0;$caseIndex-lt$orderedCases.Count;$caseIndex++){
+        $orderedCase=$orderedCases[$caseIndex]
+        # The final saved path is the original input to the setup ownership tests.
+        $caseGroup=if($caseIndex -eq $orderedCases.Count-1){'setup'}
+            elseif($orderedCase.PSObject.Properties['execution']){'ordered-selected'}
+            else{'ordered-local'}
+        if($Group -cne 'all' -and $Group -cne $caseGroup){continue}
         $finalMode=$orderedCase.final;$mixed=$orderedCase.mixed;$nodeCount=$orderedCase.count
         $independent=$null -ne $orderedCase.PSObject.Properties['independent']
         if($independent){$script:OrderedCapability=[pscustomobject]@{ordered_nodes_supported=$true;ordered_multiple_imported_executions=@('local','server','auto')}}
@@ -437,6 +465,7 @@ public sealed class ProfileModeOwner {
         Check ($null-eq$script:ConnectBody-and$ordered.IsChecked-and$toggle.IsChecked) ('Ordered Load connected or lost its enabled choice: '+$profileStatus.Text)
         Check ($chainButton.Tag.control_id-ceq$control-and@($chainButton.Tag.nodes).Count-eq$nodeCount-and(@($chainButton.Tag.nodes.id)-join',')-ceq(@($nodes.id)-join',')) 'Ordered Load lost a middle or selected final node'
         Check ((@($chainButton.Tag.nodes.mode)-join',')-ceq(@($nodes.mode)-join',')) 'Ordered Load replaced selected WG/AWG modes'
+        if($Mutation -ceq 'ordered-locked-source'){. $brokenLockedPayload}
         UnifiedConnect;$body=$script:ConnectBody
         Check ($null-ne$body-and(@($body.PSObject.Properties.Name|Sort-Object)-join',')-ceq'execution,expected_profile_tokens,expected_selected_node_id,nodes') 'Ordered Connect sent legacy pair/private fields or omitted source owners'
         Check ($body.expected_selected_node_id-ceq$control-and@($body.expected_profile_tokens.PSObject.Properties).Count-eq$nodeCount) 'Ordered Connect lost original selected control or all-source hash preconditions'
@@ -474,8 +503,10 @@ public sealed class ProfileModeOwner {
             Check ($null-eq$script:ConnectBody) ('Changed ordered selection reached Connect: '+$fault)
             $RouterCombo.Tag=$saved
         }
+        $orderedCasesRun.Add($caseIndex)
     }
     ProfileStage 'ordered-matrix-finished'
+    if($Group -cin @('ordered-local','ordered-selected')){CompleteProfileGroup;return}
     # Actual callbacks retain their original public owner and complete source
     # map across the request. No network, private source, or WPF is simulated.
     $originalStore=$RouterCombo.Tag|ConvertTo-Json -Depth 32|ConvertFrom-Json
@@ -530,6 +561,7 @@ public sealed class ProfileModeOwner {
     $targetNodes=@([pscustomobject]@{id=$nodes[0].id;mode='awg2-fast'},[pscustomobject]@{id=$nodes[1].id;mode='shadowsocks'})
     $targetTokens=@{};$targetTokens[$nodes[0].id]=('a'*64);$targetTokens[$nodes[1].id]=('b'*64)
     $script:Loaded=[pscustomobject]@{profile=[pscustomobject]@{name='Different original target';mode='shadowsocks'};mode='shadowsocks';custom_layers=@();selected_node_id=$nodes[1].id;profile_tokens=$targetTokens;multihop_enabled=$true;multihop_nodes=$targetNodes;multihop_execution='local'}
+    if($Mutation -ceq 'setup-load-inventory'){. $brokenLoadCapture}
     $before=$script:LoadedCallbacks;&$LoadCallback
     Check ($script:LoadedCallbacks-eq$before+1-and$profileStatus.Text.StartsWith('Loaded ')) ('Original captured target Load failed: '+$profileStatus.Text)
     $request=$script:Requests[-1].Body
@@ -560,7 +592,7 @@ public sealed class ProfileModeOwner {
     $toggle.IsChecked=$false
     Check (-not(Get-RouterVPNVisibleConnectionSnapshot -Owner $Owner).ContainsKey('multihop_nodes')) 'Disabled ordered path leaked into a direct profile'
     ProfileStage 'setup-ownership-finished'
-    Write-Output ("Actual WPF profile Add/Load/Update and main Connect callbacks: $script:Count checks PASS")
+    CompleteProfileGroup
 }finally{
     if(Test-Path -LiteralPath $FixtureStateRoot){Remove-Item -LiteralPath $FixtureStateRoot -Recurse -Force}
 }

@@ -23,6 +23,7 @@ type orderedCandidatePreparedView struct {
 	catalog        *desktopNodeChainCandidateCatalog
 	candidates     []orderedCandidateChoice
 	prefixes       []orderedCandidatePrefix
+	responseNodes  []orderedCandidateResponseSourceNode
 }
 
 func captureOrderedCandidatePreparedView(ctx context.Context, a *app, position int,
@@ -111,6 +112,7 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 		return nil, err
 	}
 	view := &orderedCandidatePreparedView{draft: draft, scope: scope, token: token, network: network, expires: time.Now().Add(120 * time.Second), position: position, selection: selection}
+	view.responseNodes = orderedCandidateResponseSourceNodes(selection, orderedCandidateDraftExecution(draft), position)
 	for i, member := range selection.Nodes {
 		metric := desktopCandidatePrefixMetric(launch, i)
 		if scope == orderedCandidateSavedPrefixScope && (i == len(selection.Nodes)-1 || metric == "" || metric == hopmeasure.CandidateTCPMeasurement && !mobilemultihop.DesktopNodePhysicalGraphSupported(member.Mode, member.Profile.StartLayer)) {
@@ -146,6 +148,9 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 			_, choice.Proposal, err = orderedDraftProposal(draft.Execution, selection.Nodes, position, profile, proposalProfiles)
 		}
 		if err != nil {
+			if len(view.responseNodes) != 0 {
+				continue
+			}
 			choice.SaveReason = err.Error()
 		}
 		view.candidates = append(view.candidates, choice)

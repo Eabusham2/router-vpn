@@ -9,10 +9,10 @@ import test_ios_node_chain_connect_profiles as C
 
 ROUNDTRIP=r'''
  static func independentRoundtrip()throws {
-  let choice=CommandLine.arguments.last!, count=Int(choice) ?? 9
+  let choice=CommandLine.arguments.last!, count=Int(choice) ?? (choice=="private-sixteen" ? 16:9)
   let cases: [(Bool,Bool,Bool)]
   switch choice {
-  case "private-nine": cases=[(false,false,true)]
+  case "private-nine","private-sixteen": cases=[(false,false,true)]
   case "later-nine": cases=[(false,true,true)]
   default: cases=[(false,false,false),(true,false,false)] + (count==9 ? [(false,true,false)] : [])
   }
@@ -38,6 +38,20 @@ ROUNDTRIP=r'''
    var final=try stored(ids[count-1]);final.routerProfiles[0].multihopExecution="local"
    for position in 0..<count-1{final.routerProfiles[0].multihopNodes![position].mode=positions.contains(position) || count>8 && privateStreams.contains(position) ? "shadowsocks":"wg"}
    try store.save(final);model.bundle=final
+   if choice=="private-sixteen" {
+    var selected=final, nodes=final.routerProfiles[0].multihopNodes!
+    nodes.swapAt(2,count-2);selected.routerProfiles[0].multihopNodes=nodes
+    selected.routerProfiles[0].multihopExecution="auto"
+    let linked=try model.iosNodeChainBundles(for:selected)
+    let profiles=linked.map { bundle in bundle.routerProfiles.first(where:{$0.id==bundle.selectedRouterID})! }
+    let draft=IOSNodeChainDraft(saved:nodes,finalID:ids.last!)
+    try check("sixteen-member editor retains the private penultimate Compare source",try draft.measurementPath(through:count-2,execution:"auto",profiles:profiles)==nodes)
+    try reject("Server cannot request a private response at position fourteen"){_=try draft.measurementPath(through:count-2,execution:"server",profiles:profiles)}
+    let original=try IOSNodeChainExecutionCapture.compile(bundles:linked.map {try encoded($0)},requested:"auto")
+    defer {try? original.close()}
+    try check("extended editor opens the original selected capture and one measured stop",original.extendedOriginalNodeCount==count && original.responsePosition(for:"local")==count-2 && original.responsePosition(for:"server")==nil)
+    continue
+   }
    let beforeSources=try model.iosNodeChainBundles(for:final),originals=try beforeSources.map{try encoded($0)},native=try IOSNodeChainCapture.compile(bundles:originals);defer{try? native.plan.close()}
    if laterHostname {
     let members=beforeSources.map { bundle in bundle.routerProfiles.first(where:{$0.id==bundle.selectedRouterID})! }
@@ -70,6 +84,11 @@ ROUNDTRIP=r'''
      if qualified {
       try check("selected entry candidate retains every private and public reference",try draft.measurementPath(through:0,execution:execution,profiles:pairedProfiles)==nodes)
       try reject("private stream has no selected response authority"){_ = try draft.measurementPath(through:2,execution:execution,profiles:pairedProfiles)}
+      var penultimate=nodes;penultimate.swapAt(2,count-2)
+      let complete=IOSNodeChainDraft(saved:penultimate,finalID:ids.last!)
+      if execution=="auto" {
+       try check("private penultimate chooser retains its complete Compare source",try complete.measurementPath(through:count-2,execution:execution,profiles:pairedProfiles)==penultimate)
+      } else {try reject("Server cannot measure through the private penultimate"){_ = try complete.measurementPath(through:count-2,execution:execution,profiles:pairedProfiles)}}
       var crossed=nodes;crossed[0].mode="awg2-fast"
       try reject("private stream requires WG entry for candidate selection"){_ = try IOSNodeChainDraft(saved:crossed,finalID:ids.last!).measurementPath(through:0,execution:execution,profiles:pairedProfiles)}
       let linked=try model.iosNodeChainBundles(for:selected),bytes=try linked.map{try encoded($0)}
@@ -159,7 +178,9 @@ ROUNDTRIP=r'''
 '''
 
 def main():
-    source=C.TYPED
+    # setupTyped immediately replaces the placeholder records with the complete
+    # native fixture. Reset the shared preferences using a valid two-node pair.
+    source=C.TYPED.replace('_ = try setup(count)', '_ = try setup(2)', 1)
     start=source.index(' static func connectRoundtrip()throws {')
     source=source[:start]+ROUNDTRIP
     # Sufficient original packet assets are established before canonical capture.
@@ -178,5 +199,5 @@ def main():
     C.P.BOUNDARIES='import CoreFoundation\n'+C.P.BOUNDARIES+'\nenum ProfileProgress {\n'+boolean+'\n'+progress+'\n}\n'
     C.P.BOUNDARIES+='\n'+C.L.S.member((C.P.APP/'IOSNodeChainEditor.swift').read_text(),'struct IOSNodeChainDraft {')+'\n'
     C.TYPED=source
-    C.main(label='independent Local imports',roundtrip='independentRoundtrip',binary_cases=[(str(n),) for n in range(3,10)]+[("private-nine",),("later-nine",)],extra_source_names=("IOSSessionIdentity.swift",))
+    C.main(label='independent Local imports',roundtrip='independentRoundtrip',binary_cases=[(str(n),) for n in range(3,10)]+[("private-nine",),("private-sixteen",),("later-nine",)],extra_source_names=("IOSSessionIdentity.swift",))
 if __name__=='__main__':main()

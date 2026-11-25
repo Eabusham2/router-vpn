@@ -99,13 +99,15 @@ type viaEntryOwner struct {
 }
 
 type viaEntryControl struct {
-	mu                 sync.Mutex
-	owner              *viaEntryOwner
-	seen               map[string]time.Time
-	orderedView        *orderedCandidateView
-	preparedView       *orderedCandidatePreparedView
-	preparedAdmissions map[string]*orderedCandidatePreparedAdmission
-	preparedViews      map[string]*orderedCandidatePreparedAdmission
+	mu                        sync.Mutex
+	owner                     *viaEntryOwner
+	seen                      map[string]time.Time
+	orderedView               *orderedCandidateView
+	preparedView              *orderedCandidatePreparedView
+	preparedAdmissions        map[string]*orderedCandidatePreparedAdmission
+	preparedViews             map[string]*orderedCandidatePreparedAdmission
+	orderedResponseAdmissions map[string]*orderedCandidateResponseAdmission
+	orderedResponseViews      map[string]*orderedCandidateResponseAdmission
 }
 
 var viaEntryControls sync.Map // map[*app]*viaEntryControl; failed cleanup retains its owner
@@ -121,6 +123,7 @@ func validViaEntryRequestID(id string) bool {
 }
 
 func (c *viaEntryControl) pruneNoncesLocked() {
+	c.pruneOrderedCandidateResponseNoncesLocked()
 	for token, record := range c.preparedViews {
 		if time.Since(record.created) > 5*time.Minute {
 			delete(c.preparedViews, token)
@@ -650,6 +653,9 @@ func cleanupViaEntryOwnerContext(caller context.Context, c *viaEntryControl, own
 		return errors.Join(err, lockErr)
 	}
 	owner.drained = err == nil
+	if record := c.orderedResponseAdmissions[owner.id]; record != nil && owner.ordered != nil && record.token == owner.ordered.view.token {
+		record.drained = owner.drained
+	}
 	c.mu.Unlock()
 	return errors.Join(err, ctx.Err())
 }
@@ -677,12 +683,22 @@ func (a *app) viaEntryCandidatesCancel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) cancelViaEntryCandidate(w http.ResponseWriter, r *http.Request, requestID string, admission *orderedCandidatePreparedAdmission) {
+	a.cancelViaEntryCandidateWithResponse(w, r, requestID, admission, nil)
+}
+
+func (a *app) cancelViaEntryCandidateWithResponse(w http.ResponseWriter, r *http.Request, requestID string, admission *orderedCandidatePreparedAdmission, responseAdmission *orderedCandidateResponseAdmission) {
 	c := viaEntryControlFor(a)
 	if err := desktopnetwork.LockContext(r.Context(), &c.mu); err != nil {
 		http.Error(w, "candidate cancellation could not enter its original control", http.StatusRequestTimeout)
 		return
 	}
 	c.pruneNoncesLocked()
+	if record := c.orderedResponseAdmissions[requestID]; record != responseAdmission || responseAdmission != nil &&
+		(c.owner != nil && c.owner.id == requestID && (c.owner.ordered == nil || c.owner.ordered.view.token != responseAdmission.token)) {
+		c.mu.Unlock()
+		http.Error(w, "connected cancellation requires its original request and view", http.StatusConflict)
+		return
+	}
 	if admission != nil && (c.preparedAdmissions[requestID] != admission || c.owner != nil && c.owner.id == requestID && c.owner.preparation == nil) {
 		c.mu.Unlock()
 		http.Error(w, "saved cancellation cannot adopt another original purpose", http.StatusConflict)
@@ -707,6 +723,10 @@ func (a *app) cancelViaEntryCandidate(w http.ResponseWriter, r *http.Request, re
 		select {
 		case <-owner.done:
 		case <-r.Context().Done():
+			if responseAdmission != nil {
+				writeOrderedCandidateResponseCancel(w, c, owner, requestID, responseAdmission, errors.New("original candidate is still draining"))
+				return
+			}
 			if admission != nil {
 				writeOrderedCandidatePreparedAdmissionCancelResponse(w, c, owner, requestID, admission, errors.New("original candidate is still draining"))
 				return
@@ -714,6 +734,10 @@ func (a *app) cancelViaEntryCandidate(w http.ResponseWriter, r *http.Request, re
 			http.Error(w, "candidate cancellation is still draining", http.StatusRequestTimeout)
 			return
 		case <-time.After(15 * time.Second):
+			if responseAdmission != nil {
+				writeOrderedCandidateResponseCancel(w, c, owner, requestID, responseAdmission, errors.New("original candidate is still draining"))
+				return
+			}
 			if admission != nil {
 				writeOrderedCandidatePreparedAdmissionCancelResponse(w, c, owner, requestID, admission, errors.New("original candidate is still draining"))
 				return
@@ -722,6 +746,10 @@ func (a *app) cancelViaEntryCandidate(w http.ResponseWriter, r *http.Request, re
 			return
 		}
 		if err := cleanupViaEntryOwner(c, owner); err != nil {
+			if responseAdmission != nil {
+				writeOrderedCandidateResponseCancel(w, c, owner, requestID, responseAdmission, err)
+				return
+			}
 			if admission != nil {
 				writeOrderedCandidatePreparedAdmissionCancelResponse(w, c, owner, requestID, admission, err)
 				return
@@ -733,6 +761,10 @@ func (a *app) cancelViaEntryCandidate(w http.ResponseWriter, r *http.Request, re
 			http.Error(w, "candidate cleanup is pending; protection and ownership retained", http.StatusServiceUnavailable)
 			return
 		}
+	}
+	if responseAdmission != nil {
+		writeOrderedCandidateResponseCancel(w, c, owner, requestID, responseAdmission, nil)
+		return
 	}
 	if admission != nil {
 		writeOrderedCandidatePreparedAdmissionCancelResponse(w, c, owner, requestID, admission, nil)

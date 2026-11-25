@@ -38,19 +38,21 @@ struct IOSDeviceMTUPreference: Equatable {
     let sourceSHA256 = Provider.hash, configSHA256 = String(repeating: "b", count: 64)
     var ordinaryLaunchInput: String { launchInput }
     var launchInput: String {
-        let source = String(decoding: try! JSONSerialization.data(withJSONObject: ["execution": requested, "schema": Draft.schema], options: [.sortedKeys]), as: UTF8.self)
+        let source = String(decoding: try! JSONSerialization.data(withJSONObject: ["execution": requested, "schema": [9,16].contains(Draft.schema) ? 6 : Draft.schema], options: [.sortedKeys]), as: UTF8.self)
         let launch = ["source": source, "source_sha256": sourceSHA256, "config_sha256": configSHA256]
         return String(decoding: try! JSONSerialization.data(withJSONObject: launch, options: [.sortedKeys]), as: UTF8.self)
     }
     var isSOCKS: Bool { Draft.schema == 3 }
     var isCONNECT: Bool { Draft.schema == 4 }
     // SHIPPING_PACKET_POSITIONS
- func responsePosition(for winner:String)->Int? { Draft.schema == 8 && requested == "auto" && winner == "local" ? 1:nil }
+ func responsePosition(for winner:String)->Int? { Draft.response && requested == "auto" && winner == "local" ? members.count-2:nil }
  func candidatePositions(for winner:String)->[Int] { candidatePositions + (responsePosition(for:winner).map {[$0]} ?? []) }
     // SHIPPING_HEX
     var members: [IOSNodeChainCapture.Member] {
         let graph: [(String, String)]
         switch Draft.schema {
+        case 16: graph = [("entry", "wg")] + (1...13).map { ("import-"+String($0), "shadowsocks") } + [("middle", "shadowsocks"), ("final", "shadowsocks")]
+        case 9: graph = [("entry", "wg"), ("import", "shadowsocks"), ("middle", "shadowsocks"), ("final", "shadowsocks")]
         case 8: graph = [("entry", "wg"), ("middle", "shadowsocks"), ("final", "shadowsocks")]
         case 1: graph = [("entry", "wg"), ("middle", "awg2-fast"), ("final", "hysteria2")]
         case 6: graph = [("entry", "wg"), ("import", "shadowsocks"), ("middle", "wg"), ("final", "shadowsocks")]
@@ -59,8 +61,8 @@ struct IOSDeviceMTUPreference: Equatable {
             graph = [("entry", "wg"), ("middle", "awg2-strong"), ("import", mode), ("final", "shadowsocks")]
         }
         return graph.enumerated().map { position, node in
-            .init(id: node.0, mode: node.1, profile: ["node_kind": (node.0 == "import" || Draft.schema==8 && position==1) ? "external" : "router-vpn",
-                  "node_proof_id": (node.0 == "import" || Draft.schema==8 && position==1) ? "" : String(repeating: String(position), count: 64)])
+            .init(id: node.0, mode: node.1, profile: ["node_kind": (node.0.hasPrefix("import") || Draft.schema==8 && position==1) ? "external" : "router-vpn",
+                  "node_proof_id": (node.0.hasPrefix("import") || Draft.schema==8 && position==1) ? "" : String(repeating: String(position), count: 64)])
         }
     }
     func close() throws {}
@@ -108,6 +110,7 @@ struct NEOnDemandRuleConnect {}
 enum IOSNodeChainProviderCapture { static let executionKey = "nodeChainExecutionSource" }
 @MainActor enum Draft {
     static var winner = "server", requested = "server", position = 2, schema = 6
+    static var response: Bool { [8,9,16].contains(schema) }
     static var starts = 0, removes = 0, candidateStarts = 0, unattendedStarts = 0
     static var replacedRule = false
     static var wrongConfig = false, wrongProofs = false, wrongWinner = false, lastAtInfo = false, foreignReadback = false
@@ -157,7 +160,7 @@ TEST = r'''
 @MainActor @main struct SelectedDraftFlow {
     static func run(_ requested: String, _ winner: String, _ invalid: String = "", schema: Int = 6) async throws {
         Draft.reset(requested, winner)
-        Draft.schema = schema; Draft.position = schema == 6 ? 2 : 1
+        Draft.schema = schema; Draft.position = schema == 16 ? 14 : (schema == 6 || schema == 9 ? 2 : 1)
         let model = RouterVPNModel(), probe = IOSNodeCandidates()
         let saved = try IOSNodeUsage.canonical(model.bundle)
         var draft = model.bundle!
@@ -200,7 +203,7 @@ TEST = r'''
             try await until { Provider.closeCalls > 0 || !probe.running || Draft.unattendedStarts > 0 }
             try check(Draft.unattendedStarts == 0, "unsaved selected graph started from On Demand during preference save")
             try check(Draft.starts == 1 && Draft.candidateStarts == 1 && probe.scores.isEmpty && IOSMTUMeasurementGate.held,
-                      "selected draft bypassed original candidate close")
+                      "selected draft bypassed original candidate close: "+String(schema)+"/"+requested+"/"+winner+" "+probe.text+" "+String(Draft.starts)+"/"+String(Draft.candidateStarts))
             Provider.allowClose = true; try await until { IOSSpeedLabTunnel.stopEntered }
             try check(probe.scores.isEmpty && IOSMTUMeasurementGate.held, "selected results escaped before native DOWN")
             IOSSpeedLabTunnel.allowStop = true; try await until { IOSSpeedLabTunnel.restoreEntered }
@@ -209,7 +212,7 @@ TEST = r'''
             try await until { !probe.scores.isEmpty || !probe.running }
             try check(probe.editorScore(node: "candidate", after: Draft.position) == 2.4 && !probe.canSave,
                       "editor score lost the original stop or saved before explicit preparation")
-            if schema == 8 {
+            if Draft.response {
                 try check(probe.canPrepare && IOSConnectionProfileStore.writes == 0, "joined private response lacked an explicit Prepare action")
                 probe.prepare(probe.scores[0]); try await until { !probe.preparing }
                 try check(probe.canSave && IOSConnectionProfileStore.writes == 0, "Choose wrote a profile or failed to retain the original response")
@@ -220,7 +223,7 @@ TEST = r'''
             probe.cancel(); try await until { !probe.running }
         }
         try check(Draft.unattendedStarts == 0, "unsaved selected graph started from On Demand during preference save")
-        try check(try IOSNodeUsage.canonical(model.bundle) == saved && IOSConnectionProfileStore.writes == (schema == 8 && invalid.isEmpty ? 1:0) &&
+        try check(try IOSNodeUsage.canonical(model.bundle) == saved && IOSConnectionProfileStore.writes == (Draft.response && invalid.isEmpty ? 1:0) &&
                   !model.connected && NETunnelProviderManager.saved == nil && !IOSMTUMeasurementGate.held,
                   "draft trial left a selected graph or saved profile behind")
     }
@@ -233,6 +236,10 @@ TEST = r'''
         }
         try await run("auto","local",schema:8)
         try await run("auto","server","server-response",schema:8)
+        try await run("auto","local",schema:9)
+        try await run("auto","server","server-response",schema:9)
+        try await run("auto","local",schema:16)
+        try await run("auto","server","server-response",schema:16)
         for schema in [1, 2, 5] { try await run("auto", "local", schema: schema) }
         try await run("server", "server")
         try await run("auto", "server")
@@ -254,10 +261,12 @@ def fixture():
                      'struct Identity:Equatable {let engine="multihop-libbox";let nodeChainSource:Data?;var nodeChainExecutionSource:Data?=nil}')
     source = replace(source, ' var activeRawProfile=',
                      ' var orderedExecutionObservation:(identity:Identity,requested:String,selected:String)?\n var activeRawProfile=')
+    source = replace(source, 'let hopMeasurementRows=IOSMultihopNodeSelection.maximumNodes;',
+                     'let hopMeasurementRows:Int;')
     source = replace(source, 'let nodeChainExecutionSource:Data?=nil;let bundleData:Data',
                      'let nodeChainExecutionSource:Data?;let bundleData:Data')
     source = replace(source, 'Identity(nodeChainSource:Data("original-complete-local-input".utf8),bundleData:try IOSNodeUsage.canonical(model.bundle))',
-                     'Identity(nodeChainSource:nil,nodeChainExecutionSource:model.activeSessionIdentity?.nodeChainExecutionSource,bundleData:try IOSNodeUsage.canonical(Draft.staged))')
+                     'Identity(hopMeasurementRows:ExecutionCapture(requested:Draft.requested).members.count,nodeChainSource:nil,nodeChainExecutionSource:model.activeSessionIdentity?.nodeChainExecutionSource,bundleData:try IOSNodeUsage.canonical(Draft.staged))')
     source = replace(source, 'func retireNewCandidateManager(model:RouterVPNModel,owner:UUID,input:String)async throws{throw Failure(message:"Local trial cannot retire a selected draft manager")}',
                      'let savedProtocol:NETunnelProviderProtocol?=nil\n static let ownerKey=IOSSpeedLabContext.ownerKey\n'
                      'static func ownedManager()async throws->NETunnelProviderManager?{NETunnelProviderManager.saved}\n'
@@ -288,14 +297,14 @@ def fixture():
   var metadata:[String:Any]=["schema":1,"capture_sha256":hash,"prefix_position":Draft.position,"prefix_id":"middle",
   "source_sha256":hash,"config_sha256":Draft.projected,"preparation_source_sha256":hash,"preparation_config_sha256":Draft.projected,
   "requested_execution":Draft.requested,"execution":Draft.wrongWinner ? "server" : Draft.winner,"selection_epoch":17,"targets":[["id":"candidate","source_sha256":hash]]]
-  if Draft.schema==8{metadata["measurement"]="routed-candidate-response"}
+  if Draft.response{metadata["measurement"]="routed-candidate-response"}
   reply["metadata"]=String(decoding:try json(metadata),as:UTF8.self)}''')
     source = replace(source, '"capture_sha256":hash,"prefix_position":0,"prefix_id":"entry","candidate_id":"candidate"',
                      '"capture_sha256":hash,"prefix_position":Draft.position,"prefix_id":"middle","candidate_id":"candidate"')
     source = replace(source, 'throw Failure(message:"unexpected Server/Compare handoff in a Local prefix test")',
-                     'guard Draft.schema==8, winner=="local", position==1, candidateID=="candidate", measuredInput=="measured original" else{throw Failure(message:"foreign selected response proposal")};return Self()')
-    source = source.replace('"measurement":"routed-tcp-connect"', '"measurement":Draft.schema==8 ? "routed-candidate-response":"routed-tcp-connect"')
-    source = source.replace('"kind":"tcp-connect"', '"kind":Draft.schema==8 ? "private-agent-response":"tcp-connect"')
+                     'guard Draft.response, winner=="local", position==Draft.position, candidateID=="candidate", measuredInput=="measured original" else{throw Failure(message:"foreign selected response proposal")};return Self()')
+    source = source.replace('"measurement":"routed-tcp-connect"', '"measurement":Draft.response ? "routed-candidate-response":"routed-tcp-connect"')
+    source = source.replace('"kind":"tcp-connect"', '"kind":Draft.response ? "private-agent-response":"tcp-connect"')
     model = (APP/'RouterVPNModel.swift').read_text()
     connect = member(model, '    func connectCandidatePreparation(_ capture: IOSOrderedRouteCapture')
     execution = (APP/'IOSNodeChainExecutionCapture.swift').read_text()

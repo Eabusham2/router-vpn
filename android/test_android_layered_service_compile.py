@@ -184,6 +184,7 @@ stub(APP,'AndroidOrderedLatencyStore','''{interface Guard{void require()throws E
  static Record completed(String a,String b,String c,String d,String e,int f,String g,String h,String i,boolean multiple)throws Exception{throw new IllegalStateException("No execution receipt in type boundary");}
  static void save(android.content.Context c,Record r,Guard g)throws Exception{g.require();throw new IllegalStateException("No ordered persistence in type boundary");}}''')
 stub(APP,'AndroidOrderedExecutionLatencyCapture','''{final String originalSource=null,raw="",source="",config="",generation="",selected="";
+ final String privateStreamRoles;
  AndroidOrderedExecutionLatencyCapture(String raw,int provedCount)throws Exception{throw new IllegalStateException("No selected extended receipt in type boundary");}
  AndroidOrderedExecutionLatencyCapture(String raw)throws Exception{throw new IllegalStateException("No native execution capture in type boundary");}
  void requireSelection(String requested,String selected)throws Exception{throw new IllegalStateException("No selected capture in type boundary");}

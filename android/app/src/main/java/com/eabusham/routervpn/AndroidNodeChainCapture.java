@@ -30,6 +30,12 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static boolean responsePrefix(List<AndroidNodeStore.ChainSource> sources,List<String> modes,int prefix,String execution) {
         if (sources.size()!=modes.size()||prefix<1||prefix>=sources.size()-1) return false;
         if ("auto".equals(execution)) {
+            if (sources.size() >= 4 && prefix == sources.size()-2) {
+                try {
+                    return pairedStreamInterior(sources,modes,execution,prefix)
+                            && sources.get(prefix).proofId.matches("[0-9a-f]{64}");
+                } catch (Exception unavailable) { return false; }
+            }
             if (prefix != 1 || !modes.equals(java.util.Arrays.asList("wg","shadowsocks","shadowsocks"))
                     || sources.get(0).imported || !sources.get(1).imported || sources.get(2).imported) return false;
             try {
@@ -93,7 +99,9 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         }
         return !member.imported && member.proofId.matches("[0-9a-f]{64}")
                 && !identityInputs.get(position).isEmpty()
-                && java.util.Arrays.asList("wg", "awg2-fast", "awg2-strong").contains(source.modes.get(position));
+                && (java.util.Arrays.asList("wg", "awg2-fast", "awg2-strong").contains(source.modes.get(position))
+                    || multipleImported && "auto".equals(source.execution)
+                    && responsePrefix(source.members,source.modes,position,source.execution));
     }
 
     static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture original) throws Exception {

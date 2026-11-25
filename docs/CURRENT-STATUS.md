@@ -1,3 +1,15 @@
+# 2026-11-25: Selected private-hop candidates and original cancellation
+
+The [private penultimate candidate record](IMPLEMENTATION-2026-11-25-PRIVATE-PENULTIMATE-CANDIDATES.md)
+documents measurement through an original paired private hop after Compare
+selects Local, explicit named final-profile Save/Load, and complete source and
+selection retention across desktop and mobile clients. Connected and draft
+cancellation preserve their original admission and cleanup boundaries.
+Sixteen encrypted Linux/amd64 cases passed, including four-, nine- and
+sixteen-node replacement routes. Exact-commit platform release and installed
+acceptance remain separate gates; the record retains the remaining selected
+imported-prefix candidate gap.
+
 # 2026-11-24: Integrated route consumers and release repairs
 
 The [integration repair record](IMPLEMENTATION-2026-11-24-INTEGRATED-ROUTE-REPAIRS.md)

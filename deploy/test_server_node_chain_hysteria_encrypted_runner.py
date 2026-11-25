@@ -87,7 +87,8 @@ class HysteriaServerGateTests(unittest.TestCase):
         for source,names in (
             (encrypted,('serverChainEncryptedKey','serverChainEncryptedRandom','serverChainEncryptedProof','serverChainEncryptedKeys')),
             (driver,('serverChainHysteriaKeys','serverChainHysteriaRequest')),
-            (peer,('desktopNodeChainReferenceAddressPair','desktopNodeChainInner','desktopNodeChainPeerIdentityBounds')),
+            (peer,('desktopNodeChainReferenceAddressPair','desktopNodeChainInner','desktopNodeChainPeerIdentityBounds',
+                   'desktopNodeChainPeerIdentityWithin')),
             (hysteria,('desktopHysteriaServerRequestValid',))):
             for name in names:parts.append(declaration(source,'func '+name+'('))
         for name in ('serverChainHysteriaPassword','serverChainHysteriaMask'):

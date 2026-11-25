@@ -44,7 +44,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         return value
     }
     func open(prefix: Int, inventoryBytes: Int = IOSCandidateCatalogPublication.maximumInventoryBytes,
-              family: IOSCandidateMetadataPages.Family = .ordinary,
+              family: IOSCandidateMetadataPages.Family = .ordinary, selectedResponse: IOSNodeCandidatePrefix? = nil,
               current: @MainActor () throws -> Void = {}) async throws -> IOSNodeCandidateMetadata {
         let deadline = ProcessInfo.processInfo.systemUptime + 3
         func requireCurrent() throws {
@@ -54,7 +54,8 @@ private final class IOSCandidateReply: @unchecked Sendable {
         try requireCurrent()
         guard let first = try await reply("candidate-open", request: owner, prefix: String(prefix), deadline: deadline).metadata else { throw IOSNodeCandidateResult.issue() }
         try requireCurrent()
-        var pages = try IOSCandidateMetadataPages(first, inventoryBytes: inventoryBytes, legacyLimit: 32768, family: family)
+        var pages = try IOSCandidateMetadataPages(first, inventoryBytes: inventoryBytes, legacyLimit: 32768, family: family,
+            selectedResponse: selectedResponse.map { ($0.position, $0.profile_id) })
         while let offset = pages.nextOffset {
             try requireCurrent()
             guard let raw = try await reply("candidate-metadata-page", request: owner, candidate: String(offset), deadline: deadline).metadata else { throw IOSNodeCandidateResult.issue() }
@@ -117,7 +118,13 @@ private final class IOSCandidateReply: @unchecked Sendable {
         let candidate_positions: [Int]?
         let proposal_source_sha256: String?, proposal_config_sha256: String?
         var eligiblePrefixes: [IOSNodeCandidatePrefix] {
-            proofs.filter { $0.supported(in: proofs) && (requested_execution == nil || $0.metric == "routed-tcp-connect" || requested_execution == "auto" && execution == "local" && $0.position == 1 && proofs.map(\.mode) == ["wg", "shadowsocks", "shadowsocks"]) && (candidate_positions?.contains($0.position) ?? true) }
+            proofs.filter { prefix in
+                if let requested_execution, prefix.metric == "routed-candidate-response" {
+                    return requested_execution == "auto" && execution == "local" && candidate_positions?.contains(prefix.position) == true &&
+                        prefix.selectedResponse(in: proofs)
+                }
+                return prefix.supported(in: proofs) && (candidate_positions?.contains(prefix.position) ?? true)
+            }
         }
     }
     struct Score: Identifiable {
@@ -287,12 +294,15 @@ private final class IOSCandidateReply: @unchecked Sendable {
                             try capture.requireCurrent()
                             try temporary?.requireLive()
                         }
-                        let metadata = try await owned.open(prefix: position, inventoryBytes: capture.source.inventory.data.count, family: info.requested_execution == nil ? .ordinary : .selected, current: current)
+                        let response = info.eligiblePrefixes.first { $0.metric == "routed-candidate-response" }
+                        let metadata = try await owned.open(prefix: position, inventoryBytes: capture.source.inventory.data.count,
+                            family: info.requested_execution == nil ? .ordinary : .selected, selectedResponse: response, current: current)
                         try current()
                         guard metadata.targets.map(\.id) == capture.rows.filter({ !$0.input.isEmpty }).map(\.id) else { throw IOSNodeCandidateResult.issue() }
                         try metadata.validate(prefix: capture.prefix, source: capture.chainSource, config: capture.chainConfig,
                             ids: Set(capture.rows.filter { !$0.input.isEmpty }.map(\.id)),
-                            requestedExecution: info.requested_execution, selectedExecution: info.execution, selectedPositions: info.candidate_positions ?? [])
+                            requestedExecution: info.requested_execution, selectedExecution: info.execution, selectedPositions: info.candidate_positions ?? [],
+                            selectedResponse: response)
                         let unsupported = capture.rows.filter { $0.input.isEmpty }.count
                         var lastRequest = ""
                         for target in metadata.targets {

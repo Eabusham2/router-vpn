@@ -119,7 +119,10 @@ func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *ht
 		response["requested_execution"] = view.draft.Execution
 		if metric == hopmeasure.CandidatePrivateResponseMeasurement && view.draft.Execution == "auto" {
 			response["required_selected_execution"] = "local"
-			response["note"] = "If Compare selects Local, measure 50 authenticated responses through the imported hop. Choose a candidate to save a separate final profile."
+			response["note"] = "If Compare selects Local, measure 50 authenticated responses through the captured prefix. Choose a candidate to save a separate final profile."
+			if len(view.responseNodes) != 0 {
+				response["response_source_nodes"] = view.responseNodes
+			}
 		} else if metric == hopmeasure.CandidateTCPMeasurement {
 			response["note"] = "Measure linked TCP candidates through the selected draft prefix, then add a validated hop after the temporary route closes."
 		}
@@ -275,6 +278,9 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 		response["requested_execution"] = job.view.draft.Execution
 		if job.view.draft.Execution == "auto" && response["measurement"] == hopmeasure.CandidatePrivateResponseMeasurement {
 			response["required_selected_execution"] = "local"
+			if len(job.view.responseNodes) != 0 {
+				response["response_source_nodes"] = job.view.responseNodes
+			}
 		}
 		// The worker completes the captured graph before returning any scores.
 		// Its terminal publication synchronizes access to the immutable receipt.

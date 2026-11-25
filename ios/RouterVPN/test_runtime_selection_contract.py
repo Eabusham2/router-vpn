@@ -1,6 +1,29 @@
 #!/usr/bin/env python3
 import runpy
+import subprocess
+import sys
 from pathlib import Path
+
+
+def run_node_candidate_phases(script):
+    phases = {
+        'base': ('original', 'capacity'),
+        'execution': ('local', 'server', 'auto'),
+        'private-response': ('selected-response',),
+        'selection': ('server-winner', 'typed-packet', 'ordinary-packet', 'packet-metadata'),
+        'catalog': ('unsupported-input', 'prefix-frame', 'receipt-expiry'),
+        'proposal': ('proposal-prefix', 'proposal-source', 'proposal-capture'),
+    }
+    prefix = 'Apple node candidate verified '
+    for phase, cases in phases.items():
+        result = subprocess.run([sys.executable, str(script), '--phase', phase], stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, timeout=300)
+        print(result.stdout, end='', flush=True)
+        result.check_returncode()
+        receipts = [line[len(prefix):] for line in result.stdout.splitlines() if line.startswith(prefix)]
+        if receipts != list(cases):
+            raise ValueError('Missing, duplicate or unexpected Apple node candidate case in '+phase)
+
 
 root=Path(__file__).resolve().parents[2]
 app=Path(__file__).with_name('App')
@@ -112,8 +135,6 @@ runpy.run_path(str(Path(__file__).with_name('test_connection_profiles_contract.p
 # Execute the actual forwarding policy/model and real-SDK transport checks;
 # standalone test files that are never invoked cannot certify the feature.
 import platform
-import subprocess
-import sys
 subprocess.run([sys.executable, str(root / 'deploy/test_ios_provenance_order.py')], check=True, timeout=30)
 subprocess.run([sys.executable, str(root / 'deploy/test_ios_via_entry_runner.py')], check=True, timeout=30)
 if platform.system() == 'Darwin':
@@ -144,7 +165,10 @@ if platform.system() == 'Darwin':
                           'test_ios_external_connection_profiles.py', 'test_ios_tor_connection_profiles.py', 'test_ios_external_dns_settings.py', 'test_ios_external_device_settings.py',
                           'test_ios_node_store_transactions.py', 'test_ios_candidate_catalog.py', 'test_ios_node_candidates.py', 'test_ios_node_layered_candidates.py', 'test_ios_node_candidate_prefix_capture.py',
                           'test_ios_node_candidate_typed_prefix.py', 'test_ios_node_candidate_prefix_provider.py', 'test_ios_node_candidate_prefix_host.py', 'test_ios_node_candidate_prefix_launch.py', 'test_ios_node_candidate_prefix_flow.py', 'test_ios_node_candidate_prefix_delivery.py', 'test_ios_node_candidate_prefix_engine.py', 'test_ios_node_candidate_session.py', 'test_ios_node_candidate_transaction.py', 'test_ios_node_candidate_preparation.py', 'test_ios_node_candidate_preparation_flow.py', 'test_ios_selected_draft_candidates.py', 'test_ios_node_chain_profiles.py', 'test_ios_node_chain_capture.py', 'test_ios_node_chain_openvpn_capture.py', 'test_ios_node_chain_openvpn_profiles.py', 'test_ios_node_chain_imported_capture.py', 'test_ios_node_chain_imported_profiles.py', 'test_ios_node_chain_imported_nodes.py', 'test_ios_node_chain_imported_nodes_profiles.py', 'test_ios_node_chain_execution_capture.py', 'test_ios_connect_execution_capture.py', 'test_ios_connect_execution_prefix_controls.py', 'test_ios_connect_execution_runtime.py', 'test_ios_connect_execution_control.py', 'test_ios_connect_execution_launch.py', 'test_ios_connect_execution_speed_lab.py', 'test_ios_connect_execution_layered_control.py', 'test_ios_connect_execution_layered_launch.py', 'test_ios_connect_execution_layered_profiles.py', 'test_ios_socks_execution_capture.py', 'test_ios_socks_execution_runtime.py', 'test_ios_socks_execution_restore_last.py', 'test_ios_socks_execution_layered_control.py', 'test_ios_socks_execution_layered_launch.py', 'test_ios_socks_execution_layered_profiles.py', 'test_ios_openvpn_execution_capture.py', 'test_ios_openvpn_execution_runtime.py', 'test_ios_openvpn_execution_restore_last.py', 'test_ios_openvpn_execution_profiles.py', 'test_ios_node_chain_connect_profiles.py', 'test_ios_hysteria_execution_capture.py', 'test_ios_node_chain_execution_restore_last.py', 'test_ios_node_chain_execution_host.py', 'test_ios_node_chain_socks_host.py', 'test_ios_ordered_latency.py', 'test_ios_ordered_latency_callbacks.py', 'test_ios_ordered_latency_host.py', 'test_ios_node_chain_socks_capture.py', 'test_ios_ordered_latency_socks_capture.py', 'test_ios_node_chain_socks_profiles.py', 'test_ios_node_chain_execution_registry.py', 'test_ios_node_chain_execution_session.py', 'test_ios_node_chain_execution_provider.py', 'test_ios_node_chain_identity.py', 'test_ios_node_chain_provider.py', 'test_ios_node_chain_launch.py', 'test_ios_node_chain_startup.py', 'test_ios_node_chain_editor.py', 'test_ios_node_chain_presentation.py'):
-        subprocess.run([sys.executable, str(root / 'deploy' / external_test)], check=True, timeout=300)
+        if external_test == 'test_ios_node_candidates.py':
+            run_node_candidate_phases(root / 'deploy' / external_test)
+        else:
+            subprocess.run([sys.executable, str(root / 'deploy' / external_test)], check=True, timeout=300)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_performance_bridge.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_start_layer.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_entry_start_capture.py')], check=True, timeout=150)

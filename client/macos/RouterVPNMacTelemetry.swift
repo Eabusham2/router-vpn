@@ -1113,14 +1113,38 @@ private enum RouterVPNOrderedCandidateDisplay {
         guard ["saved-complete-local","saved-prefix-local","draft-complete-selected"].contains(scope), value["scope"] as? String == scope else { return false }
         return scope != "saved-prefix-local" || (falseFlag(value,"application_open") && falseFlag(value,"dns_open") && value["proof_scope"] as? String == "selected-prefix")
     }
-    static func responseDraft(_ draft: [String: Any]?, position: Int) -> Bool {
+    static func responseSource(_ value: [String: Any], position: Int, draft: [String: Any]?) -> [[String: String]]? {
+        guard let rows = value["response_source_nodes"] as? [[String: String]], (4...96).contains(rows.count),
+              position == rows.count - 2 else { return nil }
+        var ids = Set<String>()
+        for (i, row) in rows.enumerated() {
+            let paired = i == 0 || i == position || i == rows.count - 1
+            guard row.count == 3, let id = row["id"], (1...64).contains(id.utf8.count),
+                  id.utf8.allSatisfy({ (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95 }),
+                  ids.insert(id).inserted, row["mode"] == (i == 0 ? "wg" : "shadowsocks"),
+                  row["kind"] == (paired ? "router-vpn" : "external") else { return nil }
+        }
+        if let draft {
+            guard draft["execution"] as? String == "auto", let nodes = draft["nodes"] as? [[String:String]],
+                  nodes == rows.map({ ["id":$0["id"]!, "mode":$0["mode"]!] }) else { return nil }
+        }
+        return rows
+    }
+    static func responseDraft(_ draft: [String: Any]?, position: Int, view: [String:Any] = [:]) -> Bool {
+        if view.keys.contains("response_source_nodes") { return responseSource(view,position:position,draft:draft) != nil }
         guard position == 1, draft?["execution"] as? String == "auto",
               let nodes = draft?["nodes"] as? [[String: String]] else { return false }
         return nodes.map { $0["mode"] } == ["wg","shadowsocks","shadowsocks"]
     }
+    static func responseProposal(_ choice: [String:Any], source: [[String:String]]) -> Bool {
+        guard choice["kind"] as? String == "router-vpn", let id = choice["id"] as? String, id.range(of: #"\A[A-Za-z0-9_-]{1,64}\z"#,options:.regularExpression) != nil,
+              !source.contains(where: { $0["id"] == id }), let proposal = choice["proposed_path"] as? [[String:String]] else { return false }
+        return proposal == source.dropLast().map({ ["id":$0["id"]!, "mode":$0["mode"]!] }) + [["id":id,"mode":"shadowsocks"]]
+    }
     static func responseWinner(_ value: [String: Any], position: Int, draft: [String: Any]?) -> Bool {
-        guard position == 1, value["requested_execution"] as? String == "auto",
-              value["required_selected_execution"] as? String == "local", draft == nil || responseDraft(draft, position: position) else { return false }
+        let eligible = value.keys.contains("response_source_nodes") ? responseSource(value,position:position,draft:draft) != nil : position == 1
+        guard eligible, value["requested_execution"] as? String == "auto",
+              value["required_selected_execution"] as? String == "local", draft == nil || responseDraft(draft, position: position, view: value) else { return false }
         if value["selected_execution"] == nil && value["selection_epoch"] == nil {
             return draft != nil && value["scope"] as? String == "draft-complete-selected"
         }
@@ -1148,7 +1172,13 @@ private enum RouterVPNOrderedCandidateDisplay {
         guard !flag(value,"admission_cancelled"), let selected = value["selected_execution"] as? String, ["local","server"].contains(selected),
               requested == "auto" || selected == "server", let raw = value["selection_epoch"] as? NSNumber,
               CFGetTypeID(raw) != CFBooleanGetTypeID(), let generation = UInt64(raw.stringValue), generation > 0 else { return false }
-        if value["measurement"] as? String == "routed-candidate-response" && !responseWinner(value,position: position,draft: draft) { return false }
+        if value["measurement"] as? String == "routed-candidate-response" && !responseWinner(value,position: position,draft: draft) {
+            guard selected == "server", requested == "auto", value["required_selected_execution"] as? String == "local",
+                  responseSource(value,position:position,draft:draft) != nil, flag(value,"native_down"),
+                  ["running","accepted","reviewing"].allSatisfy({ falseFlag(value,$0) }), !flag(value,"chosen"), !flag(value,"saved"),
+                  value["saved_profile_id"] as? String == "", let results = value["results"] as? [[String:Any]], results.isEmpty,
+                  flag(value,"cancelled") || !(value["failure"] as? String ?? "").isEmpty else { return false }
+        }
         return winner.isEmpty || (selected == winner && generation == epoch)
     }
     static func review(_ value: [String: Any], savedPath: Bool, scope: String = "saved-complete-local") -> Bool {
@@ -1157,7 +1187,7 @@ private enum RouterVPNOrderedCandidateDisplay {
             flag(value, "native_down") && flag(value, "reviewing") && falseFlag(value, "cleanup_pending") &&
             falseFlag(value, "running") && falseFlag(value, "cancelled") && falseFlag(value, "drained") && (value["saved_profile_id"] as? String) == "")
     }
-    static func savesMeasuredFinal(_ choice: [String: Any], draft: [String: Any]?, position: Int, metric: String) -> Bool {
+    static func savesMeasuredFinal(_ choice: [String: Any], draft: [String: Any]?, position: Int, metric: String, view: [String:Any] = [:]) -> Bool {
         if choice["proposal_action"] as? String == "save-intermediate-profile" {
             guard metric == "routed-candidate-response", let draft, draft["execution"] as? String == "local",
                   let original = draft["nodes"] as? [[String: String]], original.count < 96,
@@ -1171,7 +1201,7 @@ private enum RouterVPNOrderedCandidateDisplay {
             return expected == proposed
         }
         guard metric == "routed-candidate-response", choice["proposal_action"] as? String == "save-final-profile",
-              let draft, draft["execution"] as? String == "local" || responseDraft(draft,position: position), let original = draft["nodes"] as? [[String: String]],
+              let draft, draft["execution"] as? String == "local" || responseDraft(draft,position: position, view: view), let original = draft["nodes"] as? [[String: String]],
               position > 0, position == original.count - 2, original[position]["mode"] == "shadowsocks",
               original.last?["mode"] == "shadowsocks", let id = choice["id"] as? String, choice["kind"] as? String == "router-vpn",
               !original.contains(where: { $0["id"] == id }), let proposed = choice["proposed_path"] as? [[String: String]] else { return false }
@@ -1314,7 +1344,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         let idle=request==nil && !pendingDrain;let captured=prefix.selectedItem?.representedObject as? Int == position;refresh.isEnabled=idle;prefix.isEnabled=idle && draft == nil;test.isEnabled=idle && captured && view != nil;cancel.isEnabled=pendingDrain;save.isEnabled=false
         let reviewIdle = request == nil && !cancelWanted && !closeWanted && savedProfileID.isEmpty && (savedPath || !pendingDrain)
         if reviewIdle,captured,let receipt,RouterVPNOrderedCandidateDisplay.review(receipt,savedPath:savedPath,scope:savedScope),rows.indices.contains(table.selectedRow),let id=rows[table.selectedRow]["id"] as? String,let result=receipts[id],RouterVPNOrderedCandidateDisplay.score(result, measurement: measurement) != nil,let nodes=rows[table.selectedRow]["proposed_path"] as? [[String:Any]],nodes.count>=2 {
-            save.isEnabled = !namedFinal || RouterVPNOrderedCandidateDisplay.savesMeasuredFinal(rows[table.selectedRow], draft: draft, position: position, metric: measurement)
+            save.isEnabled = !namedFinal || RouterVPNOrderedCandidateDisplay.savesMeasuredFinal(rows[table.selectedRow], draft: draft, position: position, metric: measurement, view: view ?? [:])
         }
     }
     @objc private func capture(){guard request==nil,!pendingDrain else{return};position=prefix.selectedItem?.representedObject as? Int ?? position;view=nil;receipt=nil;receipts=[:];savedProfileID="";savedProfileName="";savedNativeDown=false;send("catalog",path:endpoint+"/catalog?prefix_position=\(position)"+catalogSuffix,body:draft)}
@@ -1327,13 +1357,13 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
     }
     @objc private func saveProfile(){
         controls();guard save.isEnabled,let view,rows.indices.contains(table.selectedRow) else{return};let row=rows[table.selectedRow]
+        guard let id = row["id"] as? String else { return }
+        chosenID = id
         if draft != nil {
-            guard let id = row["id"] as? String else { return }
-            chosenID = id
             if measurement == "routed-candidate-response" {
                 let name = profileName.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !name.isEmpty else { status.stringValue = "Enter a name for the measured path."; return }
-                guard RouterVPNOrderedCandidateDisplay.savesMeasuredFinal(row, draft: draft, position: position, metric: measurement) else { return }
+                guard RouterVPNOrderedCandidateDisplay.savesMeasuredFinal(row, draft: draft, position: position, metric: measurement, view: view) else { return }
                 send("save", path: endpoint + "/save-profile", body: ["request_id": requestID, "view_token": view["view_token"] ?? "", "candidate_id": id, "proposed_path": row["proposed_path"] ?? [], "name": name])
                 return
             }
@@ -1350,7 +1380,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         guard !closed else{return}
         if request==nil,cancelWanted,pendingDrain,Date()>=nextRetry {
             var body:[String:Any]=["request_id":requestID]
-            if savedPath {body["view_token"]=view?["view_token"] ?? ""}
+            if savedPath || view?["response_source_nodes"] != nil {body["view_token"]=view?["view_token"] ?? ""}
             send("cancel",path:endpoint+"/cancel",body:body)
         }
         if closeWanted,request==nil,!pendingDrain {controls();window?.close();return}
@@ -1392,6 +1422,14 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
             guard RouterVPNOrderedCandidateDisplay.metric(value, position: position, draft: draft) != nil else { throw Self.issue("This capture cannot measure candidates through the selected prefix.") }
             if savedPath {guard RouterVPNOrderedCandidateDisplay.purpose(value,scope:savedScope), RouterVPNOrderedCandidateDisplay.draftExecution(value,draft:draft,position:position,catalog:true,winner:"",epoch:0),RouterVPNOrderedCandidateDisplay.number(value,"schema")==1,RouterVPNOrderedCandidateDisplay.number(value,"samples")==50 else{throw Self.issue("Catalog belongs to another candidate purpose")}}
             guard let token=value["view_token"] as? String,token.range(of:"^[a-f0-9]{64}$",options:.regularExpression) != nil,RouterVPNOrderedCandidateDisplay.number(value,"prefix_position")==Double(position),let expires=RouterVPNOrderedCandidateDisplay.number(value,"expires_at"),expires>Date().timeIntervalSince1970*1000,let candidates=value["candidates"] as? [[String:Any]],!candidates.isEmpty else{throw Self.issue("Catalog expired or changed prefix")}
+            if value.keys.contains("response_source_nodes") {
+                guard value["measurement"] as? String == "routed-candidate-response",
+                      let source = RouterVPNOrderedCandidateDisplay.responseSource(value,position:position,draft:draft),
+                      RouterVPNOrderedCandidateDisplay.responseWinner(value,position:position,draft:draft),
+                      let prefix = (value["prefixes"] as? [[String:Any]])?.filter({ RouterVPNOrderedCandidateDisplay.number($0,"position") == Double(position) }),
+                      prefix.count == 1, prefix[0]["id"] as? String == source[position]["id"], prefix[0]["mode"] as? String == "shadowsocks",
+                      candidates.allSatisfy({ RouterVPNOrderedCandidateDisplay.responseProposal($0,source:source) && (draft == nil || $0["proposal_action"] as? String == "save-final-profile") }) else { throw Self.issue("The private response differs from its captured route.") }
+            }
             view=value;choices=candidates;rows=candidates;receipts=[:];prefix.removeAllItems();for item in value["prefixes"] as? [[String:Any]] ?? [] {guard let p=RouterVPNOrderedCandidateDisplay.number(item,"position") else{continue};prefix.addItem(withTitle:"After node \(Int(p)+1) · \(item["name"] as? String ?? "") · \(item["mode"] as? String ?? "")");prefix.lastItem?.representedObject=Int(p);if Int(p)==position{prefix.select(prefix.lastItem)}};table.reloadData();status.stringValue="Select saved candidates and test through this captured prefix."
             if draft != nil, !closeWanted, !cancelWanted {
                 let eligible = IndexSet(rows.indices.filter { measurement == "routed-candidate-response" || ((rows[$0]["proposed_path"] as? [[String: Any]])?.count ?? 0) >= 3 })
@@ -1399,6 +1437,35 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
                 else { status.stringValue = "No linked next hop can be inserted after this prefix." }
             }
             return
+        }
+        if view?["response_source_nodes"] != nil || value["response_source_nodes"] != nil {
+            guard let view, let original = RouterVPNOrderedCandidateDisplay.responseSource(view, position:position, draft:draft),
+                  RouterVPNOrderedCandidateDisplay.responseSource(value, position:position, draft:draft) == original,
+                  value["view_token"] as? String == view["view_token"] as? String else { throw Self.issue("The private response source changed.") }
+            if draft == nil {
+                guard RouterVPNOrderedCandidateDisplay.responseWinner(value,position:position,draft:nil),
+                      (value["selection_epoch"] as? NSNumber)?.stringValue == (view["selection_epoch"] as? NSNumber)?.stringValue else { throw Self.issue("The selected Local path changed.") }
+                guard value["request_id"] as? String == requestID else { throw Self.issue("The private response belongs to another request.") }
+                if action == "cancel" {
+                    let started = RouterVPNOrderedCandidateDisplay.flag(value,"started")
+                    guard (started && RouterVPNOrderedCandidateDisplay.falseFlag(value,"admission_cancelled")) ||
+                          (!savedAdmitted && RouterVPNOrderedCandidateDisplay.falseFlag(value,"started") && RouterVPNOrderedCandidateDisplay.flag(value,"admission_cancelled")),
+                          value["measurement"] as? String == measurement, RouterVPNOrderedCandidateDisplay.number(value,"prefix_position") == Double(position),
+                          ["ok","cancelled","drained"].allSatisfy({ RouterVPNOrderedCandidateDisplay.flag(value,$0) }),
+                          ["running","accepted","reviewing","cleanup_pending","active_path_changed"].allSatisfy({ RouterVPNOrderedCandidateDisplay.falseFlag(value,$0) }),
+                          let results = value["results"] as? [[String:Any]], results.isEmpty,
+                          value["saved_profile_id"] == nil || value["saved_profile_id"] as? String == "" else { throw Self.issue("The original candidate cancellation is still pending.") }
+                } else if ["run","poll"].contains(action), value["measurement"] as? String == measurement,
+                          RouterVPNOrderedCandidateDisplay.number(value,"prefix_position") == Double(position) {
+                    savedAdmitted = true
+                }
+                if action == "save" {
+                    guard value["candidate_id"] as? String == chosenID,
+                          let path = value["proposed_path"] as? [[String:String]],
+                          RouterVPNOrderedCandidateDisplay.responseProposal(["id":chosenID,"kind":"router-vpn","proposed_path":path], source:original),
+                          RouterVPNOrderedCandidateDisplay.falseFlag(value,"active_path_changed") else { throw Self.issue("The saved profile differs from the measured final.") }
+                }
+            }
         }
         if savedPath {try receiveSaved(value,action:action);return}
         if action=="save" {guard RouterVPNOrderedCandidateDisplay.flag(value,"ok"),!RouterVPNOrderedCandidateDisplay.flag(value,"active_path_changed") else{throw Self.issue("Profile save was not confirmed")};receipt=nil;status.stringValue="Saved \(value["profile_name"] as? String ?? "profile"). Disconnect before loading it; the active path is unchanged.";return}
@@ -1451,8 +1518,8 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
                       measurement == "routed-candidate-response", !RouterVPNOrderedCandidateDisplay.flag(value, "chosen"),
                       choices.contains(where: { choice in
                           guard choice["id"] as? String == chosenID, choice["proposal_action"] as? String == action,
-                                RouterVPNOrderedCandidateDisplay.savesMeasuredFinal(choice, draft: draft, position: position, metric: measurement) else { return false }
-                          if action == "save-intermediate-profile" {
+                                RouterVPNOrderedCandidateDisplay.savesMeasuredFinal(choice, draft: draft, position: position, metric: measurement, view: view ?? [:]) else { return false }
+                          if action == "save-intermediate-profile" || view?["response_source_nodes"] != nil {
                               guard let confirmed = value["proposed_path"] as? [[String:String]],
                                     let expected = choice["proposed_path"] as? [[String:String]] else { return false }
                               return confirmed == expected

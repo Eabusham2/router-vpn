@@ -582,7 +582,7 @@ final class AndroidNodeStore {
             String execution,java.util.function.BooleanSupplier current)throws Exception { synchronized(STORE_LOCK) {
         requireChainCatalog(catalog);
         if(current==null||!current.getAsBoolean()||!java.util.Arrays.asList("server","auto").contains(execution)
-                ||sources.size()<2||sources.size()>8||sources.size()!=modes.size()||prefix<0||prefix>=sources.size()-1)
+                ||sources.size()<2||sources.size()>PHYSICAL_TRAVERSAL_DEPTH||sources.size()!=modes.size()||prefix<0||prefix>=sources.size()-1)
             throw new IllegalStateException("The complete selected draft or candidate position changed.");
         List<ChainSource> originals=new ArrayList<>();JSONArray refs=new JSONArray();Set<String> ids=new HashSet<>(),proofs=new HashSet<>();long bytes=0;
         for(int i=0;i<sources.size();i++){
@@ -595,6 +595,9 @@ final class AndroidNodeStore {
             originals.add(original);refs.put(new JSONObject().put("id",original.profileId).put("mode",modes.get(i)));
         }
         int schema=AndroidNodeChainCapture.sourceSchema(originals,modes);
+        if (originals.size()>8 && !(schema==6 && "auto".equals(execution) && prefix==originals.size()-2
+                && AndroidNodeChainCapture.responsePrefix(originals,modes,prefix,execution)))
+            throw new IllegalStateException("This longer selected draft has no qualified private response at this position.");
         if((schema==3||schema==4)&&prefix!=0||schema==7||originals.get(0).imported||originals.get(originals.size()-1).imported
                 ||((originals.get(prefix).imported||!List.of("wg","awg2-fast","awg2-strong").contains(modes.get(prefix)))
                 &&!AndroidNodeChainCapture.responsePrefix(originals,modes,prefix,execution)))

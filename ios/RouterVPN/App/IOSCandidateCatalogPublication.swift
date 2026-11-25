@@ -248,6 +248,7 @@ final class IOSCandidateCatalogPublication: @unchecked Sendable {
 struct IOSCandidateMetadataPages {
     enum Family { case ordinary, selected, preparation }
     private let family: Family
+    private let selectedResponse: (position: Int, id: String)?
     private var header: [String: Any]?
     private var headerBytes: Data?
     private var total = 0
@@ -260,8 +261,10 @@ struct IOSCandidateMetadataPages {
     private let legacyLimit: Int
     var nextOffset: Int32? { legacy == nil && rows.count < total ? Int32(exactly: rows.count) : nil }
 
-    init(_ first: String, inventoryBytes: Int, legacyLimit: Int, family: Family = .ordinary) throws {
+    init(_ first: String, inventoryBytes: Int, legacyLimit: Int, family: Family = .ordinary,
+         selectedResponse: (position: Int, id: String)? = nil) throws {
         guard inventoryBytes > 0, inventoryBytes <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw Self.issue() }
+        self.selectedResponse = selectedResponse
         self.family = family; self.budget = inventoryBytes; self.legacyLimit = legacyLimit
         try append(first)
     }
@@ -322,7 +325,8 @@ struct IOSCandidateMetadataPages {
         if let metric = body["measurement"] {
             guard let value = metric as? String, value == "routed-tcp-connect" ||
                     value == "routed-candidate-response" && (family != .selected ||
-                        body["requested_execution"] as? String == "auto" && body["execution"] as? String == "local" && Self.integer(body["prefix_position"]) == 1) else { throw Self.issue() }
+                        body["requested_execution"] as? String == "auto" && body["execution"] as? String == "local" && selectedResponse != nil &&
+                        Self.integer(body["prefix_position"]) == selectedResponse?.position && body["prefix_id"] as? String == selectedResponse?.id) else { throw Self.issue() }
             fields.insert("measurement")
         }
         if paged { fields.formUnion(["target_total","target_offset","targets_sha256"]) }

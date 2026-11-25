@@ -28,6 +28,8 @@ type orderedCandidateView struct {
 	catalog        *desktopNodeChainCandidateCatalog
 	candidates     []orderedCandidateChoice
 	prefixes       []orderedCandidatePrefix
+	responseNodes  []orderedCandidateResponseSourceNode
+	responseEpoch  uint64
 }
 type orderedCandidateChoice struct {
 	ID             string                         `json:"id"`
@@ -58,7 +60,9 @@ func desktopCandidatePrefixMetric(launch *desktopNodeLaunch, position int) strin
 	if launch == nil || launch.chain == nil || position < 0 || position >= len(launch.chain.selection.Nodes) || !desktopSelectedCandidatePosition(launch, position) {
 		return ""
 	}
-	if position > 7 && (launch.chain.execution != nil || launch.chain.policy == nil || launch.chain.policy.OriginalChain().ExtendedLocalNodeCount() <= position+1) {
+	privateSelected := launch.chain.execution != nil && launch.chain.execution.preparation != nil &&
+		launch.chain.execution.preparation.SupportsCompareLocalResponseCandidate(position)
+	if position > 7 && !privateSelected && (launch.chain.execution != nil || launch.chain.policy == nil || launch.chain.policy.OriginalChain().ExtendedLocalNodeCount() <= position+1) {
 		return ""
 	}
 	if mobilemultihop.NodeChainPrefixMode(launch.chain.selection.Nodes[position].Mode) {
@@ -110,7 +114,7 @@ func registerOrderedCandidateRoutes(h *http.ServeMux, a *app) {
 	registerOrderedCandidatePreparedRoutes(h, a)
 	h.HandleFunc("/api/multihop/prefix-candidates/catalog", a.orderedCandidateCatalog)
 	h.HandleFunc("/api/multihop/prefix-candidates", a.orderedCandidates)
-	h.HandleFunc("/api/multihop/prefix-candidates/cancel", a.viaEntryCandidatesCancel)
+	h.HandleFunc("/api/multihop/prefix-candidates/cancel", a.orderedCandidateConnectedCancel)
 	h.HandleFunc("/api/multihop/prefix-candidates/save-profile", a.saveOrderedCandidateProfile)
 }
 
@@ -163,6 +167,7 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 409)
 		return
 	}
+	privateResponse := desktopCompareLocalPrivateResponseMembers(members, requested, position)
 	for i, n := range members {
 		if metric := desktopCandidatePrefixMetric(identity.Ordered.launch, i); metric != "" {
 			view.prefixes = append(view.prefixes, orderedPrefixChoice(i, n, metric))
@@ -186,11 +191,18 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		profiles := index.members(members, p.ID)
 		var proposal []common.MultihopNodeSelection
 		if candidateViewMetric(view.prefixes, position) == hopmeasure.CandidatePrivateResponseMeasurement {
-			_, proposal, _, err = orderedResponseProfile(ctx, identity.Ordered.launch.root, requested, members, position, p, profiles)
+			var action string
+			_, proposal, action, err = orderedResponseProfile(ctx, identity.Ordered.launch.root, requested, members, position, p, profiles)
+			if privateResponse {
+				choice.ProposalAction = action
+			}
 		} else {
 			_, proposal, err = orderedCandidateProposalForExecution(members, position, p, profiles, requested)
 		}
 		if err != nil {
+			if privateResponse {
+				continue
+			}
 			choice.SaveReason = err.Error()
 		} else {
 			choice.Proposal = proposal
@@ -212,13 +224,6 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 409)
 		return
 	}
-	c := viaEntryControlFor(a)
-	if err = desktopnetwork.LockContext(ctx, &c.mu); err != nil {
-		http.Error(w, err.Error(), 408)
-		return
-	}
-	c.orderedView = view
-	c.mu.Unlock()
 	metric := candidateViewMetric(view.prefixes, position)
 	note := "50 TCP connection handshakes through the retained connected prefix. This does not authenticate candidate credentials. Saving creates a next-connection profile; it does not change the active path."
 	if metric == hopmeasure.CandidatePrivateResponseMeasurement {
@@ -237,7 +242,26 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		reply["selected_execution"], reply["selection_epoch"] = ready.Progress.Execution, ready.SelectionEpoch
+		view.responseNodes = orderedCandidateResponseSourceNodes(identity.Ordered.launch.chain.selection, requested, position)
+		if len(view.responseNodes) != 0 {
+			view.responseEpoch = ready.SelectionEpoch
+			view.addResponseSource(reply)
+		}
 	}
+	// Publish the complete immutable view only after its original winner and
+	// public source map have been captured.
+	c := viaEntryControlFor(a)
+	if err = desktopnetwork.LockContext(ctx, &c.mu); err != nil {
+		http.Error(w, err.Error(), 408)
+		return
+	}
+	if err := rememberOrderedCandidateResponseViewLocked(c, view); err != nil {
+		c.mu.Unlock()
+		http.Error(w, err.Error(), 429)
+		return
+	}
+	c.orderedView = view
+	c.mu.Unlock()
 	viaEntryJSON(w, reply)
 }
 
@@ -394,6 +418,11 @@ func (a *app) orderedCandidates(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if err := reserveOrderedCandidateResponseAdmissionLocked(c, q.RequestID, view); err != nil {
+		release()
+		http.Error(w, err.Error(), 409)
+		return
+	}
 	job := &orderedCandidateJob{view: view, results: []hopmeasure.CandidateStatus{}, failures: []viaEntryCandidateError{}}
 	owner := &viaEntryOwner{id: q.RequestID, cancel: cancel, done: make(chan struct{}), running: true, ordered: job}
 	owner.cleanup = func(join context.Context) error {
@@ -515,7 +544,9 @@ func orderedCandidateResponseLocked(owner *viaEntryOwner, now time.Time) map[str
 		}
 		return a < b
 	})
-	return map[string]any{"schema": 1, "request_id": owner.id, "view_token": job.view.token, "prefix_position": job.view.position, "running": owner.running, "drained": owner.drained, "cancelled": owner.cancelled, "accepted": job.accepted && !owner.cancelled, "current_candidate": job.current, "results": rows, "errors": append([]viaEntryCandidateError{}, job.failures...), "failure": job.failure, "measurement": candidateViewMetric(job.view.prefixes, job.view.position)}
+	response := map[string]any{"schema": 1, "request_id": owner.id, "view_token": job.view.token, "prefix_position": job.view.position, "running": owner.running, "drained": owner.drained, "cancelled": owner.cancelled, "accepted": job.accepted && !owner.cancelled, "current_candidate": job.current, "results": rows, "errors": append([]viaEntryCandidateError{}, job.failures...), "failure": job.failure, "measurement": candidateViewMetric(job.view.prefixes, job.view.position)}
+	job.view.addResponseSource(response)
+	return response
 }
 func (a *app) orderedCandidateStatus(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()

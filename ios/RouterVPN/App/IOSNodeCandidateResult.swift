@@ -20,7 +20,8 @@ struct IOSNodeCandidateMetadata: Decodable {
     var execution: String? = nil
     var selection_epoch: Int64? = nil
     func validate(prefix: IOSNodeCandidatePrefix, source: String, config: String, ids: Set<String>,
-                  requestedExecution: String? = nil, selectedExecution: String? = nil, selectedPositions: [Int] = [0]) throws {
+                  requestedExecution: String? = nil, selectedExecution: String? = nil, selectedPositions: [Int] = [0],
+                  selectedResponse: IOSNodeCandidatePrefix? = nil) throws {
         if let requestedExecution, let selectedExecution {
             guard ["server", "auto"].contains(requestedExecution), ["local", "server"].contains(selectedExecution),
                   requestedExecution == "auto" || requestedExecution == selectedExecution,
@@ -34,7 +35,7 @@ struct IOSNodeCandidateMetadata: Decodable {
                   source_sha256 == source, config_sha256 == config else { throw IOSNodeCandidateResult.issue() }
         }
         guard prefix.supported, metric == prefix.metric, requestedExecution == nil || metric == "routed-tcp-connect" ||
-                requestedExecution == "auto" && selectedExecution == "local" && prefix_position == 1,
+                requestedExecution == "auto" && selectedExecution == "local" && selectedResponse == prefix,
               schema == 1, prefix_position == prefix.position, prefix_id == prefix.profile_id,
               IOSCandidateCatalogPublication.isDigest(capture_sha256), !targets.isEmpty,
               Set(targets.map(\.id)) == ids, Set(targets.map(\.id)).count == targets.count,

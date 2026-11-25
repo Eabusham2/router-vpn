@@ -386,7 +386,12 @@ $UnifiedBlock=[regex]::Match($UnifiedSource, '(?ms)^    \$extraState = @''\r?\n(
 Check $UnifiedBlock.Success 'Shipping primary Connect source missing.'
 $Primary=@([ScriptBlock]::Create($UnifiedBlock.Groups[1].Value).Ast.FindAll({param($Node)$Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'UnifiedConnect'},$true))
 Check ($Primary.Count -eq 1) 'Shipping primary Connect function changed.'
-. ([ScriptBlock]::Create($Primary[0].Extent.Text))
+Import-Module (Join-Path $Root 'client/RouterVPN-Windows-UIState.psm1') -Global -ErrorAction Stop
+$FixtureStateRoot=Join-Path ([IO.Path]::GetTempPath()) ('router-external-primary-'+[guid]::NewGuid().ToString('N'))
+[void][IO.Directory]::CreateDirectory($FixtureStateRoot)
+try{
+$PrimarySource=$Primary[0].Extent.Text.Replace('$PSScriptRoot','$FixtureStateRoot')
+. ([ScriptBlock]::Create($PrimarySource))
 $RetryReceipt=@([ScriptBlock]::Create($UnifiedBlock.Groups[1].Value).Ast.FindAll({param($Node)$Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'GetUnifiedStopRetryToken'},$true))
 Check ($RetryReceipt.Count -eq 1) 'Shipping Stop receipt validator changed.'
 . ([ScriptBlock]::Create($RetryReceipt[0].Extent.Text))
@@ -394,16 +399,37 @@ $script:UnifiedStopRetryToken='';$script:UnifiedAsyncOwnedStopRetry=$false;$scri
 function UnifiedAsyncBusy{return $false}
 function UnifiedSelectedProfile{return $Captured}
 $RouterCombo=[pscustomobject]@{Tag=$null;SelectedValue=''}
-function Control($Name){throw ('Unrelated Router control read during external Connect: '+$Name)}
+$script:RouterReads=0;$script:ConnectMessage=''
+function Control($Name){$script:RouterReads++;throw ('Unrelated Router control read during external Connect: '+$Name)}
+function Log($Text){$script:ConnectMessage=[string]$Text}
 function StartUnifiedApiAsync($Label,$Path,$Method,$Body,$Timeout,$Success,$Failure,$Finally){$script:DispatchPath=$Path;$script:DispatchBody=$Body;return $true}
 foreach($Choice in @('local','server','auto')){
     $Captured=[pscustomobject]@{id='captured-exit';profile_token=('a'*64);node_kind='external';multihop_execution=$Choice}
     $RouterCombo.Tag=[pscustomobject]@{selected_id=$Captured.id;profiles=@($Captured)};$RouterCombo.SelectedValue=$Captured.id
-    $script:DispatchPath='';$script:DispatchBody=$null;UnifiedConnect
-    Check ($DispatchPath -ceq '/api/external-profile/connect' -and $null -ne $DispatchBody -and $DispatchBody.profile_id -ceq 'captured-exit' -and $DispatchBody.execution -ceq $Choice -and $DispatchBody.Count -eq 4 -and $DispatchBody.expected_selected_node_id -ceq 'captured-exit' -and $DispatchBody.expected_profile_tokens['captured-exit'] -ceq ('a'*64)) 'Primary Connect borrowed Router controls or dropped saved external execution.'
+    $script:DispatchPath='';$script:DispatchBody=$null;$script:ConnectMessage='';UnifiedConnect
+    Check ($RouterReads -eq 0 -and $DispatchPath -ceq '/api/external-profile/connect' -and $null -ne $DispatchBody -and $DispatchBody.profile_id -ceq 'captured-exit' -and $DispatchBody.execution -ceq $Choice -and $DispatchBody.Count -eq 4 -and $DispatchBody.expected_selected_node_id -ceq 'captured-exit' -and $DispatchBody.expected_profile_tokens['captured-exit'] -ceq ('a'*64)) ('Primary Connect borrowed Router controls or dropped saved external execution. '+$ConnectMessage)
     $Captured=[pscustomobject]@{id='replacement';node_kind='router-vpn';multihop_execution='auto'}
     Check ($DispatchBody.profile_id -ceq 'captured-exit' -and $DispatchBody.execution -ceq $Choice) 'Replacement selection changed captured primary request.';$Count++
 }
+# Reuse the valid auto selection and catalog on both sides of each refusal.
+$Captured=$RouterCombo.Tag.profiles[0]
+$StateDir=Join-Path $FixtureStateRoot '.routervpn-state'
+[void][IO.Directory]::CreateDirectory($StateDir)
+$Intent=Join-Path $StateDir 'windows-profile-load-v1.json'
+[IO.File]::WriteAllText($Intent,'{}')
+$script:DispatchBody=$null;$script:DispatchPath='';$script:ConnectMessage='';UnifiedConnect
+Check ($null -eq $DispatchBody -and -not $DispatchPath -and $RouterReads -eq 0 -and $ConnectMessage -like '*Recover the pending connection profile*') 'A pending profile Load allowed or misdirected external Connect.'
+[IO.File]::Delete($Intent)
+$script:ConnectMessage='';UnifiedConnect
+Check ($DispatchPath -ceq '/api/external-profile/connect' -and $DispatchBody.execution -ceq 'auto' -and $RouterReads -eq 0) ('External Connect did not resume after the pending Load cleared. '+$ConnectMessage)
+$Count+=2
+$Broken=$PrimarySource.Replace('$P=UnifiedSelectedProfile',"if((Control 'UnifiedMultihop').IsChecked){return};"+'$P=UnifiedSelectedProfile')
+Check ($Broken -cne $PrimarySource) 'Primary priority negative control did not mutate source.'
+. ([ScriptBlock]::Create($Broken))
+$script:DispatchBody=$null;$script:DispatchPath='';$script:ConnectMessage='';UnifiedConnect
+Check ($null -eq $DispatchBody -and -not $DispatchPath -and $RouterReads -eq 1 -and $ConnectMessage -like '*Unrelated Router control read during external Connect: UnifiedMultihop*') 'Primary priority negative control was not rejected for reading the unrelated Router toggle.'
+. ([ScriptBlock]::Create($PrimarySource))
+$Count++
 $Captured=[pscustomobject]@{id='captured-exit';profile_token=('a'*64);node_kind='external';multihop_execution='invalid'};$RouterCombo.Tag=[pscustomobject]@{selected_id=$Captured.id;profiles=@($Captured)};$script:DispatchBody=$null;UnifiedConnect;Check ($null -eq $DispatchBody) 'Invalid external execution fell through to Router connect.';$Count++
 # Use the real catalog lookup for failure paths; no Router controls may be read.
 $Lookup=@([ScriptBlock]::Create($UnifiedBlock.Groups[1].Value).Ast.FindAll({param($Node)$Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'UnifiedSelectedProfile'},$true))
@@ -427,11 +453,5 @@ foreach($CatalogCase in @('failure','missing','wrong','duplicate','unknown','mal
     $script:DispatchPath='';$script:DispatchBody=$null;$script:RouterReads=0;UnifiedConnect
     Check ($null -eq $DispatchBody -and -not $DispatchPath -and $RouterReads -eq 0) 'Unavailable selected identity fell through to unrelated Router controls.';$Count++
 }
-function UnifiedSelectedProfile{return $Captured}
-# Negative control: reading the unrelated Router toggle first reproduces the bug
-# and must prevent the external dispatch that the positive controls require.
-$Broken=$Primary[0].Extent.Text.Replace('$P=UnifiedSelectedProfile',"if((Control 'UnifiedMultihop').IsChecked){return};"+'$P=UnifiedSelectedProfile')
-Check ($Broken -cne $Primary[0].Extent.Text) 'Primary priority negative control did not mutate source.'
-. ([ScriptBlock]::Create($Broken));$Captured=[pscustomobject]@{id='captured-exit';node_kind='external';multihop_execution='server'};$script:DispatchBody=$null;UnifiedConnect
-Check ($null -eq $DispatchBody) 'Primary priority negative control was not rejected.';$Count++
+}finally{[IO.Directory]::Delete($FixtureStateRoot,$true)}
 Write-Host ('PASS shipping Windows external Save and captured connection callbacks: '+$Count+' cases')

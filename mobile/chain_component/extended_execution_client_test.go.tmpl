@@ -301,8 +301,13 @@ func runExtendedSelectedClient(t *testing.T, f *multipleImportedFixture, prep *m
 		if remote, err := runtime.NewRemoteCandidatePlanContext(ctx, privatePosition, inventory); err == nil || remote != nil {
 			t.Fatal("private stream acquired remote packet candidate authority")
 		}
-		if local, err := runtime.NewLocalCandidatePlanContext(ctx, privatePosition, inventory); err == nil || local != nil {
-			t.Fatal("private stream acquired local packet candidate authority")
+		local, err := runtime.NewLocalCandidatePlanContext(ctx, privatePosition, inventory)
+		if mode == "auto" && frozen.Execution == "local" && privatePosition == len(f.members)-2 {
+			if err != nil || local == nil || local.CaptureSHA256() == "" {
+				t.Fatal("selected private penultimate hop lost its private response plan", err)
+			}
+		} else if err == nil || local != nil {
+			t.Fatal("stream outside the selected private replacement scope acquired a candidate plan")
 		}
 		if candidateReplies.Load() != 0 {
 			t.Fatal("source-only candidate checks opened a private candidate socket")
@@ -632,7 +637,8 @@ const selectedPrivateApplication = "203.0.113.197:8181"
 
 func (c *selectedResponseNativeCase) proveLoadedApplication(t *testing.T, ctx context.Context, native *box.Box, runtime *mobilemultihop.NodeChainExecutionRuntime, f *multipleImportedFixture) {
 	t.Helper()
-	if f != c.replacement || f.members[2].private.Load() == 0 || f.members[2].public.Load() == 0 || f.dns.Load() == 0 || f.invalidDNS.Load() || c.app.Load() != 0 || c.accepted.Load() != 50 {
+	final := f.members[len(f.members)-1]
+	if f != c.replacement || final.private.Load() == 0 || final.public.Load() == 0 || f.dns.Load() == 0 || f.invalidDNS.Load() || c.app.Load() != 0 || c.accepted.Load() != 50 {
 		t.Fatal("replacement did not prove its own selected identity, DNS and public path")
 	}
 	gate, found := native.Outbound().Outbound(mobilemultihop.NodeChainExecutionGateTag)
@@ -664,18 +670,29 @@ func (c *selectedResponseNativeCase) proveLoadedApplication(t *testing.T, ctx co
 	}
 }
 
+// Count original connections at the encrypted entry and each retained SS2022 peer.
+func responsePrefixConnections(f *multipleImportedFixture) []int64 {
+	counts := make([]int64, len(f.members)-1)
+	counts[0] = f.members[0].prefix.handler.tcp.Load()
+	for i := 1; i < len(counts); i++ {
+		counts[i] = f.members[i].provider.stats().Streams
+	}
+	return counts
+}
+
 func (c *selectedResponseNativeCase) run(t *testing.T, ctx context.Context, f *multipleImportedFixture, engine *box.RouterVPNNodeChainExecutionEngine, runtime *mobilemultihop.NodeChainExecutionRuntime) {
 	t.Helper()
 	original := runtime.Progress()
 	epoch, err := engine.SelectionEpochContext(ctx)
-	if err != nil || epoch == 0 || f.dns.Load() == 0 || len(original.Prefixes) != 3 {
+	if err != nil || epoch == 0 || f.dns.Load() == 0 || len(original.Prefixes) != len(f.members) {
 		t.Fatal("original selected path lost its DNS, comparison or epoch", err)
 	}
 	inventory := desktopNodeChainJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-selected-local-private-response", Inputs: []string{c.input}})
-	if grant, err := runtime.NewRemoteCandidatePlanContext(ctx, 1, inventory); grant != nil || err == nil {
+	position := len(f.members) - 2
+	if grant, err := runtime.NewRemoteCandidatePlanContext(ctx, position, inventory); grant != nil || err == nil {
 		t.Fatal("remote connect-only grant accepted a selected stream")
 	}
-	plan, err := runtime.NewLocalCandidatePlanContext(ctx, 1, inventory)
+	plan, err := runtime.NewLocalCandidatePlanContext(ctx, position, inventory)
 	if c.fault == "server-winner" {
 		if original.Execution != "server" || plan != nil || err == nil || c.provider.stats().PhysicalTCP != 0 {
 			t.Fatal("Server winner initiated Local private measurement")
@@ -686,6 +703,12 @@ func (c *selectedResponseNativeCase) run(t *testing.T, ctx context.Context, f *m
 	if original.Execution != "local" || err != nil || plan == nil {
 		t.Fatal("original Local winner refused authenticated response", err)
 	}
+	for i, input := range f.source.Nodes {
+		originalInventory := desktopNodeChainJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "existing-member", Inputs: []string{input}})
+		if duplicate, err := runtime.NewLocalCandidatePlanContext(ctx, position, originalInventory); err == nil || duplicate != nil {
+			t.Fatal("original member admitted as a replacement", i)
+		}
+	}
 	owner := &selectedResponseNativeOwner{&extendedSelectedMeasurement{runtime: runtime}, plan.CaptureSHA256(), c}
 	s, err := plan.NewMeasurementContext(ctx, owner)
 	if err != nil {
@@ -693,7 +716,7 @@ func (c *selectedResponseNativeCase) run(t *testing.T, ctx context.Context, f *m
 	}
 	c.service.Store(s)
 	defer s.Close()
-	before := f.members[1].provider.stats().Streams
+	before := responsePrefixConnections(f)
 	if err = s.StartContext(ctx, selectedResponseRequestID, privateResponsePeerID); err != nil {
 		t.Fatal(err)
 	}
@@ -723,9 +746,15 @@ func (c *selectedResponseNativeCase) run(t *testing.T, ctx context.Context, f *m
 			t.Fatal("missing private response receipt", status)
 		}
 		row := status.Results[0]
-		if !row.Ready || row.Kind != "private-agent-response" || row.Benchmark == nil || row.Benchmark.Measurement != hopmeasure.CandidatePrivateResponseMeasurement || row.Benchmark.Attempts != 50 || row.Benchmark.Failed != 0 || row.Benchmark.Distribution == nil || row.Benchmark.Distribution.Samples != 50 || c.accepted.Load() != 50 || c.provider.stats().Streams != 50 || f.members[1].provider.stats().Streams-before < 50 {
+		if !row.Ready || row.Kind != "private-agent-response" || row.Benchmark == nil || row.Benchmark.Measurement != hopmeasure.CandidatePrivateResponseMeasurement || row.Benchmark.Attempts != 50 || row.Benchmark.Failed != 0 || row.Benchmark.Distribution == nil || row.Benchmark.Distribution.Samples != 50 || c.accepted.Load() != 50 || c.provider.stats().Streams != 50 {
 			t.Fatal("fresh responses did not traverse both exact ciphers", status, c.accepted.Load())
 		}
+		for i, after := range responsePrefixConnections(f) {
+			if after-before[i] < 50 {
+				t.Fatal("private responses skipped an original encrypted prefix", i, after-before[i])
+			}
+		}
+		t.Logf("PRIVATE_RESPONSE_PREFIX nodes=%d position=%d prefixes=%d authenticated=50", len(f.members), position, len(before))
 		samples = 50
 	} else {
 		for _, row := range status.Results {

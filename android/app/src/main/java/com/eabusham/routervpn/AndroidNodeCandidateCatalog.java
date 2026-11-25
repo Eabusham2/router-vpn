@@ -129,7 +129,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
             throw new IllegalStateException("This selected route has no retained packet stop at the requested position.");
         if ("routed-candidate-response".equals(measurement) && (!"auto".equals(originalSource.execution)
                 || !"auto".equals(executionOwner.requestedExecution()) || !"local".equals(executionOwner.execution())))
-            throw new IllegalStateException("A private response through this imported node requires Compare to select Local.");
+            throw new IllegalStateException("Measuring a private response through this hop requires Compare to select Local.");
         return originalSource.members.get(prefix).profileId;
     }
     void requireSourcesCurrent()throws Exception {

@@ -3,6 +3,7 @@
 import importlib.util
 import contextlib
 import io
+import re
 from pathlib import Path
 import subprocess
 import unittest
@@ -55,6 +56,8 @@ class PowerShellDiagnosticVerdict(unittest.TestCase):
     def test_generic_error_with_matching_words_is_not_a_behavioral_assertion(self):
         with self.assertRaisesRegex(RuntimeError, "Negative did not fail"):
             self.classify(WRAPPED.replace("PROFILE-CHECK:", "RuntimeError:"))
+        with self.assertRaisesRegex(RuntimeError, "Negative did not fail"):
+            self.classify("PROFILE-CHECK: unrelated assertion\nExpected witness: " + WITNESS)
 
     def test_success_cannot_supply_a_negative_verdict(self):
         with self.assertRaisesRegex(RuntimeError, "Negative did not fail"):
@@ -141,12 +144,60 @@ class OrderedEditorPartition(unittest.TestCase):
         self.assertIn("-PositiveOnly", editor[0].args[0])
         self.assertEqual([c.args[0][-1] for c in editor[len(G.WINDOWS_EDITOR_GROUPS):]], list(G.WINDOWS_EDITOR_CONTROLS))
         profiles = [c for c in run.call_args_list if c not in editor]
-        self.assertEqual(len(profiles), 23)
+        self.assertEqual(len(profiles), 1 + 6 + 21)
         transaction = [c for c in profiles if "-TransactionOnly" in c.args[0]]
         self.assertEqual(len(transaction), 1)
         self.assertEqual(transaction[0].args[0], ["captured-pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                                                   str(G.ROOT / "client/test-windows-connection-profile-modes.ps1"), "-TransactionOnly"])
         self.assertEqual(transaction[0].kwargs, {"observation": "profile:coordinated-recovery"})
+
+    def test_profile_groups_cover_each_original_case_once_and_require_its_receipt(self):
+        with patch.object(G, "run") as run, patch.object(G, "windows_editor"):
+            G.windows("captured-pwsh")
+        groups = run.call_args_list[1:7]
+        self.assertEqual([call.args[0][-4:] for call in groups], [
+            ["-Group", group, "-Mutation", "shipping"] for group in
+            ("pair-local", "pair-server", "pair-auto", "ordered-local", "ordered-selected", "setup")])
+        seen = [[], [], []]
+        for call in groups:
+            group = call.args[0][-3]
+            match = re.fullmatch(r"PROFILE-GROUP (\S+) pair=([\d,]*) connect=([\d,]*) ordered=([\d,]*)",
+                                 call.kwargs["receipt"])
+            self.assertEqual(match[1], group)
+            self.assertEqual(call.kwargs["observation"], "profile:shipping:" + group)
+            for values, ids in zip(seen, match.groups()[1:]):
+                values.extend(int(i) for i in ids.split(",") if i)
+        for cases, size in zip(seen, (57, 78, 41)):
+            self.assertEqual(sorted(cases), list(range(size)))
+
+    def test_each_declared_profile_mutation_runs_once_with_an_explicit_behavioral_cause(self):
+        with patch.object(G, "run") as run, patch.object(G, "windows_editor"):
+            G.windows("captured-pwsh")
+        source = (G.ROOT / "client/test-windows-connection-profile-modes.ps1").read_text(encoding="utf-8-sig")
+        declared = re.search(r"\[ValidateSet\(([^)]*)\)\]\[string\]\$Mutation", source)[1]
+        names = re.findall(r"'([^']+)'", declared)
+        self.assertEqual(names[0], "shipping")
+        controls = run.call_args_list[7:]
+        self.assertEqual([call.args[0][-1] for call in controls], names[1:])
+        self.assertEqual(len(set(names)), len(names))
+        for call in controls:
+            group, mutation = call.args[0][-3], call.args[0][-1]
+            self.assertIn(group, G.WINDOWS_PROFILE_GROUPS)
+            self.assertIs(call.kwargs["negative"], True)
+            self.assertIn(call.kwargs["witness"].split(":")[0], source)
+            self.assertEqual(call.kwargs["observation"], "profile:" + mutation)
+
+    def test_missing_repeated_different_and_partial_group_receipts_fail(self):
+        receipt = "PROFILE-GROUP fixture pair=0,3,6 connect= ordered="
+        for output in ("", receipt.replace("3,6", "3,3"), receipt.replace("fixture", "other"),
+                       receipt[:-1], receipt + "\n" + receipt):
+            result = subprocess.CompletedProcess(["pwsh"], 0, output, "")
+            with self.subTest(output=output), patch.object(G.subprocess, "run", return_value=result), \
+                    self.assertRaisesRegex(RuntimeError, "Incomplete or duplicated"):
+                G.run(["pwsh"], receipt=receipt)
+        good = subprocess.CompletedProcess(["pwsh"], 0, "actual callbacks passed\n" + receipt + "\n", "")
+        with patch.object(G.subprocess, "run", return_value=good), contextlib.redirect_stdout(io.StringIO()):
+            G.run(["pwsh"], receipt=receipt)
 
     def test_ordered_marker_exit_and_intended_cause_are_required(self):
         witness = next(iter(G.WINDOWS_EDITOR_CONTROLS.values()))

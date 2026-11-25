@@ -4,7 +4,7 @@ $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 # witness, then extract this new dialog's shipping functions and callbacks.
 . (Join-Path $Root 'client/test-windows-performance.ps1') -Root $Root
 $Ast=[ScriptBlock]::Create($ProductSource).Ast
-foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','TestOrderedCandidateLocalResponse','OrderedCandidateViewMetric','OrderedCandidateFinalProfileChoice','OrderedCandidateBase','OrderedCandidateScope','OrderedCandidateCatalogPath','UseExistingOrderedCandidateDialog','OrderedCandidateScopedBody','OrderedCandidateNumber','TestOrderedCandidateDraftExecution','OrderedCandidateSavedEnvelope','OrderedCandidateBeforeStart','OrderedCandidateCancelBody','OrderedCandidateReady','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
+foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','TestOrderedCandidateResponseSource','TestOrderedCandidateResponseProposal','TestOrderedCandidateLocalResponse','OrderedCandidateViewMetric','OrderedCandidateFinalProfileChoice','OrderedCandidateBase','OrderedCandidateScope','OrderedCandidateCatalogPath','UseExistingOrderedCandidateDialog','OrderedCandidateScopedBody','OrderedCandidateNumber','TestOrderedCandidateDraftExecution','OrderedCandidateSavedEnvelope','OrderedCandidateBeforeStart','OrderedCandidateCancelBody','OrderedCandidateReady','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
  $F=@($Ast.FindAll({param($n)$n-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-ceq$Name},$true));if($F.Count-ne1){throw "Missing shipping candidate function $Name"};. ([ScriptBlock]::Create($F[0].Extent.Text))
 }
 $Count=0
@@ -308,5 +308,72 @@ foreach($depth in @(9,16,96)){
  Assert-Candidate (OrderedCandidateFinalProfileChoice $S $choice) 'original deep draft lost its explicit measured final'
  $proposal[$position]=@{id='replaced-late-prefix';mode='shadowsocks'}
  Assert-Candidate (-not(OrderedCandidateFinalProfileChoice $S $choice)) 'late replacement borrowed another measured route'
+}
+foreach($depth in @(4,9,16,96)){
+ $position=$depth-2
+ $nodes=@(for($i=0;$i -lt $depth;$i++){@{id=('member-'+$i);mode=$(if($i){'shadowsocks'}else{'wg'})}})
+ $source=@(for($i=0;$i -lt $depth;$i++){@{}+$nodes[$i]+@{kind=$(if($i -eq 0 -or $i -ge $position){'router-vpn'}else{'external'})}})
+ $proposal=@($nodes|Select-Object -SkipLast 1)+@(@{id='candidate-C';mode='shadowsocks'})
+ $choice=@{id='candidate-C';name='Measured final C';kind='router-vpn';proposal_action='save-final-profile';proposed_path=$proposal}
+ $row=@{}+$nodes[$position]+@{position=$position;measurement=$metric;name='Original private hop'}
+ foreach($temporary in @($false,$true)){
+  $S.Position=$position;$S.SavedPrefix=$temporary;$S.SavedPath=$temporary;$S.Draft=if($temporary){@{execution='auto';nodes=$nodes}}else{$null}
+  $S.CancelWanted=$false;$S.CloseWanted=$false;$S.PendingDrain=$false;$S.SavedAdmitted=$false;$S.Dialog.Tag=$null
+  $offer=@{schema=1;samples=50;view_token='7'*64;expires_at=$Now+120000;prefix_position=$position;measurement=$metric;requested_execution='auto';required_selected_execution='local';response_source_nodes=$source;prefixes=@($row);candidates=@($choice)}
+  if($temporary){$offer.scope='draft-complete-selected';$offer.origin='editor-draft'}else{$offer.selected_execution='local';$offer.selection_epoch=37L}
+  foreach($badIndex in @(0,1,$position,($depth-1))){
+   $bad=@{}+$offer;$crossed=@($source.Clone());$crossed[$badIndex]=@{}+$crossed[$badIndex];$crossed[$badIndex].kind=if($crossed[$badIndex].kind -ceq 'external'){'router-vpn'}else{'external'}
+   $bad.response_source_nodes=$crossed;$refused=$false;try{ReceiveOrderedCandidates $S $bad 'catalog'}catch{$refused=$true}
+   Assert-Candidate $refused 'A changed saved role acquired a selected private response'
+  }
+  ReceiveOrderedCandidates $S $offer 'catalog'
+  $value=@{}+$offer;$value.request_id=$S.RequestID;$value.results=@($private);$value.selected_execution='local';$value.selection_epoch=37L
+  $value.native_down=$true;$value.accepted=$true;$value.active_path_changed=$false;$value.reviewing=$temporary;$value.drained=-not $temporary;$value.failure=''
+  $private.results[0].benchmark.measurement=$metric;$private.results[0].benchmark.distribution.samples=50
+  $crossed=@($source.Clone());$crossed[1]=@{}+$source[1];$crossed[1].id='foreign-import'
+  foreach($field in @(@{key='response_source_nodes';v=$crossed},@{key='response_source_nodes';v=$null},@{key='selected_execution';v='server'},@{key='view_token';v='a'*64})){
+   $bad=@{}+$value;$bad[$field.key]=$field.v;$refused=$false;try{ReceiveOrderedCandidates $S $bad 'poll'}catch{$refused=$true}
+   Assert-Candidate $refused ('Changed selected result reached review '+$field.key)
+  }
+  ReceiveOrderedCandidates $S $value 'poll';$S.Table.SelectedItem=$S.Rows[0];SetOrderedCandidateControls $S
+  Assert-Candidate $S.Save.IsEnabled 'Original private response did not enable measured profile Save'
+  $S.ProfileName.Text='Measured paired exit';&$Click
+  $expectedPath=if($temporary){'/api/multihop/draft-candidates/save-profile'}else{'/api/multihop/prefix-candidates/save-profile'}
+  Assert-Candidate ($SavedRequest.Path -ceq $expectedPath -and $SavedRequest.Body.name -ceq 'Measured paired exit' -and ($SavedRequest.Body.proposed_path.id -join ',') -ceq ($proposal.id -join ',')) 'Selected Compare did not save the full named final replacement'
+  $saved=@{}+$value;$saved.saved_profile_id='future-profile';$saved.saved=$true;$saved.ok=$true;$saved.candidate_id='candidate-C';$saved.proposal_action='save-final-profile';$saved.proposed_path=$proposal
+  $saved.profile_name='Measured paired exit';$saved.accepted=$false;$saved.reviewing=$false;$saved.drained=$true
+  foreach($change in @(@{key='candidate_id';v='other'},@{key='proposed_path';v=$nodes},@{key='response_source_nodes';v=$crossed},@{key='selection_epoch';v=38L})){
+   $bad=@{}+$saved;$bad[$change.key]=$change.v;$refused=$false;try{ReceiveOrderedCandidates $S $bad 'save'}catch{$refused=$true}
+   Assert-Candidate $refused ('Wrong named save confirmed '+$change.key)
+  }
+  ReceiveOrderedCandidates $S $saved 'save'
+  Assert-Candidate ($S.Status.Text.Contains('Measured paired exit') -and -not $S.PendingDrain -and $null -eq $S.Dialog.Tag) 'Named selected profile changed the editor or lost write confirmation'
+  if(-not $temporary -and $depth -eq 16){
+   $body=OrderedCandidateCancelBody $S
+   Assert-Candidate ($body.Count -eq 2 -and $body.view_token -ceq $offer.view_token -and $body.request_id -ceq $S.RequestID) 'Mapped connected Cancel omitted the original view'
+   $reply=@{}+$value;$reply.results=@();$reply.reviewing=$false;$reply.running=$false;$reply.accepted=$false;$reply.drained=$true
+   $reply.ok=$true;$reply.cancelled=$true;$reply.cleanup_pending=$false
+   $reply.started=$false;$reply.admission_cancelled=$true;$S.PendingDrain=$true;$refused=$false
+   try{ReceiveOrderedCandidates $S $reply 'cancel'}catch{$refused=$true}
+   Assert-Candidate ($refused -and $S.PendingDrain) 'Late connected tombstone retired admitted work'
+   $reply.started=$true;$reply.admission_cancelled=$false
+   foreach($change in @(@{key='request_id';v='other'},@{key='view_token';v='foreign'},@{key='selection_epoch';v=38},@{key='accepted';v=$true},@{key='results';v=@($private)},@{key='running';v=$true},@{key='reviewing';v=$true},@{key='drained';v=$false})){
+    $bad=@{}+$reply;$bad[$change.key]=$change.v;$refused=$false;try{ReceiveOrderedCandidates $S $bad 'cancel'}catch{$refused=$true}
+    Assert-Candidate ($refused -and $S.PendingDrain) ('Connected Cancel retired foreign work '+$change.key)
+   }
+   ReceiveOrderedCandidates $S $reply 'cancel';Assert-Candidate (-not $S.PendingDrain) 'Connected cancellation retained joined work'
+   $S.SavedAdmitted=$false;$S.PendingDrain=$true;$reply.started=$false;$reply.admission_cancelled=$true
+   ReceiveOrderedCandidates $S $reply 'cancel';Assert-Candidate (-not $S.PendingDrain) 'Original connected admission tombstone did not retire'
+  }
+  if($temporary -and $depth -eq 16){
+   ReceiveOrderedCandidates $S $offer 'catalog'
+   $failure=@{}+$saved;$failure.selected_execution='server';$failure.saved=$false;$failure.saved_profile_id='';$failure.running=$false
+   $failure.cancelled=$true;$failure.failure='The Server winner cannot measure this private response.';$failure.results=@($private)
+   $refused=$false;try{ReceiveOrderedCandidates $S $failure 'cancel'}catch{$refused=$true}
+   Assert-Candidate $refused 'Server failure exposed measured scores'
+   $failure.results=@();$S.PendingDrain=$true;ReceiveOrderedCandidates $S $failure 'cancel';SetOrderedCandidateControls $S
+   Assert-Candidate (-not $S.PendingDrain -and -not $S.Save.IsEnabled -and -not $S.SavedProfileID) 'Failed Server trial retained ownership after original native DOWN'
+  }
+ }
 }
 Write-Output "Composed Windows ordered candidates: PASS ($Count checks; actual functions and save callback, no WPF or VPN connection)"

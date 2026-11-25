@@ -17,7 +17,8 @@ def complete(target):
     if target == "linux/amd64":
         return ("Shipping GTK ordered editor + Add/Load/Update/Connect: 123 checks PASS; real callbacks/persistence, doubled controller boundary.\n" +
                 "".join("GTK ordered causal control " + name + ": rejected\n" for name in D.LINUX_CONTROLS)).encode()
-    return ("Actual WPF profile Add/Load/Update and main Connect callbacks: 123 checks PASS\n" +
+    return ("".join("Actual WPF profile Add/Load/Update and main Connect callbacks: 123 checks PASS\n" +
+                    receipt + "\n" for receipt in D.WINDOWS_PROFILE_RECEIPTS) +
             "WPF pair and ordered capture, setup ownership/response, load/Connect, capability and startup deadline negatives: 21 rejected\n" +
             "".join("Actual ordered editor causal control " + name + ": rejected\n" for name in sorted(D.WINDOWS_CONTROLS)) +
             "".join("Actual ordered node editor callbacks (" + group + "): 123 checks PASS; WPF=True\n" for group in D.WINDOWS_EDITOR_GROUPS)).encode()
@@ -140,10 +141,17 @@ class DesktopEditorVerdicts(unittest.TestCase):
             raw = complete(target)
             self.assertFalse(D.verdict(raw.replace(b"hysteria-execution-global", b"omitted-hysteria"), target, 0, False, True)["accepted"])
 
+    def test_windows_profile_receipts_require_all_completed_cases_in_the_original_groups(self):
+        raw = complete("windows/amd64")
+        for receipt in D.WINDOWS_PROFILE_RECEIPTS:
+            line = (receipt + "\n").encode()
+            for changed in (raw.replace(line, b""), raw + line, raw.replace(line, line.replace(b"ordered=", b"ordered=99,"))):
+                self.assertFalse(D.verdict(changed, "windows/amd64", 0, False, True)["accepted"])
+
     def test_windows_suite_budget_covers_each_original_bounded_command(self):
         source = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
-        self.assertEqual(D.windows_suite_budget(source), 5490)
-        self.assertEqual(D.windows_suite_budget(source), (22 + 6 + 33) * 90)
+        self.assertEqual(D.windows_suite_budget(source), 6030)
+        self.assertEqual(D.windows_suite_budget(source), (1 + 6 + 21 + 6 + 33) * 90)
         self.assertIn('execute("gtk-profiles", command, 900)', Path(D.__file__).read_text(encoding="utf-8"))
 
     def test_windows_suite_budget_refuses_changed_child_or_case_inventory(self):
@@ -151,8 +159,10 @@ class DesktopEditorVerdicts(unittest.TestCase):
         changes = (
             source.replace("timeout=90", "timeout=91", 1),
             source.replace("timeout=90", "timeout=None", 1),
-            source.replace('"shipping", "capture-two-modes", ', '"shipping", ', 1),
-            source.replace('"shipping", "capture-two-modes", ', '"shipping", "shipping", "capture-two-modes", ', 1),
+            source.replace('    "capture-two-modes":', '    "missing-control":', 1),
+            source.replace('    "pair-local":', '    "pair-local": (), "pair-local":', 1),
+            source.replace('for group, cases in WINDOWS_PROFILE_GROUPS.items():', 'for group, cases in {}.items():', 1),
+            source.replace('["-TransactionOnly"]', '["-Mutation", "shipping"]', 1),
             source.replace('    windows_editor(shell)', '    windows_editor(shell)\n    windows_editor(shell)', 1),
             source.replace('def windows_editor(shell):', 'def omitted_windows_editor(shell):', 1),
             source.replace("'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',", '', 1),

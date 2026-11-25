@@ -45,7 +45,7 @@ def behavioral_diagnostic(output):
     return " ".join(plain.split())
 
 
-def run(command, *, negative=False, witness=None, observation=None, marker="PROFILE-CHECK:"):
+def run(command, *, negative=False, witness=None, observation=None, marker="PROFILE-CHECK:", receipt=None):
     started = time.monotonic()
     if observation is not None:
         print("Native profile fixture started: " + observation, flush=True)
@@ -71,10 +71,13 @@ def run(command, *, negative=False, witness=None, observation=None, marker="PROF
     if negative:
         diagnostic = behavioral_diagnostic(output)
         crashed = re.search(r"(?i)(?:\b(?:panic|fatal(?: error)?):|\bsegmentation fault\b|\b(?:SIGABRT|SIGSEGV|SIGILL|SIGBUS)\b|\*\*\*\s*Signal\s+\d+)", diagnostic)
-        if result.returncode != 1 or crashed or marker not in diagnostic or (witness and witness not in diagnostic):
+        expected = marker + " " + witness if witness else marker
+        if result.returncode != 1 or crashed or expected not in diagnostic:
             raise RuntimeError("Negative did not fail on a behavioral assertion:\n" + output)
     elif result.returncode:
         raise RuntimeError("Shipping fixture failed:\n" + output)
+    elif receipt and re.findall(r"^PROFILE-GROUP [^\r\n]*", output, re.MULTILINE) != [receipt]:
+        raise RuntimeError("Incomplete or duplicated profile group receipt:\n" + output)
     elif output.strip():
         print(output.strip(), flush=True)
 
@@ -135,25 +138,53 @@ def windows_editor(shell):
         print("Actual ordered editor causal control " + name + ": rejected", flush=True)
 
 
+# Unchanged case inventory. The last selected ordered case also supplies the
+# original saved graph for the setup ownership and rollback controls.
+WINDOWS_PROFILE_GROUPS = {
+    "pair-local": (range(0, 57, 3), (), ()),
+    "pair-server": (range(1, 57, 3), (), ()),
+    "pair-auto": (range(2, 57, 3), range(78), ()),
+    "ordered-local": ((), (), range(25)),
+    "ordered-selected": ((), (), range(25, 40)),
+    "setup": ((), (), (40,)),
+}
+WINDOWS_PROFILE_CONTROLS = {
+    "capture-two-modes": ("pair-local", "Snapshot replaced the selected exit mode"),
+    "load-fallback": ("pair-auto", "Unsupported loaded mode silently became a valid exit"),
+    "connect-fallback": ("pair-auto", "Out-of-range exit index accepted by the shipping Connect selector"),
+    "entry-capture-fallback": ("pair-local", "Snapshot replaced the selected entry mode"),
+    "entry-load-fallback": ("pair-auto", "Unsupported loaded entry silently became a valid mode"),
+    "entry-connect-fallback": ("pair-auto", "Main Connect replaced the captured entry, exit or execution"),
+    "startup-deadline": ("pair-auto", "Main Connect lost the captured native startup deadline"),
+    "ordered-drop-middle": ("ordered-local", "Ordered profile truncated or reordered a middle node"),
+    "ordered-execution-capture": ("ordered-selected", "Ordered profile borrowed an unrelated logical mode or execution"),
+    "ordered-execution-connect": ("ordered-selected", "Ordered Connect changed its complete path"),
+    "ordered-final-owner": ("setup", "Invalid or foreign-final ordered selection was accepted"),
+    "ordered-capability": ("ordered-local", "An older controller received ordered nodes as a legacy pair"),
+    "ordered-source": ("ordered-local", "Changed ordered selection reached Connect: relinked-middle"),
+    "ordered-locked-source": ("ordered-local", "Ordered Connect lost original selected control or all-source hash preconditions"),
+    "setup-expectation": ("pair-local", "Setup action discarded its original source inventory"),
+    "setup-current-receipt": ("setup", "A changed setup owner was adopted: visible-off"),
+    "setup-response-source": ("setup", "Malformed setup reply was adopted: changed-token"),
+    "setup-response-order": ("setup", "Malformed setup reply was adopted: reordered-members"),
+    "setup-load-inventory": ("setup", "Load discarded an original saved selection source"),
+    "setup-refresh-retirement": ("setup", "Setup kept its pending catalog refresh"),
+    "setup-uncertain-owner": ("setup", "Failed prepared Load changed the previous selected-node authority"),
+}
+
+
 def windows(shell):
     command = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                str(ROOT / "client/test-windows-connection-profile-modes.ps1")]
     run(command + ["-TransactionOnly"], observation="profile:coordinated-recovery")
-    setup_witnesses = {
-        "setup-expectation": "Setup action discarded its original source inventory",
-        "ordered-execution-capture": "Ordered profile borrowed an unrelated logical mode or execution",
-        "ordered-execution-connect": "Ordered Connect changed its complete path",
-        "ordered-capability": "An older controller received ordered nodes as a legacy pair",
-        "setup-current-receipt": "A changed setup owner was adopted: visible-off",
-        "setup-response-source": "Malformed setup reply was adopted: changed-token",
-        "setup-response-order": "Malformed setup reply was adopted: reordered-members",
-        "setup-load-inventory": "Load discarded an original saved selection source",
-        "setup-refresh-retirement": "Setup kept its pending catalog refresh",
-        "setup-uncertain-owner": "Failed prepared Load changed the previous selected-node authority",
-    }
-    for mutation in ("shipping", "capture-two-modes", "load-fallback", "connect-fallback", "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback", "startup-deadline", "ordered-drop-middle", "ordered-execution-capture", "ordered-execution-connect", "ordered-final-owner", "ordered-capability", "ordered-source", "ordered-locked-source", "setup-expectation", "setup-current-receipt", "setup-response-source", "setup-response-order", "setup-load-inventory", "setup-refresh-retirement", "setup-uncertain-owner"):
-        run(command + ["-Mutation", mutation], negative=mutation != "shipping",
-            witness=setup_witnesses.get(mutation), observation="profile:" + mutation)
+    for group, cases in WINDOWS_PROFILE_GROUPS.items():
+        pair, connect, ordered = (",".join(map(str, rows)) for rows in cases)
+        run(command + ["-Group", group, "-Mutation", "shipping"],
+            observation="profile:shipping:" + group,
+            receipt=f"PROFILE-GROUP {group} pair={pair} connect={connect} ordered={ordered}")
+    for mutation, (group, witness) in WINDOWS_PROFILE_CONTROLS.items():
+        run(command + ["-Group", group, "-Mutation", mutation], negative=True,
+            witness=witness, observation="profile:" + mutation)
     print("WPF pair and ordered capture, setup ownership/response, load/Connect, capability and startup deadline negatives: 21 rejected", flush=True)
     windows_editor(shell)
 
@@ -1061,7 +1092,7 @@ for (count, host, entry) in [(4,2,"wg"), (9,2,"awg2-fast"), (96,94,"awg2-strong"
 }
 // Build the saved WG/literal/paired-stream family through the native editor
 // and serialize exactly the same references for each selected execution.
-for count in [4, 9, 96] {
+for count in [4, 9, 16, 96] {
     _ = chooseOrdered(count)
     let position = count / 2
     var original = owner.captureConnectionProfileSelection()
@@ -1081,6 +1112,13 @@ for count in [4, 9, 96] {
         check(editor.allowedModes(at: position) == ["shadowsocks"] && payload["nodes"] as? [[String:String]] == original.orderedNodes &&
               payload["execution"] as? String == execution && payload["expected_profile_tokens"] as? [String:String] == original.profileTokens,
               "selected private stream lost its exact saved route")
+        var penultimate = original
+        penultimate.orderedNodes.swapAt(position,count-2)
+        let measured = try RouterVPNOrderedNodeDraft(selection: penultimate,generation:UUID(),catalog:profiles)
+        check(measured.canMeasure(after:count-2) == (execution == "auto") && !measured.canMeasure(after:1),
+              "the editor did not bind its private response to the Compare penultimate source")
+        if position != count-2 { check(!editor.canMeasure(after:position) && !editor.canMeasure(after:count-2),
+                                       "the editor offered private response for a different saved position") }
         var base = original
         let removed = base.orderedNodes.remove(at: position)
         base.profileTokens.removeValue(forKey: removed["id"]!)

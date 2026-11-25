@@ -33,8 +33,10 @@ def transcript(root, leaf=None, failed=False, witness=''):
         if root == RUN.SELECTED_ROOT and leaf not in RUN.PRIVATE_STREAM_CASES and leaf not in RUN.PRIVATE_DEPTH_CASES:
             rows.append(row('output',name,Output=RUN.selected_marker(leaf)))
             if leaf in RUN.PRIVATE_RESPONSE_CASES:
-                fault = leaf.removeprefix('3-local-private-')
+                raw_count, fault = leaf.split('-local-private-')
+                count = int(raw_count)
                 if fault == 'original':
+                    rows.append(row('output', name, Output=f'PRIVATE_RESPONSE_PREFIX nodes={count} position={count-2} prefixes={count-1} authenticated=50'))
                     rows.append(row('output',name,Output=RUN.RELOADED_PRIVATE_FINAL))
                 rows.append(row('output',name,Output=f"SELECTED_PRIVATE_RESPONSE fault={fault} samples={50 if fault=='original' else 0} joined=true"))
             if leaf in RUN.AWG_SELECTED_CASES:
@@ -247,7 +249,7 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                             RUN.verdict(output(transcript(RUN.MIXED_ROOT, leaf, witness=altered)), RUN.MIXED_ROOT, leaf)
 
     def test_selected_evidence_requires_every_original_count_winner_and_transfer(self):
-        self.assertEqual(len(RUN.SELECTED_CASES), 55)
+        self.assertEqual(len(RUN.SELECTED_CASES), 64)
         self.assertEqual(len(set(RUN.FAST_SELECTED_CASES)), 15)
         self.assertEqual(len(set(RUN.STRONG_SELECTED_CASES)), 15)
         positions = [i for part in RUN.PARTS for first,last in [map(int,part.split('-')[-2:])] for i in range(first,last+1)]
@@ -281,7 +283,16 @@ class MultipleImportedNativeRunner(unittest.TestCase):
             bad=[dict(r,Output=r['Output'].replace(part,'foreign')) if r is original else r for r in rows]
             with self.assertRaisesRegex(ValueError,'Missing loaded Compare'):
                 RUN.verdict(output(bad),root,leaf)
-        for leaf in RUN.PRIVATE_RESPONSE_CASES[1:]:
+        self.assertEqual(len(set(RUN.PRIVATE_RESPONSE_CASES)), 16)
+        for count in (3, 4, 9, 16):
+            leaf = f'{count}-local-private-original'
+            rows = transcript(root, leaf)
+            prefix = next(row for row in rows if row.get('Output', '').startswith('PRIVATE_RESPONSE_PREFIX'))
+            for field in (f'nodes={count}', f'position={count-2}', f'prefixes={count-1}', 'authenticated=50'):
+                corrupted = [dict(row, Output=row['Output'].replace(field, 'foreign')) if row is prefix else row for row in rows]
+                with self.assertRaisesRegex(ValueError, 'prefix response witnesses'):
+                    RUN.verdict(output(corrupted), root, leaf)
+        for leaf in RUN.PRIVATE_RESPONSE_CASES:
             bad=transcript(root,leaf)
             bad.append(dict(original,Test=root+'/'+leaf))
             with self.assertRaises(ValueError):

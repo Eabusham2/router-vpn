@@ -45,9 +45,10 @@ struct IOSNodeChainDraft {
                 node.mode == "shadowsocks" && linked.contains { $0.id == node.id && $0.normalizedNodeKind == "router-vpn" }
             }
             if hasPairedStream {
-                guard position == 0, selected == nodes,
-                      !IOSMultihopNodeSelection.pairedStreamPositions(nodes, execution: execution, profiles: linked).isEmpty else {
-                    throw IOSMultihopNodeSelection.issue("Measure the original WireGuard entry of a qualified Server or Compare private-stream route.")
+                let privateStops = IOSMultihopNodeSelection.pairedStreamPositions(nodes, execution: execution, profiles: linked)
+                guard selected == nodes, !privateStops.isEmpty,
+                      position == 0 || execution == "auto" && position == nodes.count - 2 && privateStops == [position] else {
+                    throw IOSMultihopNodeSelection.issue("Choose the WireGuard entry or the qualified private penultimate hop of a Compare route.")
                 }
                 return nodes
             }

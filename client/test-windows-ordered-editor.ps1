@@ -294,6 +294,18 @@ try{
             }
             $script:MeasuredBody=$null;$list.SelectedIndex=$count-2;&$measureNext
             Check ($null -ne $MeasuredBody -and $MeasuredBody.nodes.Count -eq $count -and $MeasuredBody.expected_profile_tokens.Count -eq $count) ('deep measured final lost its original captured draft '+$count+' '+$status.Text)
+            foreach($source in $store.profiles | Where-Object { $_.node_kind -ceq 'external' }){$source.external.ordered_multiple_imported_execution_supported=$true}
+            $penultimate=$store.profiles[-1];$originalExternal=$penultimate.external
+            $penultimate.node_kind='router-vpn';$penultimate.Remove('external')
+            foreach($index in @(1,2)){
+                $rootControls['UnifiedExecution'].SelectedIndex=$index;&$refresh
+                $script:MeasuredBody=$null;$list.SelectedIndex=$count-2;&$measureNext
+                Check (($null -ne $MeasuredBody) -eq ($index -eq 2)) ('Compare penultimate paired source did not control the actual editor launch '+$count)
+                if($index -eq 2){Check ($MeasuredBody.execution -ceq 'auto' -and ($MeasuredBody.nodes.id -join ',') -ceq ($all.id -join ',')) 'Measured Compare changed its original source'}
+                Check (-not(Test-RouterVPNOrderedCandidatePosition $all 1 'auto' $store.profiles)) 'Compare offered a private response through a public prefix'
+            }
+            $penultimate.node_kind='external';$penultimate.external=$originalExternal
+            $rootControls['UnifiedExecution'].SelectedIndex=0;&$refresh
             if($count -eq 9){
                 $rows.Clear()
                 for($i=0;$i -lt $count-1;$i++){$rows.Add([pscustomobject]@{id=$all[$i].id;mode=$all[$i].mode})}

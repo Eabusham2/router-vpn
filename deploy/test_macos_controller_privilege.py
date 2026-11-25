@@ -229,6 +229,10 @@ def appkit_source():
     api = '\n'.join(block(source, marker) for marker in (
         'enum RouterVPNNodeEntryModes {', 'enum RouterVPNNodeExitModes {',
         'enum RouterVPNMultihopStartup {', 'final class ProductAPI {'))
+    profiles = (MAC / 'RouterVPNConnectionProfiles.swift').read_text()
+    profile_models = '\n'.join(block(profiles, marker) for marker in (
+        'func macCustomPresetName(', 'struct MacConnectionCustomPreset:',
+        'struct RouterVPNConnectionProfileSelection:', 'enum RouterVPNOrderedNodes {'))
     delegate = block(source, '@MainActor final class ProductDelegate:')
     comparison = block(source, 'private final class ProductComparisonTransportDelegate:')
     progress_transport = block(source, 'private final class MultihopProgressTransportDelegate:')
@@ -248,6 +252,7 @@ import CoreFoundation
 import Darwin
 let routerVPNProductBaseURL=URL(string:"http://127.0.0.1:8788")!
 COMPARISON
+PROFILE_MODELS
 API
 PROGRESS_TRANSPORT
 @MainActor final class ProductWindowController: NSWindowController {
@@ -345,7 +350,7 @@ MainActor.assumeIsolated {
         do { try runNativeOwner() } catch { require(false,error.localizedDescription) }
     }
 }
-'''.replace('COMPARISON', comparison).replace('PROGRESS_TRANSPORT', progress_transport).replace('API\n', api + '\n').replace('DELEGATE', delegate).replace('METHODS', methods)
+'''.replace('COMPARISON', comparison).replace('PROGRESS_TRANSPORT', progress_transport).replace('PROFILE_MODELS', profile_models).replace('API\n', api + '\n').replace('DELEGATE', delegate).replace('METHODS', methods)
 
 
 def main():
@@ -380,7 +385,7 @@ def main():
         appkit = work / 'native-appkit-owner'
         sources = [MAC / name for name in ['RouterVPNMacControllerAuth.swift', 'RouterVPNMacControllerLaunch.swift',
                    'RouterVPNMacShutdown.swift', 'RouterVPNMacMTUTransport.swift', 'RouterVPNMacDNSTransport.swift',
-                   'RouterVPNMacDNSController.swift', 'RouterVPNMacSpeedLabTransport.swift']]
+                   'RouterVPNMacDNSController.swift', 'RouterVPNMacSpeedLabTransport.swift', 'RouterVPNProfileLoadTransaction.swift']]
         subprocess.run([arguments.swift, '-swift-version', '5', '-module-cache-path', str(work / 'module-cache'),
                         *map(str, sources), str(main), '-framework', 'AppKit', '-o', str(appkit)], check=True, timeout=180)
         binary.chmod(0o755); appkit.chmod(0o755); capability.chmod(0o755)

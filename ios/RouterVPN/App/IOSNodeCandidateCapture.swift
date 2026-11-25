@@ -32,10 +32,8 @@ import Libbox
     static func compile(records: [String: Data], stamp: IOSCandidateCatalogPublication.Stamp,
                         prefixPosition: Int, proofs: [IOSNodeCandidatePrefix], selectedResponse: Bool = false) throws -> (inventory: Data, rows: [Row]) {
         guard stamp.ready, stamp.sources_sha256 == (try IOSCandidateCatalogPublication.sourcesDigest(records)),
-              proofs.indices.contains(prefixPosition), proofs[prefixPosition].supported(in: proofs),
+              proofs.indices.contains(prefixPosition), selectedResponse ? proofs[prefixPosition].selectedResponse(in: proofs) : proofs[prefixPosition].supported(in: proofs),
               proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }), (2...8).contains(proofs.count) || IOSMultihopNodeSelection.extendedOriginalModes(proofs.map(\.mode), execution: "local") else { throw issue() }
-        guard !selectedResponse || prefixPosition == 1 && proofs.map(\.mode) == ["wg", "shadowsocks", "shadowsocks"] &&
-                proofs[prefixPosition].metric == "routed-candidate-response" else { throw issue() }
         let excludedMembers = proofs.prefix(selectedResponse ? proofs.count : prefixPosition + 1)
         let excluded = Set(excludedMembers.map(\.profile_id))
         let paired = Set(excludedMembers.map(\.node_id).filter { !$0.isEmpty })

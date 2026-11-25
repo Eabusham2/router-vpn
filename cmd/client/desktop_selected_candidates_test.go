@@ -137,9 +137,14 @@ func publishDesktopSelectedCandidateParentResult(t *testing.T, f *desktopNodeCha
 }
 
 type desktopSelectedCandidateHTTPTestView struct {
-	Token      string                   `json:"view_token"`
-	Prefixes   []orderedCandidatePrefix `json:"prefixes"`
-	Candidates []orderedCandidateChoice `json:"candidates"`
+	Token         string                               `json:"view_token"`
+	Prefixes      []orderedCandidatePrefix             `json:"prefixes"`
+	Candidates    []orderedCandidateChoice             `json:"candidates"`
+	ResponseNodes []orderedCandidateResponseSourceNode `json:"response_source_nodes"`
+	Requested     string                               `json:"requested_execution"`
+	Required      string                               `json:"required_selected_execution"`
+	Selected      string                               `json:"selected_execution"`
+	Epoch         uint64                               `json:"selection_epoch"`
 }
 
 func exerciseDesktopSelectedCandidateHTTP(t *testing.T, f *desktopNodeChainOwnedFixture, catalog *desktopNodeChainCandidateCatalog, id, winner string, position int, prefixes []int) (desktopSelectedCandidateHTTPTestView, orderedCandidateRequest) {
@@ -227,6 +232,9 @@ func exerciseDesktopSelectedCandidateHTTP(t *testing.T, f *desktopNodeChainOwned
 		t.Fatal(err)
 	}
 	status := desktopSelectedCandidateStatusFixture(t, catalog, request)
+	if request.Operation == "selected-local-private-response-50" {
+		status.Measurement, status.Results[0].Kind, status.Results[0].Benchmark.Measurement = hopmeasure.CandidatePrivateResponseMeasurement, "private-agent-response", hopmeasure.CandidatePrivateResponseMeasurement
+	}
 	publishDesktopSelectedCandidateParentResult(t, f, request, metadata, status)
 	var response *httptest.ResponseRecorder
 	select {

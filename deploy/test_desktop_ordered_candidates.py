@@ -434,6 +434,92 @@ namedResults["saved_profile_id"]="named-result";namedResults["profile_id"]="name
 var rejected=namedResults;rejected["chosen"]=true;do{try named.receive(rejected,action:"save");fatalError("named save adopted a draft change")}catch{checks+=1}
 namedPost.finish(namedResults);settle()
 check(named.savedProfileID=="named-result" && !named.pendingDrain && !named.save.isEnabled,"named final did not retain its separate saved-profile identity")
+for depth in [4,9,16,96] {
+    let pos = depth-2
+    let source = (0..<depth).map { ["id":"member-\($0)","mode":$0 == 0 ? "wg":"shadowsocks","kind":$0 == 0 || $0 >= pos ? "router-vpn":"external"] }
+    let nodes = source.map { ["id":$0["id"]!, "mode":$0["mode"]!] }
+    let proposal = Array(nodes.dropLast()) + [["id":"custom","mode":"shadowsocks"]]
+    var choice = finalChoice; choice["proposed_path"] = proposal
+    for temporary in [false,true] {
+        let draft:[String:Any]? = temporary ? ["execution":"auto","nodes":nodes] : nil
+        let form = Form(savedPrefix:temporary,draft:draft,position:pos){_ in fatalError("selected final changed editor")}
+        var offer = namedCatalog
+        offer["response_source_nodes"]=source;offer["requested_execution"]="auto";offer["required_selected_execution"]="local"
+        offer["scope"] = temporary ? "draft-complete-selected":"";offer["prefix_position"]=pos;offer["candidates"]=[choice]
+        offer["prefixes"]=[["position":pos,"id":nodes[pos]["id"]!,"mode":"shadowsocks","measurement":responseMetric]]
+        if !temporary { offer["selected_execution"]="local";offer["selection_epoch"]=37 }
+        for badIndex in [0,1,pos,depth-1] {
+            var crossed=source;crossed[badIndex]["kind"] = source[badIndex]["kind"] == "external" ? "router-vpn":"external"
+            var bad=offer;bad["response_source_nodes"]=crossed
+            do {try form.receive(bad,action:"catalog");fatalError("crossed selected response role admitted")} catch {checks+=1}
+        }
+        var duplicated=source;duplicated[pos]["id"]=source[1]["id"]
+        var bad=offer;bad["response_source_nodes"]=duplicated
+        do {try form.receive(bad,action:"catalog");fatalError("duplicate selected identity admitted")} catch {checks+=1}
+        try! form.receive(offer,action:"catalog")
+        if !temporary {form.requestID="connected-measurement"}
+        var result=namedResults
+        result["scope"]=offer["scope"];result["request_id"]=form.requestID;result["saved_profile_id"]="";result["saved"]=false;result["drained"]=(!temporary)
+        result["reviewing"]=temporary;result["accepted"]=true;result["results"]=[streamRow];result["prefix_position"]=pos
+        result["response_source_nodes"]=source;result["requested_execution"]="auto";result["required_selected_execution"]="local";result["selected_execution"]="local";result["selection_epoch"]=37
+        var crossed=source;crossed[1]["id"]="foreign-import"
+        for (key,wrong) in [("response_source_nodes",crossed as Any),("response_source_nodes",NSNull()),("selected_execution","server"),("view_token",String(repeating:"b",count:64))] {
+            var bad=result;bad[key]=wrong
+            do {try form.receive(bad,action:"run");fatalError("crossed selected response acknowledged: "+key)} catch {checks+=1}
+        }
+        if temporary {RouterVPNMacSpeedLabTransport.calls.last!.finish(result);settle()} else {try! form.receive(result,action:"run");form.controls()}
+        check(form.save.isEnabled,"qualified private response unavailable for named save")
+        var stale=result;stale["selection_epoch"]=38
+        do {try form.receive(stale,action:"poll");fatalError("foreign selected epoch admitted")} catch {checks+=1}
+        form.profileName.stringValue="Measured paired exit";form.saveProfile()
+        let write=RouterVPNMacSpeedLabTransport.calls.last!
+        check(write.body?["proposed_path"] as? [[String:String]] == proposal && write.body?["name"] as? String == "Measured paired exit" &&
+              write.url.path == (temporary ? "/api/multihop/draft-candidates/save-profile":"/api/multihop/prefix-candidates/save-profile"),"selected measured final lost its explicit named full path")
+        result["accepted"]=false;result["reviewing"]=false;result["drained"]=true;result["saved"]=true;result["ok"]=true
+        result["profile_name"]="Measured paired exit";result["saved_profile_id"]="future-profile";result["profile_id"]="future-profile";result["proposed_path"]=proposal;result["candidate_id"]="custom";result["results"]=[]
+        for (key,wrong) in [("proposed_path",nodes as Any),("candidate_id","other-final"),("response_source_nodes",crossed)] {
+            var bad=result;bad[key]=wrong
+            do {try form.receive(bad,action:"save");fatalError("crossed selected profile write acknowledged: "+key)} catch {checks+=1}
+        }
+        write.finish(result);settle()
+        check(form.status.stringValue.contains("Measured paired exit") && !form.pendingDrain,"named selected profile confirmation lost depth=\(depth), temporary=\(temporary), status=\(form.status.stringValue), pending=\(form.pendingDrain)")
+        if !temporary && depth == 16 {
+            for admitted in [false,true] {
+                let cancelled=Form(position:pos)
+                try! cancelled.receive(offer,action:"catalog");cancelled.requestID="connected-cancel"
+                var reply=result;reply["request_id"]=cancelled.requestID;reply["saved_profile_id"]="";reply["saved"]=false
+                reply["accepted"]=false;reply["results"]=[];reply["reviewing"]=false;reply["drained"]=true;reply["running"]=false;reply["cancelled"]=true;reply["cleanup_pending"]=false
+                if admitted {try! cancelled.receive(reply,action:"poll")}
+                cancelled.pendingDrain=true;cancelled.cancelTest()
+                let post=RouterVPNMacSpeedLabTransport.calls.last!
+                let body=post.body ?? [:]
+                check(post.url.path=="/api/multihop/prefix-candidates/cancel" && Set(body.keys)==Set(["request_id","view_token"]) &&
+                      body["view_token"] as? String==offer["view_token"] as? String,"mapped connected Cancel lost its original view")
+                reply["started"]=admitted;reply["admission_cancelled"] = !admitted
+                let invalid:[(String,Any)]=[("request_id","other"),("view_token","foreign"),("selection_epoch",38),("results",[streamRow]),("running",true),("reviewing",true),("accepted",true),("drained",false),("saved_profile_id","other"),("ok",false),("cancelled",false),("cleanup_pending",true),("active_path_changed",true),("prefix_position",0)]
+                for (key,wrong) in invalid {
+                    var bad=reply;bad[key]=wrong
+                    do {try cancelled.receive(bad,action:"cancel");fatalError("foreign cancellation retired original work: "+key)} catch {checks+=1}
+                }
+                if admitted {var late=reply;late["started"]=false;late["admission_cancelled"]=true
+                    do {try cancelled.receive(late,action:"cancel");fatalError("late connected tombstone retired admitted work")} catch {checks+=1}
+                }
+                post.finish(reply);settle();check(!cancelled.pendingDrain && !cancelled.save.isEnabled,"connected Cancel did not release original work")
+            }
+        }
+        if temporary && depth == 16 {
+            let failed=Form(savedPrefix:true,draft:draft,position:pos){_ in fatalError("failed Server trial changed the draft")}
+            try! failed.receive(offer,action:"catalog")
+            var failure=result;failure["request_id"]=failed.requestID;failure["selected_execution"]="server";failure["accepted"]=false
+            failure["saved"]=false;failure["saved_profile_id"]="";failure["cancelled"]=true;failure["failure"]="The Server winner cannot measure this private response."
+            failure["running"]=false;failure["reviewing"]=false;failure["native_down"]=true;failure["drained"]=true;failure["results"]=[]
+            var dirty=failure;dirty["results"]=[streamRow]
+            do {try failed.receive(dirty,action:"cancel");fatalError("Server failure exposed measured scores")} catch {checks+=1}
+            RouterVPNMacSpeedLabTransport.calls.last!.finish(failure);settle();failed.controls()
+            check(!failed.pendingDrain && !failed.save.isEnabled && failed.savedProfileID.isEmpty,"failed Server trial retained ownership after confirmed native DOWN")
+        }
+    }
+}
 print("Swift shipping ordered-candidate controls: \(checks) checks PASS")
 '''.replace('POLICY',policy).replace('FIELDS',fields).replace('METHODS',methods.replace('func issue(', 'static func issue('))
     # Static marker extraction starts at func, so restore only that qualifier.
@@ -441,6 +527,8 @@ print("Swift shipping ordered-candidate controls: \(checks) checks PASS")
     subprocess.run(['swiftc','-swift-version','5','-module-cache-path',str(directory/'cache'),str(path),'-o',str(directory/'controls')],check=True,timeout=120)
     subprocess.run([str(directory/'controls')],check=True,timeout=30)
     controls=[
+        ('connected-cancel-tombstone','(!savedAdmitted && RouterVPNOrderedCandidateDisplay.falseFlag(value,"started")','(RouterVPNOrderedCandidateDisplay.falseFlag(value,"started")','late connected tombstone retired admitted work'),
+        ('selected-private-source','RouterVPNOrderedCandidateDisplay.responseSource(value, position:position, draft:draft) == original','RouterVPNOrderedCandidateDisplay.responseSource(value, position:position, draft:draft) != nil','crossed selected response acknowledged: response_source_nodes'),
         ('native-down','flag(value, "native_down") && ','','saved choice escaped original DOWN: native_down'),
         ('cleanup',' && falseFlag(value, "cleanup_pending")','','saved choice escaped original DOWN: cleanup_pending'),
         ('review-idle','(savedPath || !pendingDrain)','!pendingDrain','DOWN review lost its live observer or explicit Save'),
@@ -583,7 +671,7 @@ def linux_policy(directory):
     candidates=(ROOT/'client/linux/routervpn-ordered-candidates-v1.inc').read_text()
     helpers=(ROOT/'client/linux/routervpn-telemetry-v9.inc').read_text()
     declarations=candidates[candidates.index('typedef struct {'):candidates.index('} LinuxOrderedCandidates;')+len('} LinuxOrderedCandidates;')]
-    guards+='\n'+declarations+'\n'+'\n'.join(block(helpers,marker) for marker in ['static JsonNode *linux_ec_member(', 'static const char *linux_ec_string(', 'static gboolean linux_ec_bool(', 'static double linux_ec_number(', 'static JsonArray *linux_ec_array(', 'static JsonObject *linux_ec_object('])+'\n'+'\n'.join(block(candidates,marker) for marker in ['static const char*linux_oc_measurement_kind(', 'static const char*linux_oc_prefix_measurement(', 'static JsonObject*linux_oc_root(', 'static gboolean linux_oc_response_winner(', 'static gboolean linux_oc_response_draft(', 'static gboolean linux_oc_catalog_measurement(', 'static double linux_oc_score(', 'static gboolean linux_oc_same_measurement(', 'static double linux_oc_current_score(', 'static const char*linux_oc_scope(', 'static gboolean linux_oc_draft_execution(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_final_choice(', 'static gboolean linux_oc_final_saved(', 'static gboolean linux_oc_view_fresh('])
+    guards+='\n'+declarations+'\n'+'\n'.join(block(helpers,marker) for marker in ['static JsonNode *linux_ec_member(', 'static const char *linux_ec_string(', 'static gboolean linux_ec_bool(', 'static double linux_ec_number(', 'static JsonArray *linux_ec_array(', 'static JsonObject *linux_ec_object('])+'\n'+'\n'.join(block(candidates,marker) for marker in ['static const char*linux_oc_measurement_kind(', 'static const char*linux_oc_prefix_measurement(', 'static JsonObject*linux_oc_root(', 'static gboolean linux_oc_response_id(', 'static gboolean linux_oc_response_source(', 'static gboolean linux_oc_response_winner(', 'static gboolean linux_oc_response_draft(', 'static gboolean linux_oc_catalog_measurement(', 'static double linux_oc_score(', 'static gboolean linux_oc_same_measurement(', 'static double linux_oc_current_score(', 'static const char*linux_oc_scope(', 'static gboolean linux_oc_draft_execution(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_final_choice(', 'static gboolean linux_oc_final_saved(', 'static gboolean linux_oc_view_fresh('])
     program=r"""
 #include <gtk/gtk.h>
 #include <glib-object.h>
@@ -855,6 +943,15 @@ def linux_form(directory):
     packet_draft={'execution':'local','expected_selected_node_id':'final','nodes':[{'id':'entry','mode':'awg2-strong'},{'id':'packet','mode':'wg'},{'id':'middle','mode':'shadowsocks'},{'id':'final','mode':'shadowsocks'}]}
     packet_catalog=json.loads(json.dumps(response_catalog));packet_catalog['prefix_position']=2;packet_catalog['prefixes'][0].update(position=2,id='middle')
     packet_catalog['candidates'][0]['proposed_path']=json.loads(json.dumps(packet_draft['nodes']));packet_catalog['candidates'][0]['proposed_path'][-1]['id']='paired'
+    for depth in (4,9,16,96):
+        nodes=[{'id': 'entry' if i==0 else 'final' if i==depth-1 else f'source-{i}', 'mode':'wg' if i==0 else 'shadowsocks'} for i in range(depth)]
+        draft={'execution':'auto','expected_selected_node_id':'final','nodes':nodes}
+        offer=json.loads(json.dumps(response_catalog))
+        offer.update(scope='draft-complete-selected', requested_execution='auto', required_selected_execution='local', prefix_position=depth-2,
+                     response_source_nodes=[dict(row,kind='router-vpn' if i==0 or i>=depth-2 else 'external') for i,row in enumerate(nodes)])
+        offer['prefixes'][0].update(position=depth-2,id=nodes[-2]['id'])
+        offer['candidates'][0]['proposed_path']=nodes[:-1]+[{'id':'paired','mode':'shadowsocks'}]
+        for name,value in [('catalog',offer),('draft',draft)]: (directory/f'selected-{depth}-{name}.json').write_text(json.dumps(value))
     for name,value in [('catalog',catalog),('row',row),('response-catalog',response_catalog),('response-row',response_row),('deep-response-catalog',deep_catalog),('deep-response-draft',deep_draft),('packet-response-catalog',packet_catalog),('packet-response-draft',packet_draft)]: (directory/(name+'.json')).write_text(json.dumps(value))
     program=r'''
 #include <gtk/gtk.h>
@@ -1046,27 +1143,101 @@ int main(int argc,char**argv){
   check(selected->view&&!strcmp(linux_ec_string(linux_oc_root(selected->view),"view_token"),token),"sparse packet recapture lost its new token");g_free(token);json_node_free(sparse);gtk_widget_destroy(selected->dialog);
  }
 
- for(int close_case=0;close_case<4;close_case++){
+ {
+  const int pos=14;
+  linux_ordered_candidates_open_captured(&app,FALSE,FALSE);
+  LinuxOrderedCandidates*form=g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates");
+  JsonNode*discovery=fixture("catalog"),*offer=fixture("selected-16-catalog");
+  JsonObject*catalog_value=linux_oc_root(offer);
+  JsonArray*prefixes=linux_ec_array(linux_oc_root(discovery),"prefixes");
+  json_array_add_element(prefixes,json_node_copy(json_array_get_element(linux_ec_array(catalog_value,"prefixes"),0)));
+  reply(form,discovery);check(gtk_combo_box_set_active_id(GTK_COMBO_BOX(form->prefix),"14"),"connected picker lost selected penultimate position");
+  gtk_button_clicked(GTK_BUTTON(form->refresh));check(form->position==pos,"connected refresh selected a different prefix");
+  json_object_remove_member(catalog_value,"origin");json_object_remove_member(catalog_value,"scope");
+  json_object_set_string_member(catalog_value,"selected_execution","local");json_object_set_int_member(catalog_value,"selection_epoch",37);
+  reply(form,offer);choose(form);gtk_button_clicked(GTK_BUTTON(form->test));
+  JsonNode*receipt=parse_json("{}"),*sample=fixture("response-row");JsonObject*value=linux_oc_root(receipt);
+  json_object_set_string_member(value,"request_id",form->request);json_object_set_string_member(value,"view_token",linux_ec_string(catalog_value,"view_token"));
+  json_object_set_string_member(value,"measurement","routed-candidate-response");json_object_set_int_member(value,"prefix_position",pos);
+  json_object_set_string_member(value,"requested_execution","auto");json_object_set_string_member(value,"required_selected_execution","local");
+  json_object_set_string_member(value,"selected_execution","local");json_object_set_int_member(value,"selection_epoch",38);
+  json_object_set_member(value,"response_source_nodes",json_node_copy(linux_ec_member(catalog_value,"response_source_nodes")));
+  json_object_set_boolean_member(value,"drained",TRUE);json_object_set_boolean_member(value,"accepted",TRUE);
+  JsonArray*scores=json_array_new();json_array_add_element(scores,json_node_copy(sample));json_object_set_array_member(value,"results",scores);
+  check(!linux_oc_receive(form,value,2),"connected receipt borrowed another selected epoch");json_object_set_int_member(value,"selection_epoch",37);
+  JsonObject*original_import=json_array_get_object_element(linux_ec_array(value,"response_source_nodes"),1);
+  json_object_set_string_member(original_import,"id","different-import");check(!linux_oc_receive(form,value,2),"connected receipt borrowed a different original import");json_object_set_string_member(original_import,"id","source-1");
+  reply(form,receipt);choose(form);linux_oc_controls(form);check(gtk_widget_get_sensitive(form->save),"connected selected final was unavailable to Save");
+  gtk_entry_set_text(GTK_ENTRY(form->name),"Measured paired exit");gtk_button_clicked(GTK_BUTTON(form->save));
+  JsonNode*write=parse_json(g_ptr_array_index(bodies,bodies->len-1));JsonObject*posted=linux_oc_root(write);
+  check(!strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/prefix-candidates/save-profile")&&!strcmp(linux_ec_string(posted,"name"),"Measured paired exit")&&
+        !strcmp(linux_ec_string(posted,"candidate_id"),"paired")&&json_array_get_length(linux_ec_array(posted,"proposed_path"))==16,"connected Save lost its original name or final path");
+  json_object_set_boolean_member(value,"ok",TRUE);json_object_set_boolean_member(value,"active_path_changed",FALSE);
+  json_object_set_string_member(value,"profile_name","Measured paired exit");json_object_set_string_member(value,"candidate_id","foreign");
+  json_object_set_member(value,"proposed_path",json_node_copy(linux_ec_member(posted,"proposed_path")));
+  check(!linux_oc_receive(form,value,4),"connected Save confirmed a foreign candidate");json_object_set_string_member(value,"candidate_id","paired");
+  JsonObject*first=json_array_get_object_element(linux_ec_array(value,"proposed_path"),0);json_object_set_string_member(first,"id","foreign-import");
+  check(!linux_oc_receive(form,value,4),"connected Save confirmed a foreign original path");json_object_set_string_member(first,"id","entry");
+  reply(form,receipt);check(strstr(gtk_label_get_text(GTK_LABEL(form->status)),"Measured paired exit")&&!form->pending,"connected Save lost the named profile");
+  g_autofree char*cancel_data=linux_oc_body(form,3);JsonNode*cancel_post=parse_json(cancel_data);check(json_object_get_size(linux_oc_root(cancel_post))==2 && !strcmp(linux_ec_string(linux_oc_root(cancel_post),"view_token"),linux_ec_string(catalog_value,"view_token")),"mapped connected Cancel omitted the original view token");json_node_free(cancel_post);
+  json_object_set_boolean_member(value,"running",FALSE);json_object_set_boolean_member(value,"accepted",FALSE);json_object_set_boolean_member(value,"reviewing",FALSE);
+  json_object_set_boolean_member(value,"cancelled",TRUE);json_object_set_boolean_member(value,"cleanup_pending",FALSE);
+  json_object_set_boolean_member(value,"started",FALSE);json_object_set_boolean_member(value,"admission_cancelled",TRUE);json_object_set_array_member(value,"results",json_array_new());
+  check(!linux_oc_receive(form,value,3),"late connected tombstone retired admitted work");
+  json_object_set_boolean_member(value,"started",TRUE);json_object_set_boolean_member(value,"admission_cancelled",FALSE);
+  json_object_set_boolean_member(value,"running",TRUE);check(!linux_oc_receive(form,value,3),"connected cancellation retired a running job");json_object_set_boolean_member(value,"running",FALSE);
+  check(linux_oc_receive(form,value,3)&&!form->pending,"connected cancellation did not retire its own admitted work");
+  choose(form);gtk_button_clicked(GTK_BUTTON(form->test));check(form->phase==2&&form->pending&&!form->saved_admitted,"next connected measurement retained old admission");
+  reply_code(form,receipt,409);form->retry=0;linux_oc_tick(form);check(form->phase==3,"unadmitted connected cancel lost its pending request");
+  json_object_set_string_member(value,"request_id",form->request);json_object_set_boolean_member(value,"started",FALSE);json_object_set_boolean_member(value,"admission_cancelled",TRUE);
+  reply(form,receipt);check(!form->pending&&!gtk_widget_get_sensitive(form->save),"original connected admission tombstone left cleanup pending");
+  gtk_widget_destroy(form->dialog);json_node_free(write);json_node_free(receipt);json_node_free(sample);json_node_free(offer);json_node_free(discovery);
+ }
+ for(int close_case=0;close_case<9;close_case++){
   GtkWidget*owner=gtk_window_new(GTK_WINDOW_TOPLEVEL);
   const char*original="{\"execution\":\"local\",\"expected_selected_node_id\":\"final\",\"nodes\":[{\"id\":\"entry\",\"mode\":\"wg\"},{\"id\":\"middle\",\"mode\":\"shadowsocks\"},{\"id\":\"final\",\"mode\":\"shadowsocks\"}]}";
   char*deep_original=NULL;int response_position=close_case==2?14:close_case==3?2:1,response_count=close_case==2?16:close_case==3?4:3;
-  if(close_case>=2){JsonNode*input=fixture(close_case==2?"deep-response-draft":"packet-response-draft");deep_original=encode(input);json_node_free(input);original=deep_original;}
+  gboolean mapped=close_case>=4;
+  const char*scope=mapped?"draft-complete-selected":"saved-prefix-local";
+  if(mapped){response_count=close_case==4?4:close_case==5?9:(close_case==6||close_case==8)?16:96;response_position=response_count-2;}
+  g_autofree char*selected_draft=g_strdup_printf("selected-%d-draft",response_count),*selected_catalog=g_strdup_printf("selected-%d-catalog",response_count);
+  if(close_case>=2){JsonNode*input=fixture(mapped?selected_draft:close_case==2?"deep-response-draft":"packet-response-draft");deep_original=encode(input);json_node_free(input);original=deep_original;}
   linux_ordered_candidates_open_draft(&app,GTK_WINDOW(owner),original,response_position);
   LinuxOrderedCandidates*form=g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates");
-  JsonNode*offer=fixture(close_case==2?"deep-response-catalog":close_case==3?"packet-response-catalog":"response-catalog"),*sample=fixture("response-row");reply(form,offer);
+  JsonNode*offer=fixture(mapped?selected_catalog:close_case==2?"deep-response-catalog":close_case==3?"packet-response-catalog":"response-catalog"),*sample=fixture("response-row");
+  if(mapped){
+   JsonObject*m=linux_oc_root(offer);JsonArray*rows=linux_ec_array(m,"response_source_nodes");JsonObject*first=json_array_get_object_element(rows,1);
+   json_object_set_string_member(first,"kind","router-vpn");check(!linux_oc_receive(form,m,1),"foreign first remote acquired private response");json_object_set_string_member(first,"kind","external");
+  }
+  reply(form,offer);
   check(form->phase==2&&form->pending&&gtk_widget_get_visible(form->name)&&!strcmp(gtk_button_get_label(GTK_BUTTON(form->save)),"Save profile with this final"),"response draft lost named future-profile action");
   JsonNode*receipt=parse_json("{}");JsonObject*value=linux_oc_root(receipt);
-  json_object_set_int_member(value,"schema",1);json_object_set_string_member(value,"origin","editor-draft");json_object_set_string_member(value,"scope","saved-prefix-local");json_object_set_string_member(value,"proof_scope","selected-prefix");
+  json_object_set_int_member(value,"schema",1);json_object_set_string_member(value,"origin","editor-draft");json_object_set_string_member(value,"scope",scope);json_object_set_string_member(value,"proof_scope","selected-prefix");
+  if(mapped){json_object_set_member(value,"response_source_nodes",json_node_copy(linux_ec_member(linux_oc_root(offer),"response_source_nodes")));
+   json_object_set_string_member(value,"requested_execution","auto");json_object_set_string_member(value,"required_selected_execution","local");json_object_set_string_member(value,"selected_execution","local");json_object_set_int_member(value,"selection_epoch",37);}
   json_object_set_boolean_member(value,"application_open",FALSE);json_object_set_boolean_member(value,"dns_open",FALSE);json_object_set_boolean_member(value,"active_path_changed",FALSE);
   json_object_set_string_member(value,"measurement","routed-candidate-response");json_object_set_int_member(value,"prefix_position",response_position);
   json_object_set_string_member(value,"request_id",form->request);json_object_set_string_member(value,"view_token",linux_ec_string(linux_oc_root(offer),"view_token"));
   json_object_set_boolean_member(value,"native_down",TRUE);json_object_set_boolean_member(value,"accepted",TRUE);json_object_set_boolean_member(value,"reviewing",TRUE);json_object_set_boolean_member(value,"drained",FALSE);
-  JsonArray*scores=json_array_new();json_array_add_element(scores,json_node_copy(sample));json_object_set_array_member(value,"results",scores);reply(form,receipt);choose(form);linux_oc_controls(form);
+  JsonArray*scores=json_array_new();json_array_add_element(scores,json_node_copy(sample));json_object_set_array_member(value,"results",scores);
+  if(close_case==8){
+   json_object_set_string_member(value,"selected_execution","server");json_object_set_string_member(value,"saved_profile_id","");
+   json_object_set_string_member(value,"failure","The Server winner cannot measure this private response.");
+   json_object_set_boolean_member(value,"drained",TRUE);json_object_set_boolean_member(value,"accepted",FALSE);json_object_set_boolean_member(value,"running",FALSE);
+   json_object_set_boolean_member(value,"reviewing",FALSE);json_object_set_boolean_member(value,"cancelled",TRUE);
+   check(!linux_oc_receive(form,value,2),"Server failure exposed measured scores");
+   json_object_set_array_member(value,"results",json_array_new());reply(form,receipt);linux_oc_controls(form);
+   check(!form->pending&&!gtk_widget_get_sensitive(form->save)&&!form->saved_profile[0],"failed Server trial retained ownership after original native DOWN");
+   gtk_widget_destroy(form->dialog);gtk_widget_destroy(owner);json_node_free(receipt);json_node_free(sample);json_node_free(offer);g_free(deep_original);continue;
+  }
+  if(mapped){json_object_set_string_member(value,"selected_execution","server");check(!linux_oc_receive(form,value,2),"Server winner acquired selected private review");json_object_set_string_member(value,"selected_execution","local");
+    JsonObject*changed=json_array_get_object_element(linux_ec_array(value,"response_source_nodes"),1);json_object_set_string_member(changed,"id","foreign-import");check(!linux_oc_receive(form,value,2),"crossed selected source acquired review");json_object_set_string_member(changed,"id","source-1");}
+  reply(form,receipt);choose(form);linux_oc_controls(form);
   check(gtk_widget_get_sensitive(form->save)&&form->pending&&strstr(gtk_label_get_text(GTK_LABEL(form->note)),"authenticated"),"response review did not show fresh private-agent timing after native DOWN");
   guint old_requests=paths->len,old_adoptions=selected_deliveries;gtk_button_clicked(GTK_BUTTON(form->save));check(paths->len==old_requests,"named final save invented a profile name");
   gtk_entry_set_text(GTK_ENTRY(form->name),"Measured future final");gtk_button_clicked(GTK_BUTTON(form->save));
   JsonNode*write=parse_json(g_ptr_array_index(bodies,bodies->len-1));JsonObject*posted=linux_oc_root(write);
-  check(!strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/draft-candidates/save-profile")&&!strcmp(linux_ec_string(posted,"name"),"Measured future final")&&!strcmp(linux_ec_string(posted,"scope"),"saved-prefix-local")&&!strcmp(linux_ec_string(posted,"candidate_id"),"paired")&&json_array_get_length(linux_ec_array(posted,"proposed_path"))==(guint)response_count,"named final Save lost its exact name, path or original scope");json_node_free(write);
+  check(!strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/draft-candidates/save-profile")&&!strcmp(linux_ec_string(posted,"name"),"Measured future final")&&!strcmp(linux_ec_string(posted,"scope"),scope)&&!strcmp(linux_ec_string(posted,"candidate_id"),"paired")&&json_array_get_length(linux_ec_array(posted,"proposed_path"))==(guint)response_count,"named final Save lost its exact name, path or original scope");json_node_free(write);
   json_object_set_boolean_member(value,"ok",TRUE);json_object_set_boolean_member(value,"saved",TRUE);json_object_set_boolean_member(value,"accepted",FALSE);json_object_set_boolean_member(value,"reviewing",FALSE);json_object_set_boolean_member(value,"cleanup_pending",TRUE);
   json_object_set_string_member(value,"saved_profile_id","future-final");json_object_set_string_member(value,"profile_name","Measured future final");json_object_set_string_member(value,"candidate_id","paired");json_object_set_string_member(value,"proposal_action","save-final-profile");
   JsonObject*choice=json_array_get_object_element(linux_ec_array(linux_oc_root(offer),"candidates"),0);json_object_set_member(value,"proposed_path",json_node_copy(linux_ec_member(choice,"proposed_path")));

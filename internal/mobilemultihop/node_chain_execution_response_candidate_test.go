@@ -2,6 +2,7 @@ package mobilemultihop
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -57,5 +58,96 @@ func TestNodeChainCompareLocalImportedResponseCandidate(t *testing.T) {
 				t.Fatal("an existing final was accepted as its own replacement")
 			}
 		})
+	}
+}
+
+func TestCompareLocalPrivatePenultimateCandidate(t *testing.T) {
+	input, err := nodeChainFixtureNodes(t, 17, "")[16].LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory := candidateInventoryFixture(t, "separate-private-final", input)
+	for _, n := range []int{4, 9, 16} {
+		for _, outcome := range []string{"compare-local", "compare-server", "server"} {
+			t.Run(fmt.Sprintf("%d/%s", n, outcome), func(t *testing.T) {
+				requested := "auto"
+				if outcome == "server" {
+					requested = "server"
+				}
+				position := n - 2
+				f := multipleImportedExecutionRuntimeFixture(t, selectedPrivateStreamLayout(n, position), requested)
+				prep := f.runtime.projection.preparation
+				for i := 0; i < n; i++ {
+					if prep.SupportsCompareLocalResponseCandidate(i) != (requested == "auto" && i == position) {
+						t.Fatal("source advertised another metric or stop", i)
+					}
+				}
+				entryRun(t, f, outcome)
+				t.Cleanup(func() {
+					if err := closeRemoteCandidateRuntime(f.runtime); err != nil {
+						t.Error(err)
+					}
+				})
+				if p, err := f.runtime.NewRemoteCandidatePlanContext(t.Context(), position, inventory); err == nil || p != nil {
+					t.Fatal("private prefix obtained a Server packet stop")
+				}
+				p, err := f.runtime.NewLocalCandidatePlanContext(t.Context(), position, inventory)
+				if outcome != "compare-local" {
+					if p != nil || err == nil {
+						t.Fatal("private response plan without active Compare Local winner")
+					}
+					return
+				}
+				if err != nil || p.plan.multiple == nil || p.plan.multiple.registry != prep.multiple.owners || p.plan.prefix != prep.local.proofs[position] ||
+					p.trial != f.runtime.active || p.plan.measurement != hopmeasure.CandidatePrivateResponseMeasurement {
+					t.Fatal("lost the original private prefix or sealed source", err)
+				}
+				for _, i := range []int{position, n - 1} {
+					duplicate, err := prep.local.nodes[i].LaunchInput()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if alt, err := f.runtime.NewLocalCandidatePlanContext(t.Context(), position, candidateInventoryFixture(t, "original-member", duplicate)); err == nil || alt != nil {
+						t.Fatal("accepted an original member", i)
+					}
+				}
+				target, err := ParseNodeLaunchInput(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, field := range []string{"id", "node_proof_id"} {
+					value := target.profile[field]
+					target.profile[field] = prep.local.nodes[n-1].profile[field]
+					alias, err := NewNodeProfile(target.mode, target.inputs.Files, startJSON(t, target.profile), target.inputs.Start, target.inputs.DNSBootstrap)
+					if err != nil {
+						t.Fatal(err)
+					}
+					renamed, err := alias.LaunchInput()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if alt, err := f.runtime.NewLocalCandidatePlanContext(t.Context(), position, candidateInventoryFixture(t, "aliased-final", renamed)); err == nil || alt != nil {
+						t.Fatal("accepted original final alias", field)
+					}
+					target.profile[field] = value
+				}
+				registry := p.plan.multiple.registry
+				copy := *registry
+				p.plan.multiple.registry = &copy
+				if p.CaptureSHA256() != "" {
+					t.Fatal("copied registry acquired an original capture")
+				}
+				p.plan.multiple.registry = registry
+				epoch := p.trial.selectionEpoch
+				p.trial.selectionEpoch++
+				if p.CaptureSHA256() != "" {
+					t.Fatal("capture survived a changed selection epoch")
+				}
+				p.trial.selectionEpoch = epoch
+				if p.CaptureSHA256() == "" {
+					t.Fatal("original epoch was not restored")
+				}
+			})
+		}
 	}
 }

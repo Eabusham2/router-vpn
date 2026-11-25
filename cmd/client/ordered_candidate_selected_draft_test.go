@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -220,24 +221,61 @@ func TestDesktopSelectedDraftRetainsWinnerThroughOriginalDownAndChoose(t *testin
 }
 
 func TestSelectedPrivateResponseNamedProfileRetainsCompare(t *testing.T) {
-	a, inventory := desktopNodeChainCaptureFixture(t, 4)
-	rows := slices.Clone(inventory[:3])
-	rows[2].Mode = "shadowsocks"
-	installDesktopOrderedImported(t, a, rows)
-	candidate := inventory[3].ID
-	file := filepath.Join(clientRoot(a), "generated", candidate, "shadowsocks", "sing-box.json")
-	raw, err := os.ReadFile(file)
-	if err != nil {
-		t.Fatal(err)
+	testSelectedPrivateResponseNamedProfile(t, 3)
+}
+
+func TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare(t *testing.T) {
+	for _, count := range []int{4, 9, 16} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) { testSelectedPrivateResponseNamedProfile(t, count) })
 	}
-	oldKey, newKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("s"), 32)), base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 32))
-	if strings.Count(string(raw), oldKey) != 1 {
-		t.Fatal("independent encrypted candidate setup")
+}
+
+func TestSelectedPrivatePenultimateResponseDraftServerWinnerClosesWithoutScores(t *testing.T) {
+	a, rows, candidate := selectedPrivateResponseAppFixture(t, 16)
+	a, draft, q := selectedDraftSourceFixture(t, a, rows, "auto", 14, candidate)
+	testOriginalSelectedDraftLifecycle(t, a, draft, q, [3]string{"auto", "server", "private-server-refusal"})
+}
+
+func testSelectedPrivateResponseNamedProfile(t *testing.T, count int) {
+	t.Helper()
+	a, rows, candidate := selectedPrivateResponseAppFixture(t, count)
+	a, draft, q := selectedDraftSourceFixture(t, a, rows, "auto", count-2, candidate)
+	testOriginalSelectedDraftLifecycle(t, a, draft, q, [3]string{"auto", "local", "private-replacement"})
+}
+
+func selectedPrivateResponseAppFixture(t *testing.T, count int) (*app, []common.MultihopNodeSelection, string) {
+	t.Helper()
+	a, inventory := desktopNodeChainCaptureFixture(t, count+1)
+	rows := slices.Clone(inventory[:count])
+	rows[count-1].Mode = "shadowsocks"
+	candidate := inventory[count].ID
+	keys := map[string]byte{candidate: 'x'}
+	if count == 3 {
+		installDesktopOrderedImported(t, a, rows)
+	} else {
+		var imports []int
+		for position := 1; position < count-2; position++ {
+			imports = append(imports, position)
+		}
+		installDesktopIndependentImports(t, a, rows, imports)
+		rows[count-2].Mode = "shadowsocks"
+		keys[rows[count-2].ID] = 'v'
 	}
-	if err := os.WriteFile(file, []byte(strings.Replace(string(raw), oldKey, newKey, 1)), 0600); err != nil {
-		t.Fatal(err)
+	for id, seed := range keys {
+		file := filepath.Join(clientRoot(a), "generated", id, "shadowsocks", "sing-box.json")
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldKey, newKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("s"), 32)), base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{seed}, 32))
+		if strings.Count(string(raw), oldKey) != 1 {
+			t.Fatal("independent encrypted candidate setup")
+		}
+		if err := os.WriteFile(file, []byte(strings.Replace(string(raw), oldKey, newKey, 1)), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	a.profiles.SelectedID, a.state.RouterID = rows[2].ID, rows[2].ID
+	a.profiles.SelectedID, a.state.RouterID = rows[count-1].ID, rows[count-1].ID
 	for i := range a.profiles.Profiles {
 		p := &a.profiles.Profiles[i]
 		p.KillSwitch, p.KillSwitchPolicy = true, "on-connect"
@@ -247,8 +285,7 @@ func TestSelectedPrivateResponseNamedProfileRetainsCompare(t *testing.T) {
 			p.MultihopExecution = ""
 		}
 	}
-	a, draft, q := selectedDraftSourceFixture(t, a, rows, "auto", 1, candidate)
-	testOriginalSelectedDraftLifecycle(t, a, draft, q, [3]string{"auto", "local", "private-replacement"})
+	return a, rows, candidate
 }
 
 func testOriginalSelectedDraftLifecycle(t *testing.T, a *app, draft *multihopConnectRequest, q orderedCandidatePreparationRequest, choice [3]string) {
@@ -276,6 +313,19 @@ func testOriginalSelectedDraftLifecycle(t *testing.T, a *app, draft *multihopCon
 	view, err := captureOrderedCandidatePreparedSelection(ctx, a, q.Position, q.Scope, draft, observed)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var expectedResponseNodes []orderedCandidateResponseSourceNode
+	if strings.HasPrefix(choice[2], "private-") && len(draft.Nodes) > 3 {
+		for position, node := range draft.Nodes {
+			kind := "external"
+			if position == 0 || position >= len(draft.Nodes)-2 {
+				kind = "router-vpn"
+			}
+			expectedResponseNodes = append(expectedResponseNodes, orderedCandidateResponseSourceNode{node.ID, node.Mode, kind})
+		}
+		if !reflect.DeepEqual(view.responseNodes, expectedResponseNodes) {
+			t.Fatal("candidate view lost its complete original private-source roles")
+		}
 	}
 	// Keep the modeled controller lifetime independent of this one finite operation.
 	f := newDesktopNodeChainOwnedFixtureWith(t, a, view.selection)
@@ -316,10 +366,15 @@ func testOriginalSelectedDraftLifecycle(t *testing.T, a *app, draft *multihopCon
 		}
 		return raw
 	}}
-	if _, err := p.startFullRuntime(ctx, r, launch); err != nil {
-		t.Fatal("original selected draft startup", err)
+	_, startupFailure := p.startFullRuntime(ctx, r, launch)
+	if startupFailure != nil && choice[2] != "private-server-refusal" {
+		t.Fatal("original selected draft startup", startupFailure)
 	}
-	if _, registered := desktopOrderedExecutionOwners.Load(a); registered || a.state.Connected || a.state.Phase != "candidate:testing" || !mtuSuspended(a) || f.starts != 1 || r.selectedReady == nil || r.selectedReady.Progress.Execution != choice[1] || r.selectedReady.SelectionEpoch == 0 || net.phase != 3 || !reflect.DeepEqual(before, a.profiles) {
+	expectedPhase := "candidate:testing"
+	if choice[2] == "private-server-refusal" {
+		expectedPhase = "starting" // The private catalog refuses before Test is published.
+	}
+	if _, registered := desktopOrderedExecutionOwners.Load(a); registered || a.state.Connected || a.state.Phase != expectedPhase || !mtuSuspended(a) || f.starts != 1 || r.selectedReady == nil || r.selectedReady.Progress.Execution != choice[1] || r.selectedReady.SelectionEpoch == 0 || net.phase != 3 || !reflect.DeepEqual(before, a.profiles) {
 		t.Fatal("selected draft adopted an ordinary connection or lost its original proof")
 	}
 	if _, _, _, _, err := readDesktopSelectedLatencyCapture(ctx, launch); err == nil {
@@ -335,6 +390,32 @@ func testOriginalSelectedDraftLifecycle(t *testing.T, a *app, draft *multihopCon
 		t.Fatal("foreign preparation borrowed the draft")
 	}
 	owned := r.selectedReady.SelectionEpoch
+	if choice[2] == "private-server-refusal" {
+		failure := startupFailure
+		if failure == nil {
+			t.Fatal("Server winner admitted a Local private response catalog")
+		}
+		if _, err := f.launch.directoryRoot.Lstat(desktopSelectedCandidateRequestFile); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("Server winner published a private candidate request", err)
+		}
+		if err := p.finish(); err != nil {
+			t.Fatal("Server winner failed original temporary cleanup", err)
+		}
+		job.nativeDown, job.failure = p.nativeDown, failure.Error()
+		response := orderedCandidatePreparedResponseLocked(p.owner, time.Now())
+		if response["native_down"] != true || response["drained"] != true || response["accepted"] != false || response["running"] != false || response["reviewing"] != false ||
+			response["selected_execution"] != "server" || response["selection_epoch"] != owned || response["requested_execution"] != "auto" || response["required_selected_execution"] != "local" ||
+			!reflect.DeepEqual(response["response_source_nodes"], expectedResponseNodes) || len(response["results"].([]hopmeasure.CandidateStatus)) != 0 || len(job.results) != 0 ||
+			!reflect.DeepEqual(before, a.profiles) || f.starts != 1 || mtuSuspended(a) || a.candidatePreparation != nil || net.phase != 6 {
+			t.Fatal("failed Server selection invented response scores or lost its original cleanup identity")
+		}
+		proposed := slices.Clone(draft.Nodes)
+		proposed[len(proposed)-1] = common.MultihopNodeSelection{ID: q.CandidateIDs[0], Mode: "shadowsocks"}
+		if saved := orderedCandidateHTTP(t, a, "/api/multihop/draft-candidates/save-profile", map[string]any{"request_id": q.RequestID, "view_token": view.token, "candidate_id": q.CandidateIDs[0], "proposed_path": proposed, "scope": q.Scope, "name": "Must not save"}); saved.Code != 409 {
+			t.Fatal("failed private measurement acquired a named profile", saved.Code, saved.Body.String())
+		}
+		return
+	}
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		rec := httptest.NewRecorder()
@@ -436,7 +517,10 @@ func testOriginalSelectedDraftLifecycle(t *testing.T, a *app, draft *multihopCon
 			t.Fatal("missing original Local response proof", current["measurement"])
 		}
 		wanted := slices.Clone(draft.Nodes)
-		wanted[2].ID = candidate.ID
+		wanted[len(wanted)-1].ID = candidate.ID
+		if len(expectedResponseNodes) != 0 && !reflect.DeepEqual(current["response_source_nodes"], expectedResponseNodes) {
+			t.Fatal("terminal result changed the original source roles")
+		}
 		payload := map[string]any{"request_id": q.RequestID, "view_token": view.token, "candidate_id": candidate.ID, "proposed_path": wanted, "scope": q.Scope}
 		if r := orderedCandidateHTTP(t, a, "/api/multihop/draft-candidates/choose", payload); r.Code != 409 {
 			t.Fatal("editor changed selected Home before named Save", r.Code, r.Body.String())
@@ -453,14 +537,15 @@ func testOriginalSelectedDraftLifecycle(t *testing.T, a *app, draft *multihopCon
 			r := orderedCandidateHTTP(t, a, save, payload)
 			var out struct {
 				Saved     bool
-				ID        string                         `json:"saved_profile_id"`
-				Action    string                         `json:"proposal_action"`
-				Epoch     uint64                         `json:"selection_epoch"`
-				Requested string                         `json:"requested_execution"`
-				Selected  string                         `json:"selected_execution"`
-				Path      []common.MultihopNodeSelection `json:"proposed_path"`
+				ID        string                               `json:"saved_profile_id"`
+				Action    string                               `json:"proposal_action"`
+				Epoch     uint64                               `json:"selection_epoch"`
+				Requested string                               `json:"requested_execution"`
+				Selected  string                               `json:"selected_execution"`
+				Path      []common.MultihopNodeSelection       `json:"proposed_path"`
+				Source    []orderedCandidateResponseSourceNode `json:"response_source_nodes"`
 			}
-			if r.Code != 200 || json.Unmarshal(r.Body.Bytes(), &out) != nil || !out.Saved || out.ID == "" || (i > 0 && id != out.ID) || out.Action != "save-final-profile" || out.Requested != "auto" || out.Selected != "local" || out.Epoch != owned || !slices.Equal(out.Path, wanted) {
+			if r.Code != 200 || json.Unmarshal(r.Body.Bytes(), &out) != nil || !out.Saved || out.ID == "" || (i > 0 && id != out.ID) || out.Action != "save-final-profile" || out.Requested != "auto" || out.Selected != "local" || out.Epoch != owned || !slices.Equal(out.Path, wanted) || !reflect.DeepEqual(out.Source, expectedResponseNodes) {
 				t.Fatal("named Save changed measured scope", r.Code, r.Body.String())
 			}
 			id = out.ID

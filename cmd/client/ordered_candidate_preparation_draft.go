@@ -36,18 +36,24 @@ func (a *app) candidatePreparationNodesLocked(scope string, control common.Route
 // This source-only preview cannot authorize a measurement. A fresh native
 // receipt from the original Compare Local winner is required for adoption.
 func desktopCompareLocalResponseFinal(members []desktopNodeChainMember, execution string, position int, candidate common.RouterProfile) bool {
-	if execution != "auto" || len(members) != 3 || position != 1 || candidate.External != nil ||
-		members[0].Mode != "wg" || members[0].Profile.External != nil ||
-		members[1].Mode != "shadowsocks" || members[1].Profile.External == nil ||
-		members[2].Mode != "shadowsocks" || members[2].Profile.External != nil {
+	if execution != "auto" || len(members) < 3 || position != len(members)-2 || candidate.External != nil {
 		return false
 	}
-	middle := members[1].Profile.External
-	if middle.Protocol != "shadowsocks" || middle.Shadowsocks == nil {
-		return false
-	}
-	address, err := netip.ParseAddr(middle.Shadowsocks.Server)
-	if err != nil || address.Zone() != "" || address.IsUnspecified() {
+	if len(members) == 3 {
+		if members[0].Mode != "wg" || members[0].Profile.External != nil ||
+			members[1].Mode != "shadowsocks" || members[1].Profile.External == nil ||
+			members[2].Mode != "shadowsocks" || members[2].Profile.External != nil {
+			return false
+		}
+		middle := members[1].Profile.External
+		if middle.Protocol != "shadowsocks" || middle.Shadowsocks == nil {
+			return false
+		}
+		address, err := netip.ParseAddr(middle.Shadowsocks.Server)
+		if err != nil || address.Zone() != "" || address.IsUnspecified() {
+			return false
+		}
+	} else if !desktopCompareLocalPrivateResponseMembers(members, execution, position) {
 		return false
 	}
 	for _, m := range members {

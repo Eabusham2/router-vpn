@@ -123,10 +123,19 @@ final class IOSNodeChainExecutionCapture {
         }
     }
 
-    // Only the retained Local winner can expose the imported stop. The draft
+    // Only the retained Local winner can measure the selected response stop. The draft
     // uses "local" to preview this exact eligible family before starting Compare.
     func responsePosition(for winner: String) -> Int? {
-        guard requested == "auto", winner == "local", case .ordinary(let capture) = local,
+        guard requested == "auto", winner == "local" else { return nil }
+        if case .multipleImported(let capture) = local {
+            let position = members.count - 2
+            guard capture.sourceSchema == 6, position >= 2,
+                  let profiles = try? members.map({ try JSONDecoder().decode(RouterProfile.self, from: Data($0.profileJSON.utf8)) }),
+                  IOSMultihopNodeSelection.pairedStreamPositions(members.map { .init(id: $0.id, mode: $0.mode) },
+                    execution: requested, profiles: profiles) == [position] else { return nil }
+            return position
+        }
+        guard case .ordinary(let capture) = local,
               capture.sourceSchema == 2, members.map(\.mode) == ["wg", "shadowsocks", "shadowsocks"],
               let middle = try? JSONDecoder().decode(RouterProfile.self, from: Data(members[1].profileJSON.utf8)),
               IOSImportedShadowsocksSource.eligibleLiteral(middle),

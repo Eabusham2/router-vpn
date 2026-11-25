@@ -15,6 +15,19 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
         default: return false
         }
     }
+    func selectedResponse(in proofs: [Self]) -> Bool {
+        guard (3...IOSMultihopNodeSelection.physicalTraversalDepth).contains(proofs.count), position == proofs.count - 2,
+              proofs[position] == self, metric == "routed-candidate-response",
+              proofs.first?.mode == "wg", proofs.dropFirst().allSatisfy({ $0.mode == "shadowsocks" }),
+              Set(proofs.map(\.profile_id)).count == proofs.count else { return false }
+        let privateIDs = proofs.map(\.node_id).filter { !$0.isEmpty }
+        guard Set(privateIDs).count == privateIDs.count else { return false }
+        return proofs.enumerated().allSatisfy { index, row in
+            let paired = index == 0 || index == proofs.count - 1 || proofs.count >= 4 && index == position
+            return row.position == index && (!row.node_id.isEmpty) == paired &&
+                (index == position || row.measurement == nil)
+        }
+    }
     func supported(in proofs: [Self]) -> Bool {
         guard supported else { return false }
         let modes = proofs.map(\.mode)

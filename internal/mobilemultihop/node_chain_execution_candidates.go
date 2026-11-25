@@ -88,8 +88,13 @@ func (p *NodeChainExecutionProjection) newPacketCandidatePlan(position int, inve
 // SupportsCompareLocalResponseCandidate describes a source before Compare runs.
 // Only an already selected Local trial can create the live plan or dial.
 func (p *NodeChainExecutionPreparation) SupportsCompareLocalResponseCandidate(position int) bool {
-	if p == nil || p.validateCapture() != nil || p.Execution() != "auto" || position != 1 {
+	if p == nil || p.validateCapture() != nil || p.Execution() != "auto" {
 		return false
+	}
+	if p.multiple != nil {
+		return p.multiple.local == p.local && p.multiple.owners == p.local.importedNodes &&
+			position == len(p.local.proofs)-2 && p.local.selectedPrivateStream(position) &&
+			p.local.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement
 	}
 	return p.local.compareLocalResponsePrefix(position)
 }
@@ -134,12 +139,19 @@ func (r *NodeChainExecutionRuntime) newExecutionCandidatePlanContext(ctx context
 	var err error
 	if localInterior && r.projection.preparation.SupportsCompareLocalResponseCandidate(position) {
 		original := r.projection.policy.local
-		if !original.compareLocalResponsePrefix(position) {
+		binding := r.projection.preparation.multiple
+		if binding == nil {
+			if !original.compareLocalResponsePrefix(position) {
+				return nil, nodeChainExecutionError
+			}
+		} else if original != binding.local || r.projection.policy.multiple != binding || original.importedNodes != binding.owners {
 			return nil, nodeChainExecutionError
 		}
 		plan, err = original.NewCandidatePlan(position, inventory)
 		if err == nil {
-			final := original.proofs[2]
+			// NewCandidatePlan excludes every original profile and private proof
+			// through the penultimate stop. Also exclude the original final.
+			final := original.proofs[len(original.proofs)-1]
 			for _, response := range plan.responses {
 				if response.Target.ID == final.ProfileID || response.NodeID == final.NodeID {
 					return nil, nodeChainExecutionError

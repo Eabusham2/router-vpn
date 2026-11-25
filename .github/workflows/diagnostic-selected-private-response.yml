@@ -1,8 +1,6 @@
 name: Selected Compare Local private response diagnostic
 
 on:
-  push:
-    branches: [diagnostic/selected-local-private-response-20261125]
   workflow_dispatch:
 
 permissions:
@@ -10,7 +8,7 @@ permissions:
 
 jobs:
   native:
-    if: github.ref == 'refs/heads/diagnostic/selected-local-private-response-20261125'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     steps:
@@ -45,7 +43,7 @@ jobs:
         run: |
           python3 deploy/test_node_chain_multiple_imported_native_runner.py
           python3 deploy/diagnostic-selected-private-response.py precondition "$RUNNER_TEMP"
-      - name: Compile the registered worker and exercise the six authenticated response outcomes
+      - name: Compile the registered worker and exercise all sixteen authenticated response cases
         run: python3 deploy/diagnostic-selected-private-response.py encrypted "$RUNNER_TEMP"
       - uses: actions/upload-artifact@v4
         with:
@@ -55,4 +53,4 @@ jobs:
           retention-days: 7
 
       - name: Run the complete selected candidate controller
-        run: go test -p=1 -count=1 -timeout=20m -run '^Test(DesktopSelectedDraft|DesktopSelectedCandidate|OrderedCandidateDraftNamedFinal|SelectedPrivateResponse)' ./cmd/client
+        run: go test -p=1 -count=1 -timeout=20m -run '^Test(DesktopSelectedDraft|DesktopSelectedCandidate|DesktopSelectedPrivateResponse|OrderedCandidateDraftNamedFinal|SelectedPrivateResponse|SelectedPrivatePenultimate)' ./cmd/client

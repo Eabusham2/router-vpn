@@ -1,0 +1,60 @@
+{
+  "kind": "diagnostic-compare-local-private-response-v1",
+  "target": "linux/amd64",
+  "race": true,
+  "source_sha256": "a097663493c39814341990a422ed68156bb120b57acddf9e21404fb2ea1b259e",
+  "image_sha256": "797226a814573c53538506bfd8fef5e172b45db4b413c188c9f9cc5455fd8865",
+  "worker_sources": {
+    "cmd/sing-box/routervpn_server_chain_candidates.go": "71a40e74ec7bf3e647ec06f62033cca7716b14ad5d08cad4be663a37d8ca7696",
+    "cmd/sing-box/routervpn_server_chain_command.go": "ce29185b239254dc177d3e0f2ce5aead4ecb0b42f1703dc167c6052b19bad57d",
+    "cmd/sing-box/routervpn_server_chain_diagnostic.go": "59bf20738a7e2941a7b3a7bf81824b272c59ee439af53f0281475f48060fa1f1",
+    "cmd/sing-box/routervpn_server_chain_dns_owners.go": "2951dbd152485dd3e7cd430730e301b672ca459120b4448a7511f49361a32745",
+    "cmd/sing-box/routervpn_server_chain_front.go": "45b863019444abc0404a5cc51b4f5667e25022c742641cb8423a3a87cfabf388",
+    "cmd/sing-box/routervpn_server_chain_native.go": "5c28d9a86b722af52377649a1e1f111cc75c4906586773e91f7855bdfbec2e73",
+    "cmd/sing-box/routervpn_server_chain_openvpn.go": "894cb30adbffed1d72e0e2132df77d9b8aa7b4cf376638271fa92de42e06e9c1",
+    "cmd/sing-box/routervpn_server_chain_openvpn_endpoint.go": "e2452de8caed740e12fe1d22f9ca30350ddd2ca17cbc8031109d2064bfa3c763",
+    "cmd/sing-box/routervpn_server_chain_openvpn_endpoint_stub.go": "694b0ee0e2e9fce1f0eb3c86fd45b40c9f4b962db2151cd91c8e07b22422016a",
+    "cmd/sing-box/routervpn_server_chain_resources.go": "190ed0550ecb075979c50b8b5414ee6500772e3515593bf3ffefd58dc2c36922"
+  },
+  "encrypted": {
+    "4-local-private-original": 2,
+    "9-local-private-original": 2,
+    "16-local-private-original": 2,
+    "3-local-private-original": 2,
+    "3-local-private-wrong-candidate-key": 2,
+    "3-local-private-forged-response": 2,
+    "3-local-private-wrong-private-id": 2,
+    "3-local-private-late-catalog": 2,
+    "3-local-private-late-cancel": 2,
+    "3-local-private-server-winner": 2,
+    "4-local-private-wrong-candidate-key": 2,
+    "4-local-private-forged-response": 2,
+    "4-local-private-wrong-private-id": 2,
+    "4-local-private-late-catalog": 2,
+    "4-local-private-late-cancel": 2,
+    "4-local-private-server-winner": 2
+  },
+  "sing_box_commit": "1ac1a339cb1223e9c70eae14c44411c75033c02d",
+  "xray_commit": "50231eaff98ccc31b5cbd247a721c16e97fe5ec1",
+  "desktop_pq": {
+    "abi": 1,
+    "cargo_lock_sha256": "bc8b77b76800b22c0fe0e398f42736123b7aa571c53343797ab22a8f5e80edc2",
+    "native_static_libs": [
+      "-lgcc_s",
+      "-lutil",
+      "-lrt",
+      "-lpthread",
+      "-lm",
+      "-ldl",
+      "-lc"
+    ],
+    "rosenpass_revision": "00569eb273016a10d2e75e5142236f06f7c3d4b3",
+    "rust_target": "x86_64-unknown-linux-gnu",
+    "rust_toolchain": "1.99.0",
+    "schema_version": 1,
+    "sha256": "13347e41eac2c3e2013a26fd718456a378efb27ac0acb136f10fd0ec917d83aa",
+    "size": 46860396,
+    "source_sha256": "0c8a6248dc7dd7fda8a9d11c30275745a1d89765612b72027c845c95314df601",
+    "target": "linux/amd64"
+  }
+}

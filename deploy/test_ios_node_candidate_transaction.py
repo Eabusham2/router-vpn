@@ -65,7 +65,7 @@ SWIFT=r'''
 import Foundation
 struct Failed:Error{let text:String}
 func check(_ value:Bool,_ text:String)throws{if !value{throw Failed(text:text)}}
-struct IOSNodeCandidatePrefix:Decodable{let position:Int;let profile_id:String;let node_id:String;let mode:String;var metric:String{"routed-tcp-connect"};var supported:Bool{["wg","awg2-fast","awg2-strong"].contains(mode)}}
+struct IOSNodeCandidatePrefix:Decodable,Equatable{let position:Int;let profile_id:String;let node_id:String;let mode:String;var metric:String{"routed-tcp-connect"};var supported:Bool{["wg","awg2-fast","awg2-strong"].contains(mode)}}
 // TRANSACTION
 @MainActor final class Provider {
  let epoch=UUID().uuidString,owner=String(repeating:"a",count:32),request=String(repeating:"b",count:32),hash=String(repeating:"c",count:64)

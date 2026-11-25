@@ -335,7 +335,26 @@ def check(read):
     assert isinstance(names, tuple) and len(names) == len(set(names)), "duplicate Apple contract"
     assert set(names) == set(ORIGINAL) | set(GATES), "complete original and typed Apple inventory is mandatory"
     assert len(loops[0].body) == 1 and not loops[0].orelse
-    assert ast.unparse(loops[0].body[0]) == "subprocess.run([sys.executable, str(root / 'deploy' / external_test)], check=True, timeout=300)", "Apple gates lost their original checked 300-second boundary"
+    dispatch = loops[0].body[0]
+    assert isinstance(dispatch, ast.If) and ast.unparse(dispatch.test) == "external_test == 'test_ios_node_candidates.py'"
+    assert len(dispatch.body) == len(dispatch.orelse) == 1
+    assert ast.unparse(dispatch.body[0]) == "run_node_candidate_phases(root / 'deploy' / external_test)"
+    assert ast.unparse(dispatch.orelse[0]) == "subprocess.run([sys.executable, str(root / 'deploy' / external_test)], check=True, timeout=300)", "Apple gates lost their original checked 300-second boundary"
+    phase_driver = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'run_node_candidate_phases')
+    assert ast.literal_eval(phase_driver.body[0].value) == {
+        'base': ('original', 'capacity'),
+        'execution': ('local', 'server', 'auto'),
+        'private-response': ('selected-response',),
+        'selection': ('server-winner', 'typed-packet', 'ordinary-packet', 'packet-metadata'),
+        'catalog': ('unsupported-input', 'prefix-frame', 'receipt-expiry'),
+        'proposal': ('proposal-prefix', 'proposal-source', 'proposal-capture'),
+    }, 'Apple node candidate case inventory changed'
+    phase_loop = phase_driver.body[-1]
+    assert isinstance(phase_loop, ast.For) and ast.unparse(phase_loop.iter) == 'phases.items()'
+    assert ast.unparse(phase_loop.body[0].value) == "subprocess.run([sys.executable, str(script), '--phase', phase], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=300)"
+    assert ast.unparse(phase_loop.body[2]) == 'result.check_returncode()'
+    assert ast.unparse(phase_loop.body[-2]) == 'receipts = [line[len(prefix):] for line in result.stdout.splitlines() if line.startswith(prefix)]'
+    assert ast.unparse(phase_loop.body[-1].test) == 'receipts != list(cases)' and isinstance(phase_loop.body[-1].body[0], ast.Raise)
     for path, inventory in COMPLETE_PREFIX_CASES.items():
         source = read(path)
         for marker, count in inventory:
@@ -577,6 +596,18 @@ class AppleCONNECTWorkflowTests(unittest.TestCase):
                               ("check=True, timeout=300)\n    subprocess.run([sys.executable, str(root / 'deploy/test_ios_performance_bridge.py')", "check=False, timeout=300)\n    subprocess.run([sys.executable, str(root / 'deploy/test_ios_performance_bridge.py')"),
                               ("str(root / 'deploy' / external_test)], check=True, timeout=300)", "str(root / 'deploy' / external_test)], check=True, timeout=900)")):
             self.broken(CONTRACT, before, after)
+
+    def test_candidate_phase_inventory_and_verdicts_are_required(self):
+        for before, after in (
+                ("'private-response': ('selected-response',),", ''),
+                ("'server-winner', 'typed-packet'", "'server-winner', 'server-winner'"),
+                ("str(script), '--phase', phase", "str(script), '--phase', 'base'"),
+                ('stderr=subprocess.STDOUT, text=True, timeout=300)', 'stderr=subprocess.STDOUT, text=True, timeout=900)'),
+                ('result.check_returncode()', 'pass'),
+                ('receipts = [line[len(prefix):] for line in result.stdout.splitlines() if line.startswith(prefix)]', 'receipts = list(cases)'),
+                ('receipts != list(cases)', 'set(receipts) != set(cases)')):
+            with self.subTest(before=before):
+                self.broken(CONTRACT, before, after)
 
     def test_native_callers_reject_filtered_optional_or_missing_gates(self):
         for rel in (SMOKE, RELEASE, LIBBOX):

@@ -937,7 +937,7 @@ static void custom_profile_dialogs(LinuxUnifiedV8 *state) {
 #include "test-profile-load-recovery.inc"
 
 static void selected_private_stream_model(void) {
-    const guint counts[] = {4, 9, 96};
+    const guint counts[] = {4, 9, 16, 96};
     for (guint n = 0; n < G_N_ELEMENTS(counts); n++) {
         guint count = counts[n], private_position = count / 2;
         g_autoptr(JsonObject) store = json_object_new(), tokens = json_object_new();
@@ -972,6 +972,13 @@ static void selected_private_stream_model(void) {
         for (guint e = 0; e < G_N_ELEMENTS(executions); e++) {
             check(selection && linux_ordered_execution_v1(selection, executions[e]) && linux_ordered_current_v1(selection, store),
                   "selected private stream lost its exact saved route");
+            JsonObject *middle = json_array_get_object_element(selection->nodes,private_position);
+            JsonObject *penultimate = json_array_get_object_element(selection->nodes,count-2);
+            g_autofree char *a = g_strdup(linux_ordered_string_v1(middle,"id")), *b = g_strdup(linux_ordered_string_v1(penultimate,"id"));
+            if (private_position!=count-2) check(!linux_ordered_measurement_prefix_v1(selection,store,private_position) && !linux_ordered_measurement_prefix_v1(selection,store,count-2),"selected response used a different saved position");
+            json_object_set_string_member(middle,"id",b);json_object_set_string_member(penultimate,"id",a);
+            check(linux_ordered_measurement_prefix_v1(selection,store,count-2)==!strcmp(executions[e],"auto") && !linux_ordered_measurement_prefix_v1(selection,store,1),"selected editor did not bind the Compare response to its penultimate source");
+            json_object_set_string_member(middle,"id",a);json_object_set_string_member(penultimate,"id",b);
             g_autofree char *body = linux_ordered_connect_body_v1(selection);
             g_autoptr(JsonNode) parsed = parse_json(body);
             JsonObject *request = json_node_get_object(parsed);
@@ -1000,7 +1007,7 @@ static void selected_private_stream_model(void) {
         json_object_set_boolean_member(hints, "ordered_local_imported_nodes_supported", FALSE);
         json_object_set_boolean_member(hints, "ordered_execution_middle_supported", FALSE);
         const char *entries[] = {"wg", "awg2-fast", "awg2-strong"};
-        json_object_set_string_member(json_array_get_object_element(selection->nodes, 0), "mode", entries[n]);
+        json_object_set_string_member(json_array_get_object_element(selection->nodes, 0), "mode", entries[n % G_N_ELEMENTS(entries)]);
         check(linux_ordered_execution_v1(selection,"local") && linux_ordered_current_v1(selection,store) &&
             linux_ordered_measurement_prefix_v1(selection,store,(int)private_position), "later hostname or its measurement lost the original path");
         g_autoptr(JsonObject) value = linux_ordered_value_v1(selection);

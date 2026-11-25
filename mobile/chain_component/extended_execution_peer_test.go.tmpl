@@ -158,6 +158,10 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 			layout = v
 		}
 	}
+	response := strings.HasPrefix(measure, "private-response/")
+	if response && count > 3 {
+		privatePosition = count - 2
+	}
 	privateStream := privatePosition > 0
 	if privateStream {
 		if privatePosition < 2 || privatePosition >= count-1 || entryMode != "wg" {
@@ -169,26 +173,32 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 				imports = append(imports, i)
 			}
 		}
-		layout = multipleImportedLayout{"selected-private-stream", count, imports}
+		name := "selected-private-stream"
+		if response {
+			name = "selected-private-response-depth"
+		}
+		layout = multipleImportedLayout{name, count, imports}
 	}
 	var measured *selectedResponseNativeCase
 	var candidateRoute []multipleImportedCandidateSetup
-	if count == 3 && entryMode == "wg" && strings.HasPrefix(measure, "private-response/") {
-		layout = multipleImportedLayout{"selected-private-response", 3, []int{1}}
+	if response {
+		if count == 3 && entryMode == "wg" {
+			layout = multipleImportedLayout{"selected-private-response", 3, []int{1}}
+		}
 		measured = &selectedResponseNativeCase{fault: strings.TrimPrefix(measure, "private-response/")}
 		var final *routedPrivateResponseFinal
 		if measured.fault == "original" {
-			measured.createReplacementPeer(t)
+			measured.createReplacementPeer(t, count)
 			final = &measured.final
 		}
 		input, route, provider := newRoutedPrivateResponseFinal(t, measured.fault, measured.accept, final)
 		measured.input, measured.provider = input, provider
-		candidateRoute = []multipleImportedCandidateSetup{{1, route, false}}
+		candidateRoute = []multipleImportedCandidateSetup{{count - 2, route, false}}
 		if final != nil {
 			// The reloaded final carries its resolver's datagrams through the same
 			// imported predecessor and physical SS2022 peer used for measurement.
 			packetRoute := desktopNodeLayerRoute{Network: "udp", Destination: route.Destination, Physical: route.Physical}
-			candidateRoute = append(candidateRoute, multipleImportedCandidateSetup{1, packetRoute, false})
+			candidateRoute = append(candidateRoute, multipleImportedCandidateSetup{count - 2, packetRoute, false})
 		}
 	}
 	if layout.count <= 8 && !privateStream && measured == nil {
@@ -262,18 +272,18 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 	t.Setenv("SSL_CERT_FILE", pem)
 	t.Setenv("SSL_CERT_DIR", filepath.Dir(pem))
 	runOriginalSelectedOwner(t, f, api, front, health, mode, winner, measure, first, last, privatePosition, measured, start)
-	if privateStream {
+	if privateStream && measured == nil {
 		return
 	}
 	if measured != nil && measured.replacement != nil {
 		next := measured.replacement
 		next.ctx = f.ctx
 		next.physical = f.physical
-		copy(next.members[:2], f.members[:2])
+		copy(next.members[:count-1], f.members[:count-1])
 		next.source = f.source
 		next.source.Nodes = append([]string(nil), f.source.Nodes...)
 		next.source.IdentitySources = append([]string(nil), f.source.IdentitySources...)
-		next.source.Nodes[2], next.source.IdentitySources[2] = measured.input, measured.final.identity
+		next.source.Nodes[count-1], next.source.IdentitySources[count-1] = measured.input, measured.final.identity
 		var err error
 		next.chain, err = mobilemultihop.NewNodeChain(desktopNodeChainJSON(t, next.source))
 		if err != nil {
@@ -286,11 +296,16 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 				t.Error(err)
 			}
 		})
-		oldPrivate := f.members[2].private.Load()
-		beforeMiddle := f.members[1].provider.stats().Streams
-		runOriginalSelectedOwner(t, next, api, front, health, mode, winner, "reloaded-private-final", 0, 0, 0, measured, start)
-		if f.members[2].private.Load() != oldPrivate || f.members[1].provider.stats().Streams <= beforeMiddle {
-			t.Fatal("replacement touched the former final or skipped the retained imported member")
+		oldPrivate := f.members[count-1].private.Load()
+		before := responsePrefixConnections(f)
+		runOriginalSelectedOwner(t, next, api, front, health, mode, winner, "reloaded-private-final", 0, 0, privatePosition, measured, start)
+		if f.members[count-1].private.Load() != oldPrivate {
+			t.Fatal("replacement touched the former final")
+		}
+		for i, after := range responsePrefixConnections(next) {
+			if after <= before[i] {
+				t.Fatal("replacement skipped an original prefix", i)
+			}
 		}
 		t.Log("RELOADED_PRIVATE_FINAL requested=auto winner=local original_prefix=true private=true dns=true application=true joined=true")
 	}
@@ -476,10 +491,11 @@ func runOriginalSelectedOwner(t *testing.T, f *multipleImportedFixture, api, fro
 
 // The candidate provider freezes its own listener, independent DNS responder,
 // private identity, public TLS target and application endpoint before either client starts.
-func (c *selectedResponseNativeCase) createReplacementPeer(t *testing.T) {
+func (c *selectedResponseNativeCase) createReplacementPeer(t *testing.T, count int) {
 	t.Helper()
-	final := &multipleImportedMember{position: 2, publicIP: "203.0.113.198", entered: make(chan struct{}, 1)}
-	next := &multipleImportedFixture{members: []*multipleImportedMember{nil, nil, final}}
+	final := &multipleImportedMember{position: count - 1, publicIP: "203.0.113.198", entered: make(chan struct{}, 1)}
+	next := &multipleImportedFixture{members: make([]*multipleImportedMember, count)}
+	next.members[count-1] = final
 	cert, trust := desktopNodeChainImportedCertificate(t, net.ParseIP("1.0.0.1"))
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM([]byte(trust)) {

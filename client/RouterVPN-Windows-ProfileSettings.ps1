@@ -520,6 +520,19 @@ function global:Test-RouterVPNOrderedStreamEdit {
 
 function global:Test-RouterVPNOrderedResponsePrefix {
     param($Nodes,[int]$Position,[string]$Execution,$Profiles)
+    if($Execution -ceq 'auto' -and $Position -eq $Nodes.Count-2 -and $Position -ge 1 -and $Nodes[0].mode -ceq 'wg' -and
+        $Nodes[$Position].mode -ceq 'shadowsocks' -and $Nodes[-1].mode -ceq 'shadowsocks'){
+        $index=Get-RouterVPNOrderedProfileIndex $Profiles
+        if($Nodes.Count -ge 4){
+            return (Test-RouterVPNOrderedPairedOff $index[$Nodes[$Position].id]) -and (Test-RouterVPNOrderedLocalImportedPath $Nodes $Profiles -SelectedExecution -ProfileIndex $index)
+        }
+        $source=$index[$Nodes[$Position].id]
+        $external=Get-RouterVPNOrderedValue $source 'external'
+        $literal=Get-RouterVPNOrderedValue $external 'ordered_execution_middle_supported'
+        $hostFlag=Get-RouterVPNOrderedValue $external 'ordered_hostname_execution_middle_supported' $false
+        return (Test-RouterVPNOrderedPairedOff $index[$Nodes[0].id]) -and (Test-RouterVPNOrderedPairedOff $index[$Nodes[-1].id]) -and
+            (Test-RouterVPNOrderedLiteralOff $source) -and $literal -is [bool] -and $literal -and $hostFlag -is [bool] -and -not $hostFlag
+    }
     if($Execution -cne 'local' -or $Position -lt 1 -or $Position -ge $Nodes.Count-1 -or $Nodes[$Position].mode -cne 'shadowsocks' -or $Nodes[-1].mode -cne 'shadowsocks'){return $false}
     $index=Get-RouterVPNOrderedProfileIndex $Profiles
     if(-not(Test-RouterVPNOrderedPairedOff $index[$Nodes[-1].id])){return $false}

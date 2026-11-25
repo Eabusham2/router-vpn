@@ -119,7 +119,7 @@ TARGETS = {
 # Every shipping profile case and each separate native editor/control process
 # keeps the original ninety-second bound.
 WINDOWS_PROFILE_MUTATIONS = (
-    "shipping", "capture-two-modes", "load-fallback", "connect-fallback",
+    "capture-two-modes", "load-fallback", "connect-fallback",
     "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback",
     "startup-deadline", "ordered-drop-middle", "ordered-execution-capture", "ordered-execution-connect", "ordered-final-owner",
     "ordered-capability", "ordered-source", "ordered-locked-source",
@@ -127,6 +127,18 @@ WINDOWS_PROFILE_MUTATIONS = (
     "setup-response-order", "setup-load-inventory", "setup-refresh-retirement",
     "setup-uncertain-owner",
 )
+WINDOWS_PROFILE_CASES = {
+    "pair-local": (range(0, 57, 3), (), ()),
+    "pair-server": (range(1, 57, 3), (), ()),
+    "pair-auto": (range(2, 57, 3), range(78), ()),
+    "ordered-local": ((), (), range(25)),
+    "ordered-selected": ((), (), range(25, 40)),
+    "setup": ((), (), (40,)),
+}
+WINDOWS_PROFILE_RECEIPTS = [
+    "PROFILE-GROUP {} pair={} connect={} ordered={}".format(group, *(",".join(map(str, ids)) for ids in cases))
+    for group, cases in WINDOWS_PROFILE_CASES.items()
+]
 WINDOWS_CHILD_SECONDS = 90
 
 
@@ -148,21 +160,30 @@ def windows_suite_budget(raw):
     if (len(deadlines) != 1 or not isinstance(deadlines[0], ast.Constant)
             or type(deadlines[0].value) is not int or deadlines[0].value != WINDOWS_CHILD_SECONDS):
         raise ValueError("original Windows child deadline changed")
-    loops = [node for node in functions["windows"].body if isinstance(node, ast.For)
-             and isinstance(node.target, ast.Name) and node.target.id == "mutation"]
-    if len(loops) != 1 or not isinstance(loops[0].iter, ast.Tuple):
-        raise ValueError("original Windows profile inventory changed")
-    try:
-        mutations = ast.literal_eval(loops[0].iter)
-    except (ValueError, TypeError):
-        raise ValueError("original Windows profile inventory is not literal") from None
-    if mutations != WINDOWS_PROFILE_MUTATIONS:
-        raise ValueError("original Windows profile inventory changed")
     def calls(node, name):
         return [item for item in ast.walk(node) if isinstance(item, ast.Call)
                 and isinstance(item.func, ast.Name) and item.func.id == name]
-    if (len(calls(loops[0], "run")) != 1 or len(calls(functions["windows"], "run")) != 1 or
-            len(calls(functions["windows"], "windows_editor")) != 1 or
+
+    # Read the candidate source as data. Only the two original bounded loops
+    # and the separate coordinated recovery process may schedule profile work.
+    loops = [node for node in functions["windows"].body if isinstance(node, ast.For)]
+    expected_loops = ("WINDOWS_PROFILE_GROUPS", "WINDOWS_PROFILE_CONTROLS")
+    if (len(loops) != 2 or any(ast.unparse(loop.iter) != name + ".items()"
+            or len(calls(loop, "run")) != 1 for loop, name in zip(loops, expected_loops))):
+        raise ValueError("original Windows profile loops changed")
+    for name, expected in zip(expected_loops, (WINDOWS_PROFILE_CASES, WINDOWS_PROFILE_MUTATIONS)):
+        maps = [node.value for node in tree.body if isinstance(node, ast.Assign)
+                and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == name]
+        if (len(maps) != 1 or not isinstance(maps[0], ast.Dict)
+                or tuple(ast.literal_eval(key) for key in maps[0].keys) != tuple(expected)):
+            raise ValueError("original Windows profile inventory changed")
+    recovery = [node.value for node in functions["windows"].body if isinstance(node, ast.Expr)
+                and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                and node.value.func.id == "run"]
+    if (len(recovery) != 1 or not recovery[0].args or not isinstance(recovery[0].args[0], ast.BinOp)
+            or ast.literal_eval(recovery[0].args[0].right) != ["-TransactionOnly"]
+            or len(calls(functions["windows"], "run")) != 3 or len(calls(functions["windows"], "windows_editor")) != 1 or
             len(calls(functions["windows_editor"], "run")) != 2):
         raise ValueError("original Windows owned command inventory changed")
     inventories = [node.value for node in tree.body if isinstance(node, ast.Assign)
@@ -180,7 +201,7 @@ def windows_suite_budget(raw):
               and any(isinstance(t, ast.Name) and t.id == "WINDOWS_EDITOR_GROUPS" for t in node.targets)]
     if len(groups) != 1 or ast.literal_eval(groups[0]) != WINDOWS_EDITOR_GROUPS:
         raise ValueError("original Windows editor group inventory changed")
-    return (len(mutations) + len(WINDOWS_EDITOR_GROUPS) + len(controls)) * WINDOWS_CHILD_SECONDS
+    return (1 + len(WINDOWS_PROFILE_CASES) + len(WINDOWS_PROFILE_MUTATIONS) + len(WINDOWS_EDITOR_GROUPS) + len(controls)) * WINDOWS_CHILD_SECONDS
 
 
 def load(name, path):
@@ -216,12 +237,14 @@ def verdict(raw, target, code, timed_out, joined):
         failures = failures or "CRITICAL" in text or "WARNING" in text
     elif target in ("windows/amd64", "windows/arm64"):
         profiles = re.findall(r"(?m)^Actual WPF profile Add/Load/Update and main Connect callbacks: ([1-9][0-9]*) checks PASS$", text)
+        receipts = re.findall(r"(?m)^PROFILE-GROUP [^\r\n]*", text)
         editors = re.findall(r"(?m)^Actual ordered node editor callbacks \(([a-z0-9-]+)\): ([1-9][0-9]*) checks PASS; WPF=True$", text)
         summaries = re.findall(r"(?m)^WPF pair and ordered capture, setup ownership/response, load/Connect, capability and startup deadline negatives: ([0-9]+) rejected$", text)
         controls = re.findall(r"(?m)^Actual ordered editor causal control ([^\r\n]+): rejected$", text)
-        result.update(profile_counts=profiles, editor_counts=[count for _, count in editors], editor_groups=[group for group, _ in editors], controls=controls,
+        result.update(profile_counts=profiles, profile_groups=receipts, editor_counts=[count for _, count in editors], editor_groups=[group for group, _ in editors], controls=controls,
                       original_control_counts=summaries)
-        complete = (len(profiles) == 1 and tuple(group for group, _ in editors) == WINDOWS_EDITOR_GROUPS and summaries == ["21"] and
+        complete = (len(profiles) == len(WINDOWS_PROFILE_CASES) and receipts == WINDOWS_PROFILE_RECEIPTS and
+                    tuple(group for group, _ in editors) == WINDOWS_EDITOR_GROUPS and summaries == ["21"] and
                     len(controls) == len(WINDOWS_CONTROLS) and frozenset(controls) == WINDOWS_CONTROLS)
     else:
         raise ValueError("unknown desktop editor target")

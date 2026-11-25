@@ -47,8 +47,23 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
             'return mode == "shadowsocks"')),
         ("private_local", "sealed Local original", "private init(plan: LibboxRouterNodeChain,", "var members: [Member]", (
             'let identitySources = root["identity_sources"] as? [String], identitySources.count == nodes.count,',
-            '(2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.extendedLocalSource(root["schema"] as? Int, execution: "local", count: nodes.count, identities: identitySources, allowPairedStreams: selectionExecution == "local") && Int(plan.extendedLocalNodeCount()) == nodes.count,',
+            '(2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.extendedLocalSource(root["schema"] as? Int, execution: "local", count: nodes.count, identities: identitySources, allowPairedStreams: selectionExecution == "local", selectedPrivateStream: multipleExecution) && Int(plan.extendedLocalNodeCount()) == nodes.count,',
             '!multipleExecution || schema == 6 && ["server", "auto"].contains(selectionExecution),')),
+        ("private_local", "captured private roles", "let selectedPrivate = ", "self.sourceSchema = schema", (
+            'multipleExecution && members.dropFirst().dropLast().contains { $0.mode == "shadowsocks" && $0.profile["node_kind"] as? String == "router-vpn" }',
+            'if hostnamePosition != nil || selectedPrivate {',
+            'guard let layout = IOSMultihopNodeSelection.localStreamLayout(selected, execution: selectionExecution, profiles: profiles),',
+            'layout.hostname == hostnamePosition else {')),
+        ("session", "sealed session roles", "var selectedPrivateStream: Int?", "selectedPrivateStream = position", (
+            'sealedNodes.elementsEqual(nodes, by: { $0.utf8.elementsEqual($1.utf8) })',
+            'sealedIdentities.elementsEqual(identities, by: { $0.utf8.elementsEqual($1.utf8) })',
+            'let privateStreams = nodes.indices.dropFirst().dropLast().filter { position in',
+            'guard privateStreams.count == 1, position >= 2, Self.extendedLocalMembers(sealed, nodes: nodes, selected: true) else { return false }')),
+        ("progress", "active session progress", "let capturedExtendedCount: Int", "let lastKind =", (
+            'orderedNodes.count == identity?.hopMeasurementRows,',
+            'self.iosConnectGeneration == connectionGeneration, self.activeSessionIdentity == identity,',
+            'current["bundle"] as? Data == bundleData, current[chainKey] as? String == chainSource,',
+            'expectedPublicPositions: Set(orderedNodes.indices.filter { orderedNodes[$0].kind == "external" }), capturedExtendedCount: capturedExtendedCount')),
         ("private_selected", "sealed selected original", "let returned = try Self.object(localSource,", "func requireCurrent()", (
             'let original = try Self.object(local.launchInput, limit: IOSNodeChainCapture.maximumInputBytes)',
             'schema != 6 || (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || nodes.count > IOSMultihopNodeSelection.maximumNodes && Int(plan.extendedOriginalNodeCount()) == nodes.count,',
@@ -90,7 +105,7 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
             except IndexError:
                 problems.append(f"iOS ordered profile {label}: shipping owner missing")
                 continue
-        if label in ("all-member snapshot", "sealed Local original", "sealed selected original"):
+        if owner in ("private_local", "private_selected", "session", "progress") or label == "all-member snapshot":
             # An inactive copy of the old map in a comment cannot establish
             # complete, ordered capture of the original member at each slot.
             body = re.sub(r"//[^\n]*|/\*.*?\*/", "", body, flags=re.S)
@@ -130,7 +145,7 @@ def ios_ordered_profile_issues(sources: dict[str, str]) -> list[str]:
         ("extended original modes", r'static func extendedOriginalModes\([^\n]+\) -> Bool\s*\{(.*?)\n    \}',
          'extendedPairedModes(modes, execution: execution) || extendedMixedPacketCount(modes, execution: execution) > 0 || extendedLocalModes(modes, execution: execution) || ["server", "auto"].contains(execution ?? "") && extendedSelectedModeShape(modes)'),
         ("extended original identities", r'static func extendedLocalSource\([^\n]+\) -> Bool\s*\{(.*?)\n    \}',
-         'guard execution == "local", (maximumNodes + 1...physicalTraversalDepth).contains(count), let identities, identities.count == count else { return false } if schema == 1 { return identities.allSatisfy { !$0.isEmpty } } let prefix = identities.dropLast().prefix(while: { !$0.isEmpty }).count return schema == 6 && prefix > 0 && prefix < count - 1 && !identities[count - 1].isEmpty && (allowPairedStreams || identities.dropFirst(prefix).dropLast().allSatisfy { $0.isEmpty })'),
+         'guard execution == "local", (maximumNodes + 1...physicalTraversalDepth).contains(count), let identities, identities.count == count else { return false } if schema == 1 { return identities.allSatisfy { !$0.isEmpty } } let prefix = identities.dropLast().prefix(while: { !$0.isEmpty }).count return schema == 6 && prefix > 0 && prefix < count - 1 && !identities[count - 1].isEmpty && (allowPairedStreams || identities.dropFirst(prefix).dropLast().allSatisfy { $0.isEmpty } || selectedPrivateStream && prefix == 1 && identities.dropFirst(2).dropLast().filter({ !$0.isEmpty }).count == 1)'),
         ("multiple imported execution shape", r'static func supportsMultipleImportedExecution\([^\n]+\) -> Bool\s*\{(.*?)\n    \}',
          'guard (3...maximumNodes).contains(nodes.count) || extendedSelectedModeShape(nodes.map(\\.mode)), let first = nodes.first, supportsNativePrefix(first.mode), nodes.last?.mode == "shadowsocks", requiresImportedNodesSource(nodes) else { return false } return nodes.dropLast().allSatisfy { supportsNativePrefix($0.mode) || $0.mode == "shadowsocks" }'),
         ("independent imported execution policy", r'static func usesIndependentImports\([^\n]+\) -> Bool\s*\{([^{}]*)\}',
@@ -390,6 +405,8 @@ ordered_sources = {
     "models": read("ios/RouterVPN/App/Models.swift"),
     "private_local": read("ios/RouterVPN/App/IOSNodeChainCapture.swift"),
     "private_selected": read("ios/RouterVPN/App/IOSNodeChainExecutionCapture.swift"),
+    "session": read("ios/RouterVPN/App/IOSSessionIdentity.swift"),
+    "progress": read("ios/RouterVPN/App/IOSMultihopProgress.swift"),
     "store": read("ios/RouterVPN/App/IOSNodeBundleStore.swift"),
     "capture": read("ios/RouterVPN/App/IOSMultihopView.swift"),
 }
@@ -482,6 +499,16 @@ if not ordered_issues:
         ("models", "extended original identities", 'identities.dropFirst(prefix).dropLast().allSatisfy { $0.isEmpty }', 'true'),
         ("models", "multiple imported execution shape", '|| extendedSelectedModeShape(nodes.map(\\.mode)), let first', '|| nodes.count > maximumNodes, let first'),
         ("models", "execution selection guard", '|| extendedOriginalModes(nodes.map(\\.mode), execution: execution),', '|| nodes.count > maximumNodes,'),
+        ("models", "extended original identities", 'selectedPrivateStream && prefix == 1 &&', 'selectedPrivateStream &&'),
+        ("models", "extended original identities", 'identities.dropFirst(2).dropLast().filter({ !$0.isEmpty }).count == 1', 'true'),
+        ("private_local", "sealed Local original", 'selectedPrivateStream: multipleExecution)', 'selectedPrivateStream: true)'),
+        ("private_local", "captured private roles", 'if hostnamePosition != nil || selectedPrivate {', 'if hostnamePosition != nil {'),
+        ("private_local", "captured private roles", 'layout.hostname == hostnamePosition else {', 'true else {'),
+        ("session", "sealed session roles", 'privateStreams.count == 1, position >= 2,', 'position >= 1,'),
+        ("session", "sealed session roles", 'sealedIdentities.elementsEqual(identities, by: { $0.utf8.elementsEqual($1.utf8) })', 'sealedIdentities.count == identities.count'),
+        ("progress", "active session progress", 'orderedNodes.count == identity?.hopMeasurementRows,', 'orderedNodes.count > 8,'),
+        ("progress", "active session progress", 'self.activeSessionIdentity == identity,', 'true,'),
+        ("progress", "active session progress", 'orderedNodes[$0].kind == "external"', 'orderedNodes[$0].mode == "shadowsocks"'),
         ("private_local", "sealed Local original", 'Int(plan.extendedLocalNodeCount()) == nodes.count,', 'true,'),
         ("private_local", "sealed Local original", '!multipleExecution || schema == 6 && ["server", "auto"].contains(selectionExecution),', 'true,'),
         ("private_selected", "sealed selected original", 'Int(plan.extendedOriginalNodeCount()) == nodes.count,', 'true,'),
