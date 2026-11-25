@@ -430,22 +430,29 @@ func importedSS2022Method(method string) bool {
 // PSK. Each key must have the exact cipher size. The outer Start Layer's
 // separate legacy constructor does not govern this imported inner transport.
 func importedSS2022Credentials(method, password string) bool {
+	return importedSS2022KeyIdentity(method, password) != ""
+}
+
+// The original source and native cipher retain the supplied password. Compare
+// decoded key chains independently of alternate legal Base64 spellings.
+func importedSS2022KeyIdentity(method, password string) string {
 	if !importedSS2022Method(method) || password == "" || len(password) > 4096 {
-		return false
+		return ""
 	}
 	keys := strings.Split(password, ":")
 	if method == "2022-blake3-chacha20-poly1305" && len(keys) != 1 {
-		return false
+		return ""
 	}
 	size := 32
 	if method == "2022-blake3-aes-128-gcm" {
 		size = 16
 	}
-	for _, raw := range keys {
+	for i, raw := range keys {
 		key, err := base64.StdEncoding.DecodeString(raw)
 		if err != nil || len(key) != size {
-			return false
+			return ""
 		}
+		keys[i] = base64.StdEncoding.EncodeToString(key)
 	}
-	return true
+	return strings.Join(keys, ":")
 }

@@ -193,24 +193,22 @@ func nodeChainMTUPlan(config string, proofs []NodeChainProof) (NodeChainMTUPlan,
 			tag = next
 		}
 	}
-	result := NodeChainMTUPlan{Original: actual, Ceiling: 9000, TUNTag: predecessorText(tun, "tag"),
-		Prefixes: make([]NodeChainMTUBound, 0, len(proofs))}
-	for _, proof := range proofs {
-		// Read-only validation projection: the shipped selector and graph
-		// remain byte-for-byte unchanged. NewPlan sees each complete prefix.
-		route["final"] = proof.Tag
-		raw, err := json.Marshal(graph)
-		if err != nil {
-			return NodeChainMTUPlan{}, bad
-		}
-		plan, err := mobilemtu.NewPlan(string(raw), actual)
-		if err != nil {
-			return NodeChainMTUPlan{}, err
-		}
-		if plan.Ceiling < result.Ceiling {
-			result.Ceiling = plan.Ceiling
-		}
-		result.Prefixes = append(result.Prefixes, NodeChainMTUBound{proof.Position, proof.Tag, plan.Ceiling})
+	return orderedPrefixMTUBounds(config, proofs, actual, predecessorText(tun, "tag"))
+}
+
+func orderedPrefixMTUBounds(config string, proofs []NodeChainProof, actual int, tunTag string) (NodeChainMTUPlan, error) {
+	result := NodeChainMTUPlan{Original: actual, Ceiling: 9000, TUNTag: tunTag, Prefixes: make([]NodeChainMTUBound, 0, len(proofs))}
+	tags := make([]string, len(proofs))
+	for i, proof := range proofs {
+		tags[i] = proof.Tag
+	}
+	ceilings, err := mobilemtu.PrefixCeilings(config, actual, tags)
+	if err != nil {
+		return NodeChainMTUPlan{}, err
+	}
+	for i, proof := range proofs {
+		result.Ceiling = min(result.Ceiling, ceilings[i])
+		result.Prefixes = append(result.Prefixes, NodeChainMTUBound{proof.Position, proof.Tag, ceilings[i]})
 	}
 	return result, nil
 }

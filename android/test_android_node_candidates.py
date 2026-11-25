@@ -56,7 +56,7 @@ func fixtureCandidateFrames(plan interface{ MetadataPage(int32) string }) ([]str
 """
 
 def compiler(source):
-    return ORIGINAL_COMPILER(source).replace('case len(args)==2:', '''case len(args)==4&&args[0]=="selected-response-position":result,err=fixtureSelectedResponsePosition(args[1],args[2],args[3]);case len(args)==3&&args[0]=="candidate-supported-metric":result=fmt.Sprint(mobilemultihop.NodeChainCandidateInputSupportedForMeasurement(args[1],args[2]));case len(args)==3&&(args[0]=="candidate-metric"||args[0]=="candidate-proof"):var p *mobilemultihop.NodeChain;p,err=mobilemultihop.ParseNodeChainLaunchInput(args[1]);if err==nil{var pos int;_,err=fmt.Sscan(args[2],&pos);if err==nil{result=p.CandidatePrefixMeasurement(pos);if args[0]=="candidate-proof"&&result!=""{var b []byte;b,err=json.Marshal(p.ProofInventory()[pos]);result=string(b)}}};case len(args)==2&&args[0]=="candidate-supported":result=fmt.Sprint(mobilemultihop.NodeChainCandidateInputSupported(args[1]));case len(args)==4&&(args[0]=="candidate-metadata"||args[0]=="candidate-frames"):var plan *mobilemultihop.NodeChain;plan,err=mobilemultihop.ParseNodeChainLaunchInput(args[1]);if err==nil{var position int;_,err=fmt.Sscan(args[2],&position);if err==nil{var captured *mobilemultihop.NodeChainCandidatePlan;captured,err=plan.NewCandidatePlan(position,args[3]);if err==nil{result=captured.Metadata();if args[0]=="candidate-frames"{var frames []string;frames,err=fixtureCandidateFrames(captured);if err==nil{var encoded []byte;encoded,err=json.Marshal(map[string]any{"frames":frames,"complete":json.RawMessage(result)});result=string(encoded)}}}}};case len(args)==2:''') + FRAME_HELPER
+    return ORIGINAL_COMPILER(source).replace('case len(args)==2:', '''case len(args)==4&&args[0]=="selected-response-position":result,err=fixtureSelectedResponsePosition(args[1],args[2],args[3]);case len(args)==4&&args[0]=="filter-public-inventory":var pos int;_,err=fmt.Sscan(args[2],&pos);if err==nil{result,err=mobilemultihop.FilterNodeChainPublicCandidateInventory(args[1],pos,args[3])};case len(args)==3&&args[0]=="candidate-supported-metric":result=fmt.Sprint(mobilemultihop.NodeChainCandidateInputSupportedForMeasurement(args[1],args[2]));case len(args)==3&&(args[0]=="candidate-metric"||args[0]=="candidate-proof"):var p *mobilemultihop.NodeChain;p,err=mobilemultihop.ParseNodeChainLaunchInput(args[1]);if err==nil{var pos int;_,err=fmt.Sscan(args[2],&pos);if err==nil{result=p.CandidatePrefixMeasurement(pos);if args[0]=="candidate-proof"&&result!=""{var b []byte;b,err=json.Marshal(p.ProofInventory()[pos]);result=string(b)}}};case len(args)==2&&args[0]=="candidate-supported":result=fmt.Sprint(mobilemultihop.NodeChainCandidateInputSupported(args[1]));case len(args)==4&&(args[0]=="candidate-metadata"||args[0]=="candidate-frames"):var plan *mobilemultihop.NodeChain;plan,err=mobilemultihop.ParseNodeChainLaunchInput(args[1]);if err==nil{var position int;_,err=fmt.Sscan(args[2],&position);if err==nil{var captured *mobilemultihop.NodeChainCandidatePlan;captured,err=plan.NewCandidatePlan(position,args[3]);if err==nil{result=captured.Metadata();if args[0]=="candidate-frames"{var frames []string;frames,err=fixtureCandidateFrames(captured);if err==nil{var encoded []byte;encoded,err=json.Marshal(map[string]any{"frames":frames,"complete":json.RawMessage(result)});result=string(encoded)}}}}};case len(args)==2:''') + FRAME_HELPER
 
 
 SESSION = '''package com.eabusham.routervpn;
@@ -102,6 +102,9 @@ public final class RouterNodeChainCandidateMeasurement {
   long now=System.currentTimeMillis();JSONObject distribution=new JSONObject().put("samples",50).put("min_ms",1).put("median_ms",2).put("average_ms",2).put("p90_ms",3).put("max_ms",4).put("jitter_ms",1);
   String metric=meta.optString("measurement","routed-tcp-connect");
   JSONObject row=new JSONObject().put("node_id",id).put("role","candidate").put("kind","routed-candidate-response".equals(metric)?"private-agent-response":"tcp-connect").put("ready",true).put("benchmark",new JSONObject().put("schema",1).put("measurement",metric).put("attempts",50).put("failed",0).put("distribution",distribution).put("trimmed_mean_ms",id.startsWith("chain-")?1.5:2.5));
+  if(metric.equals("routed-public-candidate-response")){
+   row.put("kind","public-exit-response");row.getJSONObject("benchmark").put("endpoint","https://1.1.1.1/cdn-cgi/trace");
+  }
   boolean current=!original.isEmpty()&&original.equals(guard.currentInventorySHA256());
   return new JSONObject().put("schema",1).put("measurement",metric).put("request_id",request).put("complete",true).put("drained",true).put("stage",current?"complete":"invalidated").put("failure",current?"":"retired").put("capture_sha256",meta.getString("capture_sha256")).put("prefix_position",meta.getInt("prefix_position")).put("prefix_id",meta.getString("prefix_id")).put("candidate_id",id).put("candidate_source_sha256",source).put("measured_at",now).put("expires_at",now+120000).put("results",new JSONArray().put(row)).toString();
  }
@@ -263,6 +266,18 @@ public final class NodeCandidateHarness {
   var f=fixture(root);var session=new AndroidNodeChainSession(f.profiles.currentOrderedPath());var catalog=new AndroidNodeCandidateCatalog(f.context,session,0);
   var nativeOwner=Libbox.routerNodeChainNewCandidateMeasurement(session.capture.plan,session.server,0,catalog.inventory,catalog);nativeOwner.prepare();JSONObject meta=new JSONObject(nativeOwner.metadata());String id=meta.getJSONArray("targets").getJSONObject(0).getString("id"),request="a".repeat(32);nativeOwner.start(request,id);String raw=nativeOwner.statusJSON();long now=System.currentTimeMillis();
   var accepted=AndroidNodeCandidateResult.capture(raw,request,meta,id,"Original",now);check(accepted.current(now)&&!accepted.current(accepted.expiresAt),"receipt read renewed120-second completion deadline");
+  String publicMetric="routed-public-candidate-response",fixed="https://1.1.1.1/cdn-cgi/trace";
+  JSONObject publicMeta=new JSONObject(meta.toString()).put("measurement",publicMetric);
+  JSONObject publicStatus=new JSONObject(raw).put("measurement",publicMetric);
+  JSONObject publicRow=publicStatus.getJSONArray("results").getJSONObject(0);
+  publicRow.put("kind","public-exit-response");publicRow.getJSONObject("benchmark").put("measurement",publicMetric).put("endpoint",fixed);
+  check(AndroidNodeCandidateResult.capture(publicStatus.toString(),request,publicMeta,id,"Original",now).score>0,"verified public trace score missing");
+  for(String swap:List.of("private-kind","different-endpoint","missing-endpoint","server","epoch","private-metric")){
+   var metadata=new JSONObject(publicMeta.toString());var status=new JSONObject(publicStatus.toString());
+   var row=status.getJSONArray("results").getJSONObject(0);var b=row.getJSONObject("benchmark");
+   switch(swap){case "private-kind":row.put("kind","private-agent-response");break;case "different-endpoint":b.put("endpoint","https://1.0.0.1/cdn-cgi/trace");break;case "missing-endpoint":b.remove("endpoint");break;case "server":metadata.put("execution","server");break;case "epoch":metadata.put("selection_epoch",1);break;case "private-metric":b.put("measurement","routed-candidate-response");break;}
+   reject(()->AndroidNodeCandidateResult.capture(status.toString(),request,metadata,id,"Original",now),"foreign public trace receipt accepted: "+swap);
+  }
   JSONObject responseMeta=new JSONObject(meta.toString()).put("measurement","routed-candidate-response");
   JSONObject response=new JSONObject(raw).put("measurement","routed-candidate-response");
   JSONObject privateRow=response.getJSONArray("results").getJSONObject(0);
@@ -573,6 +588,7 @@ def prepare(src, app, java):
 public static boolean qualifiedSelectedResponse(RouterNodeChainExecution selected,int position)throws Exception{return "true".equals(call("selected-response-position",selected.source(),Integer.toString(position),selected.execution()));}
 public static String routerNodeChainCandidatePrefixMeasurement(RouterNodeChain p,int position)throws Exception{return call("candidate-metric",p.launchInput(),Integer.toString(position));}
 public static String routerNodeChainCandidatePrefixProof(RouterNodeChain p,int position)throws Exception{return call("candidate-proof",p.launchInput(),Integer.toString(position));}
+public static String routerNodeChainFilterPublicCandidateInventory(String source,int position,String inventory)throws Exception{return call("filter-public-inventory",source,Integer.toString(position),inventory);}
 public static boolean routerNodeChainCandidateInputSupportedForMeasurement(String input,String metric)throws Exception{return "true".equals(call("candidate-supported-metric",input,metric));}
 public static boolean routerNodeChainCandidateInputSupported(String input)throws Exception{return "true".equals(call("candidate-supported",input));}
 public static RouterNodeChainCandidateMeasurement routerNodeChainNewCandidateMeasurement(RouterNodeChain plan,CommandServer server,int position,String inventory,RouterNodeChainCandidateCatalog catalog)throws Exception{return new RouterNodeChainCandidateMeasurement(plan,position,inventory,catalog);}

@@ -13,10 +13,10 @@ import Libbox
     let chainConfig: String
 
     static func make(request: String, prefixPosition: Int, proofs: [IOSNodeCandidatePrefix],
-                     chainSource: String, chainConfig: String, selectedResponse: Bool = false) throws -> Self {
+                     chainSource: String, chainConfig: String, selectedResponse: Bool = false, originalLaunch: Data? = nil) throws -> Self {
         let snapshot = try IOSNodeBundleStore.shared.candidateSnapshot()
         let compiled = try compile(records: snapshot.records, stamp: snapshot.stamp,
-                                   prefixPosition: prefixPosition, proofs: proofs, selectedResponse: selectedResponse)
+                                   prefixPosition: prefixPosition, proofs: proofs, selectedResponse: selectedResponse, originalLaunch: originalLaunch)
         guard IOSCandidateCatalogPublication.isDigest(chainSource), IOSCandidateCatalogPublication.isDigest(chainConfig) else { throw issue() }
         let published = try IOSCandidateCatalogPublication.shared.capture(request: request, inventory: compiled.inventory, expected: snapshot.stamp)
         let result = Self(source: published, records: snapshot.records, rows: compiled.rows,
@@ -30,14 +30,16 @@ import Libbox
               IOSCandidateCatalogPublication.shared.current(source) else { throw Self.issue() }
     }
     static func compile(records: [String: Data], stamp: IOSCandidateCatalogPublication.Stamp,
-                        prefixPosition: Int, proofs: [IOSNodeCandidatePrefix], selectedResponse: Bool = false) throws -> (inventory: Data, rows: [Row]) {
+                        prefixPosition: Int, proofs: [IOSNodeCandidatePrefix], selectedResponse: Bool = false, originalLaunch: Data? = nil) throws -> (inventory: Data, rows: [Row]) {
         guard stamp.ready, stamp.sources_sha256 == (try IOSCandidateCatalogPublication.sourcesDigest(records)),
               proofs.indices.contains(prefixPosition), selectedResponse ? proofs[prefixPosition].selectedResponse(in: proofs) : proofs[prefixPosition].supported(in: proofs),
               proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }), (2...8).contains(proofs.count) || IOSMultihopNodeSelection.extendedOriginalModes(proofs.map(\.mode), execution: "local") else { throw issue() }
-        let excludedMembers = proofs.prefix(selectedResponse ? proofs.count : prefixPosition + 1)
+        let publicResponse = proofs[prefixPosition].metric == "routed-public-candidate-response"
+        let completeSource = publicResponse || selectedResponse
+        let excludedMembers = proofs.prefix(completeSource ? proofs.count : prefixPosition + 1)
         let excluded = Set(excludedMembers.map(\.profile_id))
         let paired = Set(excludedMembers.map(\.node_id).filter { !$0.isEmpty })
-        var originals = selectedResponse ? Dictionary(uniqueKeysWithValues: proofs.map { ($0.profile_id, $0) }) : [:]
+        var originals = completeSource ? Dictionary(uniqueKeysWithValues: proofs.map { ($0.profile_id, $0) }) : [:]
         var rows: [Row] = [], seen = Set<String>(), inputs: [String] = []
         for key in records.keys.sorted() {
             guard let data = records[key], data.count <= 32 * 1024 * 1024,
@@ -57,7 +59,7 @@ import Libbox
                 do {
                     input = try member(profile: profile, files: files)
                     guard LibboxRouterNodeChainCandidateInputSupported(input) else { throw issue() }
-                    if proofs[prefixPosition].metric == "routed-candidate-response" {
+                    if publicResponse || proofs[prefixPosition].metric == "routed-candidate-response" {
                         guard LibboxRouterNodeChainCandidateInputSupportedForMeasurement(input, proofs[prefixPosition].metric) else { throw issue() }
                     }
                     reason = ""; inputs.append(input)
@@ -68,7 +70,28 @@ import Libbox
         guard originals.isEmpty, !inputs.isEmpty else { throw issue() }
         let inventory = try JSONSerialization.data(withJSONObject: ["schema": 1, "revision": stamp.revision, "inputs": inputs], options: [.sortedKeys])
         guard inventory.count <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw issue() }
-        return (inventory, rows)
+        guard publicResponse else { return (inventory, rows) }
+        guard let launch = originalLaunch, launch.count <= IOSNodeChainCapture.maximumInputBytes,
+              let record = try JSONSerialization.jsonObject(with: launch) as? [String: Any],
+              record["kind"] as? String == "routervpn-node-chain-launch-input", record["schema"] as? Int == 8,
+              record["execution"] as? String == "local" else { throw issue() }
+        let original = record.filter { ["schema", "execution", "nodes", "identity_sources"].contains($0.key) }
+        let source = try JSONSerialization.data(withJSONObject: original, options: [.sortedKeys])
+        var failure: NSError?
+        let filtered: String? = LibboxRouterNodeChainFilterPublicCandidateInventory(String(decoding: source, as: UTF8.self),
+            Int32(prefixPosition), String(decoding: inventory, as: UTF8.self), &failure)
+        guard failure == nil, let filtered, !filtered.isEmpty else { throw failure ?? issue() }
+        let data = Data(filtered.utf8)
+        guard data.count <= IOSCandidateCatalogPublication.maximumInventoryBytes,
+              let filteredInventory = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              filteredInventory["schema"] as? Int == 1, filteredInventory["revision"] as? String == stamp.revision,
+              let retained = filteredInventory["inputs"] as? [String], !retained.isEmpty else { throw issue() }
+        let eligible = Set(retained)
+        guard eligible.count == retained.count, inputs.filter({ eligible.contains($0) }) == retained else { throw issue() }
+        return (data, rows.map { row in
+            if row.input.isEmpty || eligible.contains(row.input) { return row }
+            return Row(id: row.id, name: row.name, input: "", reason: "This source shares an endpoint or credentials with another route member or candidate")
+        })
     }
     static func member(profile: [String: Any], files: [String: [String: String]]) throws -> String {
         guard profile["start_layer"] == nil || profile["start_layer"] is String else { throw issue() }

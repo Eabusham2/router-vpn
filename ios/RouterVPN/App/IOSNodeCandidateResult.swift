@@ -12,7 +12,11 @@ struct IOSNodeCandidateMetadata: Decodable {
     var measurement: String? = nil
     var metric: String { measurement ?? "routed-tcp-connect" }
     static func label(_ metric: String) -> String {
-        metric == "routed-candidate-response" ? "private-agent responses" : "TCP connections"
+        switch metric {
+        case "routed-public-candidate-response": return "verified public-exit HTTPS responses"
+        case "routed-candidate-response": return "private-agent responses"
+        default: return "TCP connections"
+        }
     }
     var preparation_source_sha256: String? = nil
     var preparation_config_sha256: String? = nil
@@ -35,7 +39,7 @@ struct IOSNodeCandidateMetadata: Decodable {
                   source_sha256 == source, config_sha256 == config else { throw IOSNodeCandidateResult.issue() }
         }
         guard prefix.supported, metric == prefix.metric, requestedExecution == nil || metric == "routed-tcp-connect" ||
-                selectedResponse == prefix,
+                metric == "routed-candidate-response" && selectedResponse == prefix,
               schema == 1, prefix_position == prefix.position, prefix_id == prefix.profile_id,
               IOSCandidateCatalogPublication.isDigest(capture_sha256), !targets.isEmpty,
               Set(targets.map(\.id)) == ids, Set(targets.map(\.id)).count == targets.count,
@@ -55,10 +59,12 @@ struct IOSNodeCandidateResult: Decodable {
     struct Benchmark: Decodable {
         let schema: Int, attempts: Int, failed: Int
         let measurement: String
+        let endpoint: String?
         let distribution: Distribution
         let trimmed_mean_ms: Double
         var valid: Bool {
-            schema == 1 && attempts == 50 && failed == 0 && ["routed-tcp-connect", "routed-candidate-response"].contains(measurement) && distribution.valid &&
+            schema == 1 && attempts == 50 && failed == 0 &&
+                (measurement == "routed-public-candidate-response" ? endpoint == "https://1.1.1.1/cdn-cgi/trace" : endpoint?.isEmpty != false) && ["routed-tcp-connect", "routed-candidate-response", "routed-public-candidate-response"].contains(measurement) && distribution.valid &&
                 trimmed_mean_ms.isFinite && trimmed_mean_ms >= distribution.min_ms && trimmed_mean_ms <= distribution.max_ms
         }
     }
@@ -84,13 +90,22 @@ struct IOSNodeCandidateResult: Decodable {
     let expires_at: Int64
     let results: [Row]
     private func originalRow(request: String, target: IOSNodeCandidateMetadata.Target, metadata: IOSNodeCandidateMetadata, now: Int64) throws -> Row {
+        let kind: String
+        switch measurement {
+        case "routed-tcp-connect": kind = "tcp-connect"
+        case "routed-candidate-response": kind = "private-agent-response"
+        case "routed-public-candidate-response":
+            guard metadata.requested_execution == nil, metadata.execution == nil, metadata.selection_epoch == nil else { throw Self.issue() }
+            kind = "public-exit-response"
+        default: throw Self.issue()
+        }
         guard schema == 1, measurement == metadata.metric, request_id == request, complete, drained,
               stage == "complete", failure?.isEmpty != false, capture_sha256 == metadata.capture_sha256,
               prefix_position == metadata.prefix_position, prefix_id == metadata.prefix_id,
               candidate_id == target.id, candidate_source_sha256 == target.source_sha256,
               measured_at > 0, measured_at <= now, expires_at > measured_at, expires_at - measured_at == 120000, now < expires_at,
               results.count == 1, let row = results.first, row.node_id == target.id,
-              row.role == "candidate", row.kind == (measurement == "routed-candidate-response" ? "private-agent-response" : "tcp-connect") else { throw Self.issue() }
+              row.role == "candidate", row.kind == kind else { throw Self.issue() }
         return row
     }
     func selectedServerScore(request: String, target: IOSNodeCandidateMetadata.Target, metadata: IOSNodeCandidateMetadata, now: Int64) throws -> Benchmark? {

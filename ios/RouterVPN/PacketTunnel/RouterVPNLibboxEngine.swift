@@ -2121,9 +2121,9 @@ final class RouterVPNLibboxEngine {
                     "node_id": member.profile["node_proof_id"] as? String ?? "", "mode": member.mode]
                 if selectedResponses.contains(position) {
                     prefix["measurement"] = "routed-candidate-response"
-                } else if execution == nil, let plan, member.mode == "shadowsocks",
-                   LibboxRouterNodeChainCandidatePrefixMeasurement(plan, Int32(position)) == "routed-candidate-response" {
-                    prefix["measurement"] = "routed-candidate-response"
+                } else if execution == nil, let plan, member.mode == "shadowsocks" {
+                    let metric = LibboxRouterNodeChainCandidatePrefixMeasurement(plan, Int32(position))
+                    if metric == "routed-candidate-response" || metric == "routed-public-candidate-response" { prefix["measurement"] = metric }
                 }
                 return prefix
             }

@@ -558,7 +558,7 @@ final class AndroidNodeStore {
             throw new IllegalStateException("The complete draft or intended next position changed.");
         boolean response=AndroidNodeChainCapture.responsePrefix(sources,modes,prefix,"local");
         boolean externalExit = sources.get(sources.size()-1).imported;
-        if (externalExit && (prefix!=0 || !catalog.selectedId.equals(sources.get(0).id)))
+        if (externalExit && (!catalog.selectedId.equals(sources.get(0).id) || prefix!=0 && !response))
             throw new IllegalStateException("An imported final measures candidates through its original WireGuard control.");
         if (!externalExit&&!extended&&!response&&prefix!=sources.size()-2)
             throw new IllegalStateException("The complete draft or intended next position changed.");

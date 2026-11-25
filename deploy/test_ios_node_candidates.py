@@ -51,6 +51,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
   do {
    if CommandLine.arguments.count==3 {
     switch CommandLine.arguments[2] {
+    case "public-response": try publicCandidateResponse()
     case "capacity": try largeCatalog(479);try largeCatalog(513)
     case "selected-entry": try selectedEntryProposals()
     case "selected-packet": try selectedPacketStops()
@@ -70,6 +71,114 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    }
   } catch {
    FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)
+  }
+ }
+
+ static func publicCandidateResponse() throws {
+  let metric = "routed-public-candidate-response"
+  let bound=IOSMultihopNodeSelection.physicalTraversalDepth
+  let longest=(0..<bound).map { index in
+   IOSNodeCandidatePrefix(position:index,profile_id:"source-\(index)",node_id:index==0 ? String(repeating:"a",count:64):"",mode:index==0 ? "wg":"shadowsocks",measurement:index>0 && index<bound-1 ? metric:nil)
+  }
+  try check("all public interior positions remain measurable at 96",longest.dropFirst().dropLast().allSatisfy{$0.supported(in:longest)} && !longest.last!.supported(in:longest))
+  let full=longest.map { IOSMultihopNodeSelection(id:$0.profile_id,mode:$0.mode) }
+  var fullDraft=IOSNodeChainDraft(saved:full,finalID:full[0].id)
+  try reject("public editor refuses to insert a 97th member"){try fullDraft.insertMeasured("too-deep",after:1,compiled:full)}
+  var foreign=longest
+  foreign[2]=IOSNodeCandidatePrefix(position:2,profile_id:longest[3].profile_id,node_id:"",mode:"shadowsocks",measurement:metric)
+  try check("public role map rejects duplicate captured identity",!foreign[1].supported(in:foreign))
+  for count in [3, 4, 9] {
+   let bundles = try externalFinalBundles(count, count == 3 ? "home" : "custom")
+   let source = try IOSNodeChainCapture.compile(bundles: bundles); defer { try? source.plan.close() }
+   let original = IOSNodeCandidateOriginalCapture.ordinary(source), proofs = original.candidatePrefixes
+   let targetBundle = try externalFinalBundles(count+1,"home").last!, target = try profile(targetBundle)
+   let targetID = target["id"] as! String, input = try IOSNodeCandidateCapture.member(profile:target,files:[:])
+   var records = [String:Data]()
+   for bundle in bundles + [targetBundle] { records[try profile(bundle)["id"] as! String] = bundle }
+   let stamp=IOSCandidateCatalogPublication.Stamp(schema:1,epoch:UUID().uuidString,generation:1,ready:true,sources_sha256:try IOSCandidateCatalogPublication.sourcesDigest(records))
+   try check("public saved route has one paired control and public exit",source.sourceSchema == 8 && !proofs[0].node_id.isEmpty && proofs.last!.node_id.isEmpty)
+   for position in 1..<(count-1) {
+    try check("every original public prefix carries its designated native response",proofs[position].metric == metric && proofs[position].supported(in:proofs))
+    let nodes=proofs.map { IOSMultihopNodeSelection(id:$0.profile_id,mode:$0.mode) }
+    let profiles=try bundles.map { try JSONDecoder().decode(RouterProfile.self,from:data(profile($0))) }
+    let editor=IOSNodeChainDraft(saved:nodes,finalID:source.controlMember.id)
+    try check("public editor retains every original source through the chosen stop",try editor.measurementPath(through:position,execution:"local",profiles:profiles)==nodes)
+    let catalog=try IOSNodeCandidateCapture.compile(records:records,stamp:stamp,prefixPosition:position,proofs:proofs,originalLaunch:Data(original.launchInput.utf8))
+    try check("public catalog excludes complete source and admits only independent import",catalog.rows.filter { !$0.input.isEmpty }.map(\.id) == [targetID])
+    for retain in [false, true] {
+     let proposal=try IOSNodeCandidateProposal.compile(original:original,records:records,position:position,candidateID:targetID,measuredInput:input,retainFinal:retain)
+     var ids=proofs.map(\.profile_id);ids.insert(targetID,at:position+1)
+     var next=editor
+     try next.insertMeasured(targetID,after:position,compiled:proposal.orderedNodes!)
+     try check("measured public editor insertion preserves the selected control and original exit",next.nodes.map(\.id)==ids && next.controlID==source.controlMember.id)
+     try check("public Use and Save both insert and retain entire suffix",proposal.profiles.map(\.id) == ids && proposal.orderedNodes?.map(\.id) == ids && proposal.profiles.first?.id == source.controlMember.id && proposal.profiles.last?.id == source.members.last?.id)
+    }
+    var wrong=proofs;wrong[position].measurement="routed-candidate-response"
+    try check("private metrics cannot describe this public proof map",!proofs[position].supported(in:wrong))
+   }
+   if count == 4 {
+    let another=try externalFinalBundles(count+2,"home").last!, secondID=try profile(another)["id"] as! String
+    let first=try IOSNodeCandidateProposal.compile(original:original,records:records,position:1,candidateID:targetID,measuredInput:input,retainFinal:true)
+    let launch=try object(Data(first.launchInput.utf8)),node=try object(Data((launch["nodes"] as! [String])[0].utf8))
+    let control=try object(Data((node["profile_json"] as! String).utf8))
+    let reopened=try IOSNodeChainCapture.reopen(first.launchInput,selectedProfile:control);defer{try? reopened.plan.close()}
+    let continued=IOSNodeCandidateOriginalCapture.ordinary(reopened)
+    var saved=records
+    saved[reopened.controlMember.id]=try editProfile(bundles[0]){$0=control}
+    saved[secondID]=another
+    func catalog(_ values:[String:Data])throws->(inventory:Data,rows:[IOSNodeCandidateCapture.Row]){
+     let revision=IOSCandidateCatalogPublication.Stamp(schema:1,epoch:UUID().uuidString,generation:2,ready:true,sources_sha256:try IOSCandidateCatalogPublication.sourcesDigest(values))
+     return try IOSNodeCandidateCapture.compile(records:values,stamp:revision,prefixPosition:2,proofs:continued.candidatePrefixes,originalLaunch:Data(continued.launchInput.utf8))
+    }
+    let secondCatalog=try catalog(saved)
+    guard let secondInput=secondCatalog.rows.first(where:{$0.id==secondID})?.input,!secondInput.isEmpty else {throw IOSNodeCandidateCapture.issue()}
+    let twice=try IOSNodeCandidateProposal.compile(original:continued,records:saved,position:2,candidateID:secondID,measuredInput:secondInput)
+    var expected=proofs.map(\.profile_id);expected.insert(targetID,at:2);expected.insert(secondID,at:3)
+    try check("recursively inserted public stop can measure and retain a second new candidate",continued.candidatePrefixes[2].metric==metric && twice.orderedNodes?.map(\.id)==expected && twice.profiles.first?.id==source.controlMember.id && twice.profiles.last?.id==source.members.last?.id)
+    func renamed(_ original:Data,_ id:String)throws->Data{
+     var root=try object(try editProfile(original){$0["id"]=id;$0["name"]=id});root["selectedRouterID"]=id;return try data(root)
+    }
+    var mixed=saved
+    mixed["same-retained-suffix"]=try renamed(bundles.last!,"same-retained-suffix")
+    let unrelated=try externalFinalBundles(count+3,"home").last!
+    mixed["catalog-alias-a"]=try renamed(unrelated,"catalog-alias-a")
+    mixed["catalog-alias-b"]=try renamed(unrelated,"catalog-alias-b")
+    let filtered=try catalog(mixed)
+    try check("mixed public inventory retains independent input and refuses both aliases and retained original",filtered.rows.filter{!$0.input.isEmpty}.map(\.id)==[secondID] && filtered.rows.filter{$0.input.isEmpty}.count==3 && (try object(filtered.inventory))["inputs"] as? [String]==[secondInput])
+   }
+   let bound = String(repeating:"a",count:64), receiver=proofs[1]
+   let metadataRaw:[String:Any]=["schema":1,"measurement":metric,"capture_sha256":bound,"prefix_position":1,"prefix_id":receiver.profile_id,"source_sha256":source.sourceSHA256,"config_sha256":source.configSHA256,"targets":[["id":targetID,"source_sha256":bound]]]
+   let metadata=try JSONDecoder().decode(IOSNodeCandidateMetadata.self,from:data(metadataRaw))
+   try metadata.validate(prefix:receiver,source:source.sourceSHA256,config:source.configSHA256,ids:[targetID])
+   var server=metadata
+   server.preparation_source_sha256=source.sourceSHA256;server.preparation_config_sha256=source.configSHA256
+   server.requested_execution="auto";server.execution="server";server.selection_epoch=1
+   try reject("public response cannot borrow selected Server authority"){try server.validate(prefix:receiver,source:source.sourceSHA256,config:source.configSHA256,ids:[targetID],requestedExecution:"auto",selectedExecution:"server",selectedPositions:[1],selectedResponse:receiver)}
+   let distribution:[String:Any]=["samples":50,"min_ms":1,"median_ms":2,"average_ms":2,"p90_ms":3,"max_ms":4,"jitter_ms":1]
+   let bench:[String:Any]=["schema":1,"measurement":metric,"endpoint":"https://1.1.1.1/cdn-cgi/trace","attempts":50,"failed":0,"distribution":distribution,"trimmed_mean_ms":2.0]
+   let validRow:[String:Any]=["role":"candidate","kind":"public-exit-response","node_id":targetID,"ready":true,"benchmark":bench]
+   let packet:[String:Any]=["schema":1,"measurement":metric,"request_id":"public-request","complete":true,"drained":true,"stage":"complete","capture_sha256":bound,"prefix_position":1,"prefix_id":receiver.profile_id,"candidate_id":targetID,"candidate_source_sha256":bound,"measured_at":100,"expires_at":120100,"results":[validRow]]
+   func score(_ row:[String:Any])throws->Double {
+    var body=packet;body["results"]=[row]
+    let receipt=try JSONDecoder().decode(IOSNodeCandidateResult.self,from:data(body))
+    return try receipt.score(request:"public-request",target:metadata.targets[0],metadata:metadata,now:200).trimmed_mean_ms
+   }
+   try check("public score binds 50 exact HTTPS exit results",try score(validRow)==2)
+   for field in ["kind","role","endpoint","measurement","attempts","candidate_disposition"] {
+    var row=validRow,b=bench
+    switch field { case "kind":row[field]="private-agent-response";case "role":row[field]="exit";case "endpoint":b[field]="https://example.com";case "measurement":b[field]="routed-tcp-connect";case "attempts":b[field]=49;default:row[field]="not-registered" }
+    row["benchmark"]=b
+    try reject("public response rejects substituted "+field){ _=try score(row) }
+   }
+   var stale=records
+   stale[targetID]=try editProfile(targetBundle) { row in var ext=row["external"] as! [String:Any];ext["expected_public_ip"]="192.0.2.250";row["external"]=ext }
+   try reject("candidate later public witness changed"){_ = try IOSNodeCandidateProposal.compile(original:original,records:stale,position:1,candidateID:targetID,measuredInput:input)}
+   var changedExit=records
+   changedExit[source.members.last!.id]=try editProfile(bundles.last!) { row in var ext=row["external"] as! [String:Any];ext["expected_public_ip"]="192.0.2.249";row["external"]=ext }
+   try reject("original public final witness changed in retained suffix"){_=try IOSNodeCandidateProposal.compile(original:original,records:changedExit,position:1,candidateID:targetID,measuredInput:input)}
+   var changedControl=records
+   changedControl[source.controlMember.id]=try editProfile(bundles[0]) { $0["home_lan_access"] = !($0["home_lan_access"] as? Bool ?? false) }
+   try reject("external first control changed before insertion"){_=try IOSNodeCandidateProposal.compile(original:original,records:changedControl,position:1,candidateID:targetID,measuredInput:input)}
   }
  }
  static func largeCatalog(_ size:Int)throws {
@@ -676,6 +785,7 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
 
 POSITIVE_CASES = (
     ('base', 'original', 'Apple candidates: 422 shipping Swift/shared Go capture and receipt checks PASS'),
+    ('base', 'public-response', 'Apple candidate phase public-response: 121 source and receipt checks PASS'),
     ('base', 'capacity', 'Apple candidate phase capacity: 12 source and receipt checks PASS'),
     ('execution', 'local', 'Apple candidate phase local: 140 source and receipt checks PASS'),
     ('execution', 'server', 'Apple candidate phase server: 142 source and receipt checks PASS'),
@@ -697,10 +807,12 @@ CONTROL_GROUPS = {
         ('unsupported-input', 'IOSNodeCandidateCapture.swift', 'guard LibboxRouterNodeChainCandidateInputSupported(input) else', 'guard true else', 'paired legacy stays unscored'),
         ('original-role', 'IOSNodeCandidateCapture.swift', 'if let original = originals.removeValue(forKey: id) {', 'if let original = originals.removeValue(forKey: id), false {', 'ACCEPTED catalog accepted a role map from another original', 'all-imported'),
         ('prefix-frame', 'IOSCandidateCatalogPublication.swift', 'body["prefix_id"] as? String == selectedResponse?.id', 'true', 'ACCEPTED metadata frame crossed the original selected prefix', 'selected-response'),
+        ('public-filter', 'IOSNodeCandidateCapture.swift', 'guard publicResponse else { return (inventory, rows) }', 'guard false else { return (inventory, rows) }', 'mixed public inventory retains independent input and refuses both aliases and retained original', 'public-response'),
+        ('public-endpoint', 'IOSNodeCandidateResult.swift', 'endpoint == "https://1.1.1.1/cdn-cgi/trace"', 'true', 'ACCEPTED public response rejects substituted endpoint', 'public-response'),
         ('receipt-expiry', 'IOSNodeCandidateResult.swift', 'expires_at - measured_at == 120000,', 'true,', 'ACCEPTED receipt foreign expires_at'),
     ),
     'proposal': (
-        ('proposal-prefix', 'IOSNodeCandidateProposal.swift', 'Array(priorNodes.prefix(position + 1)) == Array(afterNodes.prefix(position + 1)),', 'true,', 'ACCEPTED future proposal changed original prefix'),
+        ('proposal-prefix', 'IOSNodeCandidateProposal.swift', 'priorNodes[unchangedPrefixStart...position].elementsEqual(afterNodes[unchangedPrefixStart...position]),', 'true,', 'ACCEPTED future proposal changed original prefix'),
         ('proposal-source', 'IOSNodeCandidateProposal.swift', 'guard try IOSNodeCandidateCapture.member(profile: candidate.profile, files: candidate.files) == measuredInput else', 'guard true else', 'ACCEPTED future proposal changed measured source'),
         ('proposal-capture', 'IOSNodeCandidateProposal.swift', 'guard execution.sourceSHA256 == sourceSHA256, execution.configSHA256 == configSHA256 else', 'guard true else', 'ACCEPTED execution proposal substituted preparation source', 'selected-entry'),
     ),
@@ -721,6 +833,9 @@ def main(phase='all'):
             options+=['-lCryptoKit']
         command=options+['-I',str(work),'-L',str(work),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(work)]
         files=['Models.swift','IOSMultihopStartLayer.swift','IOSCandidateCatalogPublication.swift','IOSNodeChainCapture.swift','IOSImportedOpenVPNSource.swift','IOSNodeCandidateOriginalCapture.swift','IOSNodeChainProviderCapture.swift','IOSNodeChainSOCKSCapture.swift','IOSNodeChainCONNECTCapture.swift','IOSNodeChainExecutionCapture.swift','IOSNodeCandidateCapture.swift','IOSNodeCandidateResult.swift','IOSNodeCandidateProposal.swift']
+        draft=work/'IOSNodeChainDraft.swift'
+        draft.write_text((APP/'IOSNodeChainEditor.swift').read_text().split('struct IOSNodeChainEditorOwner', 1)[0])
+        command.append(str(draft))
         binary=work/'test'
         positives = [case for case in POSITIVE_CASES if phase in ('all', case[0])]
         if positives:
@@ -748,7 +863,7 @@ def main(phase='all'):
                     raise AssertionError('candidate causal control failed: '+filename+' '+result.stderr[-1500:])
                 print('Apple node candidate verified '+name, flush=True)
         if phase == 'all':
-            print('Apple candidate capture/receipt/proposal: eleven causal controls rejected')
+            print(f'Apple candidate capture/receipt/proposal: {sum(map(len, CONTROL_GROUPS.values()))} causal controls rejected')
 
 
 if __name__ == '__main__':

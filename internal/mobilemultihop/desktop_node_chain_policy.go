@@ -96,10 +96,17 @@ func deriveDesktopNodeChainPolicy(original *NodeChain, inputs desktopNodePolicyI
 	}
 	// Normalize only through the complete constructor source. A prior TUN-only
 	// projection grants no implicit restore value or inherited platform owner.
-	base, err := NewNodeChain(original.sourceJSON)
-	if err != nil {
-		return bad()
+	base := original
+	if !original.HasExternalFinal() || original.projection != (nodeChainProjection{}) ||
+		!original.importedNodes.localSeal.matches(original) || original.originalConfigSHA != original.ConfigSHA256() {
+		var err error
+		base, err = NewNodeChain(original.sourceJSON)
+		if err != nil {
+			return bad()
+		}
 	}
+	// The constructor-bound, unprojected public source is read-only here.
+	// Projection below still constructs a distinct graph from its exact raw bytes.
 	derived, err := projectNodeChainWithDevice(base, inputs)
 	if err != nil {
 		return bad()
@@ -282,8 +289,12 @@ func captureDesktopNodeChainGraphWithCONNECT(originalConfig, projectedConfig str
 		}
 	}
 	collector := &externalDesktopRecorder{families: map[string]string{}, roots: map[string]*ExternalDesktopPhysicalRoot{}, bootstrap: map[string]ExternalDesktopDNS{}}
+	traversal, err := parseCapturedEgressGraph(string(projection), connect)
+	if err != nil {
+		return bad()
+	}
 	for _, proof := range proofs {
-		tuples, err := compiledPhysicalEgressWithCapturedTransports(string(projection), []string{"tcp", "udp"}, collector, proof.Tag, false, connect)
+		tuples, err := traversal.physical([]string{"tcp", "udp"}, collector, proof.Tag, false)
 		if err != nil || !nodeChainSamePhysical(tuples, physical) {
 			return bad()
 		}

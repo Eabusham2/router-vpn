@@ -89,7 +89,7 @@ func desktopCandidateMetricForIntent(launch *desktopNodeLaunch, position int, se
 
 func orderedPrefixChoice(position int, n desktopNodeChainMember, metric string) orderedCandidatePrefix {
 	p := orderedCandidatePrefix{Position: position, ID: n.Profile.ID, Name: n.Profile.Name, Mode: n.Mode}
-	if metric == hopmeasure.CandidatePrivateResponseMeasurement {
+	if desktopCandidateResponseMetric(metric) {
 		p.Measurement = metric
 	}
 	return p
@@ -181,8 +181,9 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		owners = candidateResponseExecutions(e.preparation, position)
 	}
 	privateResponse := len(owners) > 0 || desktopCompareLocalPrivateResponseMembers(members, requested, position)
+	catalogMetric := desktopCandidateCatalogMetric(identity.Ordered.launch, serverResponse)
 	for i, n := range members {
-		if metric := desktopCandidateMetricForIntent(identity.Ordered.launch, i, serverResponse); metric != "" {
+		if metric := catalogMetric(i); metric != "" {
 			view.prefixes = append(view.prefixes, orderedPrefixChoice(i, n, metric))
 		}
 	}
@@ -193,7 +194,7 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		// The source compiler, not a protocol label or UI toggle, decides eligibility.
-		captured, sourceErr := captureDesktopCandidateViewSource(ctx, a, identity.Ordered.launch, position, p, revision, orderedCandidateSavedCompleteScope)
+		captured, sourceErr := captureDesktopCandidateViewSource(ctx, a, identity.Ordered.launch, position, p, revision, orderedCandidateSavedCompleteScope, catalogMetric)
 		if sourceErr != nil {
 			continue
 		}
@@ -203,10 +204,10 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		}
 		profiles := index.members(members, p.ID)
 		var proposal []common.MultihopNodeSelection
-		if candidateViewMetric(view.prefixes, position) == hopmeasure.CandidatePrivateResponseMeasurement {
+		if desktopCandidateResponseMetric(candidateViewMetric(view.prefixes, position)) {
 			var action string
 			_, proposal, action, err = orderedResponseProfile(ctx, identity.Ordered.launch.root, requested, members, position, p, profiles)
-			if privateResponse {
+			if privateResponse || candidateViewMetric(view.prefixes, position) == hopmeasure.CandidatePublicResponseMeasurement {
 				choice.ProposalAction = action
 			}
 		} else {
@@ -222,6 +223,11 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		}
 		view.candidates = append(view.candidates, choice)
 		candidates = append(candidates, captured)
+	}
+	candidates, view.candidates, err = filterDesktopPublicCandidateViews(ctx, candidates, view.candidates, position)
+	if err != nil {
+		http.Error(w, err.Error(), 409)
+		return
 	}
 	if len(candidates) == 0 || ctx.Err() != nil {
 		http.Error(w, "no saved candidate supports the measurement available through this prefix", 409)
@@ -241,8 +247,11 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 	note := "50 TCP connection handshakes through the retained connected prefix. This does not authenticate candidate credentials. Saving creates a next-connection profile; it does not change the active path."
 	if metric == hopmeasure.CandidatePrivateResponseMeasurement {
 		note = "50 authenticated private agent responses through the selected prefix and paired candidate. Saving creates a profile for the next connection."
+	} else if metric == hopmeasure.CandidatePublicResponseMeasurement {
+		note = "50 HTTPS responses after TLS through the selected prefix and the imported candidate. Every response verifies the candidate's recorded public exit IP. Save retains the original suffix and public final in a separate next-connection profile."
 	}
 	reply := map[string]any{"schema": 1, "view_token": view.token, "expires_at": view.expires.UnixMilli(), "prefix_position": position, "prefixes": view.prefixes, "candidates": view.candidates, "samples": 50, "measurement": metric, "note": note}
+	addOrderedPublicCandidateSource(reply, identity.Ordered.launch.chain.selection, position, metric)
 	if (requested == "auto" || len(owners) > 0) && metric == hopmeasure.CandidatePrivateResponseMeasurement {
 		reply["required_selected_execution"] = "local"
 		reply["requested_execution"] = requested
@@ -342,11 +351,12 @@ func orderedCandidateRequestedExecution(launch *desktopNodeLaunch) (string, erro
 
 func orderedCandidateProposalForExecution(members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile, requested string) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var control common.RouterProfile
-	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !common.ExtendedAWGSelectedMultihopSelection(nodeChainSelectedReferences(members)) && !(requested == "local" && (common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)) || common.ExtendedMixedLocalPacketCount(nodeChainSelectedReferences(members)) > 0))) || position < 0 || position >= len(members)-1 || !(mobilemultihop.NodeChainPrefixMode(members[position].Mode) || (requested == "local" || desktopSelectedResponseProposal(members, requested, position, candidate)) && members[position].Mode == "shadowsocks" && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
+	publicResponse := desktopPublicCandidateMembers(members, requested, position) && desktopNodeChainImportedExecutionMiddle(candidate)
+	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !common.ExtendedAWGSelectedMultihopSelection(nodeChainSelectedReferences(members)) && !(requested == "local" && (common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)) || common.ExtendedMixedLocalPacketCount(nodeChainSelectedReferences(members)) > 0))) || position < 0 || position >= len(members)-1 || !(mobilemultihop.NodeChainPrefixMode(members[position].Mode) || publicResponse || (requested == "local" || desktopSelectedResponseProposal(members, requested, position, candidate)) && members[position].Mode == "shadowsocks" && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
 		return control, nil, errors.New("candidate requires an original packet prefix")
 	}
-	if desktopNodeChainHasExternalFinal(members) && (requested != "local" || position != 0 || !desktopNodeChainImportedExecutionMiddle(candidate)) {
-		return control, nil, errors.New("the external-final route requires an original literal SS2022 candidate after its WireGuard entry")
+	if desktopNodeChainHasExternalFinal(members) && (requested != "local" || position != 0 && !publicResponse || !desktopNodeChainImportedExecutionMiddle(candidate)) {
+		return control, nil, errors.New("the external-final route requires an original literal SS2022 candidate through its captured prefix")
 	}
 	nodes := nodeChainSelectedReferences(members)
 	mode := "shadowsocks"
@@ -358,7 +368,7 @@ func orderedCandidateProposalForExecution(members []desktopNodeChainMember, posi
 	}
 	replacement := position + 1
 	selected := common.MultihopNodeSelection{ID: candidate.ID, Mode: mode}
-	if members[position].Mode == "shadowsocks" && replacement < len(nodes)-1 &&
+	if publicResponse || members[position].Mode == "shadowsocks" && replacement < len(nodes)-1 &&
 		(requested == "local" || desktopSelectedResponseProposal(members, requested, position, candidate)) {
 		if len(nodes) >= common.MultihopPhysicalTraversalDepth || nodes[replacement].Mode != "shadowsocks" {
 			return control, nil, errors.New("saving this measured intermediate requires the original stream suffix and room for another member")
@@ -368,7 +378,7 @@ func orderedCandidateProposalForExecution(members []desktopNodeChainMember, posi
 		nodes[replacement] = selected
 	}
 	control = cloneRouterProfile(desktopNodeChainControlProfile(members))
-	if replacement == len(members)-1 {
+	if replacement == len(members)-1 && !publicResponse {
 		control = cloneRouterProfile(candidate)
 	}
 	control.MultihopEnabled = true

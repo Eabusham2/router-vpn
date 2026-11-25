@@ -1,4 +1,4 @@
-name: Selected Compare Local private response diagnostic
+name: Selected route and public candidate response diagnostic
 
 on:
   workflow_dispatch:
@@ -43,7 +43,7 @@ jobs:
         run: |
           python3 deploy/test_node_chain_multiple_imported_native_runner.py
           python3 deploy/diagnostic-selected-private-response.py precondition "$RUNNER_TEMP"
-      - name: Compile the registered worker and exercise all 76 authenticated response cases
+      - name: Exercise 76 selected responses, six public exits and seven public candidate cases
         run: python3 deploy/diagnostic-selected-private-response.py encrypted "$RUNNER_TEMP"
       - uses: actions/upload-artifact@v4
         with:
@@ -52,5 +52,5 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: Run the complete selected candidate controller
-        run: go test -p=1 -count=1 -timeout=20m -run '^Test(DesktopSelectedDraft|DesktopSelectedCandidate|DesktopSelectedPrivateResponse|OrderedCandidateDraftNamedFinal|SelectedPrivateResponse|SelectedPrivatePenultimate)' ./cmd/client
+      - name: Run the complete selected and public candidate controllers
+        run: go test -p=1 -count=1 -timeout=20m -run '^Test(DesktopSelectedDraft|DesktopSelectedCandidate|DesktopSelectedPrivateResponse|DesktopPublicCandidate|OrderedCandidateDraftNamedFinal|SelectedPrivateResponse|SelectedPrivatePenultimate)' ./cmd/client

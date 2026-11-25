@@ -120,7 +120,14 @@ func NewDeviceFixedPlan(config string, actual int) (*Plan, error) {
 
 func planForGraph(config string, actual int, fixed bool) (*Plan, error) {
 	var object map[string]any
-	if strictJSON(config, &object, 4*1024*1024) != nil || object == nil || actual < MinMTU || actual > MaxMTU {
+	if strictJSON(config, &object, 4*1024*1024) != nil {
+		return nil, errors.New("MTU needs the exact live TUN graph")
+	}
+	return planForParsedGraph(object, config, actual, fixed)
+}
+
+func planForParsedGraph(object map[string]any, config string, actual int, fixed bool) (*Plan, error) {
+	if object == nil || actual < MinMTU || actual > MaxMTU {
 		return nil, errors.New("MTU needs the exact live TUN graph")
 	}
 	inbounds, ok := object["inbounds"].([]any)

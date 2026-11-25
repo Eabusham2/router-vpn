@@ -91,7 +91,7 @@ require_ordinary_candidate_reservation_api() {
   grep -Fq "$signature" "$api_list" || {
     echo 'combined libbox AAR is missing the ordinary candidate reservation factory' >&2; return 1
   }
-  for signature in 'java.lang.String routerNodeChainCandidatePrefixMeasurement(io.nekohasekai.libbox.RouterNodeChain, int);' 'boolean routerNodeChainCandidateInputSupportedForMeasurement(java.lang.String, java.lang.String);' 'java.lang.String routerNodeChainCandidatePrefixProof(io.nekohasekai.libbox.RouterNodeChain, int);'; do
+  for signature in 'java.lang.String routerNodeChainFilterPublicCandidateInventory(java.lang.String, int, java.lang.String) throws java.lang.Exception;' 'java.lang.String routerNodeChainCandidatePrefixMeasurement(io.nekohasekai.libbox.RouterNodeChain, int);' 'boolean routerNodeChainCandidateInputSupportedForMeasurement(java.lang.String, java.lang.String);' 'java.lang.String routerNodeChainCandidatePrefixProof(io.nekohasekai.libbox.RouterNodeChain, int);'; do
     grep -Fq "$signature" "$api_list" || {
       echo "combined libbox AAR is missing the candidate prefix measurement API: $signature" >&2; return 1
     }

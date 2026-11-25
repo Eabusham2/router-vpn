@@ -1014,17 +1014,16 @@ function ShowUnifiedOrderedNodes {
         }
         $available.Add_DropDownOpened({
             $execution=[string](Control 'UnifiedExecution').SelectedItem.Tag
-            if($rows.Count -lt 1 -or $dialog.FindName('Final').Tag){return}
+            if($rows.Count -lt 1){return}
             $exitID=if($dialog.FindName('Final').Tag){[string]$dialog.FindName('Final').Tag}else{$id}
             $nodes=@($rows.ToArray())+@([pscustomobject]@{id=$exitID;mode=[string]$finalMode.SelectedValue})
             if(-not(Test-RouterVPNOrderedCandidatePosition $nodes ($rows.Count-1) $execution $store.profiles)){return}
-            $signature=(@($rows.ToArray()|ForEach-Object{$_.id+'/'+$_.mode})-join'|')+'|'+$finalMode.SelectedValue+'|'+$execution
+            $signature=(@($rows.ToArray()|ForEach-Object{$_.id+'/'+$_.mode})-join'|')+'|'+$exitID+'|'+$finalMode.SelectedValue+'|'+$execution
             if([string]$available.Tag-ceq$signature){return}
             $available.Tag=$signature;$available.IsDropDownOpen=$false;$list.SelectedIndex=$rows.Count-1
             $dialog.FindName('MeasureNext').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent))
         })
         $dialog.FindName('MeasureNext').Add_Click({try{
-            if($dialog.FindName('Final').Tag){throw 'This external-final route supports connected measurements.'}
             do {
                 $position=$list.SelectedIndex
                 $captured=&$captureEditor
@@ -1052,7 +1051,7 @@ function ShowUnifiedOrderedNodes {
                 [void](New-RouterVPNOrderedConnectPayload ([pscustomobject]@{control_id=$id;nodes=$proposed;profile_tokens=$tokens;execution=$captured.execution}) $current)
                 $rows.Insert($next,[pscustomobject]@{id=$proposed[$next].id;mode=$proposed[$next].mode})
                 &$refresh;$list.SelectedIndex=$next;$status.Text='Added the measured hop to this draft.'
-            } while ($proposed.Count -lt (Get-RouterVPNOrderedPhysicalTraversalDepth) -and (Test-RouterVPNOrderedCandidatePosition $proposed $next $fresh.execution $store.profiles))
+            } while (($proposed.Count -lt (Get-RouterVPNOrderedPhysicalTraversalDepth) -or (Get-RouterVPNOrderedValue $body 'external_final' $false)) -and (Test-RouterVPNOrderedCandidatePosition $proposed $next $fresh.execution $store.profiles))
         }catch{$status.Text=$_.Exception.Message}})
         $dialog.FindName('Apply').Add_Click({try{
             Assert-RouterVPNMutationIdle 'applying the ordered node path'

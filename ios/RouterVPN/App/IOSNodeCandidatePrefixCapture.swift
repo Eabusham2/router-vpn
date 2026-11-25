@@ -50,7 +50,7 @@ struct IOSNodeCandidatePrefixCapture {
         guard original.selectionExecution == "local", let source = original.originalSource,
               !source.isEmpty, source.utf8.count <= IOSNodeChainCapture.maximumInputBytes,
               position >= 0, position < original.members.count - 1,
-              original.candidatePrefixes[position].metric == "routed-candidate-response" || original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
+              ["routed-candidate-response", "routed-public-candidate-response"].contains(original.candidatePrefixes[position].metric) || original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
               !inventory.isEmpty, inventory.utf8.count <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw issue() }
         var failure: NSError?
         let created: LibboxRouterNodeChainCandidatePreparation?
@@ -112,8 +112,9 @@ struct IOSNodeCandidatePrefixCapture {
                   prefix.start_layer == (layer.isEmpty ? "off" : layer), Self.digest(prefix.source_sha256),
                   !prefix.tag.isEmpty else { throw Self.issue() }
             if member.mode == "shadowsocks" {
-                guard value.measurement == "routed-candidate-response", index > 0,
+                guard index > 0,
                       prefix.start_layer == "off", case .ordinary(let capture) = original,
+                      value.measurement == (capture.sourceSchema == 8 ? "routed-public-candidate-response" : "routed-candidate-response"),
                       let graph = try JSONSerialization.jsonObject(with: Data(capture.config.utf8)) as? [String: Any],
                       let outbounds = graph["outbounds"] as? [[String: Any]],
                       outbounds.filter({ $0["tag"] as? String == prefix.tag && $0["type"] as? String == "shadowsocks" }).count == 1 else { throw Self.issue() }

@@ -13,7 +13,6 @@ import (
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
-	"router-vpn/internal/hopmeasure"
 )
 
 // The identity returned by the original atomic rename is the sole rollback
@@ -194,7 +193,7 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 	}
 	job := owner.prepared
 	namedAction, draftAction := "", ""
-	privateResponse := candidateViewMetric(job.view.prefixes, job.view.position) == hopmeasure.CandidatePrivateResponseMeasurement
+	privateResponse := desktopCandidateResponseMetric(candidateViewMetric(job.view.prefixes, job.view.position))
 	for _, choice := range job.view.candidates {
 		if choice.ID == q.CandidateID && choice.SaveReason == "" && reflect.DeepEqual(choice.Proposal, q.ProposedPath) &&
 			(choice.ProposalAction == "save-final-profile" || choice.ProposalAction == "save-intermediate-profile") && privateResponse {
@@ -453,10 +452,8 @@ func (a *app) completePreparedProfileResponse(w http.ResponseWriter, owner *viaE
 	}
 	response := orderedCandidatePreparedResponseLocked(owner, time.Now())
 	response["ok"], response["saved"] = true, true
-	if job.view.draft != nil {
-		response["proposal_action"] = job.savedAction
-		response["candidate_id"] = job.savedCandidate
-	}
+	// The committed canonical adoption fields also belong to a saved Local
+	// public candidate. Status, initial delivery and retry share one receipt.
 	response["proposed_path"] = append([]common.MultihopNodeSelection(nil), job.savedRequest.ProposedPath...)
 	response["note"] = "Saved a separate profile for the next connection. The temporary VPN is DOWN."
 	control.mu.Unlock()

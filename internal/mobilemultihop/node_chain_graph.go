@@ -209,13 +209,12 @@ func compileNodeChainGraph(nodes []nodeChainGraphMember, closures []*externalPre
 	var physical []PhysicalEgress
 	var projections [][]PhysicalEgress
 	aggregate := server != nil && server.firstPacket > 0
+	traversal, err := parseCapturedEgressGraph(string(projected), connectPhysical)
+	if err != nil {
+		return fail(err)
+	}
 	for _, proof := range proofs {
-		networks := []string{"tcp", "udp"}
-		if connect == nil {
-			physical, err = compiledPhysicalEgressWithDesktopProof(string(projected), networks, nil, proof.Tag)
-		} else {
-			physical, err = compiledPhysicalEgressWithCapturedTransports(string(projected), networks, nil, proof.Tag, false, connectPhysical)
-		}
+		physical, err = traversal.physical([]string{"tcp", "udp"}, nil, proof.Tag, false)
 		if err != nil || !aggregate && !nodeChainSamePhysical(physical, expected) {
 			return fail(errors.New("ordered chain introduced physical egress outside its original first node"))
 		}

@@ -110,7 +110,7 @@ final class AndroidNodeCandidatePreparationDialog {
         if(!visible() || waitingForReviewRelease)return;if(owner==null)owner=capturedOwner();choices=Collections.unmodifiableList(new ArrayList<>(completed));
         boolean savable=false;for(var choice:choices)if(choice.profile!=null&&choice.saveReason.isEmpty()&&choice.result.current(System.currentTimeMillis()))savable=true;
         StringBuilder text=new StringBuilder(failure==null?(choices.isEmpty()?"Temporary VPN stopped. No complete current candidate scores are available.":savable?"Temporary VPN stopped. Complete proposals are ready to save.":"Temporary VPN stopped. Candidate measurements are available. Each row gives its Save reason."):"Candidate results unavailable: "+failure.getMessage());
-        text.append("\n\nPacket prefixes measure TCP handshakes. Qualified Shadowsocks prefixes measure authenticated responses from the paired candidate. Each score requires 50 successful samples. Load and Connect remain separate choices.");
+        text.append("\n\nPacket prefixes measure TCP handshakes. Paired candidates return authenticated private responses. An imported candidate on a Local public-exit route returns its verified public address over HTTPS. Each score requires 50 successful samples. Load and Connect remain separate choices.");
         appendMeasuredRows(text,choices);output.setText(text.toString());changed.run();
     });}
     private static void appendMeasuredRows(StringBuilder text,List<AndroidNodeCandidatePreparation.Choice> rows){

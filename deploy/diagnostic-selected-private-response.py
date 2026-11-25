@@ -70,6 +70,7 @@ def encrypted(stage):
                '-o', str(stage/'warm-sing-box'), './cmd/sing-box'], cwd=core, env=env, timeout=2400)
     receipt = native.execute(core, TARGET, tags, env, build.run, private_response_diagnostic=True)
     if (set(receipt['encrypted']) != set(native.PRIVATE_RESPONSE_CASES) or len(receipt['encrypted']) != 76
+            or receipt.get('public_candidate_encrypted') != dict.fromkeys(native.PUBLIC_CANDIDATE_CASES, 2)
             or receipt.get('external_final_encrypted') != dict.fromkeys(native.EXTERNAL_FINAL_CASES, 2)
             or build.PQ.verify(archive, TARGET) != pq):
         raise ValueError('Diagnostic lost a private response case or its original native archive')

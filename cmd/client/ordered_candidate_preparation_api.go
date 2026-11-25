@@ -113,11 +113,14 @@ func (a *app) orderedCandidatePreparedCatalogWithNetwork(w http.ResponseWriter, 
 	metric := candidateViewMetric(view.prefixes, view.position)
 	if metric == hopmeasure.CandidatePrivateResponseMeasurement {
 		note = "50 authenticated responses from each paired candidate's private agent through the selected prefix. Review follows native path cleanup."
+	} else if metric == hopmeasure.CandidatePublicResponseMeasurement {
+		note = "50 HTTPS responses after TLS through the captured prefix and each imported candidate, verifying its recorded public exit IP. Review follows native cleanup. Save and Use retain the original suffix and public final."
 	}
 	response := orderedCandidatePreparedPurposeResponse(map[string]any{"schema": 1, "view_token": view.token,
 		"expires_at": view.expires.UnixMilli(), "prefix_position": view.position, "prefixes": view.prefixes,
 		"candidates": view.candidates, "samples": 50, "measurement": metric,
 		"note": note}, scope)
+	addOrderedPublicCandidateSource(response, view.selection, view.position, metric)
 	if isDraft {
 		response["origin"] = "editor-draft"
 		response["requested_execution"] = view.draft.Execution
@@ -226,7 +229,7 @@ func runOrderedCandidatePreparedJob(p *orderedCandidatePreparation, job *ordered
 			p.control.mu.Lock()
 			defer p.control.mu.Unlock()
 			if err != nil {
-				job.failures = append(job.failures, viaEntryCandidateError{ID: id, Error: "No complete valid 50-sample TCP receipt."})
+				job.failures = append(job.failures, viaEntryCandidateError{ID: id, Error: "No complete valid 50-sample receipt for the captured measurement."})
 			} else {
 				job.results = append(job.results, result)
 			}
@@ -297,7 +300,7 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 	}
 	if job.saved != nil {
 		response["saved_profile_id"], response["profile_id"], response["profile_name"], response["saved"] = job.saved.ID, job.saved.ID, job.saved.Name, true
-		if job.view.draft != nil && job.savedRequest != nil {
+		if job.savedRequest != nil && (job.view.draft != nil || response["measurement"] == hopmeasure.CandidatePublicResponseMeasurement) {
 			response["proposal_action"], response["candidate_id"], response["proposed_path"] = job.savedAction, job.savedCandidate, job.savedRequest.ProposedPath
 		}
 	}

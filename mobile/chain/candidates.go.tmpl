@@ -339,6 +339,11 @@ func RouterNodeChainCandidatePrefixMeasurement(plan *RouterNodeChain, position i
     return plan.chain.CandidatePrefixMeasurement(int(position))
 }
 
+// Retain only independent original imported candidates for one Local public prefix.
+func RouterNodeChainFilterPublicCandidateInventory(source string, position int32, inventory string) (string, error) {
+    return mobilemultihop.FilterNodeChainPublicCandidateInventory(source, int(position), inventory)
+}
+
 func RouterNodeChainCandidateInputSupportedForMeasurement(input, measurement string) bool {
     return mobilemultihop.NodeChainCandidateInputSupportedForMeasurement(input,measurement)
 }

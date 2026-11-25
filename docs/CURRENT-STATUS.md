@@ -11,8 +11,21 @@ next registered candidate can run on the same original trial. AWG2 Fast and
 Strong recursive Local candidate paths add 28 encrypted
 cases to the previous 48-case inventory.
 
-The source-fingerprinted controller run after the ownership repairs passed
-17 complete race-enabled roots and 132 root/leaf verdicts. The full native shipping source gate passed
+The same qualified Local external-final family now continues candidate
+measurements through its imported interiors. Fifty fresh HTTPS responses,
+timed after TLS and checked against the independent candidate's expected
+public IP, produce the distinct `routed-public-candidate-response` score.
+Use inserts an unsaved hop; named Save creates a separate complete profile.
+Both retain the paired entry, every original suffix member, and the public
+final. Native editors recapture the inserted prefix, including the final
+measure-only step after a 95-to-96-node insertion. Shared source filtering
+excludes ambiguous imports while retaining independent alternatives. Seven
+new encrypted fixture leaves are required separately from the earlier native
+checkpoint below.
+
+The final source-fingerprinted controller run after the public-candidate and ownership repairs passed
+19 complete race-enabled roots and 139 root/leaf verdicts, including the real
+96-member HTTP catalog under its original admission deadline. The full native shipping source gate passed
 83 tests; the shared measurement and relay race suites and platform callback
 checks also passed. The record links the integrated executable receipt and
 transcript and explains the actual modeled boundaries.
@@ -21,9 +34,11 @@ At `c125608`, the hosted Server matrix passed on amd64 and ARM64, including
 50 real encrypted candidate responses and joined cleanup. Four unmodified
 native receipts and their GitHub artifact hashes are retained in the record.
 That commit's separate selected-response diagnostic stopped during a reloaded
-17-node teardown after its first 40 selected cases and all six external-final
-cases; its aggregate receipt was not produced. Later source requires its own
-hosted qualification.
+17-node teardown. The subsequent [diagnostic at `3a772f6`](https://github.com/Eabusham2/router-vpn/actions/runs/45647366260)
+passed all 76 selected cases, all six external-final cases, and the complete
+controller step, including the original 16-to-17-node failure. Its unmodified
+receipt and artifact provenance are retained in the record. The later public
+candidate implementation requires its own hosted qualification.
 
 The record distinguishes source/controller and native callback checks from
 the mandatory new encrypted inventories, exact-commit release, signing, and

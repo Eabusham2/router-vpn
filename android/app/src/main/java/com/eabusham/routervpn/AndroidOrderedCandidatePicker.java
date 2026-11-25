@@ -55,7 +55,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
     private TextView status;
     private ArrayAdapter<String> rows;
     private int prefix;
-    private boolean eligible,busy,closed,reviewing,response;
+    private boolean eligible,busy,closed,reviewing,response,publicResponse;
     private java.util.function.BooleanSupplier captureDispatched=()->true;
     private AndroidNodeCandidatePreparation retiringOwner;
 
@@ -112,6 +112,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
         List<AndroidNodeStore.ChainSource> sources=new ArrayList<>(); List<String> modes=new ArrayList<>();
         for(AndroidOrderedPathSelection.Member member:path){sources.add(member.source);modes.add(member.mode);}
         response=AndroidNodeChainCapture.responsePrefix(sources,modes,prefix,draft.execution());
+        publicResponse=response && path.get(path.size()-1).source.imported;
         eligible=prefix>=0&&List.of("local","server","auto").contains(draft.execution())
                 && (!response || local || finalNode)
                 &&(response||List.of("wg","awg2-fast","awg2-strong").contains(path.get(prefix).mode));
@@ -141,7 +142,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
             busy=true;
             permissionHome=AndroidHomeStateStore.snapshot(activity);permissionSelection=AndroidConnectionSelection.digest(activity,nodes);
             if(connection.isActiveOrTransitioning()||!connection.pathCurrent(permissionHome))throw new IllegalStateException("Disconnect before measuring this prefix.");
-            status.setText((response?"Measuring authenticated private candidate responses through ":"Measuring candidate TCP handshakes through ")+(prefix+1)+" selected hop(s)…");renderRows();controls();
+            status.setText((publicResponse?"Measuring verified public HTTPS exit responses through ":response?"Measuring authenticated private candidate responses through ":"Measuring candidate TCP handshakes through ")+(prefix+1)+" selected hop(s)…");renderRows();controls();
             if(first!=null) {
                 Intent permission=VpnService.prepare(activity);
                 if(permission!=null){pendingPermission=allocatePermission();activity.startActivityForResult(permission,pendingPermission);}
@@ -215,7 +216,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
     });}
 
     private void complete() {
-        busy=false;status.setText("Through "+(prefix+1)+" selected hop(s) • 50 "+(response?"authenticated private responses":"TCP handshakes")+" per scored node • 10% trimmed mean");
+        busy=false;status.setText("Through "+(prefix+1)+" selected hop(s) • 50 "+(publicResponse?"verified public HTTPS exit responses":response?"authenticated private responses":"TCP handshakes")+" per scored node • 10% trimmed mean");
         renderRows();controls();changed.run();handler.removeCallbacks(expiry);handler.postDelayed(expiry,1000);
     }
     private final Runnable expiry=new Runnable(){public void run(){

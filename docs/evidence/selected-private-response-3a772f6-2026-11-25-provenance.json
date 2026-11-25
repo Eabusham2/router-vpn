@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "kind": "github-native-checkpoint-provenance",
+  "repository": "Eabusham2/router-vpn",
+  "commit": "3a772f6e9848db8af212c098d69cee7e823f9c54",
+  "tree": "043524fd19edb0dc1b68f7275031af87b28067be",
+  "workflow_run_id": 45647366260,
+  "job_id": 139321879025,
+  "artifact_id": 15040087435,
+  "archive_sha256": "2b2d3a57395a2bbb4d93b5708f48ab4b0a71184b122bb9f1e1f497602ef92111",
+  "receipt": "selected-private-response-3a772f6-2026-11-25.json",
+  "receipt_sha256": "f4bcda3bc1a096e268c568362ae6f976c5d1e33f5d77829627b0e7d3d85b0e82",
+  "selected_cases": 76,
+  "external_final_cases": 6,
+  "limits": "This unmodified hosted receipt qualifies its named commit. It is not evidence for later public-candidate implementation, packaged release or physical installed-device acceptance."
+}

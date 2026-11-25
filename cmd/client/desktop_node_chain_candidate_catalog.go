@@ -277,11 +277,14 @@ func (result *desktopNodeChainCandidateCatalog) sealSourcePlan(ctx context.Conte
 // A view needs each independent source's TCP eligibility, then one complete
 // sealed inventory. Building and validating the same full chain for every row
 // consumed the admission deadline before a large linked catalog could open.
-func captureDesktopCandidateViewSource(ctx context.Context, a *app, launch *desktopNodeLaunch, position int, profile common.RouterProfile, revision, scope string) (*desktopNodeChainCandidateCatalog, error) {
-	if launch == nil || launch.chain == nil || position < 0 || position >= len(launch.chain.selection.Nodes) {
+func captureDesktopCandidateViewSource(ctx context.Context, a *app, launch *desktopNodeLaunch, position int, profile common.RouterProfile, revision, scope string, catalogMetric func(int) string) (*desktopNodeChainCandidateCatalog, error) {
+	if catalogMetric == nil || launch == nil || launch.chain == nil || position < 0 || position >= len(launch.chain.selection.Nodes) {
 		return nil, errors.New("candidate view lost its original prefix")
 	}
 	members := launch.chain.selection.Nodes[:position+1]
+	if catalogMetric(position) == hopmeasure.CandidatePublicResponseMeasurement {
+		members = launch.chain.selection.Nodes
+	}
 	if execution := desktopNodeChainLaunchExecution(launch); execution != nil && (execution.preparation.SupportsCompareLocalResponseCandidate(position) || candidateServerRequested(ctx) && execution.preparation.SupportsServerResponseCandidate(position)) {
 		members = launch.chain.selection.Nodes
 	}
@@ -298,8 +301,8 @@ func captureDesktopCandidateViewSource(ctx context.Context, a *app, launch *desk
 	if json.Unmarshal([]byte(part.inventory), &inventory) != nil || len(inventory.Inputs) != 1 || len(part.parsedInputs) != 1 || part.parsedInputs[0] == nil {
 		return nil, errors.New("candidate has no original supported TCP source")
 	}
-	metric := desktopCandidateMetricForIntent(launch, position, part.serverResponse)
-	if metric == "" || metric == hopmeasure.CandidatePrivateResponseMeasurement && !mobilemultihop.NodeChainCandidateInputSupportedForMeasurement(inventory.Inputs[0], metric) {
+	metric := catalogMetric(position)
+	if metric == "" || desktopCandidateResponseMetric(metric) && !mobilemultihop.NodeChainCandidateInputSupportedForMeasurement(inventory.Inputs[0], metric) {
 		return nil, errors.New("candidate has no attributable response through the selected prefix")
 	}
 	return part, nil

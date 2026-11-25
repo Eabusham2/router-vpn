@@ -83,6 +83,13 @@ func TestCombinedPlansKeepEachOriginalPrefixAndExecutableSelector(t *testing.T) 
 		}
 		plans = append(plans, plan)
 	}
+	ceilings, err := PrefixCeilings(config, 1380, []string{"entry", "proxy"})
+	if err != nil || len(ceilings) != len(plans) || ceilings[0] != plans[0].Ceiling || ceilings[1] != plans[1].Ceiling {
+		t.Fatal("ordered prefix ceiling differs from its independent native projection", err)
+	}
+	if got, err := PrefixCeilings(config, 1380, []string{"entry", "missing-original", "proxy"}); err == nil || got != nil {
+		t.Fatal("unsupported middle prefix acquired partial MTU bounds")
+	}
 	combined, err := CombinePlans(config, 1380, plans)
 	if err != nil || combined.source != config || combined.Ceiling != 1500 {
 		t.Fatal("complete prefix projections lost executable source", err)

@@ -712,7 +712,7 @@ SWIFT_ORDERED_EDITOR = r'''
 '''
 
 SWIFT_ORDERED = r'''
-for count in [3, 9] {
+for count in [3, 4, 9, 95, 96] {
     let ids = (0..<count).map { "schema8-\($0)" }
     let tokens = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, String(format:"%064x",$0.offset+1)) })
     var profiles = catalogRows(ids, tokens: tokens)
@@ -730,6 +730,40 @@ for count in [3, 9] {
     check((body8["external_final"] as? Bool) == true && saved8.orderedNodes.first?["id"] == ids[0] && saved8.orderedNodes.last?["id"] == ids.last! && saved8.profileTokens == tokens, "external final lost its selected WireGuard entry or source tokens")
     let loaded = try RouterVPNOrderedNodeDraft(selection:saved8,generation:UUID(),catalog:profiles)
     check(try loaded.selection() == saved8, "saved external final lost its exit in the editor")
+    for position in 0..<count-1 { check(loaded.canMeasure(after:position),"original public route lost its next measurable prefix") }
+    check(!loaded.canMeasure(after:-1) && !loaded.canMeasure(after:count-1) && loaded.hasRoomForMeasuredHop == (count<96),"public route escaped its source or 96-node insertion bounds")
+    if count<96 {
+        var extra=profiles[1];extra["id"]="independent-public";extra["profile_token"]=String(repeating:"e",count:64)
+        let withCandidate=profiles+[extra]
+        for position in Set([1,count-2]) {
+            var next=try RouterVPNOrderedNodeDraft(selection:saved8,generation:UUID(),catalog:withCandidate)
+            var inserted=saved8.orderedNodes;inserted.insert(["id":"independent-public","mode":"shadowsocks"],at:position+1)
+            var nextTokens=tokens;nextTokens["independent-public"]=String(repeating:"e",count:64)
+            let used:[String:Any]=["draft_action":"insert-measured-hop","candidate_id":"independent-public","expected_selected_node_id":ids[0],
+                "expected_profile_tokens":nextTokens,"requested_execution":"local","proposed_path":inserted]
+            var stale=used;stale["expected_selected_node_id"]=ids.last!
+            rejects({ try next.insertMeasured(stale,after:position) },"public insertion replaced its paired control with the external final")
+            try next.insertMeasured(used,after:position)
+            let repeated=try next.selection()
+            check(repeated.orderedNodes==inserted && repeated.selectedNodeID==ids[0] && repeated.profileTokens==nextTokens && next.canMeasure(after:position+1),"public insertion lost its original suffix, exit or next measurement")
+            let recaptured=try RouterVPNOrderedNodes.connectBody(repeated,current:["selected_id":ids[0],"profiles":withCandidate])
+            check(recaptured["external_final"] as? Bool==true && recaptured["nodes"] as? [[String:String]]==inserted,"public remeasurement lost the complete original source")
+            owner.connectionProfileSelection=saved8;owner.profiles=withCandidate;owner.routerIDs=withCandidate.compactMap { $0["id"] as? String }
+            owner.routerPopup.selectItem(at:0);owner.multihopExecutionPopup.selectItem(at:0);owner.connectionProfileCatalogSelectedID=ids[0]
+            fixtureDefaults.set(true,forKey:macConnectionMultihopEnabledKey)
+            owner.api.orderedCurrent=["selected_id":ids[0],"profiles":withCandidate]
+            let originalDraft=try RouterVPNOrderedNodeDraft(selection:saved8,generation:owner.connectionProfileSelectionGeneration,catalog:withCandidate)
+            let picker=OrderedEditor(originalDraft);picker.owner=owner;picker.path.selectItem(at:position);owner.draftMeasurement=nil
+            picker.measureNext()
+            let submitted=owner.draftMeasurement!
+            check(submitted.1==position && submitted.0["external_final"] as? Bool==true && submitted.0["nodes"] as? [[String:String]]==saved8.orderedNodes,"public editor measured another captured prefix")
+            try submitted.2(used)
+            check(picker.draft.nodes==inserted && picker.draft.control==ids[0],"public callback changed the original entry or suffix")
+            owner.draftMeasurement=nil;DispatchQueue.main.run()
+            check(owner.draftMeasurement?.1==position+1 && owner.draftMeasurement?.0["nodes"] as? [[String:String]]==inserted,"public callback did not reopen the inserted prefix up to its final 96-node measurement")
+            owner.draftMeasurement=nil;DispatchQueue.clear()
+        }
+    }
     var other = saved8; other.execution = "server"
     rejects({ _ = try RouterVPNOrderedNodes.connectBody(other,current:current) }, "external final accepted Server")
     profiles[count-1]["profile_token"] = String(repeating:"f", count:64)

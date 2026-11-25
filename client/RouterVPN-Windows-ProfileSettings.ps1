@@ -596,6 +596,13 @@ function global:Test-RouterVPNOrderedResponsePrefix {
 function global:Test-RouterVPNOrderedCandidatePosition {
     param($Nodes,[int]$Position,[string]$Execution,$Profiles)
     if($Position -lt 0 -or $Position -ge $Nodes.Count-1 -or $Nodes.Count -gt (Get-RouterVPNOrderedPhysicalTraversalDepth)){return $false}
+    $index=Get-RouterVPNOrderedProfileIndex $Profiles
+    if((Get-RouterVPNOrderedValue $index[$Nodes[-1].id] 'node_kind') -ceq 'external'){
+        if($Execution -cne 'local' -or -not(Test-RouterVPNOrderedExternalFinalShape $Nodes $Nodes[0].id) -or
+           -not(Test-RouterVPNOrderedPairedOff $index[$Nodes[0].id]) -or -not(Test-RouterVPNOrderedExternalFinalProfile $index[$Nodes[-1].id])){return $false}
+        for($i=1;$i -lt $Nodes.Count-1;$i++){if(-not(Test-RouterVPNOrderedLiteralOff $index[$Nodes[$i].id])){return $false}}
+        return $true
+    }
     if($Nodes[$Position].mode -ceq 'shadowsocks'){return Test-RouterVPNOrderedResponsePrefix $Nodes $Position $Execution $Profiles}
     if(-not(Test-RouterVPNOrderedPrefixMode $Nodes[$Position].mode) -or $Nodes.Count -eq (Get-RouterVPNOrderedPhysicalTraversalDepth)){return $false}
     if($Execution -ceq 'local' -and @($Nodes|Select-Object -First ($Position+1)|Where-Object{-not(Test-RouterVPNOrderedPrefixMode $_.mode)}).Count){return $false}

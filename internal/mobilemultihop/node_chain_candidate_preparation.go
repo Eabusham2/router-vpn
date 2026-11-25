@@ -6,7 +6,6 @@ import (
 	"reflect"
 
 	"router-vpn/internal/hopmeasure"
-	"router-vpn/internal/mobilemtu"
 )
 
 // NodeChainCandidatePreparation is a separate, default-deny native source. It
@@ -195,27 +194,11 @@ func candidatePreparationMTU(graph map[string]any, proofs []NodeChainProof, orig
 	if err != nil || tun["type"] != "tun" || tun["auto_route"] != true || tun["strict_route"] != true {
 		return NodeChainMTUPlan{}, bad
 	}
-	result := NodeChainMTUPlan{Original: actual, Ceiling: 9000, TUNTag: predecessorText(tun, "tag")}
-	projection := predecessorCopy(graph)
-	for _, proof := range proofs {
-		projection["route"].(map[string]any)["final"] = proof.Tag
-		raw, err := json.Marshal(projection)
-		if err != nil {
-			return NodeChainMTUPlan{}, err
-		}
-		plan, err := mobilemtu.NewPlan(string(raw), actual)
-		if err != nil {
-			return NodeChainMTUPlan{}, err
-		}
-		if plan.Ceiling < result.Ceiling {
-			result.Ceiling = plan.Ceiling
-		}
-		result.Prefixes = append(result.Prefixes, NodeChainMTUBound{proof.Position, proof.Tag, plan.Ceiling})
+	raw, err := json.Marshal(graph)
+	if err != nil {
+		return NodeChainMTUPlan{}, err
 	}
-	if actual > result.Ceiling {
-		return NodeChainMTUPlan{}, errors.New("saved TUN MTU exceeds the captured preparation prefix ceiling")
-	}
-	return result, nil
+	return orderedPrefixMTUBounds(string(raw), proofs, actual, predecessorText(tun, "tag"))
 }
 
 func (p *NodeChainCandidatePreparation) digest() string {

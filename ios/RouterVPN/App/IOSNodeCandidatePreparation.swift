@@ -71,7 +71,7 @@ import Foundation
         records = snapshot.records; stamp = snapshot.stamp
         if case .local(let capture) = purpose, let position = prefixPosition, let request {
             let candidate = try IOSNodeCandidateCapture.make(request: request, prefixPosition: position,
-                proofs: prefixes, chainSource: sourceSHA256, chainConfig: configSHA256)
+                proofs: prefixes, chainSource: sourceSHA256, chainConfig: configSHA256, originalLaunch: Data(capture.launchInput.utf8))
             do {
                 let prefix = try IOSNodeCandidatePrefixCapture.compile(original: capture, position: position,
                     inventory: String(decoding: candidate.source.inventory.data, as: UTF8.self))

@@ -24,6 +24,8 @@ const CandidateNotRegistered = "not-registered"
 const (
 	CandidateTCPMeasurement             = "routed-tcp-connect"
 	CandidatePrivateResponseMeasurement = "routed-candidate-response"
+	CandidatePublicResponseMeasurement  = "routed-public-candidate-response"
+	CandidatePublicResponseEndpoint     = "https://1.1.1.1/cdn-cgi/trace"
 )
 
 // CandidateInventoryBytes bounds one native target frame. A retained source
@@ -91,11 +93,12 @@ type candidateCompletion struct {
 }
 
 type CandidateService struct {
-	service    *Service
-	prefix     CandidatePrefix
-	targets    []CandidateTarget
-	response   func(context.Context, CandidateTarget, func() error) error
-	completion candidateCompletion // protected by service.mu
+	service        *Service
+	prefix         CandidatePrefix
+	targets        []CandidateTarget
+	response       func(context.Context, CandidateTarget, func() error) error
+	publicResponse func(context.Context, CandidateTarget, func() error, func() error) error
+	completion     candidateCompletion // protected by service.mu
 }
 
 func candidateText(value string) bool {
@@ -156,7 +159,31 @@ func NewExtendedResponseCandidatesContext(ctx context.Context, engine CandidateE
 	return service, err
 }
 
+// PublicResponseCandidateAuthority binds the public response target inventory
+// to the exact original imported-exit route and selected imported prefix.
+type PublicResponseCandidateAuthority interface {
+	PublicResponseCandidateDepth(position int, id, tag string) int
+}
+
+func NewPublicResponseCandidatesContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, limit int, authority PublicResponseCandidateAuthority, response func(context.Context, CandidateTarget, func() error, func() error) error) (*CandidateService, error) {
+	if authority == nil || response == nil || limit <= 0 || limit > 40<<20 {
+		return nil, ErrStale
+	}
+	count := authority.PublicResponseCandidateDepth(prefix.Position, prefix.ID, prefix.Tag)
+	if count < 3 || count > 96 || prefix.Position < 1 || prefix.Position >= count-1 {
+		return nil, ErrStale
+	}
+	service, err := newPrefixCandidatesContext(ctx, engine, prefix, targets, limit, count)
+	if err == nil {
+		service.publicResponse = response
+	}
+	return service, err
+}
+
 func (s *CandidateService) measurement() string {
+	if s.publicResponse != nil {
+		return CandidatePublicResponseMeasurement
+	}
 	if s.response != nil {
 		return CandidatePrivateResponseMeasurement
 	}
@@ -241,7 +268,11 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 	}
 	result := Result{ID: target.ID, Role: "candidate", Kind: "tcp-connect", Label: fmt.Sprintf("TCP connection to candidate through node %d", s.prefix.Position+1)}
 	phase := "TCP connection"
-	if s.response != nil {
+	if s.publicResponse != nil {
+		phase = "public exit HTTPS response"
+		result.Kind = "public-exit-response"
+		result.Label = fmt.Sprintf("Verified public exit HTTPS response through node %d and candidate", s.prefix.Position+1)
+	} else if s.response != nil {
 		phase = "private agent response"
 		result.Kind = "private-agent-response"
 		result.Label = fmt.Sprintf("Authenticated candidate response through node %d", s.prefix.Position+1)
@@ -255,7 +286,15 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 				break
 			}
 			probe, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
-			interval, clockErr := StartInterval()
+			var interval Interval
+			var clockErr error
+			begin := func() error {
+				interval, clockErr = StartInterval()
+				return clockErr
+			}
+			if s.publicResponse == nil {
+				_ = begin()
+			}
 			var connection net.Conn
 			var dialErr, elapsedErr error
 			elapsed := 0.0
@@ -263,7 +302,9 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 				elapsed, elapsedErr = interval.Milliseconds()
 				return elapsedErr
 			}
-			if clockErr == nil && s.response != nil {
+			if s.publicResponse != nil {
+				dialErr = s.publicResponse(probe, target, begin, complete)
+			} else if clockErr == nil && s.response != nil {
 				dialErr = s.response(probe, target, complete)
 			} else if clockErr == nil {
 				connection, dialErr = service.engine.Dial(probe, s.prefix.Tag, target.Address)
@@ -278,7 +319,7 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 			probeErr := probe.Err()
 			cancel()
 			failure = errors.Join(clockErr, dialErr, elapsedErr, closeErr, probeErr)
-			if failure != nil || connection == nil && s.response == nil || elapsed <= 0 || math.IsNaN(elapsed) || math.IsInf(elapsed, 0) {
+			if failure != nil || connection == nil && s.response == nil && s.publicResponse == nil || elapsed <= 0 || math.IsNaN(elapsed) || math.IsInf(elapsed, 0) {
 				if s.response != nil && len(samples) == 0 && errors.Is(dialErr, ErrCandidateNotRegistered) && ctx.Err() == nil && probeErr == nil && clockErr == nil && closeErr == nil {
 					result.CandidateDisposition = CandidateNotRegistered
 					failure = ErrCandidateNotRegistered
@@ -306,6 +347,9 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 		}
 		mean /= float64(len(sorted) - 2*trim)
 		result.Benchmark = &LatencyBenchmark{Schema: 1, Measurement: s.measurement(), Attempts: LatencyBenchmarkSamples, Distribution: distribution(samples), TrimmedMean: mean}
+		if s.publicResponse != nil {
+			result.Benchmark.Endpoint = CandidatePublicResponseEndpoint
+		}
 		result.Ready = true
 	} else {
 		if result.CandidateDisposition == CandidateNotRegistered {

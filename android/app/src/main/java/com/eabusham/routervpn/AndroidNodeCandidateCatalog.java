@@ -49,7 +49,8 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
     static AndroidNodeCandidateCatalog captureSources(Context context,AndroidNodeStore.ChainCapture source,int prefix)throws Exception {
         if(source==null||prefix<0||prefix>=source.modes.size())throw new IllegalStateException("Missing original prefix source");
         String metric=java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(source.modes.get(prefix))?"routed-tcp-connect":
-                AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,source.execution)?"routed-candidate-response":"";
+                AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,source.execution)
+                        ? (source.members.get(source.members.size()-1).imported ? "routed-public-candidate-response" : "routed-candidate-response") : "";
         return new AndroidNodeCandidateCatalog(context,source,prefix,metric);
     }
     private static AndroidNodeStore.ChainCapture source(AndroidNodeChainSession session) {
@@ -60,11 +61,13 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         if(source==null||prefix<0||prefix>=source.members.size())throw new IllegalStateException("The original saved packet prefix is missing.");
         source.requireCurrent();
         measurement=metric;
-        if(!"routed-candidate-response".equals(metric)&&!"routed-tcp-connect".equals(metric))throw new IllegalStateException("This prefix has no supported candidate measurement; no score is available.");
+        boolean publicResponse="routed-public-candidate-response".equals(metric);
+        if(publicResponse && (!"local".equals(source.execution) || !source.members.get(source.members.size()-1).imported))throw new IllegalStateException("A public exit response requires the original Local imported route.");
+        if(!publicResponse&&!"routed-candidate-response".equals(metric)&&!"routed-tcp-connect".equals(metric))throw new IllegalStateException("This prefix has no supported candidate measurement; no score is available.");
         nodes=new AndroidNodeStore(context);external=new AndroidStandardExitStore(context);
         signature=currentSignature();
         Set<String> excluded=new HashSet<>(),proofs=new HashSet<>();
-        int lastExcluded = ("auto".equals(source.execution) || "server".equals(source.execution)) && "routed-candidate-response".equals(measurement) ? source.members.size()-1 : prefix;
+        int lastExcluded = publicResponse || ("auto".equals(source.execution) || "server".equals(source.execution)) && "routed-candidate-response".equals(measurement) ? source.members.size()-1 : prefix;
         for(int i=0;i<=lastExcluded;i++){AndroidNodeStore.ChainSource member=source.members.get(i);excluded.add(member.id);excluded.add(member.profileId);if(!member.proofId.isEmpty())proofs.add(member.proofId);}
         List<Row> captured=new ArrayList<>();List<AndroidNodeStore.Node> available=new ArrayList<>(nodes.list());
         java.util.Map<String,AndroidStandardExitStore.Entry> imported=new java.util.HashMap<>();
@@ -85,8 +88,12 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
                 String layer=rawLayer==null?"off":(String)rawLayer;
                 if(!java.util.Arrays.asList("","off","aes-256-gcm","aes-256-gcm+xor-whitening").contains(layer)
                         ||candidate.imported&&!layer.isEmpty()&&!"off".equals(layer))throw new IllegalStateException("Candidate Start Layer has no captured TCP owner");
+                if(publicResponse) {
+                    if(!candidate.imported)throw new IllegalStateException("Choose a saved literal imported Shadowsocks 2022 node.");
+                    AndroidNodeChainCapture.requireLiteralImportedSS(candidate);
+                }
                 input=AndroidNodeChainCapture.memberInput(candidate,candidateMode(candidate),profile);
-                if(!("routed-candidate-response".equals(measurement)?Libbox.routerNodeChainCandidateInputSupportedForMeasurement(input,measurement):Libbox.routerNodeChainCandidateInputSupported(input)))throw new IllegalStateException("Unsupported original candidate source");
+                if(!(publicResponse||"routed-candidate-response".equals(measurement)?Libbox.routerNodeChainCandidateInputSupportedForMeasurement(input,measurement):Libbox.routerNodeChainCandidateInputSupported(input)))throw new IllegalStateException("Unsupported original candidate source");
                 // The shared constructor admits the exact paired SS stream closure,
                 // or original imported SS2022, SOCKS5 or
                 // HTTP(S) CONNECT source, or single original TCP OpenVPN remote.
@@ -96,11 +103,28 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
             if(!input.isEmpty())inputs.put(input);
             captured.add(new Row(node.id,id,node.name,input,reason));
         }
-        if(inputs.length()==0)throw new IllegalStateException("No saved candidate supports this prefix measurement. A private response requires a paired Shadowsocks2022 candidate with Start Layer off.");
-        rows=java.util.Collections.unmodifiableList(captured);
-        inventory=new JSONObject().put("schema",1).put("revision",signature).put("inputs",inputs).toString();
-        if(inventory.getBytes(StandardCharsets.UTF_8).length>40*1024*1024)
+        String offered=new JSONObject().put("schema",1).put("revision",signature).put("inputs",inputs).toString();
+        if(offered.getBytes(StandardCharsets.UTF_8).length>40*1024*1024)
             throw new IllegalStateException("The complete saved candidate sources exceed the native source budget.");
+        if(publicResponse) {
+            inventory=Libbox.routerNodeChainFilterPublicCandidateInventory(AndroidNodeChainCapture.candidateSourceInput(source,prefix),prefix,offered);
+            JSONObject verified=new JSONObject(inventory);
+            if(verified.getInt("schema")!=1||!signature.equals(verified.getString("revision")))throw new IllegalStateException("The imported candidate catalog changed during verification.");
+            JSONArray eligible=verified.getJSONArray("inputs");
+            if(eligible.length()==0)throw new IllegalStateException("No independent literal imported Shadowsocks 2022 candidate has a captured public exit address.");
+            int index=0;
+            for(int i=0;i<captured.size();i++) {
+                Row row=captured.get(i);
+                if(row.input.isEmpty())continue;
+                if(index<eligible.length()&&row.input.equals(eligible.getString(index))){index++;continue;}
+                captured.set(i,new Row(row.localID,row.id,row.name,"","The imported candidate shares its identity, endpoint or cipher key with another node."));
+            }
+            if(index!=eligible.length())throw new IllegalStateException("The verified catalog replaced an original imported candidate.");
+        }else {
+            if(inputs.length()==0)throw new IllegalStateException("No saved candidate supports this prefix measurement. A private response requires a paired Shadowsocks2022 candidate with Start Layer off.");
+            inventory=offered;
+        }
+        rows=java.util.Collections.unmodifiableList(captured);
         inventorySHA=digest(inventory);
         requireSourcesCurrent();
     }

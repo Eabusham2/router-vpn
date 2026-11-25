@@ -12,6 +12,7 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
         switch metric {
         case "routed-tcp-connect": return ["wg", "awg2-fast", "awg2-strong"].contains(mode)
         case "routed-candidate-response": return mode == "shadowsocks" && (1..<(IOSMultihopNodeSelection.physicalTraversalDepth - 1)).contains(position)
+        case "routed-public-candidate-response": return mode == "shadowsocks" && node_id.isEmpty && (1..<(IOSMultihopNodeSelection.physicalTraversalDepth - 1)).contains(position)
         default: return false
         }
     }
@@ -34,6 +35,17 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
     }
     func supported(in proofs: [Self]) -> Bool {
         guard supported else { return false }
+        if metric == "routed-public-candidate-response" {
+            guard (3...IOSMultihopNodeSelection.physicalTraversalDepth).contains(proofs.count),
+                  proofs.indices.contains(position), position > 0, position < proofs.count - 1, proofs[position] == self,
+                  Set(proofs.map(\.profile_id)).count == proofs.count else { return false }
+            return proofs.enumerated().allSatisfy { index, row in
+                guard row.position == index, !row.profile_id.isEmpty else { return false }
+                if index == 0 { return row.mode == "wg" && !row.node_id.isEmpty && row.measurement == nil }
+                return row.mode == "shadowsocks" && row.node_id.isEmpty &&
+                    row.measurement == (index < proofs.count - 1 ? "routed-public-candidate-response" : nil)
+            }
+        }
         let modes = proofs.map(\.mode)
         let mixedPackets = IOSMultihopNodeSelection.extendedMixedPacketCount(modes, execution: "local")
         guard mixedPackets > 0 || position >= IOSMultihopNodeSelection.maximumNodes - 1 && metric == "routed-candidate-response" else { return true }
@@ -70,7 +82,7 @@ enum IOSNodeCandidateOriginalCapture {
     func preparationKind(at position: Int) -> String {
         switch self {
         case .ordinary(let capture):
-            if capture.sourceSchema == 8 && position == 0 { return "routervpn-node-chain-multiple-imported-candidate-preparation" }
+            if capture.sourceSchema == 8 && (position == 0 || LibboxRouterNodeChainCandidatePrefixMeasurement(capture.plan, Int32(position)) == "routed-public-candidate-response") { return "routervpn-node-chain-multiple-imported-candidate-preparation" }
             if capture.sourceSchema == 6, capture.selectionExecution == "local",
                Int(capture.plan.extendedLocalNodeCount()) == capture.members.count ||
                 LibboxRouterNodeChainCandidatePrefixMeasurement(capture.plan, Int32(position)) == "routed-candidate-response" {
@@ -87,9 +99,11 @@ enum IOSNodeCandidateOriginalCapture {
         members.enumerated().map { position, member in
             var prefix = IOSNodeCandidatePrefix(position: position, profile_id: member.id,
                 node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode)
-            if member.mode == "shadowsocks", case .ordinary(let capture) = self, selectionExecution == "local",
-               LibboxRouterNodeChainCandidatePrefixMeasurement(capture.plan, Int32(position)) == "routed-candidate-response" {
-                prefix.measurement = "routed-candidate-response"
+            if member.mode == "shadowsocks", case .ordinary(let capture) = self, selectionExecution == "local" {
+                let metric = LibboxRouterNodeChainCandidatePrefixMeasurement(capture.plan, Int32(position))
+                if metric == "routed-candidate-response" || capture.sourceSchema == 8 && metric == "routed-public-candidate-response" {
+                    prefix.measurement = metric
+                }
             }
             return prefix
         }
@@ -131,8 +145,8 @@ enum IOSNodeCandidateOriginalCapture {
         let original = try reopenConnected(String(decoding: input, as: UTF8.self), selectedProfile: final,
                                            sourceSHA256: sourceSHA256, configSHA256: configSHA256)
         defer { try? original.close() }
-        guard case .ordinary(let source) = original, source.sourceSchema == 6,
-              (4...IOSMultihopNodeSelection.maximumNodes).contains(proofs.count) || Int(source.plan.extendedLocalNodeCount()) == proofs.count,
+        guard case .ordinary(let source) = original, source.sourceSchema == 6 || source.sourceSchema == 8,
+              source.sourceSchema == 8 || (4...IOSMultihopNodeSelection.maximumNodes).contains(proofs.count) || Int(source.plan.extendedLocalNodeCount()) == proofs.count,
               original.candidatePrefixes == proofs else { throw issue() }
     }
     static func issue() -> NSError {

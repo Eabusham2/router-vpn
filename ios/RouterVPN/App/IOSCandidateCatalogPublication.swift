@@ -324,6 +324,7 @@ struct IOSCandidateMetadataPages {
         var fields: Set<String> = ["schema","capture_sha256","prefix_position","prefix_id","source_sha256","config_sha256","targets"]
         if let metric = body["measurement"] {
             guard let value = metric as? String, value == "routed-tcp-connect" ||
+                    value == "routed-public-candidate-response" && family != .selected ||
                     value == "routed-candidate-response" && (family != .selected ||
                         (body["requested_execution"] as? String == "auto" && body["execution"] as? String == "local" ||
                          ["server", "auto"].contains(body["requested_execution"] as? String ?? "") && body["execution"] as? String == "server") && selectedResponse != nil &&

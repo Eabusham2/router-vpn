@@ -62,6 +62,30 @@ func capturePlan(plan *Plan) *Plan {
 	return plan
 }
 
+// PrefixCeilings reads each original route.final projection using the same
+// envelope checks as NewPlan. Return numeric bounds only; no runnable config,
+// Plan or authority to change a TUN leaves this observation.
+func PrefixCeilings(config string, actual int, tags []string) ([]int, error) {
+	var graph map[string]any
+	if len(tags) < 1 || len(tags) > hopmeasure.PhysicalTraversalDepth || strictJSON(config, &graph, 4*1024*1024) != nil {
+		return nil, errors.New("MTU prefixes need their original graph and tags")
+	}
+	route, ok := graph["route"].(map[string]any)
+	if !ok {
+		return nil, errors.New("MTU graph lacks its exit route")
+	}
+	ceilings := make([]int, len(tags))
+	for i, tag := range tags {
+		route["final"] = tag
+		plan, err := planForParsedGraph(graph, "", actual, false)
+		if err != nil {
+			return nil, err
+		}
+		ceilings[i] = plan.Ceiling
+	}
+	return ceilings, nil
+}
+
 // CombinePlans retains the executable graph byte for byte. Every supplied
 // read-only prefix projection must differ only in route.final, and is parsed
 // again by NewPlan; public Plan fields cannot forge a packet envelope. The

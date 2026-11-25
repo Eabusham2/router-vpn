@@ -27,6 +27,9 @@ def transcript(root, leaf=None, failed=False, witness=''):
     rows = [row('start'), row('run', root)]
     for name in names[1:]:
         rows.append(row('run', name))
+        if root == RUN.PUBLIC_CANDIDATE_ROOT:
+            count, position, rounds = RUN.PUBLIC_CANDIDATE_CASES[leaf]
+            rows.append(row('output', name, Output=f'PUBLIC_CANDIDATE case={leaf} nodes={count} position={position} rounds={rounds} samples={50*rounds} retained=true joined=true'))
         if root == RUN.EXTERNAL_FINAL_ROOT:
             count, dns = RUN.EXTERNAL_FINAL_CASES[leaf]
             rows.append(row('output', name, Output=f'QUALIFIED_EXTERNAL_FINAL case={leaf} nodes={count} dns={dns} owner_joined=true private_exit_calls=0'))
@@ -647,6 +650,19 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                 with self.subTest(leaf=leaf, token=token), self.assertRaises(ValueError):
                     RUN.verdict(output(changed), root, leaf)
         self.assertIn(ROOT/RUN.EXTERNAL_FINAL_TEMPLATE, set(RUN.load('build-native-runtime.py').inputs()))
+
+    def test_public_candidates_require_original_positions_rounds_and_retirement(self):
+        root = RUN.PUBLIC_CANDIDATE_ROOT
+        self.assertEqual(set(RUN.PUBLIC_CANDIDATE_CASES), {'home-retained-suffix', 'custom-retained-final',
+                         'nine-late-import', 'wrong-key', 'wrong-exit', 'late-catalog', 'cancel-close'})
+        for leaf in RUN.PUBLIC_CANDIDATE_CASES:
+            rows = transcript(root, leaf)
+            self.assertEqual(RUN.verdict(output(rows), root, leaf), 2)
+            for token in ('position=', 'rounds=', 'samples=', 'retained=true', 'joined=true'):
+                changed = [dict(row, Output=row['Output'].replace(token, 'unqualified')) if token in row.get('Output', '') else row for row in rows]
+                with self.subTest(leaf=leaf, token=token), self.assertRaises(ValueError):
+                    RUN.verdict(output(changed), root, leaf)
+        self.assertIn(ROOT/RUN.PUBLIC_CANDIDATE_TEMPLATE, set(RUN.load('build-native-runtime.py').inputs()))
 
     def test_canonical_box_mapping_and_all_required_inputs(self):
         prep = RUN.load('prepare-mobile-node-chain.py')

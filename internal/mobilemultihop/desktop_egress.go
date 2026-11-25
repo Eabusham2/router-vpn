@@ -108,6 +108,21 @@ func compiledPhysicalEgressWithCapturedNaive(configJSON string, networks []strin
 }
 
 func compiledPhysicalEgressWithCapturedTransports(configJSON string, networks []string, desktop *externalDesktopRecorder, proofTag string, dormantNaiveDNS bool, connect nodeChainCapturedTransportProof) ([]PhysicalEgress, error) {
+	graph, err := parseCapturedEgressGraph(configJSON, connect)
+	if err != nil {
+		return nil, err
+	}
+	return graph.physical(networks, desktop, proofTag, dormantNaiveDNS)
+}
+
+// The graph is private and immutable for the duration of a source observation.
+// Each proof traverses it with its own visited, active and socket sets.
+type capturedEgressGraph struct {
+	graph   map[string]any
+	connect nodeChainCapturedTransportProof
+}
+
+func parseCapturedEgressGraph(configJSON string, connect nodeChainCapturedTransportProof) (*capturedEgressGraph, error) {
 	if connect != nil && connect.validate(configJSON) != nil {
 		return nil, nodePhysicalEgressError
 	}
@@ -115,6 +130,11 @@ func compiledPhysicalEgressWithCapturedTransports(configJSON string, networks []
 	if exactJSON([]byte(configJSON), &graph, 4<<20) != nil {
 		return nil, nodePhysicalEgressError
 	}
+	return &capturedEgressGraph{graph: graph, connect: connect}, nil
+}
+
+func (g *capturedEgressGraph) physical(networks []string, desktop *externalDesktopRecorder, proofTag string, dormantNaiveDNS bool) ([]PhysicalEgress, error) {
+	graph, connect := g.graph, g.connect
 	p := nodeEgressProjection{
 		nodes: map[string]map[string]any{}, resolvers: map[string]map[string]any{},
 		active: map[string]bool{}, visited: map[string]bool{}, tuples: map[PhysicalEgress]bool{},

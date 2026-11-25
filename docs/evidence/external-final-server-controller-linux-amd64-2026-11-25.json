@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "status": "passed",
-  "scope": "Seventeen complete original controller roots in the full unmodified race-enabled cmd/client package. Native child, Windows controller and kernel boundaries are explicitly modeled. No encrypted/native/platform acceptance or complete package pass is asserted.",
+  "scope": "Nineteen complete original controller roots, including public-candidate adoption and the 96-member HTTP catalog, in the full unmodified race-enabled cmd/client package. Native child, Windows controller and kernel boundaries are explicitly modeled. No encrypted/native/platform acceptance or complete package pass is asserted.",
   "target": "linux/amd64",
   "race": true,
   "toolchain": "go version go1.26.3 linux/amd64",
@@ -13,12 +13,12 @@
     "-p=1",
     "-mod=readonly",
     "-o",
-    "/tmp/routervpn-revocation-controller/controller.test",
+    "/tmp/routervpn-public-final-controller/controller.test",
     "./cmd/client"
   ],
-  "image_sha256": "2eb56ac0914ac4a5c4b440f1380b30f851a44ae650526c1f16014e1115b55534",
-  "source_sha256": "9c02720cf8287d537d79141bf83e6085f956bf6eedf4c011977074e3759fd501",
-  "source_files": 3152,
+  "image_sha256": "f9b5b74c60859d58ac2af07db27fe2d16789eec78b1b57bb21384fd74ce269fd",
+  "source_sha256": "f42f0275930269648b84d99186e4099ccaa21194d1e1dd9fd1d53b61d44eb6a3",
+  "source_files": 3157,
   "source_digest_algorithm": "SHA256 of sorted git-tracked (*.go, go.mod, go.sum), each UTF-8 path plus NUL followed by the raw SHA256 digest of its file bytes.",
   "records": [
     {
@@ -29,15 +29,15 @@
         "test2json",
         "-p",
         "router-vpn/cmd/client",
-        "/tmp/routervpn-revocation-controller/controller.test",
+        "/tmp/routervpn-public-final-controller/controller.test",
         "-test.v=test2json",
         "-test.count=1",
         "-test.timeout=120s",
         "-test.run=^TestDesktopExternalFinalCompleteSourceAndProjection$"
       ],
       "returncode": 0,
-      "seconds": 20.363865285995416,
-      "output_sha256": "625ed175102ecd74189bf9ffff706f23d75330a5f797d3876d8fdf8c11583f5a",
+      "seconds": 11.831683127005817,
+      "output_sha256": "75044682ccfcb7038091b3002f0cdacfaef585129aab6d0fd0af7ef353114674",
       "tests": 7
     },
     {
@@ -48,15 +48,15 @@
         "test2json",
         "-p",
         "router-vpn/cmd/client",
-        "/tmp/routervpn-revocation-controller/controller.test",
+        "/tmp/routervpn-public-final-controller/controller.test",
         "-test.v=test2json",
         "-test.count=1",
         "-test.timeout=120s",
         "-test.run=^TestDesktopExternalFinalExplicitRequestAndRevisions$"
       ],
       "returncode": 0,
-      "seconds": 1.5456472899968503,
-      "output_sha256": "0eff74845087cbbd1cf7b033172c0ac7baf624a8e9654cb614932733547dd1fe",
+      "seconds": 1.1336560320050921,
+      "output_sha256": "145b7bb17e405363e2031a442944764f51a58ba5ca8361854461e7714d0c82ac",
       "tests": 9
     },
     {
@@ -67,15 +67,15 @@
         "test2json",
         "-p",
         "router-vpn/cmd/client",
-        "/tmp/routervpn-revocation-controller/controller.test",
+        "/tmp/routervpn-public-final-controller/controller.test",
         "-test.v=test2json",
         "-test.count=1",
         "-test.timeout=120s",
         "-test.run=^TestDesktopExternalFinalSaveLoadAndLast$"
       ],
       "returncode": 0,
-      "seconds": 1.3495345970004564,
-      "output_sha256": "dc0bd927035e594da153a729de280af9660a2b5160ad9d88d41436c28b6a667d",
+      "seconds": 1.3394123279867927,
+      "output_sha256": "4c2f26e806fd32bc7d74c0dfbf261470c9a5f699a988e0060aa113f84bf14f41",
       "tests": 3
     },
     {
@@ -86,15 +86,15 @@
         "test2json",
         "-p",
         "router-vpn/cmd/client",
-        "/tmp/routervpn-revocation-controller/controller.test",
+        "/tmp/routervpn-public-final-controller/controller.test",
         "-test.v=test2json",
         "-test.count=1",
         "-test.timeout=120s",
         "-test.run=^TestDesktopExternalFinalLatencyReceiptAndHistory$"
       ],
       "returncode": 0,
-      "seconds": 2.7558082250034204,
-      "output_sha256": "bff7a8dd6a30014c89e525a8093d0651291e52472d23c7e0a5a50e3fc38249d6",
+      "seconds": 2.226023429990164,
+      "output_sha256": "8c3cca5fbb467ec3a17d2a480f6387c758756f831f6af9678002cdcdec4436f9",
       "tests": 3
     },
     {
@@ -105,15 +105,15 @@
         "test2json",
         "-p",
         "router-vpn/cmd/client",
-        "/tmp/routervpn-revocation-controller/controller.test",
+        "/tmp/routervpn-public-final-controller/controller.test",
         "-test.v=test2json",
         "-test.count=1",
         "-test.timeout=120s",
         "-test.run=^TestDesktopExternalFinalLatencyController$"
       ],
       "returncode": 0,
-      "seconds": 29.194663399001,
-      "output_sha256": "1d67b238b2402099387b56324b61f5e32b75ea4feb3d8c12fb88b5d8c37c9551",
+      "seconds": 23.399383804004174,
+      "output_sha256": "2b448ef4737dd8325a0b91661dbf22d01ee7b6c6f1a47094884a9a3fecf5face",
       "tests": 17
     },
     {
@@ -124,15 +124,15 @@
         "test2json",
         "-p",
         "router-vpn/cmd/client",
-        "/tmp/routervpn-revocation-controller/controller.test",
+        "/tmp/routervpn-public-final-controller/controller.test",
         "-test.v=test2json",
         "-test.count=1",
         "-test.timeout=120s",
         "-test.run=^TestDesktopExternalFinalThroughputMeaning$"
       ],
       "returncode": 0,
-      "seconds": 1.5911885399982566,
-      "output_sha256": "d8330cae48f93333d59a313d5024cb3f1b01478f769df8b94c67f16a77c0db7d",
+      "seconds": 1.6081081349984743,
+      "output_sha256": "6f73cdae5058767bd295f6430034e0ee03a1eb6b59c234f619fc0e7ef0d8b12b",
       "tests": 1
     },
     {
@@ -143,15 +143,15 @@
         "test2json",
         "-p",
         "router-vpn/cmd/client",
-        "/tmp/routervpn-revocation-controller/controller.test",
+        "/tmp/routervpn-public-final-controller/controller.test",
         "-test.v=test2json",
         "-test.count=1",
         "-test.timeout=120s",
         "-test.run=^TestDesktopExternalFinalConnectThroughput$"
       ],
       "returncode": 0,
-      "seconds": 3.5060606000042753,
-      "output_sha256": "8256f29ad71a4fe701b2f1b2cbdb6b508a31994d5a75db5a8162499011ef0cbf",
+      "seconds": 3.158524739992572,
+      "output_sha256": "b6112e34caffd29a6574406629a34cd533326eb67ca53aa7e894ca8c9f9fbf81",
       "tests": 1
     },
     {
@@ -162,15 +162,15 @@
         "test2json",
         "-p",
         "router-vpn/cmd/client",
-        "/tmp/routervpn-revocation-controller/controller.test",
+        "/tmp/routervpn-public-final-controller/controller.test",
         "-test.v=test2json",
         "-test.count=1",
         "-test.timeout=120s",
         "-test.run=^TestDesktopExternalFinalCandidatePrefixControl$"
       ],
       "returncode": 0,
-      "seconds": 12.02408328698948,
-      "output_sha256": "af16636cec450acaf735586074a73b9f7d2cc398d65acae4d6433a201074abf5",
+      "seconds": 9.475584272004198,
+      "output_sha256": "6fde86a1d27415d4f93114db3e58b3d7f3cc726c687d2897fc3d291ca1d6c02c",
       "tests": 4
     },
     {
@@ -181,15 +181,15 @@
         "test2json",
         "-p",
         "router-vpn/cmd/client",
-        "/tmp/routervpn-revocation-controller/controller.test",
+        "/tmp/routervpn-public-final-controller/controller.test",
         "-test.v=test2json",
         "-test.count=1",
         "-test.timeout=120s",
         "-test.run=^TestWholePathRTTLocalConnect$"
       ],
       "returncode": 0,
-      "seconds": 28.656776872012415,
-      "output_sha256": "d03a100025b294a49cc68f8e522807a249e2a365ca98870f8918881c1cbd1aa2",
+      "seconds": 25.920485313006793,
+      "output_sha256": "951575f37505857532e29c107efc69d35c31b2440850b6739db3ffb8a562e717",
       "tests": 6
     },
     {
@@ -200,15 +200,15 @@
         "test2json",
         "-p",
         "router-vpn/cmd/client",
-        "/tmp/routervpn-revocation-controller/controller.test",
+        "/tmp/routervpn-public-final-controller/controller.test",
         "-test.v=test2json",
         "-test.count=1",
         "-test.timeout=120s",
         "-test.run=^TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement$"
       ],
       "returncode": 0,
-      "seconds": 11.451952123999945,
-      "output_sha256": "999044ca21a594981f3613ebc45a1d31a3965e563461c32c07d3224dab73e295",
+      "seconds": 10.848126105003757,
+      "output_sha256": "d66ec07dd73e13bef6c3b05b9d5916aba52dfdca54ae2d864c32e48618bbe0a5",
       "tests": 17
     },
     {
@@ -219,15 +219,15 @@
         "test2json",
         "-p",
         "router-vpn/cmd/client",
-        "/tmp/routervpn-revocation-controller/controller.test",
+        "/tmp/routervpn-public-final-controller/controller.test",
         "-test.v=test2json",
         "-test.count=1",
         "-test.timeout=120s",
         "-test.run=^TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement$"
       ],
       "returncode": 0,
-      "seconds": 13.060318360992824,
-      "output_sha256": "2771fc6027bf48b4b5b803c46b45a4266372e8f91bc3c91364fd230e9cbd5cc4",
+      "seconds": 10.22638388199266,
+      "output_sha256": "560130b2f7b90a10b39d99150cd85f911bfbc4dbbef4bf255c9bf433f09d76e7",
       "tests": 17
     },
     {
@@ -238,15 +238,15 @@
         "test2json",
         "-p",
         "router-vpn/cmd/client",
-        "/tmp/routervpn-revocation-controller/controller.test",
+        "/tmp/routervpn-public-final-controller/controller.test",
         "-test.v=test2json",
         "-test.count=1",
         "-test.timeout=120s",
         "-test.run=^TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority$"
       ],
       "returncode": 0,
-      "seconds": 16.04175450198818,
-      "output_sha256": "ab3d14759a365505469120fba5a042e43fc1932bf46826c3585739a30d80515e",
+      "seconds": 14.41032299399376,
+      "output_sha256": "170a8a682182dfa76f93257f4b5c13c9d0049e102c7973df802fff1bd66d14c3",
       "tests": 33
     },
     {
@@ -257,15 +257,15 @@
         "test2json",
         "-p",
         "router-vpn/cmd/client",
-        "/tmp/routervpn-revocation-controller/controller.test",
+        "/tmp/routervpn-public-final-controller/controller.test",
         "-test.v=test2json",
         "-test.count=1",
         "-test.timeout=120s",
         "-test.run=^TestDesktopNodeChainExecutionObservationHonorsCallerAndBusyReceipt$"
       ],
       "returncode": 0,
-      "seconds": 1.5012272720050532,
-      "output_sha256": "83b74ca8e7867750a9f720eff5ebc06b8caa2e4a75e6c4b7e67767f7b2218e62",
+      "seconds": 1.5992216379963793,
+      "output_sha256": "92a42b5ec21e7b73c38b257931d213396e9598384dfc96e3f8b36722bac08b55",
       "tests": 1
     },
     {
@@ -276,15 +276,15 @@
         "test2json",
         "-p",
         "router-vpn/cmd/client",
-        "/tmp/routervpn-revocation-controller/controller.test",
+        "/tmp/routervpn-public-final-controller/controller.test",
         "-test.v=test2json",
         "-test.count=1",
         "-test.timeout=120s",
         "-test.run=^TestDesktopSelectedServerResponseConnected$"
       ],
       "returncode": 0,
-      "seconds": 28.961678993000533,
-      "output_sha256": "3e6f6655d87dc2074b39b4112b4cf23ab0ba50365964b032a58d57f3de92a1cb",
+      "seconds": 25.549505429997225,
+      "output_sha256": "8e696fd2864545072b60f6d85a993e2cf2e8b1bc99977d9ef905861e5d9a75a3",
       "tests": 4
     },
     {
@@ -295,15 +295,15 @@
         "test2json",
         "-p",
         "router-vpn/cmd/client",
-        "/tmp/routervpn-revocation-controller/controller.test",
+        "/tmp/routervpn-public-final-controller/controller.test",
         "-test.v=test2json",
         "-test.count=1",
         "-test.timeout=120s",
         "-test.run=^TestDesktopSelectedServerResponseDraft$"
       ],
       "returncode": 0,
-      "seconds": 43.30057642099564,
-      "output_sha256": "3e683dd15ee2bd0f7181e85ebd75292db4b2f14dc4b1227be900a491ddac7069",
+      "seconds": 42.17845395600307,
+      "output_sha256": "3a0f8237b5e2b3568b9935c02b101da4b9ade45d7aa2c15cd733734c816d3a13",
       "tests": 4
     },
     {
@@ -314,15 +314,15 @@
         "test2json",
         "-p",
         "router-vpn/cmd/client",
-        "/tmp/routervpn-revocation-controller/controller.test",
+        "/tmp/routervpn-public-final-controller/controller.test",
         "-test.v=test2json",
         "-test.count=1",
         "-test.timeout=120s",
         "-test.run=^TestDesktopSelectedServerUnregisteredCannotBeSaved$"
       ],
       "returncode": 0,
-      "seconds": 9.557948804998887,
-      "output_sha256": "c105daa20321c4812b867b0b9881920815e78f01665264b8f71dfb2b585480ba",
+      "seconds": 9.02012614699197,
+      "output_sha256": "43d867429b0ba2d3d5c94ffa44a81eff3807ffb86d0e8fa89f6bd13dce9d6739",
       "tests": 1
     },
     {
@@ -333,18 +333,56 @@
         "test2json",
         "-p",
         "router-vpn/cmd/client",
-        "/tmp/routervpn-revocation-controller/controller.test",
+        "/tmp/routervpn-public-final-controller/controller.test",
         "-test.v=test2json",
         "-test.count=1",
         "-test.timeout=120s",
         "-test.run=^TestDesktopSelectedCandidateCancellationJoinsWithoutStart$"
       ],
       "returncode": 0,
-      "seconds": 15.507256744996994,
-      "output_sha256": "dfea5273dfc7c6fcb8022147c5c577bf6d7dd9510b3b27fe6d61b505694716ad",
+      "seconds": 13.874955883002258,
+      "output_sha256": "8d7b1c4c8a0e7019292a12e188fb6feda164c472417b5ee1a79286f998b22c90",
       "tests": 4
+    },
+    {
+      "root": "TestDesktopPublicCandidateOriginalCatalogAndAdoption",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-public-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopPublicCandidateOriginalCatalogAndAdoption$"
+      ],
+      "returncode": 0,
+      "seconds": 30.266876551002497,
+      "output_sha256": "de0ad79824d74980583a2387016c041edf8c84b9e1fa242807927b7ff9df591b",
+      "tests": 6
+    },
+    {
+      "root": "TestDesktopPublicCandidateCatalogAtCapacity",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-public-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopPublicCandidateCatalogAtCapacity$"
+      ],
+      "returncode": 0,
+      "seconds": 12.322186611985671,
+      "output_sha256": "902922e5f0a56fd3dbf94dbf67e0d248a7f0e9426744dc60313e5c22316a4ab9",
+      "tests": 1
     }
   ],
-  "log_sha256": "077c5ff210283ff5810e08f96566e80221c3c14c8ea3f5ba125aca92d905b70b",
-  "total_root_leaf_verdicts": 132
+  "log_sha256": "3bcba4b2691dc0cf447cb30f3baab539ca69931b2b41d3065c0a1e893063286d",
+  "total_root_leaf_verdicts": 139
 }

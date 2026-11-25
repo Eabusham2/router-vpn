@@ -123,7 +123,7 @@ struct IOSNodeChainEditorView: View {
                             do {
                                 guard let position = request?.position else { throw CancellationError() }
                                 try candidates.useInDraft(score) { proposal in
-                                    guard let compiled = proposal.profiles.last?.multihopNodes else { throw CancellationError() }
+                                    guard let compiled = proposal.orderedNodes else { throw CancellationError() }
                                     try draft.insertMeasured(score.id, after: position, compiled: compiled)
                                 }
                                 request = nil

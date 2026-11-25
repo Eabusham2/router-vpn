@@ -649,6 +649,126 @@ for (depth,pos,privatePosition) in [(4,2,-1),(9,7,2),(16,14,-1),(96,94,94),(4,1,
         }
     }
 }
+// These execute the shipping public-response callbacks. HTTPS and the native
+// route remain independent boundaries exercised by the shared/native fixtures.
+let publicMetric="routed-public-candidate-response"
+func publicRow()->[String:Any] {
+    var value=row();value["measurement"]=publicMetric
+    var inner=(value["results"] as! [[String:Any]])[0];inner["kind"]="public-exit-response"
+    var b=inner["benchmark"] as! [String:Any];b["measurement"]=publicMetric;b["endpoint"]="https://1.1.1.1/cdn-cgi/trace"
+    inner["benchmark"]=b;value["results"]=[inner];return value
+}
+check(RouterVPNOrderedCandidateDisplay.score(publicRow(),measurement:publicMetric,now:now)==2,"public HTTPS receipt lost its independent metric")
+for fault in ["kind","endpoint","samples","disposition"] {
+    var value=publicRow();var inner=(value["results"] as! [[String:Any]])[0];var b=inner["benchmark"] as! [String:Any]
+    if fault=="kind" {inner["kind"]="private-agent-response"}
+    if fault=="endpoint" {b["endpoint"]="https://different.invalid/cdn-cgi/trace"}
+    if fault=="samples" {b["attempts"]=49}
+    if fault=="disposition" {inner["candidate_disposition"]="not-registered"}
+    inner["benchmark"]=b;value["results"]=[inner]
+    check(RouterVPNOrderedCandidateDisplay.score(value,measurement:publicMetric,now:now)==nil,"public receipt borrowed a foreign benchmark: "+fault)
+}
+for depth in [3,4,9,96] {
+    for pos in Set([1,depth-2]).sorted() {
+        let nodes=(0..<depth).map { ["id":$0==0 ? "entry" : $0==depth-1 ? "public-final":"public-\($0)","mode":$0==0 ? "wg":"shadowsocks"] }
+        let source=nodes.enumerated().map { i,node in node.merging(["kind":i==0 ? "router-vpn":"external"]) {_,new in new} }
+        let insertion=Array(nodes[...pos])+[["id":"custom","mode":"shadowsocks"]]+Array(nodes[(pos+1)...])
+        let draft:[String:Any]=["execution":"local","external_final":true,"expected_selected_node_id":"entry","nodes":nodes]
+        var choice:[String:Any]=["id":"custom","name":"Independent public candidate","kind":"external"]
+        if depth<96 {choice["proposed_path"]=insertion;choice["proposal_action"]="save-intermediate-profile"}
+        else {choice["save_reason"]="The original route already contains 96 nodes."}
+        let offer:[String:Any]=["schema":1,"samples":50,"measurement":publicMetric,"view_token":String(repeating:"a",count:64),"expires_at":now+120000,
+            "prefix_position":pos,"prefixes":[["position":pos,"id":nodes[pos]["id"]!,"mode":"shadowsocks","measurement":publicMetric]],
+            "external_final":true,"requested_execution":"local","public_response_source_nodes":source,"candidates":[choice]]
+        check(RouterVPNOrderedCandidateDisplay.metric(offer,position:pos)==publicMetric,"public source lost its exact selected prefix")
+        for (field,wrong) in [("requested_execution","server" as Any),("selected_execution","local"),("selection_epoch",1),("external_final",false),("scope","draft-complete-selected"),("response_source_nodes",source)] {
+            var bad=offer;bad[field]=wrong
+            check(RouterVPNOrderedCandidateDisplay.metric(bad,position:pos)==nil,"public catalog acquired another execution owner: "+field)
+        }
+        var crossed=source;crossed[depth-1]["kind"]="router-vpn"
+        var malformed=offer;malformed["public_response_source_nodes"]=crossed
+        check(RouterVPNOrderedCandidateDisplay.metric(malformed,position:pos)==nil,"public catalog replaced its original external final")
+        if depth<96 {
+            var changed=insertion;changed[depth]["id"]="foreign-final"
+            var wrong=choice;wrong["proposed_path"]=changed
+            var bad=offer;bad["candidates"]=[wrong]
+            do {try Form(position:pos).receive(bad,action:"catalog");fatalError("public proposal changed the retained final")} catch {checks+=1}
+        }
+        for purpose in ["connected","saved","draft"] {
+            let temporary=purpose != "connected", editor=purpose == "draft"
+            var scoped=offer
+            if temporary {scoped["scope"]="saved-prefix-local";scoped["application_open"]=false;scoped["dns_open"]=false;scoped["proof_scope"]="selected-prefix"}
+            if editor {scoped["origin"]="editor-draft"}
+            var currentChoice=choice
+            if editor && depth<96 {currentChoice["draft_path"]=insertion;currentChoice["draft_action"]="insert-measured-hop";scoped["candidates"]=[currentChoice]}
+            let form=Form(savedPrefix:temporary,draft:editor ? draft:nil,position:pos)
+            try! form.receive(scoped,action:"catalog")
+            if temporary && !editor {form.measure()}
+            if !temporary {form.requestID="public-connected"}
+            var receipt:[String:Any]=["schema":1,"measurement":publicMetric,"request_id":form.requestID,"view_token":scoped["view_token"]!,"prefix_position":pos,
+                "requested_execution":"local","results":[publicRow()],"accepted":true,"drained":!temporary,"native_down":true,
+                "reviewing":temporary,"running":false,"cancelled":false,"cleanup_pending":false,"active_path_changed":false,"saved_profile_id":""]
+            if temporary {receipt["scope"]="saved-prefix-local";receipt["application_open"]=false;receipt["dns_open"]=false;receipt["proof_scope"]="selected-prefix"}
+            if editor {receipt["origin"]="editor-draft"}
+            for (field,wrong) in [("requested_execution","server" as Any),("selected_execution","local"),("selection_epoch",1),("view_token","foreign"),("prefix_position",0)] {
+                var bad=receipt;bad[field]=wrong
+                do {try form.receive(bad,action:"run");fatalError("public receipt changed its source: "+field)} catch {checks+=1}
+            }
+            if temporary {RouterVPNMacSpeedLabTransport.calls.last!.finish(receipt);settle()} else {try! form.receive(receipt,action:"run")}
+            form.controls()
+            check(form.rows.count==1 && form.save.isEnabled==(depth<96),"public catalog lost its score or 96-node Save bound: depth=\(depth) pos=\(pos) temporary=\(temporary) rows=\(form.rows.count) save=\(form.save.isEnabled) status=\(form.status.stringValue)")
+            if editor {check(form.useDraft.isEnabled==(depth<96),"public Use escaped its exact insertion capacity")}
+            if depth<96 {
+                form.profileName.stringValue="Independent public hop";form.saveProfile()
+                let write=RouterVPNMacSpeedLabTransport.calls.last!
+                check(write.url.path==(editor ? "/api/multihop/draft-candidates/save-profile":temporary ? "/api/multihop/saved-candidates/save-profile":"/api/multihop/prefix-candidates/save-profile") &&
+                    write.body?["name"] as? String=="Independent public hop" && write.body?["proposed_path"] as? [[String:String]]==insertion,"public Save replaced the final or lost the explicit name")
+                var saved=receipt;saved["ok"]=true;saved["active_path_changed"]=false;saved["accepted"]=false;saved["reviewing"]=false;saved["drained"]=true;saved["saved"]=true
+                saved["saved_profile_id"]="public-profile";saved["profile_id"]="public-profile";saved["profile_name"]="Independent public hop";saved["candidate_id"]="custom"
+                saved["proposal_action"]="save-intermediate-profile";saved["proposed_path"]=insertion;saved["results"]=[]
+                for (field,wrong) in [("candidate_id","other" as Any),("proposed_path",nodes),("proposal_action","save-final-profile"),("request_id","foreign")] {
+                    var bad=saved;bad[field]=wrong
+                    do {try form.receive(bad,action:"save");fatalError("public Save confirmed a different path: "+field)} catch {checks+=1}
+                }
+                write.finish(saved);settle()
+                check(form.status.stringValue.contains("Independent public hop") && !form.pendingDrain,"public named Save was not acknowledged after original cleanup")
+                if temporary {
+                    for phase in ["poll","cancel"] {
+                        var altered=insertion;altered[depth]["id"]="foreign-final"
+                        var bad=saved;bad["proposed_path"]=altered
+                        do {try form.receive(bad,action:phase);fatalError("public Save recovery lost the exact original suffix")} catch {checks+=1}
+                        try! form.receive(saved,action:phase)
+                        check(form.savedProfileID=="public-profile" && !form.pendingDrain,"original public Save recovery lost its committed profile")
+                    }
+                }
+            }
+            if editor && depth<96 {
+                var deliveries=0
+                let applying=Form(savedPrefix:true,draft:draft,position:pos) { response in
+                    check(response["proposed_path"] as? [[String:String]]==insertion,"public Use dropped an original suffix or final")
+                    deliveries+=1
+                }
+                try! applying.receive(scoped,action:"catalog");receipt["request_id"]=applying.requestID
+                RouterVPNMacSpeedLabTransport.calls.last!.finish(receipt);settle();applying.controls();applying.useInDraft()
+                let post=RouterVPNMacSpeedLabTransport.calls.last!
+                check(post.url.path=="/api/multihop/draft-candidates/choose" && post.body?["name"]==nil && post.body?["proposed_path"] as? [[String:String]]==insertion,"public Use changed the named Save contract")
+                var chosen=receipt;chosen["chosen"]=true;chosen["accepted"]=false;chosen["reviewing"]=false;chosen["drained"]=true;chosen["candidate_id"]="custom"
+                chosen["draft_action"]="insert-measured-hop";chosen["proposed_path"]=insertion;chosen["results"]=[]
+                for (field,wrong) in [("native_down",false as Any),("candidate_id","other"),("proposed_path",nodes),("draft_action","save-final-profile"),("saved_profile_id","unexpected")] {
+                    var bad=chosen;bad[field]=wrong
+                    do {try applying.receive(bad,action:"choose");fatalError("public Use accepted another draft or live native owner: "+field)} catch {checks+=1}
+                }
+                post.finish(chosen);settle();check(deliveries==1 && applying.closeWanted && applying.savedProfileID.isEmpty,"public Use failed its single unsaved handoff")
+            }
+            if temporary && depth==96 {
+                form.nextRetry = .distantPast;form.cancelTest()
+                var cancelled=receipt;cancelled["accepted"]=false;cancelled["reviewing"]=false;cancelled["drained"]=true;cancelled["cancelled"]=true;cancelled["results"]=[]
+                RouterVPNMacSpeedLabTransport.calls.last!.finish(cancelled);settle()
+                check(!form.pendingDrain && !form.save.isEnabled && !form.useDraft.isEnabled,"96-node read-only measurement retained its editor owner")
+            }
+        }
+    }
+}
 print("Swift shipping ordered-candidate controls: \(checks) checks PASS")
 '''.replace('POLICY',policy).replace('FIELDS',fields).replace('METHODS',methods.replace('func issue(', 'static func issue('))
     # Static marker extraction starts at func, so restore only that qualifier.
@@ -656,6 +776,9 @@ print("Swift shipping ordered-candidate controls: \(checks) checks PASS")
     subprocess.run(['swiftc','-swift-version','5','-module-cache-path',str(directory/'cache'),str(path),'-o',str(directory/'controls')],check=True,timeout=120)
     subprocess.run([str(directory/'controls')],check=True,timeout=30)
     controls=[
+        ('public-save-recovery','if measurement == "routed-public-candidate-response", action == "save" || !(value["saved_profile_id"] as? String ?? "").isEmpty {','if action == "save", measurement == "routed-public-candidate-response" {','public Save recovery lost the exact original suffix'),
+        ('public-endpoint','measurement != "routed-public-candidate-response" || b["endpoint"] as? String == "https://1.1.1.1/cdn-cgi/trace"','true','public receipt borrowed a foreign benchmark: endpoint'),
+        ('public-suffix','return path==expected ? path:nil','return path.count==expected.count ? path:nil','public proposal changed the retained final'),
         ('connected-cancel-tombstone','(!savedAdmitted && RouterVPNOrderedCandidateDisplay.falseFlag(value,"started")','(RouterVPNOrderedCandidateDisplay.falseFlag(value,"started")','late connected tombstone retired admitted work'),
         ('intermediate-suffix','return proposal == expected','return position < source.count-2 ? proposal.prefix(position+2) == expected.prefix(position+2) : proposal == expected','intermediate response lost the original final'),
         ('first-import','guard i >= 2 else { return nil }','guard i >= 1 else { return nil }','crossed selected response role admitted'),
@@ -846,7 +969,7 @@ def linux_policy(directory):
     guards='\n'.join(block(source,'static gboolean '+name+'(') for name in ['routervpn_phase_busy','routervpn_mutation_busy_from_status','routervpn_mutation_busy'])
     candidates=(ROOT/'client/linux/routervpn-ordered-candidates-v1.inc').read_text()
     declarations=candidates[candidates.index('typedef struct {'):candidates.index('} LinuxOrderedCandidates;')+len('} LinuxOrderedCandidates;')]
-    guards+='\n'+declarations+'\n'+linux_candidate_json_helpers()+'\n'+'\n'.join(block(candidates,marker) for marker in ['static const char*linux_oc_measurement_kind(', 'static gboolean linux_oc_packet_mode(', 'static const char*linux_oc_prefix_measurement(', 'static JsonObject*linux_oc_root(', 'static gboolean linux_oc_response_id(', 'static gboolean linux_oc_response_source(', 'static gboolean linux_oc_response_proposal(', 'static gboolean linux_oc_response_winner(', 'static gboolean linux_oc_response_draft(', 'static gboolean linux_oc_catalog_measurement(', 'static double linux_oc_score(', 'static gboolean linux_oc_same_measurement(', 'static double linux_oc_current_score(', 'static const char*linux_oc_scope(', 'static gboolean linux_oc_draft_execution(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_final_choice(', 'static gboolean linux_oc_final_saved(', 'static gboolean linux_oc_view_fresh('])
+    guards+='\n'+declarations+'\n'+linux_candidate_json_helpers()+'\n'+'\n'.join(block(candidates,marker) for marker in ['static const char*linux_oc_measurement_kind(', 'static gboolean linux_oc_response_measurement(', 'static gboolean linux_oc_packet_mode(', 'static const char*linux_oc_prefix_measurement(', 'static JsonObject*linux_oc_root(', 'static gboolean linux_oc_response_id(', 'static gboolean linux_oc_response_source(', 'static gboolean linux_oc_response_proposal(', 'static gboolean linux_oc_response_winner(', 'static gboolean linux_oc_response_draft(', 'static gboolean linux_oc_public_source(', 'static gboolean linux_oc_public_path(', 'static gboolean linux_oc_catalog_measurement(', 'static double linux_oc_score(', 'static gboolean linux_oc_same_measurement(', 'static double linux_oc_current_score(', 'static const char*linux_oc_scope(', 'static gboolean linux_oc_draft_execution(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_final_choice(', 'static gboolean linux_oc_final_saved(', 'static gboolean linux_oc_view_fresh('])
     program=r"""
 #include <gtk/gtk.h>
 #include <glib-object.h>
@@ -1144,6 +1267,25 @@ def linux_form(directory):
         offer['candidates'][0]['proposal_action']='save-intermediate-profile' if early else 'save-final-profile'
         prefix='intermediate' if early else 'selected'
         for name,value in [('catalog',offer),('draft',draft)]: (directory/f'{prefix}-{depth}-{name}.json').write_text(json.dumps(value))
+    public_metric='routed-public-candidate-response'
+    public_row=json.loads(json.dumps(row))
+    public_row['measurement']=public_metric
+    public_row['results'][0].update(kind='public-exit-response')
+    public_row['results'][0]['benchmark'].update(measurement=public_metric,endpoint='https://1.1.1.1/cdn-cgi/trace')
+    (directory/'public-row.json').write_text(json.dumps(public_row))
+    for depth,position in [(3,1),(4,1),(4,2),(9,7),(96,1),(96,94)]:
+        nodes=[dict(id='entry' if i==0 else 'final' if i==depth-1 else f'public-{i}',mode='wg' if i==0 else 'shadowsocks') for i in range(depth)]
+        draft=dict(execution='local',external_final=True,expected_selected_node_id='entry',nodes=nodes)
+        offer=json.loads(json.dumps(response_catalog))
+        offer.update(measurement=public_metric,external_final=True,requested_execution='local',prefix_position=position,
+                     public_response_source_nodes=[dict(n,kind='external' if i else 'router-vpn') for i,n in enumerate(nodes)])
+        offer['prefixes'][0].update(id=nodes[position]['id'],position=position,measurement=public_metric)
+        proposal=nodes[:position+1]+[dict(id='custom',mode='shadowsocks')]+nodes[position+1:]
+        choice=dict(id='custom',kind='external',name='Independent public import')
+        if depth<96: choice.update(proposal_action='save-intermediate-profile',proposed_path=proposal,draft_action='insert-measured-hop',draft_path=proposal)
+        else: choice.update(save_reason='Insertion exceeds 96 nodes')
+        offer['candidates']=[choice]
+        for name,value in [('draft',draft),('catalog',offer)]: (directory/f'public-{depth}-{position}-{name}.json').write_text(json.dumps(value))
     for name,value in [('catalog',catalog),('row',row),('response-catalog',response_catalog),('response-row',response_row),('deep-response-catalog',deep_catalog),('deep-response-draft',deep_draft),('packet-response-catalog',packet_catalog),('packet-response-draft',packet_draft)]: (directory/(name+'.json')).write_text(json.dumps(value))
     program=r'''
 #include <gtk/gtk.h>
@@ -1187,6 +1329,89 @@ static char*encode(JsonNode*n){JsonGenerator*g=json_generator_new();json_generat
 static void reply_code(LinuxOrderedCandidates*s,JsonNode*n,int status){g_assert(s->job);s->job->response=encode(n);s->job->status=status;s->job->result=CURLE_OK;s->job->ready=TRUE;linux_oc_tick(s);}
 static void reply(LinuxOrderedCandidates*s,JsonNode*n){reply_code(s,n,200);}
 static void choose(LinuxOrderedCandidates*s){GtkTreePath*p=gtk_tree_path_new_from_indices(0,-1);gtk_tree_selection_select_path(gtk_tree_view_get_selection(GTK_TREE_VIEW(s->table)),p);gtk_tree_path_free(p);}
+static void public_fixture(App *app, guint count, int position, gboolean save, gboolean draft) {
+ gboolean connected=!draft && count==3;
+ const char *metric="routed-public-candidate-response";
+ g_autofree char *name=g_strdup_printf("public-%u-%d-catalog",count,position), *source=g_strdup_printf("public-%u-%d-draft",count,position);
+ g_autoptr(JsonNode) offer=fixture(name), original=fixture(source), sample=fixture("public-row"), receipt=parse_json("{}");
+ g_autofree char *raw=encode(original);
+ JsonObject *view=linux_oc_root(offer), *row=linux_oc_root(sample), *status=linux_oc_root(receipt);
+ JsonObject *result=json_array_get_object_element(linux_ec_array(row,"results"),0), *bench=json_object_get_object_member(result,"benchmark");
+ JsonObject *choice=json_array_get_object_element(linux_ec_array(view,"candidates"),0);
+ GtkWidget *owner=gtk_window_new(GTK_WINDOW_TOPLEVEL);
+ if(draft) linux_ordered_candidates_open_draft(app,GTK_WINDOW(owner),raw,position);
+ else {
+    json_object_remove_member(view,"origin");
+    json_object_remove_member(choice,"draft_action"); json_object_remove_member(choice,"draft_path");
+    if(connected)json_object_remove_member(view,"scope");
+    linux_ordered_candidates_open_captured(app,!connected,!connected);
+ }
+ LinuxOrderedCandidates *form=g_object_get_data(G_OBJECT(app->window),"linux-ordered-candidates");
+ form->position=position;
+ check(form->job && linux_oc_catalog_measurement(view,position),"captured public source missing in editor");
+ json_object_set_string_member(view,"selected_execution","server");
+ check(!linux_oc_receive(form,view,1),"public source trusted a Server winner");json_object_remove_member(view,"selected_execution");
+ JsonObject *final=json_array_get_object_element(linux_ec_array(view,"public_response_source_nodes"),count-1);
+ json_object_set_string_member(final,"kind","router-vpn");
+ check(!linux_oc_receive(form,view,1),"public catalog trusted a private exit");
+ json_object_set_string_member(final,"kind","external");
+ if(count<96) {
+    JsonObject *last=json_array_get_object_element(linux_ec_array(choice,"proposed_path"),count);
+    json_object_set_string_member(last,"id","changed-exit"); check(!linux_oc_receive(form,view,1),"public catalog discarded original suffix");
+    json_object_set_string_member(last,"id","final");
+ }
+ reply(form,offer);
+ if(!draft){choose(form);gtk_button_clicked(GTK_BUTTON(form->test));}
+ check(form->pending&&form->phase==2&&form->job&&strstr(gtk_label_get_text(GTK_LABEL(form->note)),"HTTPS"),"public dialog did not launch 50 verified responses");
+ g_autoptr(JsonNode) start=parse_json(g_ptr_array_index(bodies,bodies->len-1));
+ check(linux_ec_number(linux_oc_root(start),"samples")==50&&linux_ec_number(linux_oc_root(start),"prefix_position")==position,"public Run crossed captured stop or sample count");
+ check(linux_oc_score(row,(gint64)linux_ec_number(row,"measured_at"))==2,"original public score not shown");
+ json_object_set_string_member(bench,"endpoint","https://example.org/");check(isnan(linux_oc_score(row,(gint64)linux_ec_number(row,"measured_at"))),"public score used an unrelated endpoint");
+ json_object_set_string_member(bench,"endpoint","https://1.1.1.1/cdn-cgi/trace");
+ json_object_set_string_member(result,"kind","private-agent-response");check(isnan(linux_oc_score(row,(gint64)linux_ec_number(row,"measured_at"))),"private-agent result scored as public");
+ json_object_set_string_member(result,"kind","public-exit-response");
+ json_object_set_int_member(bench,"attempts",49);check(isnan(linux_oc_score(row,(gint64)linux_ec_number(row,"measured_at"))),"public result skipped required trace");
+ json_object_set_int_member(bench,"attempts",50);
+ fixture_saved_envelope(status);json_object_set_string_member(status,"scope","saved-prefix-local");json_object_set_string_member(status,"measurement",metric);
+ if(draft)json_object_set_string_member(status,"origin","editor-draft");
+ json_object_set_string_member(status,"proof_scope","selected-prefix");json_object_set_boolean_member(status,"application_open",FALSE);json_object_set_boolean_member(status,"dns_open",FALSE);
+ json_object_set_int_member(status,"prefix_position",position);json_object_set_string_member(status,"view_token",linux_ec_string(view,"view_token"));
+ json_object_set_string_member(status,"request_id",form->request);json_object_set_boolean_member(status,"accepted",TRUE);json_object_set_boolean_member(status,"reviewing",TRUE);
+ json_object_set_boolean_member(status,"drained",connected);json_object_set_boolean_member(status,"native_down",TRUE);json_object_set_boolean_member(status,"cleanup_pending",FALSE);
+ JsonArray *scores=json_array_new();json_array_add_element(scores,json_node_copy(sample));json_object_set_array_member(status,"results",scores);
+ json_object_set_string_member(status,"requested_execution","server");check(!linux_oc_receive(form,status,2),"public status crossed to Server ownership");json_object_remove_member(status,"requested_execution");
+ json_object_set_int_member(status,"selection_epoch",9);check(!linux_oc_receive(form,status,2),"public response gained a private trial");json_object_remove_member(status,"selection_epoch");
+ reply(form,receipt);choose(form);linux_oc_controls(form);
+ check(gtk_widget_get_sensitive(form->save)==(count<96) && gtk_widget_get_sensitive(form->use_draft)==(draft&&count<96),"public score and insertion limits were conflated");
+ if(count==96) { linux_oc_cancel(form);form->retry=0;linux_oc_tick(form); }
+ else {
+    guint delivered=selected_deliveries;
+    if(save){ gtk_entry_set_text(GTK_ENTRY(form->name),"Independent public route");gtk_button_clicked(GTK_BUTTON(form->save)); }
+    else gtk_button_clicked(GTK_BUTTON(form->use_draft));
+    g_autoptr(JsonNode) post=parse_json(g_ptr_array_index(bodies,bodies->len-1));
+    JsonObject *body=linux_oc_root(post);
+    check(form->phase==(save?4:6) && json_node_equal(linux_ec_member(body,"proposed_path"),linux_ec_member(choice,"proposed_path")),"public Save/Use changed control or suffix");
+    json_object_set_string_member(status,"candidate_id","custom");json_object_set_member(status,"proposed_path",json_node_copy(linux_ec_member(choice,"proposed_path")));
+    json_object_set_boolean_member(status,"accepted",FALSE);json_object_set_boolean_member(status,"reviewing",FALSE);json_object_set_boolean_member(status,"running",FALSE);
+    json_object_set_boolean_member(status,"drained",TRUE);json_object_set_boolean_member(status,"cancelled",FALSE);json_object_set_boolean_member(status,"saved",save);
+    json_object_set_string_member(status,"saved_profile_id",save?"public-future":"");
+    json_object_set_boolean_member(status,"ok",TRUE);
+    if(save){json_object_set_string_member(status,"proposal_action","save-intermediate-profile");json_object_set_string_member(status,"profile_name","Independent public route");}
+    else{json_object_set_boolean_member(status,"chosen",TRUE);json_object_set_string_member(status,"draft_action","insert-measured-hop");}
+    JsonObject *end=json_array_get_object_element(linux_ec_array(status,"proposed_path"),count);
+    json_object_set_string_member(end,"id","unrelated-final");check(!linux_oc_receive(form,status,form->phase),"public confirmation lost original suffix");json_object_set_string_member(end,"id","final");
+    json_object_set_string_member(status,"request_id","foreign");check(!linux_oc_receive(form,status,form->phase),"public confirmation crossed requests");json_object_set_string_member(status,"request_id",form->request);
+    if(connected){json_object_remove_member(status,"active_path_changed");check(!linux_oc_receive(form,status,form->phase),"public confirmation omitted active-path authority");json_object_set_boolean_member(status,"active_path_changed",FALSE);}
+    reply(form,receipt);
+    check(selected_deliveries==delivered+(save?0:1) && !async_state.auxiliary_jobs,"public confirmation leaked owner or changed wrong destination");
+    if(save)gtk_widget_destroy(form->dialog);
+    gtk_widget_destroy(owner);return;
+ }
+ json_object_set_boolean_member(status,"accepted",FALSE);json_object_set_boolean_member(status,"reviewing",FALSE);json_object_set_boolean_member(status,"drained",TRUE);
+ json_object_set_boolean_member(status,"cancelled",TRUE);reply(form,receipt);
+ check(!form->pending&&!async_state.auxiliary_jobs,"public measure-only did not release original owner");
+ gtk_widget_destroy(form->dialog);gtk_widget_destroy(owner);
+}
 int main(int argc,char**argv){
  output=argv[1];check(gtk_init_check(&argc,&argv),"real GTK display required");paths=g_ptr_array_new_with_free_func(g_free);bodies=g_ptr_array_new_with_free_func(g_free);App app={.window=gtk_window_new(GTK_WINDOW_TOPLEVEL)};
  JsonNode*catalog=fixture("catalog"),*row=fixture("row");JsonObject*ro=linux_oc_root(row);gint64 at=(gint64)linux_ec_number(ro,"measured_at");
@@ -1568,6 +1793,13 @@ int main(int argc,char**argv){
   else{check(!form->pending&&!async_state.auxiliary_jobs&&!strcmp(form->saved_profile,"future-final")&&strstr(gtk_label_get_text(GTK_LABEL(form->status)),"Use Profiles"),"named saved profile lost explicit future Load or native retirement");gtk_widget_destroy(form->dialog);}
   gtk_widget_destroy(owner);json_node_free(receipt);json_node_free(sample);json_node_free(offer);g_free(deep_original);
  }
+ public_fixture(&app,3,1,TRUE,TRUE);
+ public_fixture(&app,3,1,TRUE,FALSE);
+ public_fixture(&app,4,1,FALSE,TRUE);
+ public_fixture(&app,4,2,TRUE,FALSE);
+ public_fixture(&app,9,7,FALSE,TRUE);
+ public_fixture(&app,96,1,FALSE,TRUE);
+ public_fixture(&app,96,94,FALSE,TRUE);
  check(freed==paths->len,"owned HTTP worker leaked");json_node_free(catalog);json_node_free(row);json_node_free(result);json_node_free(saved);json_node_free(cancel);gtk_widget_destroy(app.window);g_ptr_array_free(paths,TRUE);g_ptr_array_free(bodies,TRUE);printf("Shipping GTK ordered-candidate controls: %u checks PASS; real widgets, controlled HTTP delivery.\n",checks);return 0;
 }
 '''.replace('HELPERS',helpers).replace('METHODS',methods)

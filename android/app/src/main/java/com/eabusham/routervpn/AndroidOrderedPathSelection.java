@@ -230,7 +230,8 @@ final class AndroidOrderedPathSelection {
     void insertMeasured(AndroidNodeStore.ChainCapture original,int prefix,AndroidNodeStore.ChainSource candidate,
             java.util.function.BooleanSupplier fresh) throws Exception {
         requireCurrent();
-        if (candidate.imported || prefix < 1 || prefix >= members.size()-1 || members.size() >= AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH)
+        boolean externalFinal=original.members.get(original.members.size()-1).imported;
+        if (candidate.imported!=externalFinal || prefix < 1 || prefix >= members.size()-1 || members.size() >= AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH)
             throw new IllegalStateException("This measured node cannot be inserted at the original position.");
         AndroidNodeStore.ChainSource linked = catalog.source(candidate.id);
         if (!linked.profileId.equals(candidate.profileId) || !linked.proofId.equals(candidate.proofId)

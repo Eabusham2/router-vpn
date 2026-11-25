@@ -54,10 +54,101 @@ including short three-node paths.
 This source family does not establish arbitrary protocol combinations. AWG
 entries, private interior nodes, hostname exits, non-Shadowsocks imports,
 additional Start Layers, and Server/Compare execution remain outside this
-external-final constructor. Its closed candidate preparation can measure the
-original WireGuard entry; later stream-prefix candidate measurements still
-require the separately qualified paired-final source. These are explicit
-functional boundaries, not evidence of universal ordered-path support.
+external-final constructor. Its closed candidate preparation measures TCP
+through the original WireGuard entry, and the public-response continuation
+below measures independent imported candidates through later stream prefixes.
+These are explicit functional boundaries, not evidence of universal
+ordered-path support.
+
+### Continue through an imported public candidate
+
+The Local schema-8 family now admits a distinct
+`routed-public-candidate-response` measurement after any original imported
+interior, from position 1 through the penultimate position. The selected
+candidate must be another independently captured, literal-address Shadowsocks
+2022 import with Start Layer Off and its own expected public IP. The original
+entry, complete prefix, retained suffix, public final, catalog revision, and
+native owner remain bound throughout admission, measurement, and adoption.
+
+Each successful candidate supplies 50 fresh HTTPS responses from
+`https://1.1.1.1/cdn-cgi/trace`. The native path opens the candidate's encrypted
+transport through the selected prefix and completes authenticated TLS before
+starting the response timer. Each request carries a fresh nonce and disables
+cache reuse; its complete bounded response must match the candidate's
+independently captured expected exit IP.
+The public result kind is `public-exit-response`; neither a TCP connection
+nor a private-agent response can substitute for this score. Private candidate
+registration, Server execution, selection epochs, and signed private-agent
+claims remain separate protocols.
+
+The source-only inventory filter validates the original complete route and
+then excludes malformed imports and every ambiguous alias. An import cannot
+reuse an original member's identity, socket endpoint, or cipher key. When two
+candidate rows share an identity or credential, both are excluded while
+independent alternatives remain available in their original order. This
+filter returns captured input bytes; the final plan seal, original live owner,
+revision checks, native proof, and operation deadlines still authorize work.
+
+All five native interfaces expose the distinct response metric and two
+explicit actions. **Use in draft** inserts the measured import immediately
+after the selected prefix without saving. **Save profile with this hop**
+creates a separately named whole-connection profile. Both preserve every
+original suffix member and the actual public final, including when measuring
+after the penultimate node. The paired first node remains Home's control.
+The editor recaptures the inserted position before offering another trial.
+A 96-node route can still measure independent candidates, but neither action
+can insert a 97th node; a 95-to-96 insertion can reopen one final measurement.
+
+The public catalog carries `public_response_source_nodes` and explicit Local
+external-final metadata. Saved, connected, and draft confirmations bind the
+actual request, view, position, metric, candidate, action, and complete proposed
+path. Save and Use require the original native work to be joined at their
+respective controller boundaries. Changed tokens, returned foreign source
+maps, private/Server claims, incomplete samples, expired scores, revoked
+catalogs, and canceled native owners cannot enable adoption.
+
+Seven separately required encrypted fixture leaves cover the new continuation:
+three original-and-recaptured routes with 100 HTTPS responses each, wrong
+candidate cipher, wrong expected public IP, source revocation, and held socket
+cancellation. Both independent candidate peer providers are closed and their
+workers joined before a native receipt is issued. Build-all's native producer
+and the selected-response diagnostic require this new inventory in addition
+to the original 76 selected-response and six external-final leaves. These
+seven new leaves require their own successful hosted run; the earlier
+checkpoint below does not qualify this later implementation.
+
+The compiled interface checks exercise the shipping callbacks against explicit
+toolkit/transport boundaries: Windows passes 1,448 candidate assertions and
+2,510 editor assertions; macOS passes 1,242 candidate assertions, 200 bounded
+transport assertions, and 49,528 profile/editor assertions; GTK passes 558
+candidate assertions and 41,718 editor assertions. Android passes 214 proposal
+assertions and its 76-check product lifecycle, and iOS passes 121 dedicated
+public-source assertions alongside the original 864-check prefix provider and
+699-check saved-profile suite. Compiled counterfactuals reject removed endpoint,
+source, suffix, cleanup, and callback ownership guards. These are source and
+controller checks, not installed native-device acceptance.
+
+A genuine TLS regression also closes a response-completeness hole: exhausting
+the total HTTP wire budget can no longer look like an ordinary EOF for a
+close-delimited body. The unchanged 16,385-byte wire and 8,192-byte body limits
+must both leave a complete response before verification or scoring. Restoring
+the prior reader in a test-only overlay fails the exact incomplete-response
+assertion. Original TLS, socket ownership, and operation deadlines remain
+unchanged. Cipher independence likewise compares complete decoded SS2022 key
+chains, preventing alternate Base64 text from disguising the same key while
+preserving every original source byte and native transport credential.
+
+The actual 96-member desktop HTTP catalog also passes its unchanged
+12-second admission deadline. The repair removes repeated parsing of the
+same captured physical policy and MTU graph. A validated immutable source
+classifies the positions once; every physical proof retains its own traversal
+sets and captured socket comparison, and every MTU prefix uses the same
+original plan validator and numeric ceiling rules. The closed-prefix path
+accepts only its original unprojected constructor owner. Borrowed owners,
+mutated captures, projected inputs, and invalid middle-node MTUs are refused.
+The affected 25 shared roots passed 434 race-enabled verdicts, and the complete
+MTU package and independent equivalence/refusal regression passed. The final
+controller receipt below separately binds the whole integrated Go source.
 
 The closed first-entry candidate preparation retains that same paired entry
 as its durable policy and journal owner. Normal replacement, unsaved insertion,
@@ -175,9 +266,9 @@ The local checks exercise production source and explicitly identify modeled
 native boundaries. They do not stand in for encrypted native qualification,
 installed devices, signing, or release artifacts.
 
-- The integrated run after the metadata, candidate-control and shutdown repairs passed
-  17 complete controller roots with race detection and their original
-  120-second per-root deadlines, producing 132
+- The integrated run after the metadata, public-candidate, and shutdown repairs passed
+  19 complete controller roots with race detection and their original
+  120-second per-root deadlines, producing 139
   root/leaf PASS verdicts. The complete, unmodified `cmd/client` package was
   compiled once; the source and executable hashes remained unchanged through
   every root. The [receipt](evidence/external-final-server-controller-linux-amd64-2026-11-25.json)
@@ -189,8 +280,13 @@ installed devices, signing, or release artifacts.
   The added candidate-prefix root verifies the actual parent HTTP capture,
   control-owned preparation, compatible replacement and insertion, named Save,
   and original-final retention on Linux, Windows and Darwin target policies.
-  Source/projection exercises lengths 3, 4, and 9; shared-source and protection
-  checks separately include 96. This is not a claim that every possible length
+  The public continuation roots additionally exercise real HTTP saved/draft
+  catalogs, named Save and recovery polls, Use and recapture, mixed-source
+  filtering, and the 96-node measure-only catalog within its original
+  12-second API deadline. Source/projection exercises lengths 3, 4, and 9;
+  the capacity root and shared-source/protection checks include 96.
+  All 3,157 tracked Go source/module files are included in the source digest.
+  This is not a claim that every possible length
   or every root in the full package was exercised.
 - The ordinary ordered startup, both Compare winners, selected graph ownership,
   and external-final controller roots passed together under race detection in
@@ -326,8 +422,8 @@ stopped in `16-imported-stop-13-original`. Its original 16-node candidate
 completed all 50 authenticated responses and joined; the following reloaded
 17-node selection failed to verify teardown. The aggregate receipt was not
 written, so this is a failed diagnostic, not a passing 76-case or 82-case
-qualification. Its original deadlines and cleanup requirements are retained
-while that failure is investigated.
+qualification. Its original deadlines and cleanup requirements were retained
+during the subsequent investigation.
 
 The subsequent shared-runtime investigation reproduced a concrete race: a
 blocked original lease renewal and deliberate Close each revoked the same
@@ -340,8 +436,19 @@ join cannot count as stopped, and an incomplete Close invalidates the cached
 barrier before a later retry. A malformed renewal still revokes without an
 explicit Close. All original `TestNodeChainExecutionRuntime*` roots and the new
 controls passed 43 race-enabled verdicts; the final focused controls passed again with
-a well-formed substituted renewal owner. These establish the race repair;
-the instrumented native 16-to-17 continuation still requires its own rerun.
+a well-formed substituted renewal owner.
+
+The subsequent [hosted diagnostic at `3a772f6`](https://github.com/Eabusham2/router-vpn/actions/runs/45647366260)
+passed all 76 selected-response leaves, all six external-final leaves, and the
+complete selected-candidate controller step. This includes
+`16-imported-stop-13-original` and its reloaded 17-node continuation. The
+[unmodified native receipt](evidence/selected-private-response-3a772f6-2026-11-25.json)
+and [artifact provenance](evidence/selected-private-response-3a772f6-2026-11-25-provenance.json)
+retain commit `3a772f6e9848db8af212c098d69cee7e823f9c54`, tree
+`043524fd19edb0dc1b68f7275031af87b28067be`, the executable and source hashes,
+and the downloaded artifact and receipt hashes. This establishes that native
+repair for its recorded source. It does not qualify the subsequently added
+seven public-candidate cases or a packaged release.
 
 The Android shared-runtime job separately reached its unchanged 15-minute
 limit. Its 300 original roots are now divided across two jobs with 153 and 147
@@ -361,11 +468,12 @@ the sole release owner. Packages, provenance, checksums, ARM64 server images,
 and generated production Compose must all identify the same complete commit.
 The tracked Compose template is not a generated deployment.
 
-The new 76-case selected-response and six-case external-final inventories still
-require their own successful hosted native execution. The Server
-`stream-response` checkpoint above is bound to `c125608`; later source must
-pass its own hosted native gates. Source inventories or component fixtures do
-not certify those encrypted cases. A complete exact-commit release, legitimate iOS provisioning,
+The 76-case selected-response and six-case external-final inventories passed
+at `3a772f6`. The new seven-case public-candidate inventory and all later
+source changes require their own successful hosted native execution. The
+Server `stream-response` checkpoint above is bound to `c125608`; later source
+must pass its own hosted native gates. Source inventories or component
+fixtures do not certify those encrypted cases. A complete exact-commit release, legitimate iOS provisioning,
 installed routing/DNS/leak and network-transition checks, off-LAN operation,
 visual/accessibility acceptance, private live integrations, and deliberate
 production deployment remain separate evidence required by the product

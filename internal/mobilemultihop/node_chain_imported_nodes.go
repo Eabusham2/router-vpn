@@ -293,10 +293,10 @@ func validateExtendedStreamTargets(closures []*externalPredecessor, targets map[
 			return nodeChainError
 		}
 		out := closure.final
-		key := predecessorText(out, "password")
+		key := importedSS2022KeyIdentity(predecessorText(out, "method"), predecessorText(out, "password"))
 		port, ok := out["server_port"].(float64)
 		if !ok || !externalPort(port) || out["type"] != "shadowsocks" ||
-			!importedSS2022Credentials(predecessorText(out, "method"), key) {
+			key == "" {
 			return nodeChainError
 		}
 		if keys[key] {

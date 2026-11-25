@@ -218,6 +218,74 @@ public final class NodeCandidateProfileHarness {
    }
   }finally{operation.cancel();AndroidMTUMeasurementGate.release(lease);session.capture.close();}
  }
+ static void publicResponseProfile(Path root,boolean use,boolean penultimate)throws Exception{
+  var f=new NodeChainCaptureHarness.Fixture(root,"2/");
+  var exits=new AndroidStandardExitStore(f.context);var ids=new ArrayList<String>();
+  for(int i=0;i<5;i++){
+   var entry=NodeCandidateHarness.custom("2022-blake3-aes-256-gcm");
+   entry.id=String.format("%032x",600+i);entry.name="Public candidate "+i;
+   entry.server="198.51.100."+(90+i);entry.expectedPublicIp="203.0.113."+(90+i);
+   var key=new byte[32];Arrays.fill(key,(byte)(40+i));entry.secret=Base64.getEncoder().encodeToString(key);
+   entry.policy.put("dns_mode",i==2?"home":"rescue").put("start_layer","off");
+   exits.save(entry);ids.add(entry.id);
+  }
+  for(int i=0;i<3;i++){
+   var alias=AndroidStandardExitStore.copy(exits.get(ids.get(i==0?2:4)));alias.id="ambiguous-candidate-"+i;
+   if(i>0){alias.server="198.51.100."+(150+i);alias.secret=Base64.getEncoder().encodeToString("z".repeat(32).getBytes(java.nio.charset.StandardCharsets.UTF_8));}
+   exits.save(alias);
+  }
+  var editor=new AndroidOrderedPathSelection(f.nodes,f.profiles);
+  while(editor.members().size()>1)editor.removePrefix(0);
+  String control=editor.members().get(0).source.id;editor.setFinal(ids.get(2),"shadowsocks");
+  editor.addPrefix(ids.get(0),"shadowsocks");editor.addPrefix(ids.get(1),"shadowsocks");
+  int pos=penultimate?2:1;
+  var source=editor.candidateDraftCapture(pos).call();var session=new AndroidNodeChainSession(source,pos);
+  var catalog=new AndroidNodeCandidateCatalog(f.context,session,pos);
+  String metric="routed-public-candidate-response";
+  check(catalog.measurement.equals(metric),"original public candidate identity lost");
+  var allowed=new ArrayList<String>();for(var row:catalog.rows)if(!row.input.isEmpty())allowed.add(row.id);
+  check(allowed.equals(ids.subList(3,5)),"public picker included aliased, retained or private targets");
+  for(var row:catalog.rows)if(row.id.startsWith("ambiguous-candidate"))check(row.input.isEmpty()&&row.reason.contains("shares"),"occupied public source acquired a score");
+  var chosen=new java.util.concurrent.atomic.AtomicReference<AndroidNodeCandidateProfile>();
+  var authority=new java.util.concurrent.atomic.AtomicReference<Authority>();
+  var failure=new java.util.concurrent.atomic.AtomicReference<Throwable>();var done=new CountDownLatch(1);
+  var lease=AndroidMTUMeasurementGate.acquire();
+  var operation=AndroidNodeCandidateMeasurement.startBorrowed(catalog,lease,new AndroidNodeCandidateMeasurement.Callback(){
+   public void changed(List<AndroidNodeCandidateResult> rows,String detail){}
+   public void completed(AndroidNodeCandidateMeasurement op,List<AndroidNodeCandidateResult> rows)throws Exception{
+    var row=rows.stream().filter(r->ids.get(3).equals(r.id)).findFirst().orElseThrow();
+    var a=new Authority(row);authority.set(a);var named=AndroidNodeCandidateProfile.captureTemporary(op,row,a);
+    chosen.set(use?AndroidNodeCandidateProfile.captureDraftInsertion(op,row,a,named):named);
+   }
+   public void finished(Throwable error){failure.set(error);done.countDown();}
+  });
+  try{
+   check(done.await(30,TimeUnit.SECONDS)&&operation.joined(),"public original candidate did not join");
+   if(failure.get()!=null)throw new AssertionError("public candidate proposal failed",failure.get());
+   session.current=false;AndroidMTUMeasurementGate.release(lease);
+   var expected=new ArrayList<String>();for(var m:source.members)expected.add(m.profileId);expected.add(pos+1,ids.get(3));
+   if(use){
+    reject(()->chosen.get().useInDraft(editor),"public candidate edited before old review DOWN");
+    authority.get().drained=true;int inserted=chosen.get().useInDraft(editor);
+    check(inserted==pos+1,"public continuation did not select the inserted position");
+    var actual=new ArrayList<String>();for(var member:editor.members())actual.add(member.source.profileId);
+    check(actual.equals(expected),"public Use dropped retained suffix or final");
+    var fresh=editor.candidateDraftCapture(inserted).call();var inventory=AndroidNodeCandidateCatalog.captureSources(f.context,fresh,inserted);
+    try(var compiled=AndroidNodeChainCapture.compile(fresh,inserted);var prep=AndroidNodeCandidatePrefixCapture.compile(compiled,inserted,inventory.inventory)){
+     var meta=new JSONObject(prep.metadata);var retained=meta.getJSONArray("prefixes");
+     check(meta.getString("measurement").equals(metric)&&retained.length()==inserted+1&&retained.getJSONObject(inserted).getString("profile_id").equals(ids.get(3))&&retained.getJSONObject(inserted).getString("node_id").isEmpty(),"repeated public measurement lost the inserted original");
+     check(meta.getJSONArray("targets").length()==1&&meta.getJSONArray("targets").getJSONObject(0).getString("id").equals(ids.get(4)),"continued catalog reacquired occupied candidate");
+    }
+    reject(()->chosen.get().useInDraft(editor),"public score from the old revision edited twice");
+   }else{
+    reject(()->chosen.get().save(f.context,"Unjoined"),"public candidate saved before old review DOWN");
+    authority.get().drained=true;var saved=chosen.get().save(f.context,"Measured public peer");f.profiles.load(saved.id);
+    var loaded=f.profiles.currentOrderedPath();var actual=new ArrayList<String>();for(var m:loaded.members)actual.add(m.profileId);
+    check(actual.equals(expected)&&f.nodes.activeId().equals(control),"public Save lost original control, suffix or final");
+    try(var compiled=AndroidNodeChainCapture.compile(loaded)){check(new JSONObject(compiled.launchInput).getInt("schema")==8 && compiled.finalProfile().getString("id").equals(ids.get(2))&&loaded.members.get(loaded.members.size()-1).external().policy.getString("dns_mode").equals("home"),"public Save changed the original exit or resolver");}
+   }
+  }finally{operation.cancel();AndroidMTUMeasurementGate.release(lease);session.capture.close();}
+ }
  static void responseProfile(Path root,String variant)throws Exception{
   boolean use=variant.startsWith("use-"), earlier=!variant.equals("final")&&!variant.equals("use-final"), draft=variant.equals("draft")||use, conflict=variant.equals("conflict"),hostname=variant.equals("deep-hostname"),deep=variant.equals("deep")||hostname;
   var f=new NodeChainCaptureHarness.Fixture(root,"2/awg-fast");
@@ -362,6 +430,7 @@ public final class NodeCandidateProfileHarness {
  public static void main(String[] args)throws Exception{
   try{Path root=Path.of(args[0]);
    if(args.length==2&&args[1].equals("response")){
+    for(boolean use:List.of(true,false))for(boolean penultimate:List.of(true,false))publicResponseProfile(root,use,penultimate);
     for(String variant:List.of("final","intermediate","draft","conflict","deep","deep-hostname","use-final","use-earlier"))responseProfile(root,variant);
     System.out.println("Android authenticated candidate profile: "+checks+" source, Save, reopen and refusal checks PASS");return;
    }

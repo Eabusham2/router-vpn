@@ -49,6 +49,12 @@ func NodeChainCandidateInputSupportedForMeasurement(input, measurement string) b
 	switch measurement {
 	case hopmeasure.CandidateTCPMeasurement:
 		return NodeChainCandidateInputSupported(input)
+	case hopmeasure.CandidatePublicResponseMeasurement:
+		if len(input) == 0 || len(input) > NodeChainInputLimit {
+			return false
+		}
+		_, err := parseCandidatePublicResponseSource(input)
+		return err == nil
 	case hopmeasure.CandidatePrivateResponseMeasurement:
 		if len(input) == 0 || len(input) > NodeChainInputLimit {
 			return false
@@ -89,6 +95,9 @@ func (c *NodeChain) candidatePrefixMeasurementValidated(position int) string {
 		return hopmeasure.CandidateTCPMeasurement
 	}
 	last := len(c.proofs) - 1
+	if c.HasExternalFinal() && position > 0 && position < last {
+		return hopmeasure.CandidatePublicResponseMeasurement
+	}
 	if position < 1 || position >= last || c.nodes[position] != nil && !c.pairedCandidateStream(position) || c.nodes[0] == nil ||
 		c.nodes[last] == nil || c.proofs[last].Mode != "shadowsocks" || c.proofs[last].StartLayer != "off" {
 		return ""
@@ -157,6 +166,9 @@ func (p *NodeChainCandidatePreparation) ExtendedCandidateDepth() int {
 		return 0
 	}
 	proof := p.proofs[p.position]
+	if p.candidates.measurement == hopmeasure.CandidatePublicResponseMeasurement {
+		return p.candidates.PublicResponseCandidateDepth(p.position, proof.ProfileID, proof.Tag)
+	}
 	if p.candidates.measurement == hopmeasure.CandidatePrivateResponseMeasurement {
 		return p.candidates.ResponseCandidateDepth(p.position, proof.ProfileID, proof.Tag)
 	}
@@ -177,6 +189,9 @@ func (p *NodeChainCandidatePlan) newService(ctx context.Context, engine hopmeasu
 			return hopmeasure.NewExtendedPacketCandidatesContext(ctx, engine, prefix, p.targets, NodeChainInputLimit, p)
 		}
 		return hopmeasure.NewCapturedPrefixCandidatesContext(ctx, engine, prefix, p.targets, NodeChainInputLimit)
+	}
+	if p.measurement == hopmeasure.CandidatePublicResponseMeasurement {
+		return p.newPublicResponseService(ctx, engine, prefix)
 	}
 	if p.measurement != hopmeasure.CandidatePrivateResponseMeasurement || wrapCandidateSS2022 == nil {
 		return nil, errors.New("authenticated candidate response requires its native Shadowsocks2022 transport")
@@ -213,28 +228,7 @@ func (s candidateResponseSource) exchangeNonce(ctx context.Context, dial func(co
 		if routedTag != tag || privateAddress != api.Host {
 			return nil, hopmeasure.ErrStale
 		}
-		raw, err := dial(call, tag, s.Target.Address)
-		if err != nil || raw == nil {
-			return raw, errors.Join(err, errors.New("original candidate transport unavailable"))
-		}
-		// DialConn can send its first handshake synchronously. The original
-		// raw socket and its close stay owned even during that initial write.
-		stopClose := make(chan struct{})
-		stop := context.AfterFunc(call, func() { _ = raw.Close(); close(stopClose) })
-		deadline, _ := call.Deadline()
-		var conn net.Conn
-		if err = raw.SetDeadline(deadline); err == nil {
-			conn, err = wrap(call, raw, s.Method, s.Password, privateAddress)
-		}
-		if !stop() {
-			<-stopClose
-			return nil, call.Err()
-		}
-		if err != nil || conn == nil {
-			_ = raw.Close()
-			return nil, errors.Join(err, errors.New("candidate cipher handshake unavailable"))
-		}
-		return conn, nil
+		return dialCandidateStream(call, dial, wrap, tag, s.Target.Address, s.Method, s.Password, privateAddress)
 	}, tag, s.API+hopmeasure.CandidateChallengePath+"?nonce="+nonce, request, "", nil, func(data []byte) error {
 		var result struct {
 			Node     string `json:"node_id"`
@@ -248,4 +242,32 @@ func (s candidateResponseSource) exchangeNonce(ctx context.Context, dial func(co
 		return accept(result.Response)
 	})
 	return err
+}
+
+// Both response measures open the separately captured candidate cipher over
+// the selected prefix socket. Cancellation joins the original handshake and
+// Close before either measurement can publish.
+func dialCandidateStream(call context.Context, dial func(context.Context, string, string) (net.Conn, error), wrap func(context.Context, net.Conn, string, string, string) (net.Conn, error), tag, endpoint, method, password, destination string) (net.Conn, error) {
+	raw, err := dial(call, tag, endpoint)
+	if err != nil || raw == nil {
+		return raw, errors.Join(err, errors.New("original candidate transport unavailable"))
+	}
+	// DialConn can send its first handshake synchronously. The original
+	// raw socket and its close stay owned even during that initial write.
+	stopClose := make(chan struct{})
+	stop := context.AfterFunc(call, func() { _ = raw.Close(); close(stopClose) })
+	deadline, _ := call.Deadline()
+	var conn net.Conn
+	if err = raw.SetDeadline(deadline); err == nil {
+		conn, err = wrap(call, raw, method, password, destination)
+	}
+	if !stop() {
+		<-stopClose
+		return nil, call.Err()
+	}
+	if err != nil || conn == nil {
+		_ = raw.Close()
+		return nil, errors.Join(err, errors.New("candidate cipher handshake unavailable"))
+	}
+	return conn, nil
 }

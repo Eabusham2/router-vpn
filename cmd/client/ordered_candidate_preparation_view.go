@@ -120,8 +120,9 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 			view.responseNodes = originalCandidateResponseNodes(selection)
 		}
 	}
+	catalogMetric := desktopCandidateCatalogMetric(launch, candidateServerRequested(ctx))
 	for i, member := range selection.Nodes {
-		metric := desktopCandidateMetricForIntent(launch, i, candidateServerRequested(ctx))
+		metric := catalogMetric(i)
 		if scope == orderedCandidateSavedPrefixScope && (i == len(selection.Nodes)-1 || metric == "" || metric == hopmeasure.CandidateTCPMeasurement && !mobilemultihop.DesktopNodePhysicalGraphSupported(member.Mode, member.Profile.StartLayer)) {
 			break
 		}
@@ -135,7 +136,7 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		captured, sourceErr := captureDesktopCandidateViewSource(ctx, a, launch, position, profile, revision, scope)
+		captured, sourceErr := captureDesktopCandidateViewSource(ctx, a, launch, position, profile, revision, scope, catalogMetric)
 		if sourceErr != nil {
 			continue
 		}
@@ -144,11 +145,11 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 			choice.Kind = "external"
 		}
 		proposalProfiles := index.members(selection.Nodes, profile.ID)
-		if candidateViewMetric(view.prefixes, position) == hopmeasure.CandidatePrivateResponseMeasurement {
+		if desktopCandidateResponseMetric(candidateViewMetric(view.prefixes, position)) {
 			_, choice.Proposal, choice.ProposalAction, err = orderedResponseProfile(ctx, selection.Native.root, orderedCandidateDraftExecution(draft), selection.Nodes, position, profile, proposalProfiles)
-			if draft == nil {
+			if draft == nil && candidateViewMetric(view.prefixes, position) != hopmeasure.CandidatePublicResponseMeasurement {
 				choice.ProposalAction = ""
-			} else {
+			} else if draft != nil {
 				var draftErr error
 				_, choice.DraftProposal, draftErr = orderedResponseDraftProposal(ctx, selection.Native.root, draft.Execution, selection.Nodes, position, profile, proposalProfiles)
 				if draftErr == nil {
@@ -168,6 +169,10 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 		}
 		view.candidates = append(view.candidates, choice)
 		candidates = append(candidates, captured)
+	}
+	candidates, view.candidates, err = filterDesktopPublicCandidateViews(ctx, candidates, view.candidates, position)
+	if err != nil {
+		return nil, err
 	}
 	if len(candidates) == 0 {
 		return nil, errors.New("no saved candidate supports the measurement available through this prefix")

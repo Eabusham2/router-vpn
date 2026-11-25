@@ -442,7 +442,14 @@ public final class MultipleImportedLocalHarness {
   try(var graph=AndroidNodeChainCapture.compile(candidateDraft,0)) {
    check(graph.ownsSource(candidateDraft) && new JSONObject(graph.launchInput).getInt("schema")==8 && "routed-tcp-connect".equals(io.nekohasekai.libbox.Libbox.routerIndependentCandidateMetric(graph.launchInput,0)),"closed original WG entry lost its candidate metric");
   }
-  reject(()->draft.candidateDraftCapture(count-2).call(),"unqualified public stream gained a private response candidate");
+  for(int pos=1;pos<count-1;pos++) {
+   var retained=draft.candidateDraftCapture(pos).call();
+   try(var publicPrefix=AndroidNodeChainCapture.compile(retained,pos)){
+    check("routed-public-candidate-response".equals(io.nekohasekai.libbox.Libbox.routerIndependentCandidateMetric(publicPrefix.launchInput,pos)),
+      "the original imported prefix lost its distinct public candidate metric");
+   }
+  }
+  reject(()->draft.candidateDraftCapture(count-1).call(),"public final opened a candidate prefix beyond the original route");
   var saved=draft.save();
   check(saved.control.id.equals(control)&&f.paired.nodes.activeId().equals(control),"external final replaced paired control");
   var record=f.paired.profiles.add("Imported exit");f.paired.profiles.update(record.id,"Saved imported exit");

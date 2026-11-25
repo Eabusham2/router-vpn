@@ -65,6 +65,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         if (!"local".equals(execution)) return false;
         try {
             int last=sources.size()-1;
+            if (sources.get(last).imported) return sourceSchema(sources,modes)==8;
             if ("shadowsocks".equals(modes.get(prefix))) {
                 for(int i=1;i<last;i++) {
                     if(!sources.get(i).imported&&"shadowsocks".equals(modes.get(i)))
@@ -241,6 +242,11 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         if(member.imported)return "";
         member.requirePairedIdentity();
         return bounded(member.bundle().getJSONObject("profiles").getJSONObject("wg").toString(),16*1024*1024);
+    }
+
+    static String candidateSourceInput(AndroidNodeStore.ChainCapture original,int prefix) throws Exception {
+        List<String> inputs=memberInputs(original,original.measurementOnly()?prefix:-1);
+        return sourceInput(original,inputs,identityInputs(original));
     }
 
     private static List<String> memberInputs(AndroidNodeStore.ChainCapture original,int candidatePrefix) throws Exception {

@@ -225,6 +225,16 @@ try{
     $add=Callback 'Add';$changeMode=Callback 'ChangeMode';$up=Callback 'Up';$down=Callback 'Down';$remove=Callback 'Remove';$apply=Callback 'Apply'
     $measureNext=Callback 'MeasureNext'
     function ShowOrderedCandidates($Draft,$Position,$Editor) {
+        if($script:DraftFault -cin @('public-use','public-stale','public-read')){
+            $script:PublicTrials.Add([pscustomobject]@{Body=$Draft;Position=$Position})
+            if($script:PublicTrials.Count -gt 1 -or $script:DraftFault -ceq 'public-read'){return $null}
+            $inserted=[Collections.Generic.List[object]]::new()
+            foreach($node in $Draft.nodes){$inserted.Add($node)}
+            $inserted.Insert($Position+1,[pscustomobject]@{id='extra-public';mode='shadowsocks'})
+            $tokens=@{};foreach($node in $inserted){$match=@($store.profiles|Where-Object{$_.id -ceq $node.id});$tokens[$node.id]=$match[0].profile_token}
+            if($script:DraftFault -ceq 'public-stale'){$tokens['extra-public']='0'*64}
+            return [pscustomobject]@{requested_execution='local';candidate_id='extra-public';expected_selected_node_id=$id;expected_profile_tokens=[pscustomobject]$tokens;proposed_path=$inserted.ToArray()}
+        }
         if($script:DraftFault -cne 'recapture' -and @($Draft.nodes.id) -ccontains 'prefix-2'){
             $script:FollowupBody=$Draft;$script:FollowupPosition=$Position
             return $null
@@ -375,7 +385,7 @@ try{
             }
             $id=$keepID;$store.selected_id=$id;$RouterCombo.SelectedValue=$id
         }
-        foreach($externalCount in @(3,9)){
+        foreach($externalCount in @(3,4,9,95,96)){
             $externalRows=@();$externalProfiles=@();$externalTokens=@{}
             for($i=0;$i -lt $externalCount;$i++){
                 $source=@{id="typed-exit-$i";name="member $i";node_kind='router-vpn';start_layer='off';profile_token=('{0:x64}' -f ($i+90))}
@@ -406,6 +416,26 @@ try{
                 $dialog.FindName('Final').Tag=$null
                 $store=$previousStore;$id=$previousID;$rows=$previousRows
             }
+            $previousStore=$store;$previousID=$id;$previousRows=$rows;$previousSelected=$selected;$previousAPI=$script:CurrentStore
+            $extraPublic=@{}+$externalProfiles[1];$extraPublic.id='extra-public';$extraPublic.profile_token='d'*64
+            $store=@{profiles=@($externalProfiles)+@($extraPublic);selected_id=$externalRows[0].id};$script:CurrentStore=$store
+            $id=$store.selected_id;$RouterCombo.SelectedValue=$id;$selected=@($externalProfiles[0]);$dialog.FindName('Final').Tag=$externalRows[-1].id
+            $rootControls['UnifiedExecution'].SelectedIndex=0
+            foreach($position in @(@(1,($externalCount-2)) | Select-Object -Unique)){
+                foreach($fault in $(if($externalCount -eq 96){'public-read'}else{'public-stale';'public-use'})){
+                    $rows=[Collections.Generic.List[object]]::new()
+                    for($i=0;$i -lt $externalCount-1;$i++){$rows.Add($externalRows[$i])}
+                    &$refresh;$list.SelectedIndex=$position
+                    $script:PublicTrials=[Collections.Generic.List[object]]::new();$script:DraftFault=$fault;&$measureNext
+                    Check ($script:PublicTrials.Count -ge 1 -and $script:PublicTrials[0].Body.external_final -and $script:PublicTrials[0].Position -eq $position) ("Public editor missed the original measurement at "+$externalCount+'/'+$position+' '+$status.Text)
+                    if($fault -ceq 'public-use'){
+                        $next=$position+1;$expected=@($externalRows[0..$position].id)+@('extra-public')+@($externalRows[$next..($externalCount-1)].id)
+                        Check ($script:PublicTrials.Count -eq 2 -and $script:PublicTrials[1].Position -eq $next -and ($script:PublicTrials[1].Body.nodes.id -join ',') -ceq ($expected -join ',') -and $script:PublicTrials[1].Body.external_final -and $script:PublicTrials[1].Body.expected_selected_node_id -ceq $id) ("Public continuation changed the selected prefix, control, suffix or exit at "+$externalCount+'/'+$position+' '+$status.Text)
+                    }else{Check ($script:PublicTrials.Count -eq 1 -and $rows.Count -eq $externalCount-1) 'Stale or read-only public candidate changed the original editor'}
+                }
+            }
+            $script:DraftFault='recapture';$script:CurrentStore=$previousAPI;$dialog.FindName('Final').Tag=$null
+            $store=$previousStore;$id=$previousID;$RouterCombo.SelectedValue=$id;$rows=$previousRows;$selected=$previousSelected
             $body8=New-RouterVPNOrderedConnectPayload $draft8 $catalog8
             Check ($body8.external_final -is [bool] -and $body8.external_final -and $body8.expected_selected_node_id -ceq $externalRows[0].id -and $body8.nodes[-1].id -ceq $externalRows[-1].id -and $body8.expected_profile_tokens.Count -eq $externalCount) 'external final lost its independent control or tokens'
             foreach($fault8 in @('server','hint','token')){

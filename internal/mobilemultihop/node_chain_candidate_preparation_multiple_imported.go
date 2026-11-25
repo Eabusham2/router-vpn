@@ -59,6 +59,21 @@ func NewNodeChainMultipleImportedCandidatePreparation(source string, position in
 	return newNodeChainCandidatePreparationOwned(original, nil, owner, position, inventory)
 }
 
+// NewPublicCandidatePreparation retains this validated original Local capture.
+// A physical projection or a prior prefix never becomes the complete authority.
+func (c *NodeChain) NewPublicCandidatePreparation(position int, inventory string) (*NodeChainCandidatePreparation, error) {
+	if !c.HasExternalFinal() || c.projection != (nodeChainProjection{}) || c.validateCapture() != nil ||
+		!c.importedNodes.localSeal.matches(c) || c.originalConfigSHA != c.ConfigSHA256() ||
+		position < 1 || position >= len(c.proofs)-1 {
+		return nil, nodeChainCandidatePreparationError
+	}
+	owner, err := newNodeChainCandidateMultipleOriginal(c)
+	if err != nil {
+		return nil, err
+	}
+	return newNodeChainCandidatePreparationOwned(c, nil, owner, position, inventory)
+}
+
 func ParseNodeChainMultipleImportedCandidatePreparation(input string) (*NodeChainCandidatePreparation, error) {
 	var source nodeChainCandidatePreparationSource
 	if exactJSON([]byte(input), &source, NodeChainInputLimit) != nil ||

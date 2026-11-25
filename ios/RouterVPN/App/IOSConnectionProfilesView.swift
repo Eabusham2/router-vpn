@@ -319,15 +319,17 @@ private enum IOSConnectionProfileStore {
 
     static func appendCandidate(name: String, profiles: [RouterProfile], current: () throws -> Void) throws -> IOSConnectionProfileRecord {
         try current()
-        guard (2...IOSMultihopNodeSelection.physicalTraversalDepth).contains(profiles.count), let final = profiles.last,
-              final.normalizedNodeKind == "router-vpn", let nodes = final.multihopNodes,
+        let publicExit = profiles.last?.normalizedNodeKind == "external"
+        guard (2...IOSMultihopNodeSelection.physicalTraversalDepth).contains(profiles.count),
+              let final = publicExit ? profiles.first : profiles.last, final.normalizedNodeKind == "router-vpn",
+              let nodes = final.multihopNodes, !publicExit || IOSMultihopNodeSelection.externalExitReferences(nodes, controlID: final.id, execution: final.multihopExecution),
               nodes.count == profiles.count, nodes.last?.mode == "shadowsocks",
               let execution = final.multihopExecution, ["local", "server", "auto"].contains(execution),
               nodes.map(\.id) == profiles.map(\.id) else { throw issue("The proposed future chain lost its complete original policies.") }
         try IOSMultihopNodeSelection.validate(nodes, execution: execution, entryID: nil, entryMode: nil,
             exitID: nil, exitMode: nil, controlID: final.id)
         var record = IOSConnectionProfileRecord(id: UUID().uuidString.lowercased(), name: try cleanName(name),
-            nodeID: final.id, nodeKind: "router-vpn", mode: "shadowsocks", customLayers: [],
+            nodeID: final.id, nodeKind: "router-vpn", mode: publicExit ? "wg" : "shadowsocks", customLayers: [],
             preferences: try capturePreferences(final), updatedAt: Date())
         record.chainPolicies = try profiles.map { profile in
             IOSConnectionEntryCapture(nodeID: profile.id, nodeKind: profile.normalizedNodeKind,

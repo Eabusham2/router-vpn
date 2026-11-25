@@ -31,18 +31,19 @@ type NodeChainCandidateOwner interface {
 }
 
 type NodeChainCandidatePlan struct {
-	chain         *NodeChain
-	multiple      *nodeChainCandidateMultipleOriginal
-	multipleSeal  *nodeChainMultipleCandidatePlanSeal
-	metadataPages *nodeChainCandidateMetadataCache
-	inventory     string
-	revision      string
-	prefix        NodeChainProof
-	targets       []hopmeasure.CandidateTarget
-	measurement   string
-	responses     []candidateResponseSource
-	capture       string
-	seal          string
+	chain           *NodeChain
+	multiple        *nodeChainCandidateMultipleOriginal
+	multipleSeal    *nodeChainMultipleCandidatePlanSeal
+	metadataPages   *nodeChainCandidateMetadataCache
+	inventory       string
+	revision        string
+	prefix          NodeChainProof
+	targets         []hopmeasure.CandidateTarget
+	measurement     string
+	responses       []candidateResponseSource
+	publicResponses []candidatePublicResponseSource
+	capture         string
+	seal            string
 }
 
 func (c *NodeChain) NewCandidatePlan(position int, inventory string) (*NodeChainCandidatePlan, error) {
@@ -50,7 +51,7 @@ func (c *NodeChain) NewCandidatePlan(position int, inventory string) (*NodeChain
 	// route. NewMeasurementContext separately requires that same full chain's
 	// fresh native owner and complete private/public/DNS readiness. Temporary
 	// closed-prefix preparations retain their distinct admission and lifetime.
-	if c != nil && (c.importedNodes != nil && len(c.nodes) > NodeChainMaximumNodes && c.ExtendedLocalNodeCount() == len(c.nodes) || c.importedNodes != nil && c.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement) {
+	if c != nil && (c.HasExternalFinal() || c.importedNodes != nil && len(c.nodes) > NodeChainMaximumNodes && c.ExtendedLocalNodeCount() == len(c.nodes) || c.importedNodes != nil && c.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement) {
 		return c.NewMultipleImportedCandidatePlan(position, inventory)
 	}
 	return c.newPacketCandidatePlan(position, inventory)
@@ -68,7 +69,7 @@ func (c *NodeChain) newPacketCandidatePlanOwned(position int, inventory string, 
 // source bytes occur at the same ordinal in the full original inventory.
 func (c *NodeChain) NewCandidatePlanFromInputs(position int, inventory string, inputs []*NodeChainCandidateInput) (*NodeChainCandidatePlan, error) {
 	var multiple *nodeChainCandidateMultipleOriginal
-	if c != nil && (c.importedNodes != nil && len(c.nodes) > NodeChainMaximumNodes && c.ExtendedLocalNodeCount() == len(c.nodes) || c.importedNodes != nil && c.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement) {
+	if c != nil && (c.HasExternalFinal() || c.importedNodes != nil && len(c.nodes) > NodeChainMaximumNodes && c.ExtendedLocalNodeCount() == len(c.nodes) || c.importedNodes != nil && c.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement) {
 		var err error
 		multiple, err = newNodeChainCandidateMultipleOriginal(c)
 		if err != nil {
@@ -94,7 +95,7 @@ func (c *NodeChain) newPacketCandidatePlanInputs(position int, inventory string,
 		return nil, errors.New("candidate timing requires the complete original source inventory")
 	}
 	plan := &NodeChainCandidatePlan{metadataPages: &nodeChainCandidateMetadataCache{}, chain: c, multiple: multiple, inventory: inventory, revision: record.Revision, prefix: c.proofs[position]}
-	if measurement == hopmeasure.CandidatePrivateResponseMeasurement {
+	if measurement != hopmeasure.CandidateTCPMeasurement {
 		plan.measurement = measurement
 	}
 	ids, proofs := map[string]bool{}, map[string]bool{}
@@ -127,7 +128,13 @@ func (c *NodeChain) newPacketCandidatePlanInputs(position int, inventory string,
 		if proof != "" {
 			proofs[proof] = true
 		}
-		if plan.measurement != "" {
+		if plan.measurement == hopmeasure.CandidatePublicResponseMeasurement {
+			source, err := parseCandidatePublicResponseSource(input)
+			if err != nil || source.Target != target || proof != "" {
+				return nil, errors.Join(err, errors.New("invalid external candidate public response source"))
+			}
+			plan.publicResponses = append(plan.publicResponses, source)
+		} else if plan.measurement == hopmeasure.CandidatePrivateResponseMeasurement {
 			source, err := parseCandidateResponseSource(input)
 			if err != nil || source.Target != target || source.NodeID != proof {
 				return nil, errors.Join(err, errors.New("invalid private candidate response source"))
@@ -135,6 +142,11 @@ func (c *NodeChain) newPacketCandidatePlanInputs(position int, inventory string,
 			plan.responses = append(plan.responses, source)
 		}
 		plan.targets = append(plan.targets, target)
+	}
+	if plan.measurement == hopmeasure.CandidatePublicResponseMeasurement {
+		if err := c.validatePublicCandidateInventory(plan.publicResponses); err != nil {
+			return nil, err
+		}
 	}
 	domain := nodeChainMultipleCandidateDomain(multiple)
 	if plan.measurement != "" {
@@ -364,6 +376,9 @@ func (p *NodeChainCandidatePlan) digest() string {
 	fields := []any{p.chain.SourceSHA256(), p.chain.ConfigSHA256(), p.inventory, p.revision, p.prefix, p.targets, p.capture}
 	if p.measurement != "" || p.responses != nil {
 		fields = append(fields, p.measurement, p.responses)
+	}
+	if p.publicResponses != nil {
+		fields = append(fields, p.publicResponses)
 	}
 	if p.multiple != nil {
 		fields = append(fields, p.multiple.digest())

@@ -60,7 +60,8 @@ struct IOSNodeCandidatePrefixProviderCapture {
             }
             let retained = privateStreams && packetCount > 0 && modes.dropFirst(packetCount).allSatisfy { $0 == "shadowsocks" } &&
                 metric == (number.intValue < packetCount ? "routed-tcp-connect" : "routed-candidate-response")
-            guard source.sourceSchema == 1 && IOSMultihopNodeSelection.extendedPairedModes(modes, execution: "local") && metric == "routed-tcp-connect" ||
+            guard source.sourceSchema == 8 && metric == "routed-public-candidate-response" && original.candidatePrefixes[number.intValue].supported(in: original.candidatePrefixes) ||
+                    source.sourceSchema == 1 && IOSMultihopNodeSelection.extendedPairedModes(modes, execution: "local") && metric == "routed-tcp-connect" ||
                     source.sourceSchema == 6 && (retained || mixed || IOSMultihopNodeSelection.extendedLocalModes(modes, execution: "local") && metric == "routed-candidate-response") else { throw IOSNodeCandidatePrefixCapture.issue() }
         }
         let selectedOwner: IOSNodeChainCapture.Member?

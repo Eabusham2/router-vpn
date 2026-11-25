@@ -486,9 +486,10 @@ static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selectio
 }
 
 static gboolean linux_ordered_measurement_prefix_v1(const LinuxOrderedSelectionV1 *selection, JsonObject *catalog, int position) {
-    if (!selection || position < 0 || linux_ordered_external_final_shape_v1(selection->nodes, selection->control) || !linux_ordered_current_v1(selection, catalog)) return FALSE;
+    if (!selection || position < 0 || !linux_ordered_current_v1(selection, catalog)) return FALSE;
     guint count = json_array_get_length(selection->nodes);
     if ((guint)position + 1 >= count) return FALSE;
+    if (linux_ordered_external_final_shape_v1(selection->nodes, selection->control)) return !strcmp(selection->execution,"local");
     const char *mode = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, position), "mode");
     if (!strcmp(mode, "shadowsocks")) {
         JsonObject *first = json_array_get_object_element(selection->nodes, 0), *final = json_array_get_object_element(selection->nodes, count - 1);
@@ -1153,7 +1154,8 @@ static gboolean linux_ordered_adopt_measured_v1(GtkWindow *parent, const char *c
         g_ptr_array_insert(editor->modes, added, g_strdup(linux_ordered_string_v1(row, "mode")));
         linux_ordered_render_v1(editor, added);
         gtk_label_set_text(GTK_LABEL(editor->status), "Added the measured hop to this draft.");
-        if (linux_ordered_present_measurement_v1 && json_array_get_length(next->nodes) < ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH &&
+        if (linux_ordered_present_measurement_v1 &&
+            (json_array_get_length(next->nodes) < ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH || linux_ordered_external_final_shape_v1(next->nodes,next->control)) &&
             linux_ordered_measurement_prefix_v1(next, json_node_get_object(current), added)) {
             editor->next_position = (int)added;
             editor->next_draft = linux_ordered_connect_body_v1(next);

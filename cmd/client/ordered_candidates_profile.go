@@ -11,6 +11,7 @@ import (
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
+	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -245,6 +246,11 @@ func (a *app) saveOrderedCandidateProfile(w http.ResponseWriter, r *http.Request
 	job.accepted = false // one explicit save per receipt, no duplicate retries
 	response := map[string]any{"ok": true, "profile_id": record.ID, "profile_name": record.Name, "proposed_path": nodes, "active_path_changed": false, "note": "Saved for the next connection. Disconnect before loading this complete profile."}
 	job.view.addResponseSource(response)
+	if candidateViewMetric(job.view.prefixes, job.view.position) == hopmeasure.CandidatePublicResponseMeasurement {
+		response["request_id"], response["candidate_id"], response["view_token"] = q.RequestID, q.CandidateID, job.view.token
+		response["prefix_position"], response["measurement"] = job.view.position, hopmeasure.CandidatePublicResponseMeasurement
+		response["proposal_action"] = "save-intermediate-profile"
+	}
 	if len(job.view.responseNodes) != 0 {
 		response["request_id"], response["candidate_id"] = q.RequestID, q.CandidateID
 		action := "save-final-profile"

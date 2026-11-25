@@ -664,7 +664,8 @@ CONTROLS = {
     "selected_receipt": ('result.label == node.label', 'true'),
     # Capture identity and uniform labels jointly reject a mixed initial inventory.
     # This control omits both initial checks; receipt validation remains original.
-    "mixed_inventory": ('            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, pairedLocal: pairedLocal, pairedPrefixNodes: reply.capture.paired_prefix_nodes, localRoles: reply.capture.localRoles(), customEntry: customEntry); try reply.capture.validateNode(row, count: rows.count) }\n            guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {', '            for row in rows { try row.validate(count: rows.count, multipleImported: multipleImported, extendedLocalCount: reply.capture.extended_local_nodes, extendedOriginalCount: reply.capture.extended_original_nodes, pairedLocal: pairedLocal, pairedPrefixNodes: reply.capture.paired_prefix_nodes, localRoles: reply.capture.localRoles(), customEntry: customEntry) }\n            guard true else {'),
+    "mixed_inventory": ('; try reply.capture.validateNode(row, count: rows.count) }\n            guard Set(rows.compactMap { $0.receiptKind(count: rows.count) }).count == 1 else {',
+                        ' }\n            guard true else {'),
     "three_only": ("reply.capture.admits(count: rows.count)", "rows.count == 3"),
     "private_middle_budget": ("maximum = node.kind == \"public-path\" ? 5000.0 : 2000.0", "maximum = node.position == 1 ? 5000.0 : 2000.0"),
     "foreign_capture": ("reply.capture == capture", "true"),

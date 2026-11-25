@@ -119,6 +119,9 @@ private final class IOSCandidateReply: @unchecked Sendable {
         let proposal_source_sha256: String?, proposal_config_sha256: String?
         var eligiblePrefixes: [IOSNodeCandidatePrefix] {
             proofs.filter { prefix in
+                if prefix.metric == "routed-public-candidate-response" {
+                    return requested_execution == nil && execution == nil && candidate_positions == nil && prefix.supported(in: proofs)
+                }
                 if let requested_execution, prefix.metric == "routed-candidate-response" {
                     return (requested_execution == "auto" && execution == "local" || ["server", "auto"].contains(requested_execution) && execution == "server") && candidate_positions?.contains(prefix.position) == true &&
                         prefix.selectedResponse(in: proofs)
@@ -200,6 +203,8 @@ private final class IOSCandidateReply: @unchecked Sendable {
             guard info.requested_execution == nil, info.execution == nil, info.candidate_positions == nil,
                   info.proposal_source_sha256 == nil, info.proposal_config_sha256 == nil else { throw IOSNodeCandidateResult.issue() }
             if IOSMultihopNodeSelection.extendedMixedPacketCount(info.proofs.map(\.mode), execution: "local") > 0 ||
+               info.proofs.contains(where: { $0.metric == "routed-public-candidate-response" }) ||
+               binding.identity.nodeChainSource.flatMap({ (try? JSONSerialization.jsonObject(with: $0) as? [String: Any])?["schema"] as? Int }) == 8 ||
                info.proofs.contains(where: { ($0.position >= IOSMultihopNodeSelection.maximumNodes - 1 || !$0.node_id.isEmpty) && $0.metric == "routed-candidate-response" }) {
                 guard let original = binding.identity.nodeChainSource else { throw IOSNodeCandidateResult.issue() }
                 try IOSNodeCandidateOriginalCapture.validateExtendedResponseInfo(input: original, bundle: binding.identity.bundleData,
@@ -220,7 +225,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                 prefixes = originalPrefixes.filter { $0.supported(in: originalPrefixes) }
                 independentPrefixes = Set(prefixes.filter { prefix in
                     prefix.position < capture.members.count - 1 &&
-                        (prefix.metric == "routed-candidate-response" || capture.members.prefix(prefix.position + 1).allSatisfy { ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) })
+                        (["routed-candidate-response", "routed-public-candidate-response"].contains(prefix.metric) || capture.members.prefix(prefix.position + 1).allSatisfy { ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) })
                 }.map(\.position))
                 if !prefixes.contains(where: { $0.position == selectedPrefix }) { selectedPrefix = prefixes.first?.position ?? 0 }
                 text = independentOnly ? "Test the selected prefix. The saved proxy suffix stays unused, and the test returns to Disconnected before future-profile choices appear." : "Test only the selected prefix, or test the complete saved Local path. Both return to Disconnected before future-profile choices appear."
@@ -281,7 +286,8 @@ private final class IOSCandidateReply: @unchecked Sendable {
                               info.proofs == temporary.prefixes else { throw CancellationError() }
                     }
                     let capture = try IOSNodeCandidateCapture.make(request: owner, prefixPosition: position, proofs: info.proofs,
-                        chainSource: info.source_sha256, chainConfig: info.config_sha256, selectedResponse: info.requested_execution != nil && info.proofs[position].metric == "routed-candidate-response")
+                        chainSource: info.source_sha256, chainConfig: info.config_sha256, selectedResponse: info.requested_execution != nil && info.proofs[position].metric == "routed-candidate-response",
+                        originalLaunch: binding.identity.nodeChainSource)
                     let owned = try IOSNodeCandidateTransaction(epoch: info.session_id, owner: owner,
                         send: { op, request, candidate, prefix, deadline in
                             try await self.send(binding.connection, operation: op, request: request, epoch: info.session_id,
@@ -371,14 +377,14 @@ private final class IOSCandidateReply: @unchecked Sendable {
                             detachedScores.removeAll { now < $0.receipt.measured_at || now >= $0.receipt.expires_at }
                             for score in detachedScores {
                                 if Int64(Date().timeIntervalSince1970 * 1000) >= score.receipt.expires_at { continue }
-                                if !editor || metadata.metric == "routed-candidate-response" {
+                                if !editor || ["routed-candidate-response", "routed-public-candidate-response"].contains(metadata.metric) {
                                     do { detachedProposals[score.token] = try await compileProposal(score, false) }
                                     catch {
                                         try currentResult(score)
                                         detachedFailures[score.token] = error.localizedDescription
                                     }
                                 }
-                                if editor && metadata.metric == "routed-candidate-response" {
+                                if editor && ["routed-candidate-response", "routed-public-candidate-response"].contains(metadata.metric) {
                                     do {
                                         if position < info.proofs.count - 2, let named = detachedProposals[score.token] {
                                             insertions[score.token] = .success(named)
@@ -426,7 +432,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                     self.draftInsertions = insertions
                     self.scores = detachedScores; self.prune()
                     for score in self.scores { try temporary.requireSaved(token: score.token) }
-                    if editor && !self.scores.contains(where: { $0.benchmark.measurement == "routed-candidate-response" }) {
+                    if editor && !self.scores.contains(where: { ["routed-candidate-response", "routed-public-candidate-response"].contains($0.benchmark.measurement) }) {
                         self.text = "Disconnected. Choose a measured node to update this draft."
                         while !self.scores.isEmpty {
                             self.prune()
@@ -503,7 +509,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                 detached.append(Score(id: target.id, name: String(row.name.prefix(100)), receipt: receipt, benchmark: score))
             }
         }
-        let offersNamedProfile = !editor || metadata.metric == "routed-candidate-response"
+        let offersNamedProfile = !editor || ["routed-candidate-response", "routed-public-candidate-response"].contains(metadata.metric)
         var insertions: [UUID: Result<IOSNodeCandidateProposal, Error>] = [:]
         var admitted: [Score] = []
         for score in detached {
@@ -521,7 +527,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                 do { proposals[score.token] = try IOSNodeCandidateProposal.compile(original: original, records: capture.records,
                     position: position, candidateID: score.id, measuredInput: row.input) }
                 catch { try current(); failures[score.token] = error.localizedDescription }
-                if editor && metadata.metric == "routed-candidate-response" {
+                if editor && ["routed-candidate-response", "routed-public-candidate-response"].contains(metadata.metric) {
                     if position < temporary.prefixes.count - 2, let named = proposals[score.token] {
                         insertions[score.token] = .success(named)
                     } else {

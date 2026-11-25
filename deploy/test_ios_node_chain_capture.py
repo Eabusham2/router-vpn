@@ -35,6 +35,9 @@ GO = GO.replace(anchor, r'''
  case "candidate-metric":
     var original *mobilemultihop.NodeChain; var position int
     if position,err=strconv.Atoi(r.Mode);err==nil{if original,err=mobilemultihop.ParseNodeChainLaunchInput(r.Source);err==nil{value=original.CandidatePrefixMeasurement(position)}}
+ case "filter-public-candidate-inventory":
+    var pos int
+    if pos,err=strconv.Atoi(r.Mode);err==nil{value,err=mobilemultihop.FilterNodeChainPublicCandidateInventory(r.Source,pos,r.Policy)}
  case "candidate-metric-input":value=strconv.FormatBool(mobilemultihop.NodeChainCandidateInputSupportedForMeasurement(r.Source,r.Mode))
  case "multiple-execution-latency":
     var original *mobilemultihop.NodeChain
@@ -196,6 +199,9 @@ public func LibboxRouterNodeChainCandidatePrefixMeasurement(_ plan:LibboxRouterN
  var error:NSError?;let source=plan.launchInput(&error);guard error==nil else{return ""}
  return (try? bridge(["Op":"candidate-metric","Source":source,"Mode":String(position)])) ?? ""
 }
+public func LibboxRouterNodeChainFilterPublicCandidateInventory(_ source:String,_ position:Int32,_ inventory:String,_ failure:UnsafeMutablePointer<NSError?>?)->String{
+ api(failure){try bridge(["Op":"filter-public-candidate-inventory","Source":source,"Mode":String(position),"Policy":inventory])} ?? ""
+}
 public func LibboxRouterNodeChainCandidateInputSupportedForMeasurement(_ source:String,_ metric:String)->Bool{
  (try? bridge(["Op":"candidate-metric-input","Source":source,"Mode":metric])) == "true"
 }
@@ -318,13 +324,7 @@ func edit(_ original:Data,_ action:(inout [String:Any])->Void)throws->Data{var v
 func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Data{
  try edit(original){root in var profiles=root["routerProfiles"] as! [[String:Any]];action(&profiles[0]);root["routerProfiles"]=profiles}
 }
-@MainActor @main struct Tests {
- static var checks=0
- static func check(_ name:String,_ value:@autoclosure ()throws->Bool)throws{guard try value()else{throw NSError(domain:"ChainCheck",code:1,userInfo:[NSLocalizedDescriptionKey:name])};checks+=1}
- static func reject(_ name:String,_ action:()throws->Void)throws{do{try action()}catch{checks+=1;return};throw NSError(domain:"ChainRejected",code:1,userInfo:[NSLocalizedDescriptionKey:"ACCEPTED "+name])}
- static func main(){defer{LibboxTestClose()};do{try run();print("Apple ordered native capture: PASS (\(checks) shipping Swift / shared Go checks; no native connection)")}
- catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
- static func externalFinal(_ count:Int,_ dns:String)throws {
+func externalFinalBundles(_ count:Int,_ dns:String)throws -> [Data] {
   var inputs=try sources(count)
   var refs=[[String:Any]]()
   let entryID=try profile(inputs[0])["id"] as! String
@@ -341,7 +341,21 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
    root["selectedRouterID"]=id;root["routerProfiles"]=[saved];root["profiles"]=[String:[String:String]]()
    inputs[position]=try data(root);refs.append(["id":id,"mode":"shadowsocks"])
   }
-  inputs[0]=try editProfile(inputs[0]) { $0["multihop_enabled"]=true;$0["multihop_nodes"]=refs;$0["multihop_execution"]="local" }
+  inputs[0]=try editProfile(inputs[0]) { p in
+   p["name"]=p["id"];p["adguard_ipv6"]="";p["socks_host"]="";p["socks_port"]=0;p["socks_username"]="";p["socks_password"]=""
+   p["multihop_enabled"]=true;p["multihop_nodes"]=refs;p["multihop_execution"]="local"
+  }
+  return inputs
+}
+@MainActor @main struct Tests {
+ static var checks=0
+ static func check(_ name:String,_ value:@autoclosure ()throws->Bool)throws{guard try value()else{throw NSError(domain:"ChainCheck",code:1,userInfo:[NSLocalizedDescriptionKey:name])};checks+=1}
+ static func reject(_ name:String,_ action:()throws->Void)throws{do{try action()}catch{checks+=1;return};throw NSError(domain:"ChainRejected",code:1,userInfo:[NSLocalizedDescriptionKey:"ACCEPTED "+name])}
+ static func main(){defer{LibboxTestClose()};do{try run();print("Apple ordered native capture: PASS (\(checks) shipping Swift / shared Go checks; no native connection)")}
+ catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
+ static func externalFinal(_ count:Int,_ dns:String)throws {
+  let inputs=try externalFinalBundles(count,dns), entryID=try profile(inputs[0])["id"] as! String
+  let refs=try profile(inputs[0])["multihop_nodes"] as! [[String:Any]]
   let chain=try IOSNodeChainCapture.compile(bundles:inputs);defer{try? chain.plan.close()}
   let saved=try profile(inputs[0]),restored=try IOSNodeChainCapture.reopen(chain.launchInput,selectedProfile:saved);defer{try? restored.plan.close()}
   let final=chain.members[count-1],launch=try object(Data(chain.launchInput.utf8)),members=launch["nodes"] as! [String]

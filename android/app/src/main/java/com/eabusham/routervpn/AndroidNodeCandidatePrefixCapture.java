@@ -46,7 +46,12 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
         JSONObject selected=new JSONObject(original.memberInputs.get(prefix));
         boolean stream="routervpn-node-chain-imported-member".equals(selected.optString("kind"))||"shadowsocks".equals(selected.optString("mode"));
         if(stream){
-            if(original.plan!=null&&"routed-candidate-response".equals(Libbox.routerNodeChainCandidatePrefixMeasurement(original.plan,prefix)))return;
+            if(original.plan!=null) {
+                String metric=Libbox.routerNodeChainCandidatePrefixMeasurement(original.plan,prefix);
+                JSONObject last=new JSONObject(original.memberInputs.get(original.memberInputs.size()-1));
+                String expected="routervpn-node-chain-external-final".equals(last.optString("kind"))?"routed-public-candidate-response":"routed-candidate-response";
+                if(expected.equals(metric))return;
+            }
             throw invalid();
         }
         for(int i=0;i<=prefix;i++)if(!packetMode(new JSONObject(original.memberInputs.get(i)).optString("mode")))throw invalid();
@@ -91,7 +96,7 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
         for(int i=0;i<proofs.length();i++){
             JSONObject proof=proofs.getJSONObject(i),member=new JSONObject(original.memberInputs.get(i));
             if ("routervpn-node-chain-imported-member".equals(member.optString("kind"))) {
-                if(original.plan==null||!"routed-candidate-response".equals(meta.optString("measurement")))throw invalid();
+                if(original.plan==null || !Libbox.routerNodeChainCandidatePrefixMeasurement(original.plan,prefix).equals(meta.optString("measurement")))throw invalid();
                 JSONObject retained=new JSONObject(Libbox.routerNodeChainCandidatePrefixProof(original.plan,i));
                 for(String key:new String[]{"position","profile_id","node_id","source_sha256","tag","kind","node_kind","mode","start_layer"})
                     if(!retained.get(key).equals(proof.get(key)))throw invalid();

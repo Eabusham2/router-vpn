@@ -513,6 +513,10 @@ struct RouterVPNOrderedNodeDraft {
         return []
     }
     var hasRoomForMeasuredHop: Bool {
+        if externalExit != nil {
+            return nodes.count < RouterVPNOrderedNodes.physicalTraversalDepth && execution == "local" &&
+                RouterVPNOrderedNodes.externalFinalPath(nodes,control:control,profiles:capturedCatalog)
+        }
         if prefixes.count >= 7 && prefixes.count < RouterVPNOrderedNodes.physicalTraversalDepth - 1 &&
             execution == "local" && finalMode == "shadowsocks" && modes.allSatisfy({ $0 == "wg" }) {
             return RouterVPNOrderedNodes.pairedMembersOff(nodes, profiles: capturedCatalog)
@@ -522,8 +526,10 @@ struct RouterVPNOrderedNodeDraft {
             RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog, selectedExecution: execution != "local"))
     }
     func canMeasure(after index: Int) -> Bool {
-        if externalExit != nil { return false }
         guard modes.indices.contains(index) else { return false }
+        if externalExit != nil {
+            return execution == "local" && RouterVPNOrderedNodes.externalFinalPath(nodes,control:control,profiles:capturedCatalog)
+        }
         if ["server","auto"].contains(execution), index >= 1, modes[index] == "shadowsocks", RouterVPNOrderedNodes.prefixModes.contains(modes.first ?? ""), finalMode == "shadowsocks" {
             if nodes.count == 3 {
                 let sourceIDs = Set(prefixes + [control])
@@ -1501,7 +1507,8 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
                 self.draft = updated
                 let inserted = index + 1
                 self.render(selected: inserted)
-                guard updated.nodes.count < RouterVPNOrderedNodes.physicalTraversalDepth, updated.canMeasure(after: inserted) else { return }
+                guard updated.nodes.count < RouterVPNOrderedNodes.physicalTraversalDepth || updated.externalExit != nil,
+                      updated.canMeasure(after: inserted) else { return }
                 let revision = self.revision
                 DispatchQueue.main.async { [weak self, weak owner] in
                     guard let self, let owner, self.window?.isVisible == true, self.revision == revision,

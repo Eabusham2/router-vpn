@@ -388,12 +388,15 @@ func validateDesktopNodeCandidatePrefixStatus(plan *mobilemultihop.NodeChainCand
 			source = target.Source
 		}
 	}
-	metric, kind := hopmeasure.CandidateTCPMeasurement, "tcp-connect"
-	if metadata.Measurement != "" {
-		if metadata.Measurement != hopmeasure.CandidatePrivateResponseMeasurement {
-			return bad
-		}
+	metric, kind, endpoint := hopmeasure.CandidateTCPMeasurement, "tcp-connect", ""
+	switch metadata.Measurement {
+	case "":
+	case hopmeasure.CandidatePrivateResponseMeasurement:
 		metric, kind = metadata.Measurement, "private-agent-response"
+	case hopmeasure.CandidatePublicResponseMeasurement:
+		metric, kind, endpoint = metadata.Measurement, "public-exit-response", hopmeasure.CandidatePublicResponseEndpoint
+	default:
+		return bad
 	}
 	if source == "" || status.Schema != 1 || status.Measurement != metric || status.PrefixPosition != metadata.PrefixPosition ||
 		status.PrefixID != metadata.PrefixID || status.CaptureSHA256 != plan.CaptureSHA256() || status.CandidateID != id || status.CandidateSourceSHA256 != source ||
@@ -402,11 +405,11 @@ func validateDesktopNodeCandidatePrefixStatus(plan *mobilemultihop.NodeChainCand
 		return bad
 	}
 	r := status.Results[0]
-	if r.ID != id || r.Role != "candidate" || r.Kind != kind || !r.Ready || r.Failure != "" || r.Idle != nil || r.Response != nil || r.Download != nil || r.Upload != nil || r.Benchmark == nil {
+	if r.ID != id || r.Role != "candidate" || r.Kind != kind || !r.Ready || r.Failure != "" || r.CandidateDisposition != "" || r.Idle != nil || r.Response != nil || r.Download != nil || r.Upload != nil || r.Benchmark == nil {
 		return bad
 	}
 	b := r.Benchmark
-	if b.Schema != 1 || b.Measurement != metric || b.Endpoint != "" || b.Attempts != hopmeasure.LatencyBenchmarkSamples || b.Failed != 0 || b.Distribution == nil {
+	if b.Schema != 1 || b.Measurement != metric || b.Endpoint != endpoint || b.Attempts != hopmeasure.LatencyBenchmarkSamples || b.Failed != 0 || b.Distribution == nil {
 		return bad
 	}
 	d := b.Distribution

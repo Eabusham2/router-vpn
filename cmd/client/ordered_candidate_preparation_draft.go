@@ -68,7 +68,8 @@ func desktopSelectedResponseProposal(members []desktopNodeChainMember, execution
 // only when the complete original suffix and all of its sources still compile.
 func orderedResponseProfile(ctx context.Context, root, execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, string, error) {
 	var empty common.RouterProfile
-	if execution != "local" && !desktopSelectedResponseProposal(members, execution, position, candidate) || position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" {
+	publicResponse := desktopPublicCandidateMembers(members, execution, position) && desktopNodeChainImportedExecutionMiddle(candidate)
+	if !publicResponse && (execution != "local" && !desktopSelectedResponseProposal(members, execution, position, candidate) || position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks") {
 		return empty, nil, "", errors.New("this measurement has no complete supported stream path")
 	}
 	p, rows, err := orderedCandidateProposalForExecution(members, position, candidate, profiles, execution)
@@ -85,7 +86,7 @@ func orderedResponseProfile(ctx context.Context, root, execution string, members
 		return empty, nil, "", err
 	}
 	action := "save-intermediate-profile"
-	if position == len(members)-2 {
+	if position == len(members)-2 && !publicResponse {
 		action = "save-final-profile"
 	}
 	return p, rows, action, nil
@@ -99,8 +100,9 @@ const orderedCandidateDraftInsertAction = "insert-measured-hop"
 // adoption; this preview cannot confer a selected-trial or measurement grant.
 func orderedResponseDraftProposal(ctx context.Context, root, execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var empty common.RouterProfile
-	if execution != "local" && !desktopSelectedResponseProposal(members, execution, position, candidate) ||
-		position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" {
+	publicResponse := desktopPublicCandidateMembers(members, execution, position) && desktopNodeChainImportedExecutionMiddle(candidate)
+	if !publicResponse && (execution != "local" && !desktopSelectedResponseProposal(members, execution, position, candidate) ||
+		position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks") {
 		return empty, nil, errors.New("this response has no complete supported draft insertion")
 	}
 	for _, member := range members {
@@ -149,8 +151,8 @@ func orderedDraftProposalWithMode(execution string, members []desktopNodeChainMe
 	if len(members) < 2 || len(members) >= mobilemultihop.NodeChainExtendedLocalMaximumNodes || position < 0 || position >= len(members)-1 {
 		return control, nil, errors.New("the measured candidate cannot be inserted at this position")
 	}
-	if desktopNodeChainHasExternalFinal(members) && (execution != "local" || position != 0 || mode != "shadowsocks" || !desktopNodeChainImportedExecutionMiddle(candidate)) {
-		return control, nil, errors.New("the external-final draft requires an original literal SS2022 candidate after its WireGuard entry")
+	if desktopNodeChainHasExternalFinal(members) && (execution != "local" || position != 0 && !desktopPublicCandidateMembers(members, execution, position) || mode != "shadowsocks" || !desktopNodeChainImportedExecutionMiddle(candidate)) {
+		return control, nil, errors.New("the external-final draft requires an original literal SS2022 candidate through its captured prefix")
 	}
 	rows := nodeChainSelectedReferences(members)
 	for _, row := range rows {

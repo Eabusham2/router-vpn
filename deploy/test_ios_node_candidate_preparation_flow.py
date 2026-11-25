@@ -47,7 +47,7 @@ protocol ObservableObject:AnyObject {}
  let records:[String:Data]
  let rows:[Row]
  let prefix:IOSNodeCandidatePrefix,chainSource:String,chainConfig:String
- static func make(request:String,prefixPosition:Int,proofs:[IOSNodeCandidatePrefix],chainSource:String,chainConfig:String,selectedResponse:Bool=false)throws->Self{
+ static func make(request:String,prefixPosition:Int,proofs:[IOSNodeCandidatePrefix],chainSource:String,chainConfig:String,selectedResponse:Bool=false,originalLaunch:Data?=nil)throws->Self{
   Self(source:IOSCandidateCatalogPublication.Capture(),records:IOSNodeBundleStore.shared.records,rows:[Row(id:"candidate",name:"Original candidate",input:"measured original")],prefix:proofs[prefixPosition],chainSource:chainSource,chainConfig:chainConfig)
  }
  func requireCurrent()throws{guard records==IOSNodeBundleStore.shared.records else{throw CancellationError()}}

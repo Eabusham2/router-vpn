@@ -11,7 +11,36 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+r'''
  static func independentSources(_ count:Int,_ positions:Set<Int>,_ mode:String="wg",_ layer:String="off",_ ceiling:Int=4096)throws->[Data]{
   var bundles=try sources(count,layer,true)
 '''+INDEPENDENT_BUNDLES+r'''
+ static func publicProvider(_ count:Int,_ position:Int)throws {
+  let bundles=try externalFinalBundles(count,"home"), control=bundles[0]
+  let plan=try IOSNodeChainCapture.compile(bundles:bundles);defer{try? plan.plan.close()}
+  let original=IOSNodeCandidateOriginalCapture.ordinary(plan),proofs=original.candidatePrefixes
+  let candidate=try externalFinalBundles(count+1,"home").last!
+  let records=Dictionary(uniqueKeysWithValues:try (bundles+[candidate]).map{(try profile($0)["id"] as! String,$0)})
+  let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString,isDirectory:true)
+  try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:false);defer{try? FileManager.default.removeItem(at:directory)}
+  let publication=IOSCandidateCatalogPublication(container:directory);try publication.publish(records)
+  let stamp=try publication.current(records:records), request=UUID().uuidString.replacingOccurrences(of:"-",with:"").lowercased()
+  let catalog=try IOSNodeCandidateCapture.compile(records:records,stamp:stamp,prefixPosition:position,proofs:proofs,originalLaunch:Data(original.launchInput.utf8))
+  let published=try publication.capture(request:request,inventory:catalog.inventory,expected:stamp)
+  let capture=try IOSNodeCandidatePrefixCapture.compile(original:original,position:position,inventory:String(decoding:catalog.inventory,as:UTF8.self));defer{try? capture.native.close()}
+  let configuration=try IOSNodeCandidatePrefixProviderCapture.configuration(capture:capture,bundle:control,owner:UUID(),epoch:UUID(),request:request)
+  let reopened=try IOSNodeCandidatePrefixProviderCapture.reopen(configuration,publication:publication);defer{try? reopened.capture.native.close()}
+  let m=reopened.capture.metadata
+  try check("public prefix host validates the exact closed graph and independent target",
+       m.measurement=="routed-public-candidate-response" && m.prefix_position==position && m.prefixes.count==position+1 && m.targets.map(\.id)==catalog.rows.filter{!$0.input.isEmpty}.map(\.id) &&
+       !m.application_open && !m.dns_open && !m.ready && reopened.capture.originalLaunchInput==plan.launchInput && reopened.source.inventory.identity==published.inventory.identity)
+  var swapped=configuration;swapped["bundle"]=bundles.last!
+  try reject("public exit cannot replace the original prefix control"){_ = try IOSNodeCandidatePrefixProviderCapture.reopen(swapped,publication:publication)}
+  try IOSNodeCandidateOriginalCapture.validateExtendedResponseInfo(input:Data(plan.launchInput.utf8),bundle:control,proofs:proofs,sourceSHA256:plan.sourceSHA256,configSHA256:plan.configSHA256)
+  var forged=proofs;forged[position].measurement="routed-candidate-response"
+  try reject("public prefix cannot change to private agent"){try IOSNodeCandidateOriginalCapture.validateExtendedResponseInfo(input:Data(plan.launchInput.utf8),bundle:control,proofs:forged,sourceSHA256:plan.sourceSHA256,configSHA256:plan.configSHA256)}
+  try reopened.storeCandidatesClosed()
+  try reject("public response owner cannot reopen a retired publication"){_ = try IOSNodeCandidatePrefixProviderCapture.reopen(configuration,publication:publication)}
+  try publication.remove(published)
+ }
  static func run()throws{
+  try publicProvider(3,1);try publicProvider(9,7)
   try run(bundles:sources(4,"off",true))
   let raw=try LibboxTestHysteriaFixture(4,"wg","off")
   var layered=try (JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [Any]).map{try data($0)}

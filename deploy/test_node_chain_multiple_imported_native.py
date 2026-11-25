@@ -27,6 +27,15 @@ EXTERNAL_FINAL_CASES = {
     'wrong-public-exit': (3, 'home'), 'failed-selected-dns': (4, 'custom'),
 }
 
+PUBLIC_CANDIDATE_TEMPLATE = 'mobile/chain_component/external_final_candidates_test.go.tmpl'
+PUBLIC_CANDIDATE_ROOT = 'TestRouterVPNExternalFinalPublicCandidates'
+# Original source size, selected prefix position, completed fifty-response rounds.
+PUBLIC_CANDIDATE_CASES = {
+    'home-retained-suffix': (4, 1, 2), 'custom-retained-final': (3, 1, 2),
+    'nine-late-import': (9, 7, 2), 'wrong-key': (4, 1, 0), 'wrong-exit': (4, 2, 0),
+    'late-catalog': (4, 1, 0), 'cancel-close': (4, 2, 0),
+}
+
 MIXED_CANDIDATE_TEMPLATE = 'mobile/chain_component/mixed_local_candidates_test.go.tmpl'
 MIXED_CANDIDATE_ROOT = 'TestRouterVPNMixedLocalCandidateMeasurements'
 MIXED_CANDIDATES = ('9-2-7-wg-connected-original', '16-2-14-awg2-strong-closed-original',
@@ -284,6 +293,7 @@ PEER_CASES = {LATER_HOSTNAME_ROOT: LATER_HOSTNAME_CASES, PAIRED_INTERIOR_ROOT: P
 
 
 PEER_CASES[EXTERNAL_FINAL_ROOT] = tuple(EXTERNAL_FINAL_CASES)
+PEER_CASES[PUBLIC_CANDIDATE_ROOT] = tuple(PUBLIC_CANDIDATE_CASES)
 
 
 def inventory():
@@ -320,6 +330,12 @@ def verdict(output, root, leaf=None, *, worker_digest=None):
         raise ValueError('Independent imported native inventory omitted, duplicated or failed a required case')
     if any(any(marker in row.get('Output', '') for marker in (*FATAL, *JOIN_FAILURES)) for row in rows):
         raise ValueError('Independent imported native receipt contains a fatal or unjoined result')
+    if root == PUBLIC_CANDIDATE_ROOT:
+        count, position, rounds = PUBLIC_CANDIDATE_CASES[leaf]
+        marker = f'PUBLIC_CANDIDATE case={leaf} nodes={count} position={position} rounds={rounds} samples={50*rounds} retained=true joined=true'
+        emitted = [row.get('Output', '').strip() for row in rows if row.get('Test') == root+'/'+leaf and 'PUBLIC_CANDIDATE' in row.get('Output', '')]
+        if len(emitted) != 1 or not emitted[0].endswith(marker):
+            raise ValueError('Missing enrolled encrypted public candidate or complete original retirement')
     if root == EXTERNAL_FINAL_ROOT:
         count, dns = EXTERNAL_FINAL_CASES[leaf]
         marker = f"QUALIFIED_EXTERNAL_FINAL case={leaf} nodes={count} dns={dns} owner_joined=true private_exit_calls=0"
@@ -501,7 +517,7 @@ def execute(core, target, tags, env, runner, *, strong_diagnostic=False, private
     owner = load('test_node_chain_openvpn_execution_owner.py')
     peers = load('prepare-desktop-external.py')
     native = load('prepare-mobile-node-chain.py')
-    template_bytes = {path: (ROOT/path).read_bytes() for path in (PEER_TEMPLATE, MIXED_TEMPLATE, MIXED_CANDIDATE_TEMPLATE, EXTERNAL_FINAL_TEMPLATE, BOX_TEMPLATE, *SELECTED_TEMPLATES)}
+    template_bytes = {path: (ROOT/path).read_bytes() for path in (PEER_TEMPLATE, MIXED_TEMPLATE, MIXED_CANDIDATE_TEMPLATE, EXTERNAL_FINAL_TEMPLATE, PUBLIC_CANDIDATE_TEMPLATE, BOX_TEMPLATE, *SELECTED_TEMPLATES)}
     worker = load('prepare-server-node-chain.py')
     worker_sources = {name: raw for name, raw in worker.copies().items()
                       if name.startswith('cmd/sing-box/routervpn_server_chain_') and not name.endswith('_test.go')}
@@ -529,7 +545,7 @@ def execute(core, target, tags, env, runner, *, strong_diagnostic=False, private
         projection.write_bytes(template_bytes[PEER_TEMPLATE])
         overlay = workspace/'peer.json'
         replacement = {str(core/PEER_TARGET): str(projection)}
-        for template in (MIXED_TEMPLATE, MIXED_CANDIDATE_TEMPLATE, EXTERNAL_FINAL_TEMPLATE, *SELECTED_TEMPLATES):
+        for template in (MIXED_TEMPLATE, MIXED_CANDIDATE_TEMPLATE, EXTERNAL_FINAL_TEMPLATE, PUBLIC_CANDIDATE_TEMPLATE, *SELECTED_TEMPLATES):
             name = Path(template).name.removesuffix('.tmpl')
             replacement[str(core/'protocol/routervpnamnezia'/name)] = str(ROOT/template)
         # The external Go test package imports the same WG peer package as the
@@ -594,6 +610,8 @@ def execute(core, target, tags, env, runner, *, strong_diagnostic=False, private
                         worker_sources={name: hashlib.sha256(raw).hexdigest() for name, raw in worker_sources.items()},
                         encrypted=peer_receipts)
         if private_response_diagnostic:
+            public_receipts = {leaf: run_case(images['peer'], PEER_PACKAGE, PUBLIC_CANDIDATE_ROOT, leaf, 90, 105)
+                               for leaf in PUBLIC_CANDIDATE_CASES}
             external_final_receipts = {}
             for leaf in EXTERNAL_FINAL_CASES:
                 external_final_receipts[leaf] = run_case(images['peer'], PEER_PACKAGE, EXTERNAL_FINAL_ROOT, leaf, 90, 105)
@@ -601,6 +619,8 @@ def execute(core, target, tags, env, runner, *, strong_diagnostic=False, private
                 peer_receipts[leaf] = run_case(images['peer'], PEER_PACKAGE, SELECTED_ROOT, leaf, 90, 105)
             unchanged()
             return dict(kind='diagnostic-compare-local-private-response-v1', target=target, race=True,
+                        public_candidate_encrypted=public_receipts,
+                        public_candidate_fixture_sha256=hashlib.sha256(template_bytes[PUBLIC_CANDIDATE_TEMPLATE]).hexdigest(),
                         external_final_encrypted=external_final_receipts,
                         external_final_fixture_sha256=hashlib.sha256(template_bytes[EXTERNAL_FINAL_TEMPLATE]).hexdigest(),
                         source_sha256=source_sha, image_sha256=identities['peer'][1],

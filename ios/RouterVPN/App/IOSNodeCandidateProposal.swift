@@ -7,6 +7,10 @@ import Libbox
     let description: String
     let profiles: [RouterProfile]
     let launchInput: String
+    var orderedNodes: [IOSMultihopNodeSelection]? {
+        let control = profiles.last?.normalizedNodeKind == "external" ? profiles.first : profiles.last
+        return control?.multihopNodes
+    }
 
     static func compile(original: IOSNodeChainCapture, records: [String: Data], position: Int,
                         candidateID: String, measuredInput: String) throws -> Self {
@@ -65,7 +69,7 @@ import Libbox
               selectedExecution || !original.requiresIndependentPrefix || original.selectionExecution == "local",
               original.members.indices.contains(position),
               position < original.members.count - (original.requiresIndependentPrefix && !selectedExecution ? 2 : 1),
-              selectedResponse || multipleImported || !selectedExecution && original.candidatePrefixes[position].metric == "routed-candidate-response" || original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
+              selectedResponse || multipleImported || !selectedExecution && ["routed-candidate-response", "routed-public-candidate-response"].contains(original.candidatePrefixes[position].metric) || original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
               !measuredInput.isEmpty else { throw IOSNodeCandidateCapture.issue() }
         func source(_ id: String) throws -> (root: [String: Any], profile: [String: Any], files: [String: [String: String]]) {
             var found: ([String: Any], [String: Any], [String: [String: String]])?
@@ -80,6 +84,17 @@ import Libbox
         }
         let candidate = try source(candidateID)
         guard try IOSNodeCandidateCapture.member(profile: candidate.profile, files: candidate.files) == measuredInput else { throw IOSNodeCandidateCapture.issue() }
+        let publicResponse = !selectedExecution && original.candidatePrefixes[position].metric == "routed-public-candidate-response"
+        if publicResponse {
+            guard original.members.count < IOSMultihopNodeSelection.physicalTraversalDepth else {
+                throw NSError(domain: "RouterVPN.CandidateProposal", code: 3, userInfo: [NSLocalizedDescriptionKey:
+                    "This route has 96 nodes. Remove a node before inserting the measured public candidate."])
+            }
+            guard case .ordinary(let source) = original, source.sourceSchema == 8, source.selectionExecution == "local",
+                  original.candidatePrefixes[position].supported(in: original.candidatePrefixes),
+                  !original.members.contains(where: { $0.id == candidateID }),
+                  LibboxRouterNodeChainCandidateInputSupportedForMeasurement(measuredInput, "routed-public-candidate-response") else { throw IOSNodeCandidateCapture.issue() }
+        }
         if selectedResponse {
             guard let proof = candidate.profile["node_proof_id"] as? String, !proof.isEmpty,
                   !original.members.contains(where: { $0.id == candidateID || $0.profile["node_proof_id"] as? String == proof }) else { throw IOSNodeCandidateCapture.issue() }
@@ -105,11 +120,11 @@ import Libbox
         // whether the replacement can occupy this exact role.
         var selected = original.members.map { (id: $0.id, mode: $0.mode) }
         let response = selectedResponse || !selectedExecution && original.candidatePrefixes[position].metric == "routed-candidate-response"
-        guard !retainFinal || response else { throw IOSNodeCandidateCapture.issue() }
-        let insertStream = response && (retainFinal || replacement < selected.count - 1)
+        guard !retainFinal || response || publicResponse else { throw IOSNodeCandidateCapture.issue() }
+        let insertStream = publicResponse || response && (retainFinal || replacement < selected.count - 1)
         if insertStream {
             guard execution == "local" || selectedResponse && ["server", "auto"].contains(execution), selected.count < IOSMultihopNodeSelection.physicalTraversalDepth,
-                  candidate.profile["node_kind"] as? String == "router-vpn", candidate.profile["external"] == nil,
+                  publicResponse ? candidate.profile["node_kind"] as? String == "external" && candidateMode == "shadowsocks" : candidate.profile["node_kind"] as? String == "router-vpn" && candidate.profile["external"] == nil,
                   original.members[replacement].mode == "shadowsocks" else { throw IOSNodeCandidateCapture.issue() }
             selected.insert((candidateID, candidateMode), at: replacement)
         } else {
@@ -121,10 +136,10 @@ import Libbox
         var proofs = Set<String>()
         for (index, member) in selected.enumerated() {
             var captured = try source(member.id)
-            if let proof = captured.profile["node_proof_id"] as? String {
+            if let proof = captured.profile["node_proof_id"] as? String, !proof.isEmpty {
                 guard proofs.insert(proof).inserted else { throw IOSNodeCandidateCapture.issue() }
             }
-            if index == selected.count - 1 {
+            if index == (publicResponse ? 0 : selected.count - 1) {
                 captured.profile["multihop_enabled"] = true
                 captured.profile["multihop_execution"] = execution
                 captured.profile["multihop_nodes"] = references
@@ -166,39 +181,51 @@ import Libbox
             throw error
         }
         defer { try? preview.close() }
+        let unchangedPrefixStart = publicResponse ? 1 : 0
         guard let prior = try JSONSerialization.jsonObject(with: Data(original.launchInput.utf8)) as? [String: Any],
               let after = try JSONSerialization.jsonObject(with: Data(preview.launchInput.utf8)) as? [String: Any],
               let priorNodes = prior["nodes"] as? [String], let afterNodes = after["nodes"] as? [String],
               let priorIdentities = prior["identity_sources"] as? [String], let afterIdentities = after["identity_sources"] as? [String],
               priorNodes.count == original.members.count, priorIdentities.count == priorNodes.count,
               afterNodes.count == selected.count, afterIdentities.count == selected.count,
-              Array(priorNodes.prefix(position + 1)) == Array(afterNodes.prefix(position + 1)),
+              priorNodes[unchangedPrefixStart...position].elementsEqual(afterNodes[unchangedPrefixStart...position]),
               Array(priorIdentities.prefix(position + 1)) == Array(afterIdentities.prefix(position + 1)) else {
             throw IOSNodeCandidateCapture.issue()
+        }
+        func expectedControl(_ originalIndex: Int) throws -> String {
+            guard let before = try JSONSerialization.jsonObject(with: Data(priorNodes[originalIndex].utf8)) as? [String: Any],
+                  let mode = before["mode"] as? String, let files = before["files"] as? String,
+                  let start = before["start"] as? String, let bootstrap = before["dns_bootstrap"] as? String else {
+                throw IOSNodeCandidateCapture.issue()
+            }
+            var expected = original.members[originalIndex].profile
+            expected["multihop_enabled"] = true; expected["multihop_execution"] = execution; expected["multihop_nodes"] = references
+            for key in ["multihop_entry_id", "multihop_entry_mode", "multihop_exit_id", "multihop_exit_mode"] { expected.removeValue(forKey: key) }
+            let profileJSON = String(decoding: try JSONSerialization.data(withJSONObject: expected, options: [.sortedKeys]), as: UTF8.self)
+            var failure: NSError?
+            let input: String? = LibboxRouterNodeChainMemberInput(mode, files, profileJSON, start, bootstrap, &failure)
+            guard failure == nil, let input else { throw failure ?? IOSNodeCandidateCapture.issue() }
+            return input
+        }
+        if publicResponse {
+            guard after["schema"] as? Int == 8, try afterNodes[0] == expectedControl(0),
+                  afterNodes[replacement] == measuredInput, afterIdentities[replacement].isEmpty else { throw IOSNodeCandidateCapture.issue() }
         }
         for index in selected.indices where index > replacement {
             let originalIndex = insertStream ? index - 1 : index
             guard priorIdentities[originalIndex] == afterIdentities[index] else { throw IOSNodeCandidateCapture.issue() }
-            if index == selected.count - 1 {
-                // Only the control member's ordered references may change.
-                // Its credentials, Start Layer, DNS and private transport stay exact.
-                guard let before = try JSONSerialization.jsonObject(with: Data(priorNodes[originalIndex].utf8)) as? [String: Any],
-                      let mode = before["mode"] as? String, let files = before["files"] as? String,
-                      let start = before["start"] as? String, let bootstrap = before["dns_bootstrap"] as? String else {
-                    throw IOSNodeCandidateCapture.issue()
-                }
-                var expected = original.members[originalIndex].profile
-                expected["multihop_enabled"] = true; expected["multihop_execution"] = execution; expected["multihop_nodes"] = references
-                for key in ["multihop_entry_id", "multihop_entry_mode", "multihop_exit_id", "multihop_exit_mode"] { expected.removeValue(forKey: key) }
-                // Ordered references legitimately change the final member's
-                // source/metadata receipts. Recompute through its real compiler
-                // with the exact original transport, rather than ignoring hashes.
-                let profileJSON = String(decoding: try JSONSerialization.data(withJSONObject: expected, options: [.sortedKeys]), as: UTF8.self)
+            if publicResponse && index == selected.count - 1 {
+                // The final capture also binds the first control's exact source.
+                // Rebind the same independently imported exit to its new ordered references.
+                let member = original.members[originalIndex]
+                let input = try IOSNodeCandidateCapture.member(profile: member.profile, files: [:])
                 var failure: NSError?
-                let expectedInput: String? = LibboxRouterNodeChainMemberInput(mode, files, profileJSON, start, bootstrap, &failure)
-                guard failure == nil, let expectedInput, expectedInput == afterNodes[index] else {
-                    throw failure ?? IOSNodeCandidateCapture.issue()
-                }
+                let before: String? = LibboxRouterNodeChainExternalFinalFromEntry(priorNodes[0], input, &failure)
+                guard failure == nil, before == priorNodes[originalIndex] else { throw failure ?? IOSNodeCandidateCapture.issue() }
+                let after: String? = LibboxRouterNodeChainExternalFinalFromEntry(afterNodes[0], input, &failure)
+                guard failure == nil, after == afterNodes[index] else { throw failure ?? IOSNodeCandidateCapture.issue() }
+            } else if index == selected.count - 1 {
+                guard try expectedControl(originalIndex) == afterNodes[index] else { throw IOSNodeCandidateCapture.issue() }
             } else {
                 guard priorNodes[originalIndex] == afterNodes[index] else { throw IOSNodeCandidateCapture.issue() }
             }

@@ -14,9 +14,10 @@ APP=ROOT/'ios/RouterVPN/App'
 LIBBOX=r'''
 import Foundation
 public protocol LibboxRouterNodeChainCandidateCatalogProtocol: AnyObject {func currentInventorySHA256()->String}
-// This provider/owner fixture contains no imported SS prefix.
-public func LibboxRouterNodeChainCandidatePrefixMeasurement(_ plan:LibboxRouterNodeChain,_ position:Int32)->String{""}
+// The real shared compiler supplies this projection in the independent prefix tests.
+public func LibboxRouterNodeChainCandidatePrefixMeasurement(_ plan:LibboxRouterNodeChain,_ position:Int32)->String{plan.prefixMetrics[position] ?? ""}
 public final class LibboxRouterNodeChain {
+ public var prefixMetrics:[Int32:String]=[:]
  public var slot:LibboxRouterNodeChainCandidateMeasurement?
  public init(){}
  public func sourceSHA256()->String{String(repeating:"a",count:64)}
@@ -113,7 +114,10 @@ final class Owner:@unchecked Sendable{let lock=NSLock();var alive=true;func curr
 struct IOSNodeChainCapture {
  struct Member {let id:String;let mode:String;let profile:[String:Any]}
  let members:[Member]
- init(plan:LibboxRouterNodeChain)throws{members=[Member(id:"entry",mode:"wg",profile:["node_proof_id":"proof"]),Member(id:"final",mode:"shadowsocks",profile:["node_proof_id":"final-proof"])]}
+ init(plan:LibboxRouterNodeChain)throws{
+  if plan.prefixMetrics.isEmpty{members=[Member(id:"entry",mode:"wg",profile:["node_proof_id":"proof"]),Member(id:"final",mode:"shadowsocks",profile:["node_proof_id":"final-proof"])]}
+  else{members=(0..<4).map{Member(id:"public-\($0)",mode:$0==0 ? "wg":"shadowsocks",profile:$0==0 ? ["node_proof_id":"original-control"]:[:])}}
+ }
 }
 struct IOSNodeChainSOCKSCapture {let plan=LibboxRouterNodeChainSOCKS();let members:[IOSNodeChainCapture.Member];init(_ count:Int){members=(0..<count).map{.init(id:"node-\($0)",mode:$0==count-2 ? "socks5" : "wg",profile:["node_proof_id":$0==count-2 ? "" : "proof-\($0)"])}}}
 struct IOSNodeChainCONNECTCapture {let plan=LibboxRouterNodeChainCONNECT();let members:[IOSNodeChainCapture.Member];init(_ count:Int){members=(0..<count).map{.init(id:"node-\($0)",mode:$0==count-2 ? "https-connect" : "wg",profile:["node_proof_id":$0==count-2 ? "" : "proof-\($0)"])}}}
@@ -234,6 +238,14 @@ final class Engine {
   f.reset();let unused=try make("f"),engine=Engine(publication)
   let info=engine.candidateMeasurementRequest(operation:"candidate-info",request:unused.request,session:"",ownerRequest:"",prefix:"",candidate:"")
   try check(info != nil,"shipping engine info")
+  let publicEngine=Engine(publication), publicMetric="routed-public-candidate-response"
+  publicEngine.nodeChain!.prefixMetrics=[1:publicMetric,2:publicMetric]
+  let visible=publicEngine.candidateMeasurementRequest(operation:"candidate-info",request:unused.request,session:"",ownerRequest:"",prefix:"",candidate:"")
+  let projected=try JSONSerialization.jsonObject(with:visible!) as! [String:Any], prefixes=projected["proofs"] as! [[String:Any]]
+  try check(prefixes.count==4 && prefixes[0]["measurement"]==nil && prefixes[3]["measurement"]==nil &&
+            prefixes[1]["measurement"] as? String==publicMetric && prefixes[2]["measurement"] as? String==publicMetric &&
+            projected["requested_execution"]==nil && projected["execution"]==nil && projected["candidate_positions"]==nil,"public provider publishes only original Local imported prefix measures")
+
   func command(_ op:String,_ nonce:String=unused.request,_ candidate:String="",_ prefix:String="",_ epoch:String?=nil)->Data?{
    engine.candidateMeasurementRequest(operation:op,request:nonce,session:epoch ?? engine.settingsEpoch,ownerRequest:unused.request,prefix:prefix,candidate:candidate)
   }

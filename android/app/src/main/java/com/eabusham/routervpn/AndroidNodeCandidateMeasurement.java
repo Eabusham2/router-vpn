@@ -185,7 +185,7 @@ final class AndroidNodeCandidateMeasurement {
             if(nativeOwner==null)throw new IllegalStateException("Native candidate owner was not returned.");
             nativeOwner.prepare();
             JSONObject metadata=requireMetadata();
-            String sampleLabel="routed-candidate-response".equals(metadata.optString("measurement","routed-tcp-connect"))?"authenticated private responses":"TCP connection handshakes";
+            String sampleLabel="routed-public-candidate-response".equals(metadata.optString("measurement"))?"verified public HTTPS exit responses":"routed-candidate-response".equals(metadata.optString("measurement","routed-tcp-connect"))?"authenticated private responses":"TCP connection handshakes";
             for(AndroidNodeCandidateCatalog.Row row:catalog.rows){
                 if(cancelled)break;
                 if(row.input.isEmpty())continue;

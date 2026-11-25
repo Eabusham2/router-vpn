@@ -21,7 +21,9 @@ final class AndroidNodeCandidateResult {
         JSONObject status=new JSONObject(raw);
         String metric=metadata.optString("measurement","routed-tcp-connect");
         boolean privateResponse="routed-candidate-response".equals(metric);
-        if(!privateResponse&&!"routed-tcp-connect".equals(metric))throw new IllegalStateException("Unsupported candidate receipt measurement");
+        boolean publicResponse="routed-public-candidate-response".equals(metric);
+        if(publicResponse && (metadata.has("execution")||metadata.has("selection_epoch")||selectedServerResponse))throw new IllegalStateException("A public candidate response cannot inherit a selected execution.");
+        if(!publicResponse&&!privateResponse&&!"routed-tcp-connect".equals(metric))throw new IllegalStateException("Unsupported candidate receipt measurement");
         if(integer(status,"schema")!=1||!metric.equals(status.getString("measurement"))
                 ||!request.equals(status.getString("request_id"))||!Boolean.TRUE.equals(status.get("complete"))||!Boolean.TRUE.equals(status.get("drained"))
                 ||!"complete".equals(status.getString("stage"))||!status.optString("failure").isEmpty()
@@ -36,11 +38,12 @@ final class AndroidNodeCandidateResult {
         if(measured<=0||expires-measured!=120000||now<measured||now>=expires)throw new IllegalStateException("Candidate result expired; retest this prefix");
         JSONArray rows=status.getJSONArray("results");if(rows.length()!=1)throw new IllegalStateException("Candidate receipt has another result set");
         JSONObject row=rows.getJSONObject(0);
-        if(!id.equals(row.getString("node_id"))||!"candidate".equals(row.getString("role"))||!(privateResponse?"private-agent-response":"tcp-connect").equals(row.getString("kind")))throw new IllegalStateException("Candidate result belongs to another original target.");
+        if(!id.equals(row.getString("node_id"))||!"candidate".equals(row.getString("role"))||!(publicResponse?"public-exit-response":privateResponse?"private-agent-response":"tcp-connect").equals(row.getString("kind")))throw new IllegalStateException("Candidate result belongs to another original target.");
         if(selectedServerResponse && Boolean.FALSE.equals(row.get("ready")) && row.get("failure") instanceof String && !row.getString("failure").isEmpty()
                 && !row.has("benchmark") && (!row.has("candidate_disposition") || "not-registered".equals(row.get("candidate_disposition"))))return null;
         if(row.has("candidate_disposition")||!Boolean.TRUE.equals(row.get("ready"))||!row.optString("failure").isEmpty())throw new IllegalStateException("Candidate has no complete score");
         JSONObject benchmark=row.getJSONObject("benchmark"),distribution=benchmark.getJSONObject("distribution");
+        if(publicResponse&&!"https://1.1.1.1/cdn-cgi/trace".equals(benchmark.optString("endpoint")))throw new IllegalStateException("The public candidate did not verify its original HTTPS trace endpoint.");
         if(integer(benchmark,"schema")!=1||!metric.equals(benchmark.getString("measurement"))||integer(benchmark,"attempts")!=50||integer(benchmark,"failed")!=0||integer(distribution,"samples")!=50)throw new IllegalStateException("All fifty selected-prefix samples must succeed");
         double min=finite(distribution,"min_ms"),median=finite(distribution,"median_ms"),average=finite(distribution,"average_ms"),p90=finite(distribution,"p90_ms"),max=finite(distribution,"max_ms"),jitter=finite(distribution,"jitter_ms"),score=finite(benchmark,"trimmed_mean_ms");
         if(min>median||median>p90||p90>max||average<min||average>max||score<min||score>max||jitter>max-min)throw new IllegalStateException("Candidate distribution is inconsistent");

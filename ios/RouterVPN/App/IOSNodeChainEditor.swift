@@ -44,7 +44,7 @@ struct IOSNodeChainDraft {
             throw IOSMultihopNodeSelection.issue("Measure this draft again.")
         }
         expected.insert(.init(id: candidate, mode: "shadowsocks"), at: position + 1)
-        guard compiled == expected, compiled.last?.id == controlID else { throw IOSMultihopNodeSelection.issue("The measured path and the current draft differ.") }
+        guard compiled == expected, compiled.last?.id == controlID || hasExternalFinal && IOSMultihopNodeSelection.externalExitReferences(compiled, controlID: controlID, execution: "local") else { throw IOSMultihopNodeSelection.issue("The measured path and the current draft differ.") }
         nodes = expected
     }
 
@@ -60,12 +60,12 @@ struct IOSNodeChainDraft {
         let selected = nodes.filter { !$0.id.isEmpty }
         let linked = profiles()
         if hasExternalFinal {
-            guard position == 0, IOSMultihopNodeSelection.externalExitReferences(nodes, controlID: controlID, execution: execution),
+            guard IOSMultihopNodeSelection.externalExitReferences(nodes, controlID: controlID, execution: execution),
                   canSave, selected.count == nodes.count, nodes.enumerated().allSatisfy({ i, node in
                       let matches = linked.filter { $0.id == node.id }
                       guard matches.count == 1, let profile = matches.first else { return false }
                       return i == 0 ? profile.normalizedNodeKind == "router-vpn" && [nil,"","off"].contains(profile.startLayer) : IOSImportedShadowsocksSource.eligibleLiteral(profile)
-                  }) else { throw IOSMultihopNodeSelection.issue("Measure candidates through the original WireGuard entry after selecting every imported node.") }
+                  }) else { throw IOSMultihopNodeSelection.issue("Select the complete Local route and its original literal Shadowsocks imports before measuring this prefix.") }
             return nodes
         }
         let hasIndependentHostname = IOSMultihopNodeSelection.hasIndependentHostname(nodes, profiles: linked)

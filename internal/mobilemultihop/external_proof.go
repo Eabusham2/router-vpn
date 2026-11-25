@@ -443,6 +443,10 @@ func externalProofHTTPName(parent context.Context, dial func(context.Context, st
 	return externalProofHTTPVerified(parent, dial, tag, target, token, serverName, testTLS, nil)
 }
 func externalProofHTTPVerified(parent context.Context, dial func(context.Context, string, string) (net.Conn, error), tag, target, token, serverName string, testTLS *tls.Config, verify func([]byte) error) (data []byte, failure error) {
+	return externalProofHTTPMeasured(parent, dial, tag, target, token, serverName, testTLS, nil, verify)
+}
+
+func externalProofHTTPMeasured(parent context.Context, dial func(context.Context, string, string) (net.Conn, error), tag, target, token, serverName string, testTLS *tls.Config, begin func() error, verify func([]byte) error) (data []byte, failure error) {
 	u, err := url.Parse(target)
 	if err != nil || u.User != nil || u.Fragment != "" || u.Host == "" || u.Scheme != "http" && u.Scheme != "https" {
 		return nil, errors.New("invalid captured external proof endpoint")
@@ -528,10 +532,16 @@ func externalProofHTTPVerified(parent context.Context, dial func(context.Context
 	if token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
 	}
+	if begin != nil {
+		if err := begin(); err != nil {
+			return nil, err
+		}
+	}
 	if request.Write(stream) != nil {
 		return nil, errors.New("external proof request failed")
 	}
-	response, err := http.ReadResponse(bufio.NewReader(io.LimitReader(stream, 16385)), request)
+	wire := &io.LimitedReader{R: stream, N: 16385}
+	response, err := http.ReadResponse(bufio.NewReader(wire), request)
 	if err != nil {
 		return nil, errors.New("external proof HTTP response failed")
 	}
@@ -540,7 +550,8 @@ func externalProofHTTPVerified(parent context.Context, dial func(context.Context
 		return nil, errors.New("external proof returned an invalid status or encoding")
 	}
 	data, err = io.ReadAll(io.LimitReader(response.Body, 8193))
-	if err != nil || len(data) > 8192 || ctx.Err() != nil {
+	// A close-delimited body must end at the peer, before the total wire limit.
+	if err != nil || len(data) > 8192 || wire.N == 0 || ctx.Err() != nil {
 		return nil, errors.New("external proof response exceeded its bound or deadline")
 	}
 	if verify != nil {

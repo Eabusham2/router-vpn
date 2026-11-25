@@ -4,7 +4,7 @@ $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 # witness, then extract this new dialog's shipping functions and callbacks.
 . (Join-Path $Root 'client/test-windows-performance.ps1') -Root $Root
 $Ast=[ScriptBlock]::Create($ProductSource).Ast
-foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','TestOrderedCandidateResponseSource','TestOrderedCandidateResponseProposal','TestOrderedCandidateLegacyConnectedResponse','TestOrderedCandidateLocalResponse','OrderedCandidateViewMetric','TestOrderedCandidateDraftInsertion','OrderedCandidateFinalProfileChoice','OrderedCandidateBase','OrderedCandidateScope','OrderedCandidateCatalogPath','UseExistingOrderedCandidateDialog','OrderedCandidateScopedBody','OrderedCandidateNumber','TestOrderedCandidateDraftExecution','OrderedCandidateSavedEnvelope','OrderedCandidateBeforeStart','OrderedCandidateCancelBody','OrderedCandidateReady','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
+foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','TestOrderedCandidateResponseSource','TestOrderedCandidateResponseProposal','TestOrderedCandidateLegacyConnectedResponse','TestOrderedCandidateLocalResponse','TestOrderedCandidatePublicSource','TestOrderedCandidatePublicPath','OrderedCandidateViewMetric','TestOrderedCandidateDraftInsertion','OrderedCandidateFinalProfileChoice','OrderedCandidateBase','OrderedCandidateScope','OrderedCandidateCatalogPath','UseExistingOrderedCandidateDialog','OrderedCandidateScopedBody','OrderedCandidateNumber','TestOrderedCandidateDraftExecution','OrderedCandidateSavedEnvelope','OrderedCandidateBeforeStart','OrderedCandidateCancelBody','OrderedCandidateReady','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
  $F=@($Ast.FindAll({param($n)$n-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-ceq$Name},$true));if($F.Count-ne1){throw "Missing shipping candidate function $Name"};. ([ScriptBlock]::Create($F[0].Extent.Text))
 }
 $Count=0
@@ -506,6 +506,133 @@ foreach($layout in @(@(4,2,-1),@(9,7,2),@(16,14,-1),@(96,94,94),@(4,1,-1),@(16,9
    Assert-Candidate $refused 'Server failure exposed measured scores'
    $failure.results=@();$S.PendingDrain=$true;ReceiveOrderedCandidates $S $failure 'cancel';SetOrderedCandidateControls $S
    Assert-Candidate (-not $S.PendingDrain -and -not $S.Save.IsEnabled -and -not $S.SavedProfileID) 'Failed Server trial retained ownership after original native DOWN'
+  }
+ }
+}
+# Use the same shipping catalog, measurement result, Save and Use handlers as the dialog.
+$publicMetric='routed-public-candidate-response'
+function Assert-PublicRefused($state,$value,$phase,$why){
+ $refused=$false
+ try {ReceiveOrderedCandidates $state $value $phase} catch {$refused=$true}
+ Assert-Candidate $refused $why
+}
+foreach($layout in @(@(3,1),@(4,1),@(4,2),@(9,1),@(9,7),@(96,1),@(96,94))){
+ $depth,$position=$layout
+ $nodes=@(for($i=0;$i -lt $depth;$i++){@{id="public-member-$i";mode=$(if($i){'shadowsocks'}else{'wg'})}})
+ $source=@(for($i=0;$i -lt $depth;$i++){@{}+$nodes[$i]+@{kind=$(if($i){'external'}else{'router-vpn'})}})
+ $candidate='measured-public-import'
+ $path=@($nodes[0..$position])+@(@{id=$candidate;mode='shadowsocks'})+@($nodes[($position+1)..($depth-1)])
+ foreach($purpose in @('connected','saved','saved-prefix','draft')){
+  $Now=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  $S.Position=$position;$S.Draft=$null;$S.View=$null;$S.SavedPath=$purpose -cne 'connected';$S.SavedPrefix=$purpose -cin @('saved-prefix','draft')
+  $S.RequestID='d'*32;$S.SavedAdmitted=$false;$S.CancelWanted=$false;$S.CloseWanted=$false;$S.PendingDrain=$false;$S.Dialog.Tag=$null
+  $S.Table.SelectedItems.Clear()
+  if($purpose -ceq 'draft'){$S.Draft=@{execution='local';external_final=$true;nodes=$nodes}}
+  $choice=@{id=$candidate;kind='external';name='Measured public import'}
+  if($depth -eq 96){$choice.save_reason='At physical traversal limit.'}
+  else{
+   $choice.proposal_action='save-intermediate-profile';$choice.proposed_path=$path
+   if($purpose -ceq 'draft'){$choice.draft_action='insert-measured-hop';$choice.draft_path=$path}
+  }
+  $offer=@{schema=1;samples=50;measurement=$publicMetric;view_token='c'*64;expires_at=$Now+120000;prefix_position=$position;requested_execution='local';external_final=$true;public_response_source_nodes=$source
+   prefixes=@(@{}+$nodes[$position]+@{position=$position;name='Original public prefix';measurement=$publicMetric});candidates=@($choice)}
+  if($S.SavedPath){$offer.scope=OrderedCandidateScope $S}
+  if($S.SavedPrefix){$offer.proof_scope='selected-prefix';$offer.application_open=$false;$offer.dns_open=$false}
+  if($purpose -ceq 'draft'){$offer.origin='editor-draft'}
+  $context="$purpose/$depth/$position"
+  if($depth -eq 4){
+   foreach($fault in @('server','epoch','owner','wrong-entry','private-final','missing-map','duplicate','reused-final','private-choice','wrong-path','proposal-role')){
+    $bad=@{}+$offer
+    switch($fault){
+     'server' {$bad.requested_execution='server'}
+     'epoch' {$bad.selection_epoch=1L}
+     'owner' {$bad.response_source_nodes=$source}
+     'wrong-entry' {$bad.public_response_source_nodes=@($source.Clone());$bad.public_response_source_nodes[0]=@{}+$source[0];$bad.public_response_source_nodes[0].mode='awg2-fast'}
+     'private-final' {$bad.public_response_source_nodes=@($source.Clone());$bad.public_response_source_nodes[-1]=@{}+$source[-1];$bad.public_response_source_nodes[-1].kind='router-vpn'}
+     'missing-map' {$bad.Remove('public_response_source_nodes')}
+     'duplicate' {$bad.candidates=@($choice,$choice)}
+     'reused-final' {$bad.candidates=@(@{}+$choice);$bad.candidates[0].id=$nodes[-1].id}
+     'private-choice' {$bad.candidates=@(@{}+$choice);$bad.candidates[0].kind='router-vpn'}
+     'wrong-path' {$bad.candidates=@(@{}+$choice);$bad.candidates[0].proposed_path=@($path.Clone());$bad.candidates[0].proposed_path[-1]=@{id='changed-public-exit';mode='shadowsocks'}}
+     'proposal-role' {$bad.candidates=@(@{}+$choice);$bad.candidates[0].proposal_action='save-final-profile'}
+    }
+    Assert-PublicRefused $S $bad 'catalog' "public catalog $context accepted $fault"
+   }
+  }
+  ReceiveOrderedCandidates $S $offer 'catalog'
+  Assert-Candidate ($S.Rows.Count -eq 1 -and $S.Rows[0].ID -ceq $candidate) "public catalog $context lost sole independent import"
+  if($purpose -ceq 'connected'){Assert-Candidate ($S.Status.Text -ceq 'Measure 50 HTTPS responses after TLS through each candidate and verify its expected public exit IP.') "public catalog $context described a different measurement"}
+  if($purpose -ceq 'draft'){Assert-Candidate ($S.AutoRun -and $S.Table.SelectedItems.Count -eq 1) "draft auto-run omitted publicly measurable $context"}
+  else{[void]$S.Table.SelectedItems.Add($S.Rows[0])}
+  $script:SavedRequest=$null;&$RunClick
+  Assert-Candidate ($SavedRequest.Phase -ceq 'run' -and $SavedRequest.Body.prefix_position -eq $position -and $SavedRequest.Body.samples -eq 50 -and ($SavedRequest.Body.candidate_ids -join ',') -ceq $candidate) "public Run dispatched a different prefix $context"
+  $receipt=New-CandidateRow;$receipt.measurement=$publicMetric;$receipt.candidate_id=$candidate
+  $result=$receipt.results[0];$result.kind='public-exit-response';$result.node_id=$candidate
+  $result.benchmark.measurement=$publicMetric;$result.benchmark.endpoint='https://1.1.1.1/cdn-cgi/trace'
+  $value=@{schema=1;measurement=$publicMetric;request_id=$S.RequestID;view_token=$offer.view_token;prefix_position=$position;accepted=$true;native_down=$true;drained= -not $S.SavedPath;active_path_changed=$false;reviewing=$S.SavedPath;failure='';results=@($receipt)}
+  foreach($key in @('scope','origin','proof_scope','application_open','dns_open')){if($offer.ContainsKey($key)){$value[$key]=$offer[$key]}}
+  if($purpose -ceq 'draft'){$value.requested_execution='local'}
+  if($depth -eq 4){
+   foreach($fault in @('kind','metric','endpoint','samples')){
+    $broken=@{}+$receipt;$broken.results=@(@{}+$result);$b=@{}+$result.benchmark;$broken.results[0].benchmark=$b
+    switch($fault){'kind'{$broken.results[0].kind='private-agent-response'} 'metric'{$b.measurement='routed-candidate-response'} 'endpoint'{$b.endpoint='https://1.0.0.1/cdn-cgi/trace'} 'samples'{$b.distribution=@{}+$b.distribution;$b.distribution.samples=49}}
+    $wrong=@{}+$value;$wrong.results=@($broken)
+    ReceiveOrderedCandidates $S $wrong 'run'
+    Assert-Candidate ($S.Rows.Count -eq 0) "public ranking $context accepted $fault"
+   }
+   foreach($fault in @('selected_execution','selection_epoch','requested_execution','external_final','public_response_source_nodes')){
+    $wrong=@{}+$value
+    switch($fault){'selected_execution'{$wrong[$fault]='server'} 'selection_epoch'{$wrong[$fault]=1} 'requested_execution'{$wrong[$fault]='auto'} 'external_final'{$wrong[$fault]=$false} 'public_response_source_nodes'{$wrong.external_final=$true;$wrong.requested_execution='local';$wrong[$fault]=@($source.Clone());$wrong[$fault][-1]=@{}+$source[-1];$wrong[$fault][-1].id='foreign-final'}}
+    Assert-PublicRefused $S $wrong 'poll' "public review $context accepted $fault"
+   }
+  }
+  ReceiveOrderedCandidates $S $value 'run';$S.Table.SelectedItem=$S.Rows[0];SetOrderedCandidateControls $S
+  Assert-Candidate ($S.Rows.Count -eq 1 -and $S.Rows[0].Timing.Contains('50/50 HTTPS exit responses')) "public $context lost verified timing"
+  if($depth -eq 96){
+   Assert-Candidate (-not $S.Save.IsEnabled -and -not $S.UseDraft.IsEnabled) "public $context offered a 97th hop"
+   $bad=@{}+$offer;$bad.candidates=@(@{}+$choice);$bad.candidates[0].proposal_action='save-intermediate-profile';$bad.candidates[0].proposed_path=$path
+   Assert-PublicRefused $S $bad 'catalog' "public $context allowed a 97th hop payload"
+   continue
+  }
+  Assert-Candidate $S.Save.IsEnabled "public $context lost explicit named profile Save"
+  $S.ProfileName.Text='Public original';$script:SavedRequest=$null;&$Click
+  Assert-Candidate ($SavedRequest.Phase -ceq 'save' -and $SavedRequest.Body.name -ceq 'Public original' -and ($SavedRequest.Body.proposed_path.id -join ',') -ceq ($path.id -join ',')) "public $context Save dropped suffix or final"
+  $saved=@{}+$value;$saved.ok=$true;$saved.saved=$true;$saved.saved_profile_id='measured-public-profile';$saved.profile_name='Public original';$saved.proposal_action='save-intermediate-profile';$saved.candidate_id=$candidate;$saved.proposed_path=$path;$saved.accepted=$false;$saved.reviewing=$false;$saved.drained=$true
+  foreach($fault in @('candidate_id','request_id','proposed_path','proposal_action')){
+   $bad=@{}+$saved
+   if($fault -ceq 'proposed_path'){$bad[$fault]=$nodes}else{$bad[$fault]='foreign'}
+   Assert-PublicRefused $S $bad 'save' "public named Save $context accepted $fault"
+  }
+  ReceiveOrderedCandidates $S $saved 'save'
+  Assert-Candidate ($S.Status.Text.Contains('Public original') -and $null -eq $S.Dialog.Tag) "public named Save $context changed the draft"
+  if($purpose -cin @('saved','saved-prefix')){
+   foreach($phase in @('poll','cancel')){
+    $S.SavedProfileID='';$S.Status.Text=''
+    foreach($field in @('proposed_path','candidate_id','proposal_action')){
+     $changed=@{}+$saved
+     if($field -ceq 'proposed_path'){
+      $changed.proposed_path=@($path.Clone());$changed.proposed_path[-1]=@{id='foreign-public-exit';mode='shadowsocks'}
+     }else{$changed[$field]='foreign'}
+     Assert-PublicRefused $S $changed $phase "public $context lost Save response accepted a changed $field on $phase"
+     Assert-Candidate (-not $S.SavedProfileID) "public $context acknowledged a foreign save on $phase"
+    }
+    ReceiveOrderedCandidates $S $saved $phase
+    Assert-Candidate ($S.SavedProfileID -ceq $saved.saved_profile_id -and $S.Status.Text.Contains('Public original')) "public $context lost its original save on $phase"
+   }
+  }
+  if($purpose -ceq 'draft'){
+   $S.Table.SelectedItems.Clear();ReceiveOrderedCandidates $S $offer 'catalog';ReceiveOrderedCandidates $S $value 'poll';$S.Table.SelectedItem=$S.Rows[0];SetOrderedCandidateControls $S
+   Assert-Candidate $S.UseDraft.IsEnabled "public $context lost Use in draft"
+   $script:SavedRequest=$null;&$UseClick
+   Assert-Candidate ($SavedRequest.Phase -ceq 'choose' -and ($SavedRequest.Body.proposed_path.id -join ',') -ceq ($path.id -join ',')) "public $context Use changed its retained final"
+   $used=@{}+$value;$used.proposed_path=$path;$used.candidate_id=$candidate;$used.draft_action='insert-measured-hop';$used.saved_profile_id='';$used.chosen=$true;$used.drained=$true
+   foreach($field in @('accepted','running','reviewing','cleanup_pending','cancelled')){$used[$field]=$false}
+   foreach($fault in @('native_down','proposed_path','candidate_id')){
+    $bad=@{}+$used;if($fault -ceq 'native_down'){$bad[$fault]=$false}elseif($fault -ceq 'proposed_path'){$bad[$fault]=$nodes}else{$bad[$fault]='another'}
+    Assert-PublicRefused $S $bad 'choose' "public $context Use accepted $fault"
+   }
+   ReceiveOrderedCandidates $S $used 'choose'
+   Assert-Candidate ($S.CloseWanted -and -not $S.PendingDrain -and ($S.Dialog.Tag.proposed_path.id -join ',') -ceq ($path.id -join ',')) "public $context did not hand off exact joined insertion"
   }
  }
 }

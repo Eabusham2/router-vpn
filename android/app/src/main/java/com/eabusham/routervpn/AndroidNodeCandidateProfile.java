@@ -39,7 +39,7 @@ final class AndroidNodeCandidateProfile {
     static AndroidNodeCandidateProfile captureDraftInsertion(AndroidNodeCandidateMeasurement operation, AndroidNodeCandidateResult result,
             SavedResultAuthority authority, AndroidNodeCandidateProfile named) throws Exception {
         AndroidNodeCandidateCatalog catalog = operation.catalog;
-        if (!catalog.originalSource.measurementOnly() || !"routed-candidate-response".equals(catalog.measurement)) return null;
+        if (!catalog.originalSource.measurementOnly() || !java.util.List.of("routed-candidate-response","routed-public-candidate-response").contains(catalog.measurement)) return null;
         catalog.originalSource.requireCandidatePurpose(catalog.prefix);
         if (named != null && named.sources.size() == catalog.originalSource.members.size() + 1) return named;
         return new AndroidNodeCandidateProfile(operation,result,authority,true);
@@ -48,7 +48,8 @@ final class AndroidNodeCandidateProfile {
         if(operation==null||result==null)throw new IllegalArgumentException("The original measured candidate is required.");
         this.operation=operation;this.result=result;this.savedAuthority=authority;requireCurrent();
         AndroidNodeCandidateCatalog catalog=operation.catalog;
-        boolean response="routed-candidate-response".equals(catalog.measurement);
+        boolean publicResponse="routed-public-candidate-response".equals(catalog.measurement);
+        boolean response=publicResponse || "routed-candidate-response".equals(catalog.measurement);
         if(catalog.originalSource.measurementOnly()&&!response)throw new ProposalUnavailable("This measurement belongs to an unsaved ordered draft. Save the edited path separately.");
         AndroidNodeCandidateCatalog.Row selected=null;
         for(AndroidNodeCandidateCatalog.Row row:catalog.rows)if(row.id.equals(result.id)&&!row.input.isEmpty()){if(selected!=null)throw new IllegalStateException("Duplicate candidate identity");selected=row;}
@@ -62,11 +63,12 @@ final class AndroidNodeCandidateProfile {
         if(original==null||replacement<1||replacement>=original.members.size()||original.members.size()!=original.modes.size())
             throw new IllegalStateException("The measured prefix has no original next-hop position.");
         execution=original.execution;
-        boolean insert=response&&(retainFinal || replacement<original.members.size()-1);
+        boolean insert=response&&(publicResponse || retainFinal || replacement<original.members.size()-1);
         if(response){
-            if(candidate.imported||!"shadowsocks".equals(candidateMode)
+            if(candidate.imported!=publicResponse || original.members.get(original.members.size()-1).imported!=publicResponse || !"shadowsocks".equals(candidateMode)
                     ||!AndroidNodeChainCapture.responsePrefix(original.members,original.modes,catalog.prefix,execution))
                 throw new IllegalStateException("The authenticated response lost its original stream or paired candidate.");
+            if(publicResponse) AndroidNodeChainCapture.requireLiteralImportedSS(candidate);
             if (!"local".equals(execution)) {
                 if (!"auto".equals(execution) && !"server".equals(execution)) throw unavailable("A selected private response needs the original Server or Compare selection.");
                 for (AndroidNodeStore.ChainSource member : original.members) {
@@ -88,7 +90,7 @@ final class AndroidNodeCandidateProfile {
         sources.addAll(original.members);modes.addAll(original.modes);
         if(insert){
             sources.add(replacement,candidate);modes.add(replacement,candidateMode);
-            if(!AndroidNodeChainCapture.pairedStreamInterior(sources,modes,execution,replacement))
+            if(!publicResponse && !AndroidNodeChainCapture.pairedStreamInterior(sources,modes,execution,replacement))
                 throw unavailable("This intermediate requires a qualified packet entry followed by independent Shadowsocks streams with Start Layer off.");
         }else{
             sources.set(replacement,candidate);modes.set(replacement,candidateMode);
@@ -120,14 +122,16 @@ final class AndroidNodeCandidateProfile {
         }else if(!insert&&replacement<sources.size()-1&&!java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(candidateMode)){
             throw unavailable("The measured transport cannot replace a WireGuard or AmneziaWG intermediate hop.");
         }
+        int schema=AndroidNodeChainCapture.sourceSchema(sources,modes);
+        int controlPosition=schema==8?0:sources.size()-1;
         for(int i=0;i<sources.size();i++){
             AndroidNodeStore.ChainSource source=sources.get(i);JSONObject policy=source.profile();
-            if(i==sources.size()-1){policy.put("multihop_enabled",true).put("multihop_execution",execution).put("multihop_nodes",references);for(String key:new String[]{"multihop_entry_id","multihop_entry_mode","multihop_exit_id","multihop_exit_mode"})policy.remove(key);AndroidNodeStore.orderedSelection(policy);}
+            if(i==controlPosition){policy.put("multihop_enabled",true).put("multihop_execution",execution).put("multihop_nodes",references);for(String key:new String[]{"multihop_entry_id","multihop_entry_mode","multihop_exit_id","multihop_exit_mode"})policy.remove(key);AndroidNodeStore.orderedSelection(policy);}
             String member=AndroidNodeChainCapture.memberInput(source,modes.get(i),"local".equals(execution)?policy:AndroidNodeChainCapture.executionProfile(policy)),identity=AndroidNodeChainCapture.identityInput(source);
             inputs.put(member);identities.put(identity);capturedInputs.add(member);capturedIdentities.add(identity);
         }
         AndroidNodeChainCapture.requireCompleteShape(sources,modes,execution);
-        int schema=AndroidNodeChainCapture.sourceSchema(sources,modes);
+        if(schema==8)inputs.put(inputs.length()-1,AndroidNodeChainCapture.externalFinalInput(inputs.getString(0),inputs.getString(inputs.length()-1)));
         String input=new JSONObject().put("schema",schema).put("execution","local").put("nodes",inputs).put("identity_sources",identities).toString();
         if(input.getBytes(StandardCharsets.UTF_8).length>AndroidNodeChainCapture.MAX_INPUT)throw new IllegalStateException("The complete proposed source exceeds its bound.");
         if(schema==4){
@@ -180,7 +184,7 @@ final class AndroidNodeCandidateProfile {
     int useInDraft(AndroidOrderedPathSelection draft) throws Exception {
         synchronized (operation) {
             AndroidNodeCandidateCatalog catalog = operation.catalog;
-            if (savedAuthority == null || !"routed-candidate-response".equals(catalog.measurement)
+            if (savedAuthority == null || !java.util.List.of("routed-candidate-response","routed-public-candidate-response").contains(catalog.measurement)
                     || sources.size() != catalog.originalSource.members.size() + 1)
                 throw new IllegalStateException("This measurement has no complete insertion for the current draft.");
             requireSavedCurrent();

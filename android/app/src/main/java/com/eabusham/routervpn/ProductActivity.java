@@ -842,7 +842,9 @@ public final class ProductActivity extends Activity {
     private void continueOrderedDraft(AndroidOrderedPathSelection draft,int inserted) {
         if(!resumed || isFinishing() || isDestroyed())return;
         try {
-            if(draft.members().size()<AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH && draft.canMeasureResponseThrough(inserted)) {
+            var members=draft.members();
+            boolean canRetest=members.size()<AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || members.get(members.size()-1).source.imported;
+            if(canRetest && draft.canMeasureResponseThrough(inserted)) {
                 measureOrderedDraft(draft,inserted);
                 return;
             }

@@ -106,6 +106,7 @@ var multipleImportedLayouts = []multipleImportedLayout{
 }
 
 type multipleImportedMember struct {
+	candidateTrace                   http.HandlerFunc
 	invalidTrace                     atomic.Bool
 	position                         int
 	imported                         bool
@@ -235,6 +236,10 @@ func (f *multipleImportedFixture) publicServer(t *testing.T, member *multipleImp
 		}
 		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "" || r.ContentLength > 0 || len(r.TransferEncoding) != 0 {
 			http.Error(w, "unowned public request", 403)
+			return
+		}
+		if member.candidateTrace != nil && r.URL.Query().Has("routervpn_candidate") {
+			member.candidateTrace(w, r)
 			return
 		}
 		if (r.Host == "1.1.1.1" || r.Host == "1.0.0.1" && member.position == len(f.members)-1) && r.URL.Path == "/cdn-cgi/trace" && len(r.URL.Query()) == 1 && len(r.URL.Query().Get("routervpn_proof")) == 32 {

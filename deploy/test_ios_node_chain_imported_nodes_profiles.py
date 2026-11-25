@@ -36,6 +36,20 @@ ROUNDTRIP=r'''
    defer{try? native.plan.close()}
    try check("loaded original imported exit and resolver",native.sourceSchema==8 && native.controlMember.id==ids[0] && native.finalProfile["dns_mode"] as? String=="home")
    ui.delete();try check("durable external exit removal",IOSConnectionProfileStore.all().isEmpty)
+   let proposed=try bundles.enumerated().map { index,bundle in
+    guard let row=bundle.routerProfiles.first(where:{$0.id==ids[index]}) else { throw failure("missing original public proposal member") }
+    return row
+   }
+   let before=try encoded(restored)
+   let future=try IOSConnectionProfileStore.appendCandidate(name:"Measured public import",profiles:proposed,current:{})
+   try check("public candidate Save retained first control and all distinct imported policies",future.nodeID==ids[0] && future.mode=="wg" && future.chainPolicies?.map(\.nodeID)==ids && future.preferences?.multihopNodes==refs)
+   try check("public candidate Save left live selection intact",try encoded(model.bundle!)==before)
+   _=try IOSConnectionProfileStore.load(model:model,id:future.id)
+   let retained=try model.iosNodeChainBundles(for:model.bundle!),compiled=try IOSNodeChainCapture.compile(bundles:retained.map{try encoded($0)})
+   defer{try? compiled.plan.close()}
+   try check("named public candidate Load reproduced original control and public final",compiled.sourceSchema==8 && compiled.sourceSHA256==native.sourceSHA256 && compiled.controlMember.id==ids[0] && compiled.members.last!.id==ids.last!)
+   try IOSConnectionProfileStore.delete(model:model,id:future.id)
+
    return
   }
   let cases: [(Bool,Bool,Bool)]
