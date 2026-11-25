@@ -477,7 +477,7 @@ static void local_imported_model(LinuxUnifiedV8 *state) {
         }
         guint first_import=0;while(!(masks[layout]&(1u<<first_import)))first_import++;
         guint all_interiors=(1u<<(count-1))-2u;
-        gboolean selected_supported=(masks[layout]&1u)==0&&(count<=8||((p==0||p==1)&&masks[layout]==all_interiors));
+        gboolean selected_supported=(masks[layout]&1u)==0&&(count<=8||masks[layout]==all_interiors);
         for(guint position=1;position+1<count;position++)if(masks[layout]&(1u<<position)){
             guint required=((1u<<(count>8?count-1:position+1))-1u)^((1u<<first_import)-1u);
             gboolean eligible=first_import>0&&(masks[layout]&required)==required;

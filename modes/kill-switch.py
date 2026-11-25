@@ -639,7 +639,7 @@ def _darwin_extended_member_role(family, rows, position):
     if family != 'ordered-node-chain-v1':
         if position == 0:
             mode = rows[0][1]
-            return (mode, 'router-vpn') if mode in ('wg', 'awg2-fast') else (None, None)
+            return (mode, 'router-vpn') if mode in ('wg', 'awg2-fast', 'awg2-strong') else (None, None)
         return ('shadowsocks', 'external')
     first_import = next((i for i, row in enumerate(rows[:-1]) if type(row) is list and row[1:3] == ['shadowsocks', 'external']), len(rows)-1)
     if position >= first_import:

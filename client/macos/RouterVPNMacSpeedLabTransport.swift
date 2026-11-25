@@ -213,7 +213,7 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                       let prefix = selectedPosition,
                       nodes.indices.contains(prefix), prefix < nodes.count - 1,
                       let tokens = body["expected_profile_tokens"] as? [String: String] else { throw URLError(.badURL) }
-                let importedLong = nodes.count > 8 && ["wg", "awg2-fast"].contains(nodes.first?["mode"] ?? "") && nodes.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" }
+                let importedLong = nodes.count > 8 && ["wg", "awg2-fast", "awg2-strong"].contains(nodes.first?["mode"] ?? "") && nodes.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" }
                 guard (nodes.count <= 8 || importedLong || execution == "local") && (prefix < 7 || execution == "local") else { throw URLError(.badURL) }
                 let packet = ["wg", "awg2-fast", "awg2-strong"].contains(nodes[prefix]["mode"] ?? "")
                 let packets = nodes.prefix(prefix + 1).prefix(while: { ["wg", "awg2-fast", "awg2-strong"].contains($0["mode"] ?? "") }).count

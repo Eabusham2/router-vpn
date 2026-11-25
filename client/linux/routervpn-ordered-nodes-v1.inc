@@ -106,14 +106,13 @@ static gboolean linux_ordered_extended_shape_v1(JsonArray *nodes) {
 }
 
 static gboolean linux_ordered_extended_selected_shape_v1(JsonArray *nodes) {
-    if (linux_ordered_extended_shape_v1(nodes)) return TRUE;
     guint count = nodes == NULL ? 0 : json_array_get_length(nodes);
     if (count <= 8 || count > ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH) return FALSE;
     for (guint i = 0; i < count; i++) {
         JsonNode *row = json_array_get_element(nodes, i);
-        if (row == NULL || !JSON_NODE_HOLDS_OBJECT(row) ||
-            g_strcmp0(linux_ordered_string_v1(json_node_get_object(row), "mode"), i == 0 ? "awg2-fast" : "shadowsocks") != 0)
-            return FALSE;
+        if (row == NULL || !JSON_NODE_HOLDS_OBJECT(row)) return FALSE;
+        const char *mode = linux_ordered_string_v1(json_node_get_object(row), "mode");
+        if (i == 0 ? !linux_ordered_prefix_v1(mode) : g_strcmp0(mode, "shadowsocks") != 0) return FALSE;
     }
     return TRUE;
 }

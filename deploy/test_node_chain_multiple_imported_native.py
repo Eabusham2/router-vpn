@@ -86,11 +86,19 @@ CONTINUOUS = '16-server-latency'
 PARTS = tuple(f'16-server-latency-{first}-{first+3}' for first in range(1, 17, 4))
 SELECTED_CASES += PARTS + tuple(f'{count}-{path}-response' for count in (9, 16)
                                 for path in ('server', 'auto-local', 'auto-server'))
-FAST_SELECTED_CASES = tuple(f'{count}-awg2-fast-{path}' for count in (9, 16)
-                            for path in ('server-server', 'auto-local', 'auto-server', 'mtu', 'server-throughput'))
-FAST_SELECTED_CASES += ('9-awg2-fast-server-latency',) + tuple(
-    f'16-awg2-fast-server-latency-{first}-{first+3}' for first in range(1, 17, 4))
-SELECTED_CASES += FAST_SELECTED_CASES
+
+
+def awg_selected_cases(entry):
+    cases = tuple(f'{count}-{entry}-{phase}' for count in (9, 16)
+                  for phase in ('server-server', 'auto-local', 'auto-server', 'mtu', 'server-throughput'))
+    return cases + (f'9-{entry}-server-latency',) + tuple(
+        f'16-{entry}-server-latency-{first}-{first+3}' for first in range(1, 17, 4))
+
+
+FAST_SELECTED_CASES = awg_selected_cases('awg2-fast')
+STRONG_SELECTED_CASES = awg_selected_cases('awg2-strong')
+AWG_SELECTED_CASES = FAST_SELECTED_CASES + STRONG_SELECTED_CASES
+SELECTED_CASES += AWG_SELECTED_CASES
 
 SELECTED_TEMPLATES = (
     'mobile/chain_component/extended_execution_client_test.go.tmpl',
@@ -100,8 +108,9 @@ SELECTED_TEMPLATES = (
 
 
 def selected_marker(leaf):
-    if leaf in FAST_SELECTED_CASES:
-        count, tail = leaf.split('-awg2-fast-')
+    if leaf in AWG_SELECTED_CASES:
+        entry = 'awg2-fast' if leaf in FAST_SELECTED_CASES else 'awg2-strong'
+        count, tail = leaf.split(f'-{entry}-')
         first, last, samples, transferred, response_samples = 0, 0, 0, 0, 0
         mode, winner = 'server', 'server'
         if tail in ('server-server', 'auto-local', 'auto-server'):
@@ -114,9 +123,9 @@ def selected_marker(leaf):
             first, last = map(int, positions.split('-')) if positions else (1, int(count))
             samples = (last-first+1)*50
         elif tail != 'mtu':
-            raise ValueError('Unknown original Fast selected phase')
+            raise ValueError('Unknown original AWG2 selected phase')
         return (f'QUALIFIED_SELECTED_NATIVE nodes={count} execution={mode} winner={winner} samples={samples} bytes={transferred} '
-                f'first={first} last={last} response_samples={response_samples} entry_mode=awg2-fast parameters_current=true')
+                f'first={first} last={last} response_samples={response_samples} entry_mode={entry} parameters_current=true')
     count, mode, action, *positions = leaf.split('-')
     first, last = (map(int, positions) if positions else (1, int(count))) if action == 'latency' else (0, 0)
     winner = 'server' if mode == 'server' else action
@@ -199,10 +208,19 @@ def verdict(output, root, leaf=None):
                    and 'QUALIFIED_SELECTED_NATIVE' in row.get('Output', '')]
         if len(markers) != 1 or not markers[0].endswith(selected_marker(leaf)):
             raise ValueError('Missing original selected native route, frozen winner or encrypted bytes')
-        if leaf in FAST_SELECTED_CASES and leaf.endswith('-mtu'):
+        if leaf in AWG_SELECTED_CASES:
+            entry = 'awg2-fast' if leaf in FAST_SELECTED_CASES else 'awg2-strong'
+            expected_client = f'QUALIFIED_SELECTED_CLIENT_AWG entry={entry} parameters_current=true other_mode_refused=true'
+            clients = [row.get('Output', '').strip() for row in rows if row.get('Test') == name
+                       and 'QUALIFIED_SELECTED_CLIENT_AWG' in row.get('Output', '')]
+            if len(clients) != 1 or not clients[0].endswith(expected_client):
+                raise ValueError('Missing live selected AWG client parameter readback or alternate-mode refusal')
+        if leaf in AWG_SELECTED_CASES and leaf.endswith('-mtu'):
             count = leaf.split('-')[0]
-            expected_mtu = f'FAST_SELECTED_MTU nodes={count} configured=1280 ceiling=1500 lease_paused=true missing_reader_refused=true'
-            mtu = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and 'FAST_SELECTED_MTU' in row.get('Output', '')]
+            entry = 'awg2-fast' if leaf in FAST_SELECTED_CASES else 'awg2-strong'
+            mtu_marker = 'STRONG_SELECTED_MTU' if entry == 'awg2-strong' else 'FAST_SELECTED_MTU'
+            expected_mtu = f'{mtu_marker} nodes={count} configured=1280 ceiling=1500 lease_paused=true missing_reader_refused=true'
+            mtu = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and '_SELECTED_MTU' in row.get('Output', '')]
             if len(mtu) != 1 or not mtu[0].endswith(expected_mtu):
                 raise ValueError('Missing original selected Fast MTU pause or native-reader refusal')
     return len(required)
@@ -231,7 +249,7 @@ def bounded_control(command, core, env):
     return process.returncode, output, error
 
 
-def execute(core, target, tags, env, runner):
+def execute(core, target, tags, env, runner, *, strong_diagnostic=False):
     if (target not in ('linux/amd64', 'linux/arm64')
             or (env.get('GOOS'), env.get('GOARCH')) != tuple(target.split('/'))
             or env.get('CGO_ENABLED') != '1' or 'with_wireguard' not in tags.split(',')):
@@ -318,6 +336,18 @@ def execute(core, target, tags, env, runner):
                         cwd=core, env=captured, timeout=60).strip().splitlines()
         if sorted(listed) != sorted(PEER_CASES):
             raise ValueError('Independent imported encrypted root discovery changed')
+        if strong_diagnostic:
+            if target != 'linux/amd64':
+                raise ValueError('The topic-branch diagnostic requires its actual amd64 host')
+            for leaf in STRONG_SELECTED_CASES:
+                peer_receipts[leaf] = run_case(images['peer'], PEER_PACKAGE, SELECTED_ROOT, leaf, 90, 105)
+                print('Completed original Strong worker case '+leaf, flush=True)
+            unchanged()
+            return dict(kind='diagnostic-original-strong-selected-v1', target=target, race=True,
+                        source_sha256=source_sha, image_sha256=identities['peer'][1],
+                        templates={path: hashlib.sha256(raw).hexdigest() for path, raw in template_bytes.items()},
+                        worker_sources={name: hashlib.sha256(raw).hexdigest() for name, raw in worker_sources.items()},
+                        encrypted=peer_receipts)
         # A user request measures one selected position. The race image measures
         # all 16 positions in four bounded invocations. The ordinary image also
         # retains all 800 original responses from one continuous generation.

@@ -275,7 +275,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
                 guard schema == 6, !selected, packets > 0, let id = profile["node_proof_id"] as? String, !id.isEmpty else { return false }
                 hasStream = true
             } else {
-                let permitted = selected ? ["wg", "awg2-fast"] : schema == 1 ? ["wg"] : ["wg", "awg2-fast", "awg2-strong"]
+                let permitted = !selected && schema == 1 ? ["wg"] : ["wg", "awg2-fast", "awg2-strong"]
                 guard !hasStream, permitted.contains(mode) else { return false }
                 packets += 1
             }

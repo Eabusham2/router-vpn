@@ -333,7 +333,7 @@ function global:Test-RouterVPNOrderedExtendedLocalShape {
 function global:Test-RouterVPNOrderedExtendedSelectedShape {
     param($Nodes)
     if(Test-RouterVPNOrderedExtendedLocalShape $Nodes){return $true}
-    if($Nodes -isnot [Collections.IList] -or $Nodes.Count -le 8 -or $Nodes.Count -gt (Get-RouterVPNOrderedPhysicalTraversalDepth) -or $Nodes[0].mode -cne 'awg2-fast'){return $false}
+    if($Nodes -isnot [Collections.IList] -or $Nodes.Count -le 8 -or $Nodes.Count -gt (Get-RouterVPNOrderedPhysicalTraversalDepth) -or $Nodes[0].mode -cnotin @('awg2-fast','awg2-strong')){return $false}
     for($i=1;$i -lt $Nodes.Count;$i++){if($Nodes[$i].mode -cne 'shadowsocks'){return $false}}
     return $true
 }

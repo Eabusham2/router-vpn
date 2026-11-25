@@ -1139,21 +1139,23 @@ class NativeShippingAuditTests(unittest.TestCase):
     def test_mixed_local_source_preserves_complete_packet_and_import_boundary(self):
         schema = "func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error)"
         common = "func ExtendedMixedLocalPacketCount(nodes []MultihopNodeSelection) int"
-        fast_ref = "func ExtendedFastSelectedMultihopSelection(nodes []MultihopNodeSelection) bool"
-        fast_source = "func (c *NodeChain) extendedFastSelectedSource() bool"
+        awg_ref = "func ExtendedAWGSelectedMultihopSelection(nodes []MultihopNodeSelection) bool"
+        awg_source = "func (c *NodeChain) extendedAWGSelectedSource() bool"
         selected = "func NewNodeChainMultipleImportedExecutionPreparation(original *NodeChain, execution string) (*NodeChainExecutionPreparation, error)"
         self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
         for path, declaration, before, after in (
-            ("internal/common/profile_node_chain.go", fast_ref, 'nodes[0].Mode == "awg2-fast"', 'nodes[0].Mode == "awg2-strong"'),
-            ("internal/common/profile_node_chain.go", fast_ref, "ExtendedMixedLocalPacketCount(nodes) == 1", "ExtendedMixedLocalPacketCount(nodes) > 0"),
-            ("cmd/client/desktop_node_chain_execution_product.go", "func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", " && !common.ExtendedFastSelectedMultihopSelection(nodes)", ""),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, "c.ExtendedLocalNodeCount() != len(c.nodes)", "false"),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, "c.ExtendedMixedLocalPacketCount() != 1", "false"),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, 'c.proofs[0].Mode != "awg2-fast"', "false"),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, "c.hasPairedStreamInteriorValidated()", "false"),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, "member.hostname != nil", "false"),
-            ("internal/mobilemultihop/node_chain_extended_fast_selected.go", fast_source, "c.nodes[position] != nil", "false"),
-            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", selected, "!original.extendedFastSelectedSource()", "false"),
+            ("internal/common/profile_node_chain.go", awg_ref, 'nodes[0].Mode == "awg2-fast"', 'nodes[0].Mode == "awg2-strong"'),
+            ("internal/common/profile_node_chain.go", awg_ref, 'nodes[0].Mode == "awg2-strong"', 'nodes[0].Mode == "awg2-pq"'),
+            ("internal/common/profile_node_chain.go", awg_ref, "ExtendedMixedLocalPacketCount(nodes) == 1", "ExtendedMixedLocalPacketCount(nodes) > 0"),
+            ("cmd/client/desktop_node_chain_execution_product.go", "func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requested string) error", " && !common.ExtendedAWGSelectedMultihopSelection(nodes)", ""),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, "c.ExtendedLocalNodeCount() != len(c.nodes)", "false"),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, "c.ExtendedMixedLocalPacketCount() != 1", "false"),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, 'c.proofs[0].Mode != "awg2-fast"', "false"),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, 'c.proofs[0].Mode != "awg2-strong"', 'c.proofs[0].Mode != "awg2-pq"'),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, "c.hasPairedStreamInteriorValidated()", "false"),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, "member.hostname != nil", "false"),
+            ("internal/mobilemultihop/node_chain_extended_awg_selected.go", awg_source, "c.nodes[position] != nil", "false"),
+            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", selected, "!original.extendedAWGSelectedSource()", "false"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", selected, "original.importedNodes.hasHostname()", "false"),
             ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "refs := nodeChainSelectedReferences(members)", "refs := nodeChainSelectedReferences(members[:2])"),
             ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "common.ExtendedMixedLocalPacketCount(refs)", "1"),

@@ -22,7 +22,7 @@ type nodeChainMultipleImportedExecutionBinding struct {
 func NewNodeChainMultipleImportedExecutionPreparation(original *NodeChain, execution string) (*NodeChainExecutionPreparation, error) {
 	if original == nil || original.validateCapture() != nil || original.importedNodes == nil || original.importedNodes.customEntry || original.importedNodes.hasHostname() || original.hasPairedStreamInteriorValidated() ||
 		original.importedMiddle != nil || original.openVPNMiddle != nil || original.socksSource != nil || original.connectSource != nil ||
-		execution != "server" && execution != "auto" || len(original.nodes) < 3 || len(original.nodes) > NodeChainMaximumNodes && (original.ExtendedLocalNodeCount() != len(original.nodes) || original.ExtendedMixedLocalPacketCount() != 0 && !original.extendedFastSelectedSource()) ||
+		execution != "server" && execution != "auto" || len(original.nodes) < 3 || len(original.nodes) > NodeChainMaximumNodes && (original.ExtendedLocalNodeCount() != len(original.nodes) || original.ExtendedMixedLocalPacketCount() != 0 && !original.extendedAWGSelectedSource()) ||
 		original.nodes[len(original.nodes)-1] == nil || original.nodes[len(original.nodes)-1].mode != "shadowsocks" ||
 		original.projection.Kind != "" || original.projection.TargetOS != "" && original.projection.TargetOS != "ios" && original.projection.TargetOS != "android" {
 		return nil, nodeChainExecutionError

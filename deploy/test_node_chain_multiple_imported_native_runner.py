@@ -27,9 +27,14 @@ def transcript(root, leaf=None, failed=False, witness=''):
             rows.append(row('output', name, Output=f'QUALIFIED_LATENCY_HISTORY nodes={count} receipts={count} samples={count*50}'))
         if root == RUN.SELECTED_ROOT:
             rows.append(row('output',name,Output=RUN.selected_marker(leaf)))
-            if leaf in RUN.FAST_SELECTED_CASES and leaf.endswith('-mtu'):
+            if leaf in RUN.AWG_SELECTED_CASES:
+                entry = 'awg2-fast' if leaf in RUN.FAST_SELECTED_CASES else 'awg2-strong'
+                rows.append(row('output', name, Output=f'QUALIFIED_SELECTED_CLIENT_AWG entry={entry} parameters_current=true other_mode_refused=true'))
+            if leaf in RUN.AWG_SELECTED_CASES and leaf.endswith('-mtu'):
+                entry = 'awg2-fast' if leaf in RUN.FAST_SELECTED_CASES else 'awg2-strong'
                 count = leaf.split('-')[0]
-                rows.append(row('output', name, Output=f'FAST_SELECTED_MTU nodes={count} configured=1280 ceiling=1500 lease_paused=true missing_reader_refused=true'))
+                mtu_marker = 'STRONG_SELECTED_MTU' if entry == 'awg2-strong' else 'FAST_SELECTED_MTU'
+                rows.append(row('output', name, Output=f'{mtu_marker} nodes={count} configured=1280 ceiling=1500 lease_paused=true missing_reader_refused=true'))
         if root == RUN.THROUGHPUT_ROOT:
             count = 9 if leaf == 'extended-nine' else 16
             rows.append(row('output', name, Output=f'QUALIFIED_ORIGINAL_THROUGHPUT nodes={count} bytes_per_direction={8<<20} bytes_total={count*(16<<20)}'))
@@ -137,8 +142,9 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                             RUN.verdict(output(transcript(RUN.MIXED_ROOT, leaf, witness=altered)), RUN.MIXED_ROOT, leaf)
 
     def test_selected_evidence_requires_every_original_count_winner_and_transfer(self):
-        self.assertEqual(len(RUN.SELECTED_CASES), 33)
+        self.assertEqual(len(RUN.SELECTED_CASES), 48)
         self.assertEqual(len(set(RUN.FAST_SELECTED_CASES)), 15)
+        self.assertEqual(len(set(RUN.STRONG_SELECTED_CASES)), 15)
         positions = [i for part in RUN.PARTS for first,last in [map(int,part.split('-')[-2:])] for i in range(first,last+1)]
         self.assertEqual(positions, list(range(1,17)))
         for leaf in RUN.SELECTED_CASES:
@@ -158,17 +164,23 @@ class MultipleImportedNativeRunner(unittest.TestCase):
             self.assertEqual(RUN.verdict(output(transcript(root)), root), len(cases)+1)
         self.assertIn('equal-source', RUN.BOX_CASES[RUN.BOX_NEGATIVE])
 
-    def test_fast_selected_preserves_original_parameters_and_mtu_ownership(self):
-        for leaf in RUN.FAST_SELECTED_CASES:
+    def test_awg_selected_preserves_original_parameters_and_mtu_ownership(self):
+        for leaf in RUN.AWG_SELECTED_CASES:
+            entry = 'awg2-fast' if leaf in RUN.FAST_SELECTED_CASES else 'awg2-strong'
             rows = transcript(RUN.SELECTED_ROOT, leaf)
             marker = next(row for row in rows if 'QUALIFIED_SELECTED_NATIVE' in row.get('Output', ''))
-            for before, after in (('entry_mode=awg2-fast', 'entry_mode=wg'),
+            for before, after in ((f'entry_mode={entry}', 'entry_mode=wg'),
                                   ('parameters_current=true', 'parameters_current=false')):
                 changed = [dict(row, Output=row['Output'].replace(before, after)) if row is marker else row for row in rows]
                 with self.assertRaises(ValueError):
                     RUN.verdict(output(changed), RUN.SELECTED_ROOT, leaf)
+            client = next(row for row in rows if 'QUALIFIED_SELECTED_CLIENT_AWG' in row.get('Output', ''))
+            for changed in ([row for row in rows if row is not client], rows[:-2]+[client]+rows[-2:],
+                            [dict(row, Output=row['Output'].replace('other_mode_refused=true', 'other_mode_refused=false')) if row is client else row for row in rows]):
+                with self.assertRaises(ValueError):
+                    RUN.verdict(output(changed), RUN.SELECTED_ROOT, leaf)
             if leaf.endswith('-mtu'):
-                mtu = next(row for row in rows if 'FAST_SELECTED_MTU' in row.get('Output', ''))
+                mtu = next(row for row in rows if '_SELECTED_MTU' in row.get('Output', ''))
                 for changed in ([row for row in rows if row is not mtu],
                                 rows[:-2]+[mtu]+rows[-2:],
                                 *[[dict(row, Output=row['Output'].replace(before, after)) if row is mtu else row for row in rows]
