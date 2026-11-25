@@ -255,7 +255,7 @@ enum IOSNodeChainEditorVisible {
     static func modes(_ profile: RouterProfile?, nodeCount: Int = 2, mixedPacket: Bool = false, selectedPacket: Bool = false) -> [String] {
         guard let profile, eligible(profile) else { return [] }
         if profile.normalizedNodeKind == "external" { return [profile.external?.protocolName ?? ""] }
-        if selectedPacket && nodeCount > IOSMultihopNodeSelection.maximumNodes { return ["wg", "awg2-fast"] }
+        if selectedPacket && nodeCount > IOSMultihopNodeSelection.maximumNodes { return IOSMultihopNodeSelection.nativePrefixModes }
         return nodeCount > IOSMultihopNodeSelection.maximumNodes && !mixedPacket ? ["wg"] : IOSMultihopNodeSelection.nativePrefixModes
     }
     static func finalModes(_ profile: RouterProfile?, nodes: [IOSMultihopNodeSelection]) -> [String] {

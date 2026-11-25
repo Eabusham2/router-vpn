@@ -21,30 +21,32 @@ def load(filename):
     return module
 
 
-def precondition(stage):
+def precondition(stage, depth=False):
     source = ROOT / 'internal/mobilemultihop/node_chain_multiple_imported_execution.go'
     captured = source.read_text()
-    guard = '(original.hasPairedStreamInteriorValidated() && !original.selectedPrivateStream(2))'
+    guard = 'return c.selectedPrivateStreamPosition() > 0'
     if captured.count(guard) != 1:
         raise ValueError('Original private-stream refusal can no longer be reproduced')
+    prior = 'return len(c.nodes) == 4 && c.selectedPrivateStreamPosition() == 2' if depth else 'return false'
     old = stage / 'packet-intermediates-only.go'
-    old.write_text(captured.replace(guard, 'original.hasPairedStreamInteriorValidated()'))
+    old.write_text(captured.replace(guard, prior))
     overlay = stage / 'packet-intermediates-only.json'
     overlay.write_text(json.dumps({'Replace': {str(source): str(old)}}))
     package = './internal/mobilemultihop'
-    root = 'TestSelectedPairedStreamOriginal'
-    command = ['go', 'test', '-p=1', '-count=1', '-json', '-run', '^'+root+'$/^(server|auto)$']
+    root = 'TestSelectedPairedStreamDepth' if depth else 'TestSelectedPairedStreamOriginal'
+    cases = ('5', '9', '16') if depth else ('server', 'auto')
+    command = ['go', 'test', '-p=1', '-count=1', '-json', '-run', '^'+root+'$/^('+'|'.join(cases)+')$']
     refused = subprocess.run([*command, '-overlay='+str(overlay), package], cwd=ROOT, capture_output=True, text=True, timeout=1200)
     rows = [json.loads(line) for line in refused.stdout.splitlines()]
-    for mode in ('server', 'auto'):
-        name = root+'/'+mode
+    for child in cases:
+        name = root+'/'+child
         if (refused.returncode != 1 or not any(row.get('Test') == name and row.get('Action') == 'fail' for row in rows)
                 or not any(row.get('Test') == name and 'typed original preparation' in row.get('Output', '') for row in rows)):
             raise ValueError('Original private-stream refusal lacked its targeted witness for '+name+'\n'+(refused.stdout+refused.stderr)[-4096:])
     subprocess.run(['go', 'test', '-p=1', '-count=1', '-run', '^TestSelectedPairedStream', package],
                    cwd=ROOT, check=True, timeout=1200)
 
-def encrypted(stage):
+def encrypted(stage, depth=False):
     build = load('build-native-runtime')
     native = load('test_node_chain_multiple_imported_native')
     env = build.environment(TARGET, compiler=True)
@@ -69,9 +71,10 @@ def encrypted(stage):
         original = hashlib.file_digest(image, 'sha256').hexdigest()
     env['ROUTERVPN_PRIVATE_STREAM_IMAGE'] = str(worker)
     env['ROUTERVPN_PRIVATE_STREAM_SHA256'] = original
-    receipt = native.execute(core, TARGET, tags, env, build.run, private_stream_diagnostic=True)
-    required = {native.SELECTED_ROOT+'/'+leaf for leaf in native.PRIVATE_STREAM_CASES}
-    if (receipt['target'] != TARGET or set(receipt['encrypted']) != required or len(required) != 11
+    receipt = native.execute(core, TARGET, tags, env, build.run, private_stream_diagnostic=not depth, private_depth_diagnostic=depth)
+    cases = (*native.PRIVATE_STREAM_CASES, *native.PRIVATE_DEPTH_CASES) if depth else native.PRIVATE_STREAM_CASES
+    required = {native.SELECTED_ROOT+'/'+leaf for leaf in cases}
+    if (receipt['target'] != TARGET or set(receipt['encrypted']) != required or len(required) != (37 if depth else 11)
             or set(receipt['encrypted'].values()) != {2} or receipt['images']['worker'] != original
             or build.PQ.verify(archive, TARGET) != pq):
         raise ValueError('Diagnostic lost its private stream, separate worker or original archive')
@@ -79,17 +82,19 @@ def encrypted(stage):
     if os.environ.get('GITHUB_SHA', sha) != sha:
         raise ValueError('Runner SHA does not match the checked-out source')
     receipt.update(commit=sha, sing_box_commit=build.PIN, xray_commit=build.POLICY.XRAY.XRAY_PIN, desktop_pq=pq)
-    (stage / 'selected-private-stream.json').write_text(json.dumps(receipt, sort_keys=True)+'\n')
+    name = 'selected-private-depth.json' if depth else 'selected-private-stream.json'
+    (stage / name).write_text(json.dumps(receipt, sort_keys=True)+'\n')
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('phase', choices=('precondition', 'encrypted'))
     parser.add_argument('stage', type=Path)
+    parser.add_argument('--depth', action='store_true', help='qualify the depth diagnostic branch')
     args = parser.parse_args()
     if platform.system() != 'Linux' or platform.machine() not in ('amd64', 'x86_64'):
         parser.error('requires native Linux amd64')
     if args.phase == 'precondition':
-        precondition(args.stage.resolve())
+        precondition(args.stage.resolve(), args.depth)
     else:
-        encrypted(args.stage.resolve())
+        encrypted(args.stage.resolve(), args.depth)

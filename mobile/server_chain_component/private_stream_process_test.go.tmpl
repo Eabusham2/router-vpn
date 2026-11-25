@@ -53,7 +53,7 @@ func privateStreamNonce() string {
 	return hex.EncodeToString(raw[:])
 }
 func startPrivateStreamProcess(ctx context.Context, t *testing.T, src string, capture multihoprelay.NodeChainCapture, listener net.Listener) (*privateStreamProcess, error) {
-	if !capture.Source.PrivateStreamAt(2) || capture.Validate() != nil || capture.Peer != "10.80.0.2" || capture.Host != "10.80.0.1" {
+	if capture.Source.PrivateStreamPosition() == 0 || capture.Validate() != nil || capture.Peer != "10.80.0.2" || capture.Host != "10.80.0.1" {
 		return nil, errors.New("unowned private stream lease")
 	}
 	file, err := os.Open(os.Getenv("ROUTERVPN_PRIVATE_STREAM_IMAGE"))

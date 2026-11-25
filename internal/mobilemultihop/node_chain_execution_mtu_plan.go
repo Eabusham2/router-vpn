@@ -94,8 +94,8 @@ func (p *NodeChainExecutionProjection) PlanForMTU(config string, actual int) (*m
 		plans = append(plans, plan)
 	}
 	var combined *mobilemtu.Plan
-	if extended && originalLocal.extendedFastSelectedSource() {
-		combined, err = mobilemtu.CombineExtendedFastExecutionPlans(config, actual, plans, originalLocal.PrefixTags())
+	if extended && originalLocal.extendedAWGSelectedSource() {
+		combined, err = mobilemtu.CombineExtendedAWGExecutionPlans(config, actual, plans, originalLocal.PrefixTags())
 	} else if extended {
 		combined, err = mobilemtu.CombineExtendedExecutionPlans(config, actual, plans, originalLocal.PrefixTags())
 	} else {

@@ -91,6 +91,7 @@ static void check(gboolean ok,const char *message){checks++;if(!ok){g_printerr("
 static void append_diag(App *app,const char *line){(void)app;(void)line;}
 static void refresh_all(App *app){(void)app;}
 COMMON
+static gboolean linux_load_fences_launch(const char *path){(void)path;return FALSE;}
 #include "routervpn-async-actions-v16.inc"
 FORMATTER
 SPEED_STRUCT

@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 Add-Type -AssemblyName System.Net.Http
 Import-Module (Join-Path $Root 'client/RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
+Import-Module (Join-Path $Root 'client/RouterVPN-Windows-UIState.psm1') -Global -ErrorAction Stop
 $source = Get-Content -LiteralPath (Join-Path $Root 'client/RouterVPN-Windows-UnifiedShell.ps1') -Raw -Encoding UTF8
 # Extract the actual emitted function definitions without constructing WPF or opening a VPN.
 $extra = [regex]::Match($source, '(?ms)^    \$extraState = @''\r?\n(.*?)\r?\n''@')

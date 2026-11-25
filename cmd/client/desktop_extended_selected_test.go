@@ -18,7 +18,7 @@ import (
 // The native transport has its own real packet/byte qualification. These tests
 // exercise the shipping parent HTTP handlers and durable profile transaction.
 func TestDesktopExtendedSelectedThroughputPublicController(t *testing.T) {
-	for _, entryMode := range []string{"wg", "awg2-fast"} {
+	for _, entryMode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		t.Run(entryMode, func(t *testing.T) {
 			for _, layout := range desktopIndependentSelectedLayouts()[3:] {
 				for _, choice := range [][2]string{{"server", "server"}, {"auto", "local"}, {"auto", "server"}} {
@@ -103,7 +103,7 @@ func TestDesktopExtendedSelectedThroughputPublicController(t *testing.T) {
 }
 
 func TestConnectionProfileExtendedSelectedTransactionalRestore(t *testing.T) {
-	for _, entryMode := range []string{"wg", "awg2-fast"} {
+	for _, entryMode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		t.Run(entryMode, func(t *testing.T) {
 			for _, layout := range desktopIndependentSelectedLayouts()[3:] {
 				for _, execution := range []string{"server", "auto"} {
@@ -144,7 +144,7 @@ func TestConnectionProfileExtendedSelectedTransactionalRestore(t *testing.T) {
 }
 
 func TestDesktopSelectedHistoryKeepsOriginalMultipleImportedDescriptor(t *testing.T) {
-	for _, entryMode := range []string{"wg", "awg2-fast"} {
+	for _, entryMode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		t.Run(entryMode, func(t *testing.T) {
 			for _, layout := range desktopIndependentSelectedLayouts()[3:] {
 				t.Run(layout.name, func(t *testing.T) {
@@ -190,7 +190,7 @@ func TestDesktopSelectedHistoryKeepsOriginalMultipleImportedDescriptor(t *testin
 }
 
 func TestDesktopMacOSExtendedOriginalBaselineCapture(t *testing.T) {
-	for _, entryMode := range []string{"wg", "awg2-fast"} {
+	for _, entryMode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		for _, execution := range []string{"local", "server", "auto"} {
 			t.Run(entryMode+"/"+execution, func(t *testing.T) {
 				for _, layout := range desktopIndependentSelectedLayouts()[3:] {

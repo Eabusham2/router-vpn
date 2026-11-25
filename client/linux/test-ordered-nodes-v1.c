@@ -5,6 +5,19 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+/* Inject failures at the real private-file publication boundary. "after"
+ * models an ambiguous post-rename reporting error and leaves actual bytes. */
+static const char *fixture_fail_phase;
+static gboolean fixture_fail_after;
+static gboolean fixture_durable_write(const char *path,const char *data,gssize size,GFileSetContentsFlags flags,int mode,GError **error) {
+    if(fixture_fail_phase && strstr(data,fixture_fail_phase)){
+        fixture_fail_phase=NULL;
+        if(fixture_fail_after && !g_file_set_contents_full(path,data,size,flags,mode,error))return FALSE;
+        g_set_error_literal(error,G_FILE_ERROR,G_FILE_ERROR_NOSPC,"injected settings write failure");return FALSE;
+    }
+    return g_file_set_contents_full(path,data,size,flags,mode,error);
+}
+#define g_file_set_contents_full fixture_durable_write
 typedef struct { GtkWidget *window; } App;
 typedef struct { App *app; GtkWidget *node, *mode, *multihop, *connect, *stack; gboolean syncing; } LinuxUnifiedV8;
 typedef struct { char *data; size_t len; } Buffer;
@@ -53,7 +66,10 @@ static const char *profile_list_mode(void) {
     if (listed_custom) return listed_custom;
     return saved ? obj_string(json_node_get_object(saved), "mode") : "shadowsocks";
 }
+#include "test-profile-load-controller.inc"
 static gboolean api_request(const char *path,const char *method,const char *body,long timeout,Buffer *out,char **error) {
+    if(g_str_has_prefix(path,"/api/connection-profile/setup/load/"))return fixture_load_http(path,body,out,error);
+
     (void)method;(void)timeout;(void)error;char *raw=NULL;
     if(strcmp(path,"/api/status")==0)raw=g_strdup(active?"{\"connected\":true,\"phase\":\"connected\"}":"{\"connected\":false,\"phase\":\"off\"}");
     else if(strcmp(path,"/api/profiles")==0) { raw=json_to_string(catalog,FALSE);if(late_read){late_read=FALSE;change_choice();} }
@@ -67,7 +83,7 @@ static gboolean api_request(const char *path,const char *method,const char *body
             if(saved)json_node_free(saved);saved=parse_json(raw);
         } else raw=g_strdup("{\"ok\":true}");
         json_node_free(n);if(late_post){late_post=FALSE;change_choice();}
-    } else if(strcmp(path,"/api/connection-profile/setup/load")==0) {
+    } else if(strcmp(path,"/fixture/profile-snapshot")==0) {
         JsonNode *capture=parse_json(body);
         check(capture && !strcmp(obj_string(json_node_get_object(capture),"expected_mode"), profile_list_mode()) &&
             strstr(body,"expected_selected_node_id") && strstr(body,"expected_profile_tokens"),"Load lost displayed source receipt");
@@ -490,7 +506,7 @@ static void local_imported_model(LinuxUnifiedV8 *state) {
         }
         guint first_import=0;while(!(masks[layout]&(1u<<first_import)))first_import++;
         guint all_interiors=(1u<<(count-1))-2u;
-        gboolean selected_supported=(masks[layout]&1u)==0&&(count<=8||((p==0||p==1)&&masks[layout]==all_interiors));
+        gboolean selected_supported=(masks[layout]&1u)==0&&(count<=8||masks[layout]==all_interiors);
         for(guint position=1;position+1<count;position++)if(masks[layout]&(1u<<position)){
             guint required=((1u<<(count>8?count-1:position+1))-1u)^((1u<<first_import)-1u);
             gboolean eligible=first_import>0&&(masks[layout]&required)==required;
@@ -867,14 +883,17 @@ static void custom_store_identity(void) {
     g_key_file_set_string(legacy,"preset:work","layers","quic");
     linux_unified_save_keyfile_v8(legacy);
     g_autoptr(JsonNode) layers=parse_json("[\"wireguard\",\"future-layer\"]");
-    check(linux_profile_apply_custom_v11("custom:Work",json_node_get_array(layers),&error),"exact CUSTOM restoration failed");
+    g_autoptr(GKeyFile) staged = linux_unified_load_keyfile_v8();
+    check(linux_profile_stage_custom_v11(staged,"custom:Work",json_node_get_array(layers),&error),"exact CUSTOM restoration failed");
+    linux_unified_save_keyfile_v8(staged);
     g_autofree char *upper=linux_unified_custom_layers_for_mode_v8("custom:Work"), *lower=linux_unified_custom_layers_for_mode_v8("custom:work");
     check(!g_strcmp0(upper,"wireguard,future-layer") && !g_strcmp0(lower,"quic"),"Load changed exact original layers or a case-only sibling");
-    check(linux_profile_apply_custom_v11("custom:Work: Night",json_node_get_array(layers),&error),"Load lost a representable legacy profile name containing a colon");
+    check(linux_profile_stage_custom_v11(staged,"custom:Work: Night",json_node_get_array(layers),&error),"Load lost a representable legacy profile name containing a colon");
+    linux_unified_save_keyfile_v8(staged);
     g_autofree char *punctuated=linux_unified_custom_layers_for_mode_v8("custom:Work: Night");
     check(!g_strcmp0(punctuated,"wireguard,future-layer"),"legacy name punctuation changed during Load");
     g_autoptr(JsonNode) invalid=parse_json("[\"wireguard\",12]");
-    check(!linux_profile_apply_custom_v11("custom:Work",json_node_get_array(invalid),&error),"malformed profile silently dropped a saved layer");
+    check(!linux_profile_stage_custom_v11(staged,"custom:Work",json_node_get_array(invalid),&error),"malformed profile silently dropped a saved layer");
     g_clear_error(&error);
     check(linux_custom_publish_v18("Work",NULL,NULL,LINUX_CUSTOM_DELETE,&error),"exact delete failed");
     check(linux_custom_publish_v18("work","WORK","quic",LINUX_CUSTOM_SAVE,&error),"explicit single-owner case rename failed");
@@ -915,9 +934,12 @@ static void custom_profile_dialogs(LinuxUnifiedV8 *state) {
     g_remove(keypath); linux_unified_refresh_mode_combo_v8(state);
 }
 
+#include "test-profile-load-recovery.inc"
+
 int main(int argc,char **argv) {
     keypath=g_build_filename(argv[1],"ordered-settings.ini",NULL);g_remove(keypath);
     custom_store_identity();
+    load_recovery_faults();
     if (argc==3 && !strcmp(argv[2],"--custom-profile")) {
         check(gtk_init_check(&argc,&argv),"CUSTOM profile display");
         App app={gtk_window_new(GTK_WINDOW_TOPLEVEL)};
@@ -925,7 +947,7 @@ int main(int argc,char **argv) {
         catalog=parse_json("{\"selected_id\":\"exit\",\"profiles\":[{\"id\":\"exit\",\"profile_token\":\"0000000000000000000000000000000000000000000000000000000000000001\"}]}");
         gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.node),"exit","Exit");
         gtk_combo_box_set_active_id(GTK_COMBO_BOX(state.node),"exit");
-        refresh_all(&app); custom_profile_dialogs(&state);
+        refresh_all(&app); custom_profile_dialogs(&state); load_dialog_faults(&state);
         printf("GTK CUSTOM profile dialogs, exact name and layer ownership: %u checks PASS\n",checks);
         return 0;
     }
@@ -942,7 +964,7 @@ int main(int argc,char **argv) {
     JsonObject*o=json_object_new();JsonArray*rows=json_array_new();json_object_set_string_member(o,"selected_id","exit");
     for(int i=0;i<=8;i++){char*id=i?g_strdup_printf("n%d",i):g_strdup("exit");char*token=g_strdup_printf("%064x",i+1);JsonObject*p=json_object_new();json_object_set_string_member(p,"id",id);json_object_set_string_member(p,"name",id);json_object_set_string_member(p,"profile_token",token);json_object_set_string_member(p,"node_kind","router-vpn");json_array_add_object_element(rows,p);gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.node),id,id);g_free(id);g_free(token);}
     json_object_set_array_member(o,"profiles",rows);catalog=json_node_new(JSON_NODE_OBJECT);json_node_take_object(catalog,o);refresh_all(&app);choose(state.node,"exit");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.mode),"smart-auto","SMART AUTO");choose(state.mode,"smart-auto");
-    custom_profile_dialogs(&state);
+    custom_profile_dialogs(&state); load_dialog_faults(&state);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state.multihop),TRUE);
     local_imported_model(&state);
     imported_execution_model(&state);
@@ -968,7 +990,7 @@ int main(int argc,char **argv) {
     guint64 generation=owned->generation;profiles(2);check(owned->generation>generation,"fixture late choice not delivered");after=snapshot();check(strcmp(original,after)==0,"late response overwrote original choice");g_free(after);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state.multihop),FALSE);profiles(4);request=parse_json(last_body);check(!linux_ordered_flag_v1(json_node_get_object(request),"multihop_enabled")&&!json_object_has_member(json_node_get_object(request),"multihop_nodes"),"Off saved an ordered graph");json_node_free(request);after=snapshot();check(strcmp(original,after)==0,"Off destroyed remembered ordered draft");g_free(after);gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state.multihop),TRUE);
     guint before_close=writes;profiles(5);check(writes==before_close,"destroyed profile dialog issued a write");
-    bad_reply=TRUE;profiles(3);before=posts;linux_profile_connect_v11(NULL,&state);check(owned->invalid&&posts==before,"incomplete loaded receipt fell back to a pair");bad_reply=FALSE;
+    guint before_commit=fixture_load_commits;LinuxOrderedSelectionV1 *prior_selection=owned->selection;bad_reply=TRUE;profiles(3);check(!owned->invalid&&owned->selection==prior_selection&&fixture_load_commits==before_commit,"incomplete prepared receipt replaced the original selection");bad_reply=FALSE;
     GKeyFile*key=linux_unified_load_keyfile_v8();char*raw=g_key_file_get_string(key,"connection-profile-selection","ordered_selection",NULL);check(raw&&strcmp(raw,original)==0,"disk save lost original public inventory");g_free(raw);g_key_file_unref(key);
     JsonObject *custom=external_source_profile_v24(json_node_get_object(catalog),"n2"), *external=json_object_new();
     json_object_set_string_member(custom,"node_kind","external");json_object_set_string_member(external,"protocol","shadowsocks");json_object_set_boolean_member(external,"ordered_middle_supported",TRUE);json_object_set_object_member(custom,"external",external);

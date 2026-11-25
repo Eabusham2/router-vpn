@@ -18,8 +18,12 @@ func TestDesktopExtendedMixedOriginal(t *testing.T) {
 		for _, spec := range []struct {
 			mode    string
 			packets int
-		}{{"wg", 2}, {"awg2-fast", 1}} {
-			t.Run(fmt.Sprintf("%d-%s", n, spec.mode), func(t *testing.T) {
+		}{{"wg", 2}, {"awg2-fast", 1}, {"awg2-strong", 1}, {"awg2-strong", 2}} {
+			name := fmt.Sprintf("%d-%s", n, spec.mode)
+			if spec.mode == "awg2-strong" && spec.packets == 2 {
+				name += "-two-packets"
+			}
+			t.Run(name, func(t *testing.T) {
 				imports := make([]int, n-spec.packets-1)
 				for i := range imports {
 					imports[i] = i + spec.packets
@@ -29,9 +33,9 @@ func TestDesktopExtendedMixedOriginal(t *testing.T) {
 				control := a.profiles.Profiles[n-1]
 				for _, mode := range []string{"server", "auto"} {
 					err := desktopOrderedExecutionSelection(nodes, mode)
-					if spec.mode == "awg2-fast" && spec.packets == 1 {
+					if (spec.mode == "awg2-fast" || spec.mode == "awg2-strong") && spec.packets == 1 {
 						if err != nil {
-							t.Fatal("original Fast selected references refused", mode, err)
+							t.Fatal("original AWG selected references refused", mode, err)
 						}
 					} else if err == nil {
 						t.Fatal("Local original accepted non-Local", mode)

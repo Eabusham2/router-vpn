@@ -2,6 +2,8 @@ package mobilemultihop
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,11 +26,34 @@ func multipleImportedServerPlanFixture(t *testing.T, layout nodeChainImportedLay
 	t.Helper()
 	local := nodeChainMultipleImportedFixture(t, layout, mode, layer)
 	if layout.name == "selected-private-stream" {
-		original := nodeChainModeFixtureNodes(t, []string{"wg", "wg", "shadowsocks", "shadowsocks"}, []string{"", "", "", ""})
-		var err error
-		local.Nodes[2], err = original[2].LaunchInput()
-		if err != nil {
-			t.Fatal(err)
+		pair := nodeChainModeFixtureNodes(t, []string{"wg", "wg", "shadowsocks", "shadowsocks"}, make([]string, 4))
+		identity := nodeChainModeFixtureNodes(t, []string{"wg", "wg", "wg", "wg"}, make([]string, 4))
+		for i := 1; i < len(local.Nodes); i++ {
+			if local.IdentitySources[i] == "" {
+				continue
+			}
+			slot := 2
+			if i == len(local.Nodes)-1 {
+				slot = 3
+			}
+			original := pair[slot]
+			// These independent stream keys cannot collide with the fixture's
+			// position-derived keys at deeper placements. The independent WG
+			// companion remains a real original capture for this exact node.
+			assets := externalTestRead(t, original.inputs.Files)
+			graph := externalTestRead(t, string(mustDecodeChainAsset(t, assets["sing-box.json"].(string))))
+			key := sha256.Sum256([]byte(fmt.Sprintf("private-stream-depth-peer-%d", slot)))
+			graph["outbounds"].([]any)[0].(map[string]any)["password"] = base64.StdEncoding.EncodeToString(key[:])
+			assets["sing-box.json"] = base64.StdEncoding.EncodeToString([]byte(startJSON(t, graph)))
+			selected, err := NewNodeProfile("shadowsocks", startJSON(t, assets), startJSON(t, original.profile), "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			local.Nodes[i], err = selected.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			local.IdentitySources[i] = identity[slot].inputs.Files
 		}
 	}
 

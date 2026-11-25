@@ -237,10 +237,14 @@ func desktopImportedWGSSHTTP(t *testing.T, certificate *tls.Certificate, handler
 	if certificate != nil {
 		listener = tls.NewListener(listener, &tls.Config{Certificates: []tls.Certificate{*certificate}, MinVersion: tls.VersionTLS12})
 	}
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second, IdleTimeout: time.Second, MaxHeaderBytes: 8192}
+	lifetime, cancelLifetime := context.WithCancel(context.Background())
+	server := &http.Server{Handler: handler, BaseContext: func(net.Listener) context.Context { return lifetime }, ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second, IdleTimeout: time.Second, MaxHeaderBytes: 8192}
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
 	t.Cleanup(func() {
+		// A deliberately held proof belongs to this reference server. Retiring
+		// it must cancel that handler before graceful Shutdown waits for it.
+		cancelLifetime()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		if err := server.Shutdown(ctx); err != nil {

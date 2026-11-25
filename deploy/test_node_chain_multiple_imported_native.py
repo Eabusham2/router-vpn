@@ -86,11 +86,19 @@ CONTINUOUS = '16-server-latency'
 PARTS = tuple(f'16-server-latency-{first}-{first+3}' for first in range(1, 17, 4))
 SELECTED_CASES += PARTS + tuple(f'{count}-{path}-response' for count in (9, 16)
                                 for path in ('server', 'auto-local', 'auto-server'))
-FAST_SELECTED_CASES = tuple(f'{count}-awg2-fast-{path}' for count in (9, 16)
-                            for path in ('server-server', 'auto-local', 'auto-server', 'mtu', 'server-throughput'))
-FAST_SELECTED_CASES += ('9-awg2-fast-server-latency',) + tuple(
-    f'16-awg2-fast-server-latency-{first}-{first+3}' for first in range(1, 17, 4))
-SELECTED_CASES += FAST_SELECTED_CASES
+
+
+def awg_selected_cases(entry):
+    cases = tuple(f'{count}-{entry}-{phase}' for count in (9, 16)
+                  for phase in ('server-server', 'auto-local', 'auto-server', 'mtu', 'server-throughput'))
+    return cases + (f'9-{entry}-server-latency',) + tuple(
+        f'16-{entry}-server-latency-{first}-{first+3}' for first in range(1, 17, 4))
+
+
+FAST_SELECTED_CASES = awg_selected_cases('awg2-fast')
+STRONG_SELECTED_CASES = awg_selected_cases('awg2-strong')
+AWG_SELECTED_CASES = FAST_SELECTED_CASES + STRONG_SELECTED_CASES
+SELECTED_CASES += AWG_SELECTED_CASES
 
 PRIVATE_STREAM_CASES = {
     '4-private-server-response': ('server', 'server', 'response'), '4-private-auto-local': ('auto', 'local', 'response'),
@@ -98,6 +106,43 @@ PRIVATE_STREAM_CASES = {
     '4-private-server-throughput': ('server', 'server', 'throughput'), '4-private-drain': ('server', 'server', 'drain'),
     **{'4-private-wrong-'+field: ('server', 'server', 'wrong-'+field) for field in ('key', 'identity', 'dns', 'public', 'exit')},
 }
+
+PRIVATE_DEPTH_CASES = {
+    '5-private-2-server-server-response': (5, 2, 'server', 'server', 'response', 0, 0),
+    '5-private-3-auto-local-response': (5, 3, 'auto', 'local', 'response', 0, 0),
+    '5-private-2-auto-server-response': (5, 2, 'auto', 'server', 'response', 0, 0),
+    '5-private-3-server-server-throughput': (5, 3, 'server', 'server', 'throughput', 0, 0),
+    '5-private-2-server-server-drain': (5, 2, 'server', 'server', 'drain', 0, 0),
+    '5-private-3-server-server-latency-1-5': (5, 3, 'server', 'server', 'latency', 1, 5),
+    '9-private-4-server-server-response': (9, 4, 'server', 'server', 'response', 0, 0),
+    '9-private-7-auto-local-response': (9, 7, 'auto', 'local', 'response', 0, 0),
+    '9-private-4-auto-server-response': (9, 4, 'auto', 'server', 'response', 0, 0),
+    '9-private-7-server-server-throughput': (9, 7, 'server', 'server', 'throughput', 0, 0),
+    '9-private-4-server-server-drain': (9, 4, 'server', 'server', 'drain', 0, 0),
+    '9-private-7-server-server-latency-1-9': (9, 7, 'server', 'server', 'latency', 1, 9),
+    '16-private-2-server-server-response': (16, 2, 'server', 'server', 'response', 0, 0),
+    '16-private-14-auto-local-response': (16, 14, 'auto', 'local', 'response', 0, 0),
+    '16-private-2-auto-server-response': (16, 2, 'auto', 'server', 'response', 0, 0),
+    '16-private-14-server-server-throughput': (16, 14, 'server', 'server', 'throughput', 0, 0),
+    '16-private-2-server-server-drain': (16, 2, 'server', 'server', 'drain', 0, 0),
+    '16-private-14-server-server-latency-1-4': (16, 14, 'server', 'server', 'latency', 1, 4),
+    '16-private-14-server-server-latency-5-8': (16, 14, 'server', 'server', 'latency', 5, 8),
+    '16-private-14-server-server-latency-9-12': (16, 14, 'server', 'server', 'latency', 9, 12),
+    '16-private-14-server-server-latency-13-16': (16, 14, 'server', 'server', 'latency', 13, 16),
+    '5-private-3-server-server-wrong-key': (5, 3, 'server', 'server', 'wrong-key', 0, 0),
+    '9-private-4-server-server-wrong-public': (9, 4, 'server', 'server', 'wrong-public', 0, 0),
+    '9-private-7-server-server-wrong-dns': (9, 7, 'server', 'server', 'wrong-dns', 0, 0),
+    '16-private-14-server-server-wrong-identity': (16, 14, 'server', 'server', 'wrong-identity', 0, 0),
+    '16-private-2-server-server-wrong-exit': (16, 2, 'server', 'server', 'wrong-exit', 0, 0),
+}
+
+def private_case(leaf):
+    if leaf in PRIVATE_DEPTH_CASES:
+        return PRIVATE_DEPTH_CASES[leaf]
+    mode, winner, action = PRIVATE_STREAM_CASES[leaf]
+    first, last = (1, 4) if action == 'latency' else (0, 0)
+    return 4, 2, mode, winner, action, first, last
+
 
 SELECTED_TEMPLATES = (
     'mobile/server_chain_component/private_stream_process_test.go.tmpl',
@@ -108,8 +153,9 @@ SELECTED_TEMPLATES = (
 
 
 def selected_marker(leaf):
-    if leaf in FAST_SELECTED_CASES:
-        count, tail = leaf.split('-awg2-fast-')
+    if leaf in AWG_SELECTED_CASES:
+        entry = 'awg2-fast' if leaf in FAST_SELECTED_CASES else 'awg2-strong'
+        count, tail = leaf.split(f'-{entry}-')
         first, last, samples, transferred, response_samples = 0, 0, 0, 0, 0
         mode, winner = 'server', 'server'
         if tail in ('server-server', 'auto-local', 'auto-server'):
@@ -122,9 +168,9 @@ def selected_marker(leaf):
             first, last = map(int, positions.split('-')) if positions else (1, int(count))
             samples = (last-first+1)*50
         elif tail != 'mtu':
-            raise ValueError('Unknown original Fast selected phase')
+            raise ValueError('Unknown original AWG2 selected phase')
         return (f'QUALIFIED_SELECTED_NATIVE nodes={count} execution={mode} winner={winner} samples={samples} bytes={transferred} '
-                f'first={first} last={last} response_samples={response_samples} entry_mode=awg2-fast parameters_current=true')
+                f'first={first} last={last} response_samples={response_samples} entry_mode={entry} parameters_current=true')
     count, mode, action, *positions = leaf.split('-')
     first, last = (map(int, positions) if positions else (1, int(count))) if action == 'latency' else (0, 0)
     winner = 'server' if mode == 'server' else action
@@ -143,8 +189,8 @@ def inventory():
 
 def expected(root, leaf=None):
     cases = inventory().get(root)
-    if root == SELECTED_ROOT and leaf in PRIVATE_STREAM_CASES:
-        cases = PRIVATE_STREAM_CASES
+    if root == SELECTED_ROOT and (leaf in PRIVATE_STREAM_CASES or leaf in PRIVATE_DEPTH_CASES):
+        cases = (*PRIVATE_STREAM_CASES, *PRIVATE_DEPTH_CASES)
     if cases is None or leaf is not None and leaf not in cases:
         raise ValueError('Uncaptured independent imported native case')
     if root in PEER_CASES and leaf is None:
@@ -203,14 +249,14 @@ def verdict(output, root, leaf=None, *, worker_digest=None):
         emitted = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and 'QUALIFIED_ORIGINAL_THROUGHPUT nodes=' in row.get('Output', '')]
         if len(emitted) != 1 or not emitted[0].endswith(marker):
             raise ValueError('Missing complete original encrypted per-member throughput')
-    if root == SELECTED_ROOT and leaf in PRIVATE_STREAM_CASES:
+    if root == SELECTED_ROOT and (leaf in PRIVATE_STREAM_CASES or leaf in PRIVATE_DEPTH_CASES):
         lines = [row.get('Output', '').strip() for row in rows if row.get('Test') == root+'/'+leaf]
         def unique(marker):
             matches = [line.split(marker, 1)[1] for line in lines if marker in line]
             if len(matches) != 1:
                 raise ValueError('Missing or duplicate private stream witness '+marker)
             return matches[0]
-        mode, winner, action = PRIVATE_STREAM_CASES[leaf]
+        count, position, mode, winner, action, first, last = private_case(leaf)
         wanted = 2 if (mode, winner) == ('auto', 'server') else 1
         def workers(marker):
             found = [line.split(marker, 1)[1] for line in lines if marker in line]
@@ -227,9 +273,9 @@ def verdict(output, root, leaf=None, *, worker_digest=None):
         if started != joined or retained != required_order:
             raise ValueError('Separate native process source, image or joined OS identity changed')
         rejected = action.startswith('wrong-')
-        samples = {'response': 6, 'latency': 200}.get(action, 0)
-        transferred = 4 * (16 << 20) if action == 'throughput' else 0
-        result = f'nodes=4 mode={mode} winner={winner} operation={action} rejected={str(rejected).lower()} samples={samples} bytes={transferred}'
+        samples = {'response': 6, 'latency': (last-first+1)*50}.get(action, 0)
+        transferred = count * (16 << 20) if action == 'throughput' else 0
+        result = f'nodes={count} private={position} mode={mode} winner={winner} operation={action} rejected={str(rejected).lower()} samples={samples} bytes={transferred} first={first} last={last}'
         if unique('SELECTED_PRIVATE_STREAM_NATIVE ') != result:
             raise ValueError('Selected private stream proof, outcome, samples or transferred bytes changed')
         if not rejected and unique('PRIVATE_STREAM_OWNER ') != 'foreign_peer_session_epoch_refused=true':
@@ -242,10 +288,19 @@ def verdict(output, root, leaf=None, *, worker_digest=None):
                    and 'QUALIFIED_SELECTED_NATIVE' in row.get('Output', '')]
         if len(markers) != 1 or not markers[0].endswith(selected_marker(leaf)):
             raise ValueError('Missing original selected native route, frozen winner or encrypted bytes')
-        if leaf in FAST_SELECTED_CASES and leaf.endswith('-mtu'):
+        if leaf in AWG_SELECTED_CASES:
+            entry = 'awg2-fast' if leaf in FAST_SELECTED_CASES else 'awg2-strong'
+            expected_client = f'QUALIFIED_SELECTED_CLIENT_AWG entry={entry} parameters_current=true other_mode_refused=true'
+            clients = [row.get('Output', '').strip() for row in rows if row.get('Test') == name
+                       and 'QUALIFIED_SELECTED_CLIENT_AWG' in row.get('Output', '')]
+            if len(clients) != 1 or not clients[0].endswith(expected_client):
+                raise ValueError('Missing live selected AWG client parameter readback or alternate-mode refusal')
+        if leaf in AWG_SELECTED_CASES and leaf.endswith('-mtu'):
             count = leaf.split('-')[0]
-            expected_mtu = f'FAST_SELECTED_MTU nodes={count} configured=1280 ceiling=1500 lease_paused=true missing_reader_refused=true'
-            mtu = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and 'FAST_SELECTED_MTU' in row.get('Output', '')]
+            entry = 'awg2-fast' if leaf in FAST_SELECTED_CASES else 'awg2-strong'
+            mtu_marker = 'STRONG_SELECTED_MTU' if entry == 'awg2-strong' else 'FAST_SELECTED_MTU'
+            expected_mtu = f'{mtu_marker} nodes={count} configured=1280 ceiling=1500 lease_paused=true missing_reader_refused=true'
+            mtu = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and '_SELECTED_MTU' in row.get('Output', '')]
             if len(mtu) != 1 or not mtu[0].endswith(expected_mtu):
                 raise ValueError('Missing original selected Fast MTU pause or native-reader refusal')
     return len(required)
@@ -274,12 +329,17 @@ def bounded_control(command, core, env):
     return process.returncode, output, error
 
 
-def execute(core, target, tags, env, runner, *, private_stream_diagnostic=False):
+def execute(core, target, tags, env, runner, *, strong_diagnostic=False, private_stream_diagnostic=False, private_depth_diagnostic=False):
+    private_cases = (*PRIVATE_STREAM_CASES, *PRIVATE_DEPTH_CASES) if private_depth_diagnostic else PRIVATE_STREAM_CASES
+    if sum((strong_diagnostic, private_stream_diagnostic, private_depth_diagnostic)) > 1:
+        raise ValueError("A native proof requires one diagnostic family")
     if (target not in ('linux/amd64', 'linux/arm64')
             or (env.get('GOOS'), env.get('GOARCH')) != tuple(target.split('/'))
             or env.get('CGO_ENABLED') != '1' or 'with_wireguard' not in tags.split(',')):
         raise ValueError('Independent imported proof requires its actual Linux native race target')
-    if private_stream_diagnostic and target != 'linux/amd64':
+    if strong_diagnostic and target != 'linux/amd64':
+        raise ValueError('The topic-branch diagnostic requires its actual amd64 host')
+    if (private_stream_diagnostic or private_depth_diagnostic) and target != 'linux/amd64':
         raise ValueError('The separate private-stream diagnostic requires its actual amd64 host')
     core, captured = Path(core).resolve(), dict(env)
     helpers = load('test_desktop_native_root_phases.py')
@@ -336,7 +396,7 @@ def execute(core, target, tags, env, runner, *, private_stream_diagnostic=False)
         images = {'peer': workspace/'peer.test', 'box': workspace/'box.test', 'continuous': workspace/'continuous.test'}
         identities = {}
         peer_receipts, box_receipts = {}, {}
-        if private_stream_diagnostic:
+        if private_stream_diagnostic or private_depth_diagnostic:
             images['worker'] = Path(captured['ROUTERVPN_PRIVATE_STREAM_IMAGE'])
             identities['worker'] = helpers.image_identity(images['worker'])
             if identities['worker'][1] != captured['ROUTERVPN_PRIVATE_STREAM_SHA256']:
@@ -368,11 +428,22 @@ def execute(core, target, tags, env, runner, *, private_stream_diagnostic=False)
                         cwd=core, env=captured, timeout=60).strip().splitlines()
         if sorted(listed) != sorted(PEER_CASES):
             raise ValueError('Independent imported encrypted root discovery changed')
-        if private_stream_diagnostic:
-            for leaf in PRIVATE_STREAM_CASES:
-                peer_receipts[SELECTED_ROOT+'/'+leaf] = run_case(images['peer'], PEER_PACKAGE, SELECTED_ROOT, leaf, 90, 105)
+        if strong_diagnostic:
+            for leaf in STRONG_SELECTED_CASES:
+                peer_receipts[leaf] = run_case(images['peer'], PEER_PACKAGE, SELECTED_ROOT, leaf, 90, 105)
+                print('Completed original Strong worker case '+leaf, flush=True)
             unchanged()
-            return dict(kind='native-selected-private-stream-v1', target=target, source_sha256=source_sha,
+            return dict(kind='diagnostic-original-strong-selected-v1', target=target, race=True,
+                        source_sha256=source_sha, image_sha256=identities['peer'][1],
+                        templates={path: hashlib.sha256(raw).hexdigest() for path, raw in template_bytes.items()},
+                        worker_sources={name: hashlib.sha256(raw).hexdigest() for name, raw in worker_sources.items()},
+                        encrypted=peer_receipts)
+        if private_stream_diagnostic or private_depth_diagnostic:
+            for leaf in private_cases:
+                peer_receipts[SELECTED_ROOT+'/'+leaf] = run_case(images['peer'], PEER_PACKAGE, SELECTED_ROOT, leaf, 90, 105)
+                print('Completed separate private-stream worker case '+leaf, flush=True)
+            unchanged()
+            return dict(kind='native-selected-private-depth-v1' if private_depth_diagnostic else 'native-selected-private-stream-v1', target=target, source_sha256=source_sha,
                         templates={path: hashlib.sha256(raw).hexdigest() for path, raw in template_bytes.items()},
                         images={name: identity[1] for name, identity in identities.items()}, race=True,
                         encrypted=peer_receipts, installed_host_acceptance=False)

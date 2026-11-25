@@ -523,14 +523,6 @@ try{
         }
         $finalID=$localNodes[-1].id;$localStore=@{selected_id=$finalID;profiles=$localProfiles}
         $localDraft=@{control_id=$finalID;nodes=$localNodes;execution='local';profile_tokens=$localTokens}
-        if($layout.count-gt8-and$packet-ceq'awg2-strong'){
-            $valid=New-RouterVPNOrderedConnectPayload $localDraft $localStore
-            Check ($valid.nodes.Count -eq $layout.count -and $valid.nodes[0].mode -ceq $packet) 'Extended Local imported path lost its AmneziaWG entry'
-            foreach($selected in @('server','auto')){
-                $localDraft.execution=$selected;$refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}
-                Check $refused 'Extended AWG2 Strong imported path acquired unproved remote execution'
-            };continue
-        }
         try{$localPayload=New-RouterVPNOrderedConnectPayload $localDraft $localStore}catch{Check $false 'Local imported nodes lost complete original path'}
         Check (($localPayload.nodes.id-join',')-ceq($localNodes.id-join',')-and($localPayload.nodes.mode-join',')-ceq($localNodes.mode-join',')-and$localPayload.execution-ceq'local') 'Local imported nodes changed original order or modes'
         Check ($localPayload.expected_profile_tokens.Count-eq$layout.count-and($localPayload|ConvertTo-Json -Depth 12)-notmatch'private-import-|password|start_layer') 'Local imported nodes lost source references or copied secrets'
@@ -561,7 +553,7 @@ try{
             foreach($j in $layout.positions){$localProfiles[$j].external.ordered_multiple_imported_execution_supported=$true}
             if($layout.positions-notcontains0){
                 $payload=New-RouterVPNOrderedConnectPayload $localDraft $localStore
-                Check ($payload.execution-ceq$executionChoice-and$payload.nodes.Count-eq$layout.count-and(Get-RouterVPNOrderedExecutionCapability $localNodes $executionChoice)-ceq'ordered_multiple_imported_executions') 'Multiple imported execution lost its native family or complete selected order'
+                Check ($payload.execution-ceq$executionChoice-and($payload.nodes.id-join',')-ceq($localNodes.id-join',')-and($payload.nodes.mode-join',')-ceq($localNodes.mode-join',')-and(Get-RouterVPNOrderedExecutionCapability $localNodes $executionChoice)-ceq'ordered_multiple_imported_executions') 'Multiple imported execution lost its native family or complete selected order'
                 foreach($j in $layout.positions){
                     $localProfiles[$j].external.ordered_multiple_imported_execution_supported='true'
                     $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $localDraft $localStore)}catch{$refused=$true}

@@ -94,7 +94,7 @@ func (c *desktopImportedMTUCache) SaveContext(ctx context.Context, key string, m
 			*profile = before
 			return err
 		}
-		if err := persistDesktopImportedMTUProfilesContext(ctx, u.a.cfg.ProfilesFile, u.a.profiles); err != nil {
+		if err := persistDesktopImportedMTUProfilesContext(ctx, u.a.cfg.ProfilesFile, u.a.profiles, u.a.profileLoad); err != nil {
 			*profile = before
 			return err
 		}
@@ -127,7 +127,7 @@ func (c *desktopImportedMTUCache) restore(ctx context.Context) error {
 		}
 		before := common.CloneRouterProfile(*profile)
 		copyMTUMeasurementFields(profile, c.before)
-		if err := persistDesktopImportedMTUProfilesContext(ctx, u.a.cfg.ProfilesFile, u.a.profiles); err != nil {
+		if err := persistDesktopImportedMTUProfilesContext(ctx, u.a.cfg.ProfilesFile, u.a.profiles, u.a.profileLoad); err != nil {
 			*profile = before
 			return err
 		}

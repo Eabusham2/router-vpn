@@ -1712,7 +1712,7 @@ return value == "local" || value == "server" || value == "auto"
 	if err := common.ValidateMultihopNodes(nodes); err != nil {
 		return err
 	}
-	if requested != "local" && (common.ExtendedPairedLocalMultihopSelection(nodes) || common.ExtendedMixedLocalPacketCount(nodes) > 0) && !common.ExtendedFastSelectedMultihopSelection(nodes) {
+	if requested != "local" && (common.ExtendedPairedLocalMultihopSelection(nodes) || common.ExtendedMixedLocalPacketCount(nodes) > 0) && !common.ExtendedAWGSelectedMultihopSelection(nodes) {
 		return errors.New("extended paired WireGuard routes require Local execution")
 	}
 	if requested != "local" && nodes[len(nodes)-1].Mode != "shadowsocks" && !desktopHysteriaExecutionNodes(nodes) {
@@ -2049,16 +2049,16 @@ return ctx.Err()
 	}
 	return p
     '''),)
-    # The public Fast reference and native original must independently qualify.
+    # The public AWG2 reference and native original must independently qualify.
     expected += (
         ("internal/common/profile_node_chain.go",
-         "func ExtendedFastSelectedMultihopSelection(nodes []MultihopNodeSelection) bool", r'''
-	return ExtendedMixedLocalPacketCount(nodes) == 1 && nodes[0].Mode == "awg2-fast"
+         "func ExtendedAWGSelectedMultihopSelection(nodes []MultihopNodeSelection) bool", r'''
+	return ExtendedMixedLocalPacketCount(nodes) == 1 && (nodes[0].Mode == "awg2-fast" || nodes[0].Mode == "awg2-strong")
         '''),
-        ("internal/mobilemultihop/node_chain_extended_fast_selected.go",
-         "func (c *NodeChain) extendedFastSelectedSource() bool", r'''
+        ("internal/mobilemultihop/node_chain_extended_awg_selected.go",
+         "func (c *NodeChain) extendedAWGSelectedSource() bool", r'''
 	if c == nil || len(c.nodes) <= NodeChainMaximumNodes || c.ExtendedLocalNodeCount() != len(c.nodes) ||
-		c.ExtendedMixedLocalPacketCount() != 1 || c.proofs[0].Mode != "awg2-fast" || c.hasPairedStreamInteriorValidated() {
+		c.ExtendedMixedLocalPacketCount() != 1 || (c.proofs[0].Mode != "awg2-fast" && c.proofs[0].Mode != "awg2-strong") || c.hasPairedStreamInteriorValidated() {
 		return false
 	}
 	for position := 1; position < len(c.nodes)-1; position++ {
@@ -2073,7 +2073,7 @@ return ctx.Err()
          "func NewNodeChainMultipleImportedExecutionPreparation(original *NodeChain, execution string) (*NodeChainExecutionPreparation, error)", r'''
 	if original == nil || original.validateCapture() != nil || original.importedNodes == nil || original.importedNodes.customEntry || original.importedNodes.hasHostname() || original.hasPairedStreamInteriorValidated() ||
 		original.importedMiddle != nil || original.openVPNMiddle != nil || original.socksSource != nil || original.connectSource != nil ||
-		execution != "server" && execution != "auto" || len(original.nodes) < 3 || len(original.nodes) > NodeChainMaximumNodes && (original.ExtendedLocalNodeCount() != len(original.nodes) || original.ExtendedMixedLocalPacketCount() != 0 && !original.extendedFastSelectedSource()) ||
+		execution != "server" && execution != "auto" || len(original.nodes) < 3 || len(original.nodes) > NodeChainMaximumNodes && (original.ExtendedLocalNodeCount() != len(original.nodes) || original.ExtendedMixedLocalPacketCount() != 0 && !original.extendedAWGSelectedSource()) ||
 		original.nodes[len(original.nodes)-1] == nil || original.nodes[len(original.nodes)-1].mode != "shadowsocks" ||
 		original.projection.Kind != "" || original.projection.TargetOS != "" && original.projection.TargetOS != "ios" && original.projection.TargetOS != "android" {
 		return nil, nodeChainExecutionError

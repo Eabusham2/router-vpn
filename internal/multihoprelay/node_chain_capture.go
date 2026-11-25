@@ -121,14 +121,33 @@ func nodeChainDigest(domain string, value any) (string, error) {
 
 // The independently provisioned WG identity companion is an identity proof.
 // This stream has no packet endpoint or positional packet key.
-func (s NodeChainDescriptor) PrivateStreamAt(position int) bool {
-	if s.Schema != 6 || s.EntryMode != "wg" || len(s.Members) != 3 || position != 2 {
-		return false
+func (s NodeChainDescriptor) PrivateStreamPosition() int {
+	n := len(s.Members)
+	if s.Schema != 6 || s.EntryMode != "wg" || n < 3 || n > NodeChainExtendedMaximumMembers {
+		return 0
 	}
-	a, b, c := s.Members[0], s.Members[1], s.Members[2]
-	return a.NodeKind == "external" && a.ProofKind == "public-path" && a.Mode == "shadowsocks" && a.StartLayer == "off" &&
-		b.NodeKind == "" && b.ProofKind == "" && b.Mode == "shadowsocks" && b.StartLayer == "off" &&
-		c.NodeKind == "" && c.ProofKind == "" && c.Mode == "shadowsocks" && c.StartLayer == "off"
+	paired := 0
+	for i, m := range s.Members {
+		if m.Position != i+1 || m.Mode != "shadowsocks" || m.StartLayer != "off" {
+			return 0
+		}
+		switch {
+		case i == n-1:
+			if m.NodeKind != "" || m.ProofKind != "" {
+				return 0
+			}
+		case m.NodeKind == "external" && m.ProofKind == "public-path":
+		case i > 0 && m.NodeKind == "" && m.ProofKind == "" && paired == 0:
+			paired = i + 1
+		default:
+			return 0
+		}
+	}
+	return paired
+}
+
+func (s NodeChainDescriptor) PrivateStreamAt(position int) bool {
+	return position >= 2 && s.PrivateStreamPosition() == position
 }
 
 func (s NodeChainDescriptor) Validate() error {
@@ -148,6 +167,7 @@ func (s NodeChainDescriptor) Validate() error {
 	ids, nodes := map[string]bool{s.EntryID: true}, map[string]bool{s.EntryNodeID: true}
 	keys := map[string]bool{}
 	publicSources := map[string]bool{}
+	privatePosition := s.PrivateStreamPosition()
 	publicCount := 0
 	for index, member := range s.Members {
 		if member.Position != index+1 || !ident.MatchString(member.ProfileID) || ids[member.ProfileID] ||
@@ -155,7 +175,7 @@ func (s NodeChainDescriptor) Validate() error {
 			return nodeChainCaptureError
 		}
 		ids[member.ProfileID] = true
-		privateStream := s.PrivateStreamAt(member.Position)
+		privateStream := privatePosition > 0 && privatePosition == member.Position
 		if privateStream != (member.StreamIdentitySHA256 != "") {
 			return nodeChainCaptureError
 		}
@@ -208,7 +228,7 @@ func (s NodeChainDescriptor) Validate() error {
 			keys[key] = true
 		}
 	}
-	if len(s.Members) > NodeChainMaximumMembers && (s.EntryMode != "wg" && s.EntryMode != "awg2-fast" || publicCount != len(s.Members)-1 || s.Members[len(s.Members)-1].StartLayer != "off") {
+	if len(s.Members) > NodeChainMaximumMembers && (s.EntryMode != "wg" && s.EntryMode != "awg2-fast" && s.EntryMode != "awg2-strong" || (publicCount != len(s.Members)-1 && privatePosition == 0) || s.Members[len(s.Members)-1].StartLayer != "off") {
 		return nodeChainCaptureError
 	}
 	if s.Schema == 6 && publicCount == 0 {
@@ -303,8 +323,9 @@ func (q NodeChainRequest) Validate(source NodeChainDescriptor) error {
 	}
 	if source.Schema == 6 {
 		positions := []int{0}
+		private := source.PrivateStreamPosition()
 		for index, member := range source.Members {
-			if index < len(source.Members)-1 && member.NodeKind == "" && !source.PrivateStreamAt(member.Position) {
+			if index < len(source.Members)-1 && member.NodeKind == "" && private != member.Position {
 				positions = append(positions, member.Position)
 			}
 		}

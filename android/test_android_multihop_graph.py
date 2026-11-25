@@ -159,7 +159,7 @@ def streaming_policy_helper(helper):
 GRAPH_CONTROLLER_SOURCES = (
     'AndroidMultihopController', 'NativeSingBoxController', 'AndroidNativeMAXProfile',
     'AndroidNativeCompositeProfile', 'AndroidProfileSelection', 'AndroidNumericAddress',
-    'AndroidNativeProfilePolicy', 'AndroidWireGuardLibboxPolicy', 'AndroidStartLayer',
+    'AndroidDNSResolverCatalog', 'AndroidNativeProfilePolicy', 'AndroidWireGuardLibboxPolicy', 'AndroidStartLayer',
     'AndroidXrayLibboxPolicy', 'NativeXrayController', 'AndroidMultihopStartLayer', 'AndroidDeviceMTU',
 )
 STUBS={

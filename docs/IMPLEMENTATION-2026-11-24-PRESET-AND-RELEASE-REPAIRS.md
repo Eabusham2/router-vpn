@@ -180,10 +180,11 @@ required in hosted CI. Native WFP execution, generated Apple frameworks and
 real device behavior likewise retain their actual platform gates.
 
 A further review reproduced a separate desktop profile-load failure boundary:
-the controller can commit successfully before a local preset-store write
-fails. The preflight repairs above do not make those two stores one atomic
-transaction. Coordinated durable prepare/commit/recovery is being implemented
-as a separate unit; it is not claimed complete by this repair batch.
+the controller could commit successfully before a local preset-store write
+failed. The coordinated recovery protocol below now joins the controller's
+durable outcome to the GTK, AppKit and Windows local journals. Its targeted
+controller and real HTTP interoperability tests passed; native packages and
+installed device acceptance remain subject to the release gates.
 
 The authoritative release remains `build-all.yml`: one exact main commit must
 produce the required native packages, ARM64 images and verified production
@@ -197,3 +198,82 @@ separate requirements.
 Switching from Home or another DNS policy to Rescue in the quick picker or detailed DNS editor now starts with the Rescue HTTPS preset. Reopening an explicit saved Rescue retains its resolver address, certificate hostname, port and request path. The paired native graph validates that target and carries DNS through the selected tunnel detour. Incomplete explicit targets fail instead of substituting a public resolver. A legacy Rescue selection with no HTTPS settings retains the original preset.
 
 The shipping Java editor methods and native graph passed the host-run Home/Rescue fixture, including a switch from a private Home resolver, an explicit IPv6 Rescue at port 8443, missing certificate names, invalid paths and the legacy preset. The fixture uses Android handle doubles and the real Go compiler for its generated graph cases. Physical Android transport, exit and DNS proof still require a device.
+
+### Coordinated Linux connection-profile Load
+
+The GTK profile manager captures the controller revision before preparing a saved profile. It stages the complete mode, exact named CUSTOM layers, pair or ordered path, and execution choice in the existing private settings file. The same atomic write records the original values and the controller's operation, generation and receipt. The controller commits only after the local file and directory entry have been confirmed. Recovery on startup or reopening Profiles uses the original owner to finish a committed Load or restore the original choices before aborting a prepared Load. A late prepare is cancelled against its captured revision. Conflicting local settings keep the operation pending and preserve the newer values. Disconnect and Emergency stop stay available.
+
+The GTK fixture runs the shipping storage and recovery functions against a temporary settings directory and a controller double. It covers timeouts around prepare, commit and finish, a delayed prepare after cancellation or supersession, missing owners, file replacement, failed writes on both sides of the local rename, a malformed ordered receipt, and a failed rollback followed by restart. The native C shell also compiled and passed its four built-in self-tests. These checks do not establish a VPN or provide route, DNS or exit proof.
+
+On the native Linux desktop, the shipping GTK dialog callbacks passed 454 cumulative checks. These included 275 storage and recovery checks and 132 checks in seven modal failure scenarios, covering lost prepare, commit and finish replies, refused commit, and failed writes before or after rename. The separately compiled pair-dialog fixture requires the catalog exported by the Go controller test. That catalog was unavailable for this desktop run.
+
+### Shared profile Load recovery and desktop adapters
+
+The controller reserves a prepared operation without changing the selected
+node or its preferences. The desktop app validates the complete returned
+snapshot and durably stages its mode, exact CUSTOM layers and path choices.
+Only then does it request commit. The controller publishes the selected
+profiles and committed receipt in the same private-file replacement. An
+unfinished receipt blocks new Connect, startup and settings changes while
+keeping Disconnect and Emergency Stop available. Finish releases that fence
+after the local journal records completion or rollback.
+
+Each operation carries a random identity, a generation, an exact snapshot
+digest and the revision captured before prepare. An explicit cancellation
+records a tombstone for an unacknowledged prepare; a late request cannot revive
+it after a newer operation. Recovery never overwrites a different local file
+or controller generation. Named setup metadata can be damaged after prepare
+without preventing authenticated abort and finish. Reading an older named
+setup during preparation no longer performs a migration write.
+
+The controller retains the receipt through its other private writers and the
+installed Linux service and comparison readers. These readers use the private
+store's existing bound, so a receipt that grows a valid catalog past the small
+network-message limit remains readable. Future top-level private fields remain
+readable at startup; a staged Load refuses to discard an extension it cannot
+preserve. Complete 96-member current-path expectations are accepted by the
+bounded Load API, while an extra member is refused.
+
+Full production Linux controller sources and the focused protocol tests passed
+actual restart, phase, delayed cancellation, source replacement, old schema,
+private-file, comparison and startup controls. The Swift coordinator also ran
+against those real Go HTTP handlers and real private files. Normal Load and a
+lost commit reply finished committed; a refused local write and a lost prepare
+reply restored the prior choices and finished aborted. The required CI step
+runs all four cases with the complete race-enabled controller package and
+rejects absent, skipped or duplicated pass receipts. That hosted race run is
+separate from the completed local interoperability run.
+
+That interoperability check exposed a Home DNS reload defect: a UDP, TCP or
+DoT profile could regain an HTTP-only request path and change its public
+revision after commit. The default now applies only to HTTP DNS. All five Home
+DNS transports retain their selected path and public revision across reload.
+
+The Windows shipping callback and file fixture passed 6,257 source/callback
+checks, 265 coordinated failure checks, 21 original mutation controls, 1,023
+device-settings checks, 15 asynchronous groups and eight checked-storage
+controls. Native Windows ComboBox event acceptance remains a hosted Windows
+test. AppKit's affected native callback fixture passed 49,009 checks and 23
+file-backed interruption cases; its small canonical receipt tests include
+ordinary and legacy-pair null-node responses. These Swift checks execute the
+shipping methods on Linux, not an AppKit window or a macOS VPN session.
+
+### DNS catalog and native teardown follow-ups
+
+Android's paired DNS editor and native graph now share the twelve known
+resolver addresses. An IPv6 literal is not inferred to be a TLS certificate
+hostname. Quad9's secondary IPv6 address receives the same explicit known
+certificate name as the selector. The actual editor and generated DoT, DoH and
+DoH3 graphs passed 58 focused checks, two historical broken-source controls,
+and the existing DNS Retest and Home-state checks. These tests establish
+configuration and ownership behavior, not physical Android TLS traffic.
+
+The macOS native interoperability job exposed a real composite teardown race:
+cancellation could close and unregister a socket before the owner's registry
+captured its close error. The published TCP and UDP versions each reproduced
+that loss with the new deterministic schedule. The corrected owner retains
+that exact error once, while an ordinary caller-owned close keeps its error
+with the caller. The focused native cases passed twenty repeated race runs
+against the pinned sing-box sources; the complete native outbound fixture and
+two repository packages also passed. The encrypted hosted jobs still require
+the integrated commit.

@@ -110,24 +110,56 @@ func TestOriginalExtendedSelectedExecution(t *testing.T) {
 		cases = append(cases, selectedCase{
 			fmt.Sprintf("16-server-latency-%d-%d", first, first+3), 16, "wg", "server", "server", "latency", first, first + 3})
 	}
-	for _, count := range []int{9, 16} {
-		for _, variant := range []struct{ mode, winner string }{{"server", "server"}, {"auto", "local"}, {"auto", "server"}} {
-			cases = append(cases, selectedCase{fmt.Sprintf("%d-awg2-fast-%s-%s", count, variant.mode, variant.winner), count, "awg2-fast", variant.mode, variant.winner, "response", 0, 0})
-		}
-		cases = append(cases, selectedCase{fmt.Sprintf("%d-awg2-fast-mtu", count), count, "awg2-fast", "server", "server", "mtu", 0, 0})
-		cases = append(cases, selectedCase{fmt.Sprintf("%d-awg2-fast-server-throughput", count), count, "awg2-fast", "server", "server", "throughput", 0, 0})
-		if count == 9 {
-			cases = append(cases, selectedCase{"9-awg2-fast-server-latency", count, "awg2-fast", "server", "server", "latency", 1, 9})
-		} else {
-			for first := 1; first <= 16; first += 4 {
-				cases = append(cases, selectedCase{fmt.Sprintf("16-awg2-fast-server-latency-%d-%d", first, first+3), count, "awg2-fast", "server", "server", "latency", first, first + 3})
+	for _, entry := range []string{"awg2-fast", "awg2-strong"} {
+		for _, count := range []int{9, 16} {
+			prefix := fmt.Sprintf("%d-%s-", count, entry)
+			for _, variant := range []struct{ mode, winner string }{{"server", "server"}, {"auto", "local"}, {"auto", "server"}} {
+				cases = append(cases, selectedCase{prefix + variant.mode + "-" + variant.winner, count, entry, variant.mode, variant.winner, "response", 0, 0})
+			}
+			cases = append(cases, selectedCase{prefix + "mtu", count, entry, "server", "server", "mtu", 0, 0})
+			cases = append(cases, selectedCase{prefix + "server-throughput", count, entry, "server", "server", "throughput", 0, 0})
+			if count == 9 {
+				cases = append(cases, selectedCase{prefix + "server-latency", count, entry, "server", "server", "latency", 1, 9})
+			} else {
+				for first := 1; first <= 16; first += 4 {
+					cases = append(cases, selectedCase{prefix + fmt.Sprintf("server-latency-%d-%d", first, first+3), count, entry, "server", "server", "latency", first, first + 3})
+				}
 			}
 		}
 	}
+	privatePositions := map[string]int{}
+	for _, c := range cases {
+		if c.count == 4 {
+			privatePositions[c.name] = 2
+		}
+	}
+	registerPrivate := func(count, position int, mode, winner, operation string, first, last int) {
+		name := fmt.Sprintf("%d-private-%d-%s-%s-%s", count, position, mode, winner, operation)
+		if operation == "latency" {
+			name += fmt.Sprintf("-%d-%d", first, last)
+		}
+		privatePositions[name] = position
+		cases = append(cases, selectedCase{name, count, "wg", mode, winner, operation, first, last})
+	}
+	for _, layout := range []struct{ count, middle, late, batch int }{{5, 2, 3, 5}, {9, 4, 7, 9}, {16, 2, 14, 4}} {
+		registerPrivate(layout.count, layout.middle, "server", "server", "response", 0, 0)
+		registerPrivate(layout.count, layout.late, "auto", "local", "response", 0, 0)
+		registerPrivate(layout.count, layout.middle, "auto", "server", "response", 0, 0)
+		registerPrivate(layout.count, layout.late, "server", "server", "throughput", 0, 0)
+		registerPrivate(layout.count, layout.middle, "server", "server", "drain", 0, 0)
+		for first := 1; first <= layout.count; first += layout.batch {
+			registerPrivate(layout.count, layout.late, "server", "server", "latency", first, first+layout.batch-1)
+		}
+	}
+	registerPrivate(5, 3, "server", "server", "wrong-key", 0, 0)
+	registerPrivate(9, 4, "server", "server", "wrong-public", 0, 0)
+	registerPrivate(9, 7, "server", "server", "wrong-dns", 0, 0)
+	registerPrivate(16, 14, "server", "server", "wrong-identity", 0, 0)
+	registerPrivate(16, 2, "server", "server", "wrong-exit", 0, 0)
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			routervpnamnezia.RunExtendedOriginalWorker(t, c.count, c.entry, c.mode, c.winner, c.measure, c.first, c.last, func(ctx, base context.Context, src string, capture multihoprelay.NodeChainCapture, listener net.Listener) (multihoprelay.NodeChainProcess, error) {
-				if c.count == 4 {
+			routervpnamnezia.RunExtendedOriginalWorker(t, c.count, c.entry, c.mode, c.winner, c.measure, c.first, c.last, privatePositions[c.name], func(ctx, base context.Context, src string, capture multihoprelay.NodeChainCapture, listener net.Listener) (multihoprelay.NodeChainProcess, error) {
+				if privatePositions[c.name] > 0 {
 					child, err := startPrivateStreamProcess(ctx, t, src, capture, listener)
 					if child == nil {
 						_ = listener.Close()

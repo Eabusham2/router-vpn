@@ -360,7 +360,7 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		}
 		node, err := ParseNodeLaunchInput(launch)
 		if err != nil || node == nil || validateNodeChainIdentity(source.IdentitySources[index], node) != nil ||
-			index < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) && !(multiple && len(source.Nodes) == 3 && source.EntryMode == "wg" && index == 1 && p.multiple.members[0] != nil && node.mode == "shadowsocks") || index == len(source.Nodes)-1 && !nodeChainServerFinalCapture(source.Schema, node) {
+			index < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) && !(multiple && source.EntryMode == "wg" && index > 0 && p.multiple.members[0] != nil && node.mode == "shadowsocks") || index == len(source.Nodes)-1 && !nodeChainServerFinalCapture(source.Schema, node) {
 			return nil, nodeChainServerError
 		}
 		// Every suffix establishment is already a later captured peer. No
@@ -449,7 +449,8 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		return nil, nodeChainServerError
 	}
 	p.descriptor.DNSPolicySHA256 = externalDigest(policyRaw)
-	if p.descriptor.Validate() != nil || (p.descriptor.PrivateStreamAt(2) && !privateStreamCompanionUnique(p.descriptor.Members[1].StreamIdentitySHA256, p.nodes, source.IdentitySources, 1)) {
+	private := p.descriptor.PrivateStreamPosition()
+	if p.descriptor.Validate() != nil || (private > 0 && !privateStreamCompanionUnique(p.descriptor.Members[private-1].StreamIdentitySHA256, p.nodes, source.IdentitySources, private-1)) {
 		return nil, nodeChainServerError
 	}
 	var expected []PhysicalEgress

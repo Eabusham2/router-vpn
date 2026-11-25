@@ -46,7 +46,7 @@ func (s *nodeChainMultipleImportedServerScope) freeze(p *NodeChainServerPolicy, 
 			s.firstPacket = i
 		}
 	}
-	if (len(s.members) > NodeChainMaximumNodes-1 || p.descriptor.PrivateStreamAt(2)) && !extendedStreamClosures(closures) {
+	if (len(s.members) > NodeChainMaximumNodes-1 || p.descriptor.PrivateStreamPosition() > 0) && !extendedStreamClosures(closures) {
 		return nodeChainServerError
 	}
 	if !s.original() {

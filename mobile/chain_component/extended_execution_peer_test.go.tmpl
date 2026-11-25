@@ -148,7 +148,7 @@ func (r *extendedRuntimeWorker) StartChain(ctx context.Context, c multihoprelay.
 	}
 	return proc, err
 }
-func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner, measure string, first, last int, start ExtendedWorkerFactory) {
+func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner, measure string, first, last, privatePosition int, start ExtendedWorkerFactory) {
 	t.Helper()
 	var layout multipleImportedLayout
 	for _, v := range multipleImportedLayouts {
@@ -156,10 +156,19 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 			layout = v
 		}
 	}
-	privateStream := count == 4 && entryMode == "wg"
+	privateStream := privatePosition > 0
 	negative := privateStream && strings.HasPrefix(measure, "wrong-")
 	if privateStream {
-		layout = multipleImportedLayout{"selected-private-stream", 4, []int{1}}
+		if privatePosition < 2 || privatePosition >= count-1 || entryMode != "wg" {
+			t.Fatal("invalid original selected private stream")
+		}
+		var imports []int
+		for i := 1; i < count-1; i++ {
+			if i != privatePosition {
+				imports = append(imports, i)
+			}
+		}
+		layout = multipleImportedLayout{"selected-private-stream", count, imports}
 	}
 	if layout.count <= 8 && !privateStream {
 		t.Fatal("missing longer original fixture")
@@ -172,7 +181,7 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 	var privatePositions []int
 	fault := ""
 	if privateStream {
-		privatePositions = []int{2}
+		privatePositions = []int{privatePosition}
 	}
 	if measure == "wrong-key" {
 		fault = "wrong-interior-key"
@@ -197,10 +206,10 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 			f.members[1].wrong.Store(true)
 		}
 		if measure == "wrong-exit" {
-			f.members[3].invalidTrace.Store(true)
+			f.members[count-1].invalidTrace.Store(true)
 		}
 		if measure == "wrong-identity" {
-			f.members[2].wrong.Store(true)
+			f.members[privatePosition].wrong.Store(true)
 		}
 		if measure == "wrong-dns" {
 			f.badDNS.Store(true)
@@ -210,7 +219,7 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 		t.Fatal("original packet peer and client identity disagree")
 	}
 	var originalPacketParameters string
-	if entryMode == "awg2-fast" {
+	if entryMode == "awg2-fast" || entryMode == "awg2-strong" {
 		readback := f.members[0].prefix.readback
 		if readback == nil {
 			t.Fatal("original AWG peer has no parameter readback")
@@ -298,7 +307,7 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 			t.Error(err)
 		}
 	}()
-	runExtendedSelectedClient(t, f, prep, policy, front, mode, winner, measure, first, last)
+	runExtendedSelectedClient(t, f, prep, policy, front, mode, winner, measure, first, last, privatePosition)
 	if privateStream {
 		if get.Load() == 0 || put.Load() == 0 {
 			t.Fatal("no real lease discovery and acquisition")
@@ -308,16 +317,16 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 			wantOwners = 2
 		}
 		if negative {
-			if measure == "wrong-key" && f.members[2].provider.stats().AuthTCP == 0 || measure == "wrong-identity" && f.members[2].private.Load() == 0 || measure == "wrong-dns" && f.dns.Load() == 0 {
+			if measure == "wrong-key" && f.members[privatePosition].provider.stats().AuthTCP == 0 || measure == "wrong-identity" && f.members[privatePosition].private.Load() == 0 || measure == "wrong-dns" && f.dns.Load() == 0 {
 				t.Fatal("invalid original private stream or DNS never exercised its actual peer")
 			}
-			if measure == "wrong-public" && (f.members[1].public.Load() == 0 || f.members[2].private.Load() != 0) || measure == "wrong-exit" && (f.members[3].public.Load() == 0 || f.dns.Load() == 0) || measure == "wrong-dns" && f.members[3].public.Load() != 0 {
+			if measure == "wrong-public" && (f.members[1].public.Load() == 0 || f.members[privatePosition].private.Load() != 0) || measure == "wrong-exit" && (f.members[count-1].public.Load() == 0 || f.dns.Load() == 0) || measure == "wrong-dns" && f.members[count-1].public.Load() != 0 {
 				t.Fatal("public-prefix or final DNS/exit refusal escaped its original position")
 			}
-			if measure != "wrong-dns" && measure != "wrong-exit" && (f.members[3].private.Load() != 0 || f.dns.Load() != 0) {
+			if measure != "wrong-dns" && measure != "wrong-exit" && (f.members[count-1].private.Load() != 0 || f.dns.Load() != 0) {
 				t.Fatal("wrong intermediate reached the final")
 			}
-		} else if testedOwners.Load() != wantOwners || measure == "drain" && !drainChecked.Load() || post.Load() == 0 || remove.Load() == 0 || f.members[1].public.Load() == 0 || f.members[2].private.Load() == 0 || f.members[3].private.Load() == 0 || f.dns.Load() == 0 {
+		} else if testedOwners.Load() != wantOwners || measure == "drain" && !drainChecked.Load() || post.Load() == 0 || remove.Load() == 0 || f.members[1].public.Load() == 0 || f.members[privatePosition].private.Load() == 0 || f.members[count-1].private.Load() == 0 || f.dns.Load() == 0 {
 			t.Fatal("private stream lost a route, proof, lease or joined deletion")
 		}
 		generation := front.generation.Load()
@@ -334,11 +343,21 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 		case "response":
 			samples = 6
 		case "latency":
-			samples = 200
+			samples = (last - first + 1) * 50
 		case "throughput":
-			transferred = 4 * (16 << 20)
+			transferred = count * (16 << 20)
 		}
-		t.Logf("SELECTED_PRIVATE_STREAM_NATIVE nodes=4 mode=%s winner=%s operation=%s rejected=%t samples=%d bytes=%d", mode, winner, measure, negative, samples, transferred)
+		if !negative {
+			for i := 1; i < count-1; i++ {
+				if i != privatePosition && (!f.members[i].imported || f.members[i].public.Load() == 0) {
+					t.Fatal("missing original public prefix", i)
+				}
+			}
+			if f.members[count-1].public.Load() == 0 {
+				t.Fatal("missing original public exit proof")
+			}
+		}
+		t.Logf("SELECTED_PRIVATE_STREAM_NATIVE nodes=%d private=%d mode=%s winner=%s operation=%s rejected=%t samples=%d bytes=%d first=%d last=%d", count, privatePosition, mode, winner, measure, negative, samples, transferred, first, last)
 		if !negative {
 			t.Log("PRIVATE_STREAM_OWNER foreign_peer_session_epoch_refused=true")
 		}
@@ -367,12 +386,12 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 	} else if measure == "response" {
 		responseSamples = 6
 	}
-	if entryMode == "awg2-fast" {
+	if entryMode == "awg2-fast" || entryMode == "awg2-strong" {
 		current, err := f.members[0].prefix.readback()
 		if err != nil || current != originalPacketParameters {
 			t.Fatal("selected execution replaced original AWG parameters", err)
 		}
-		t.Logf("QUALIFIED_SELECTED_NATIVE nodes=%d execution=%s winner=%s samples=%d bytes=%d first=%d last=%d response_samples=%d entry_mode=awg2-fast parameters_current=true", count, mode, winner, samples, transferred, first, last, responseSamples)
+		t.Logf("QUALIFIED_SELECTED_NATIVE nodes=%d execution=%s winner=%s samples=%d bytes=%d first=%d last=%d response_samples=%d entry_mode=%s parameters_current=true", count, mode, winner, samples, transferred, first, last, responseSamples, entryMode)
 	} else {
 		t.Logf("QUALIFIED_SELECTED_NATIVE nodes=%d execution=%s winner=%s samples=%d bytes=%d first=%d last=%d response_samples=%d", count, mode, winner, samples, transferred, first, last, responseSamples)
 	}
@@ -451,8 +470,10 @@ func originalServerPolicy(t *testing.T, f *multipleImportedFixture) *mobilemulti
 	// same peer public key, original SS endpoint and authenticated final node.
 	last := len(source.Nodes) - 1
 	positions := []int{last}
-	if len(f.members) == 4 && !f.members[2].imported {
-		positions = append(positions, 1)
+	for i, proof := range f.chain.ProofInventory() {
+		if i > 0 && i < len(f.members)-1 && !f.members[i].imported && proof.Mode == "shadowsocks" {
+			positions = append(positions, i-1)
+		}
 	}
 	for _, pos := range positions {
 		var finalIdentity map[string]string

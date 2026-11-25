@@ -22,7 +22,7 @@ def compiler_source(source):
     assert source.count(marker) == 1
     return source.replace(marker, extra + marker)
 
-PHASES = ("selected-execution","selected-extended-nine","selected-extended-sixteen","selected-fast-nine","selected-fast-sixteen","selected-fast-bounds","hostname-four","hostname-nine","hostname-sixteen", "adjacent", "separated", "single-interior", "maximum", "extended-nine", "extended-sixteen", "awg-fast", "awg-strong", "layers", "refusals", "rollback", "stale", "source-race", "compiler", "preview-receipts", "history", "custom-entry")
+PHASES = ("selected-execution","selected-extended-nine","selected-extended-sixteen","selected-fast-nine","selected-fast-sixteen","selected-strong-nine","selected-strong-sixteen","selected-fast-bounds","hostname-four","hostname-nine","hostname-sixteen", "adjacent", "separated", "single-interior", "maximum", "extended-nine", "extended-sixteen", "awg-fast", "awg-strong", "layers", "refusals", "rollback", "stale", "source-race", "compiler", "preview-receipts", "history", "custom-entry")
 HARNESS = r'''package com.eabusham.routervpn;
 import org.json.*;import java.io.*;import java.nio.file.*;import java.nio.charset.StandardCharsets;import java.util.*;
 public final class MultipleImportedLocalHarness {
@@ -203,11 +203,17 @@ public final class MultipleImportedLocalHarness {
    var source=draft.save();var saved=f.paired.profiles.add("Complete "+requested+" imported route");
    try(var original=AndroidNodeChainCapture.compile(source);
        var chosen=AndroidNodeChainExecutionCapture.compile(original,requested)){
-    if(fixture.equals("2/awg-fast")){
+    if(fixture.equals("2/awg-fast") || fixture.equals("2/awg-strong")){
+     String packetMode = fixture.equals("2/awg-strong") ? "awg2-strong" : "awg2-fast";
      var proof=new JSONArray(io.nekohasekai.libbox.Libbox.routerIndependentProofs(original.launchInput));
-     check(proof.getJSONObject(0).getString("mode").equals("awg2-fast")&&proof.getJSONObject(0).getString("node_id").equals(source.members.get(0).proofId),"selected original Fast entry became another packet source");
-     for(int i=1;i<total-1;i++)check(proof.getJSONObject(i).getString("kind").equals("public-path")&&source.members.get(i).imported&&original.identityInputs.get(i).isEmpty(),"projected selected Fast source changed a public role");
-     check(!original.identityInputs.get(total-1).isEmpty()&&!source.members.get(total-1).imported,"selected Fast source borrowed its private final");
+     check(proof.getJSONObject(0).getString("mode").equals(packetMode)&&proof.getJSONObject(0).getString("node_id").equals(source.members.get(0).proofId),"selected original AWG2 entry became another packet source");
+     JSONObject originalBundle=new JSONObject(new String(source.members.get(0).bytes(),StandardCharsets.UTF_8));
+     String raw=new String(Base64.getDecoder().decode(originalBundle.getJSONObject("profiles").getJSONObject(packetMode).getString("awg.conf")),StandardCharsets.UTF_8);
+     String junkCount=raw.lines().filter(line->line.split("=",2)[0].trim().equals("Jc")).findFirst().orElseThrow().split("=",2)[1].trim();
+     JSONObject endpoint=NodeChainCaptureHarness.tagged(new JSONObject(original.config).getJSONArray("endpoints"),proof.getJSONObject(0).getString("tag"));
+     check(endpoint.getString("type").equals("routervpn-amneziawg")&&endpoint.getJSONObject("amnezia").getString("jc").equals(junkCount),"selected AWG2 packet parameters differ from its captured raw asset");
+     for(int i=1;i<total-1;i++)check(proof.getJSONObject(i).getString("kind").equals("public-path")&&source.members.get(i).imported&&original.identityInputs.get(i).isEmpty(),"projected selected AWG2 source changed a public role");
+     check(!original.identityInputs.get(total-1).isEmpty()&&!source.members.get(total-1).imported,"selected AWG2 source borrowed its private final");
     }
     check(chosen.plan.extendedOriginalNodeCount()==total,"selected source did not identify the exact original extended owner");
     check(chosen.plan.extendedOriginalStatusLimit()==original.plan.extendedLocalStatusLimit(),"extended selected reply size changed");
@@ -232,8 +238,8 @@ public final class MultipleImportedLocalHarness {
   }
  }
  static void selectedFastBounds(Path root)throws Exception{
-  for(String fixture:List.of("2/awg-strong","3/mixed-awg")){
-   int paired=fixture.startsWith("2/")?2:3;
+  for(String fixture:List.of("3/awg-strong","3/mixed-awg")){
+   int paired=3;
    var f=new Fixture(root,fixture,9-paired);var draft=f.draft();f.addAll(draft);
    for(String requested:List.of("server","auto"))reject(()->draft.setExecution(requested),"unqualified extended packet source acquired selected execution");
    check(draft.execution().equals("local")&&draft.save().members.size()==9,"rejected selected source lost its original Local route");
@@ -409,7 +415,7 @@ public final class MultipleImportedLocalHarness {
  }
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);String phase=args[1];
-  switch(phase){case "hostname-four":mixedHostname(root,4);break;case "hostname-nine":mixedHostname(root,9);break;case "hostname-sixteen":mixedHostname(root,16);break;case "selected-fast-nine":selectedExecution(root,9,"2/awg-fast");break;case "selected-fast-sixteen":selectedExecution(root,16,"2/awg-fast");break;case "selected-fast-bounds":selectedFastBounds(root);break;case "selected-execution":selectedExecution(root,0,"3/aes-256-gcm");break;case "selected-extended-nine":selectedExecution(root,9,"2/");break;case "selected-extended-sixteen":selectedExecution(root,16,"2/");break;case "custom-entry":customEntry(root);break;case "extended-nine":case "extended-sixteen":roundtrip(root,phase);mixedExtended(root,phase.equals("extended-nine")?9:16);if(phase.equals("extended-sixteen"))mixedLatePacket(root);break;case "adjacent":case "separated":case "single-interior":case "maximum":case "awg-fast":case "awg-strong":roundtrip(root,phase);break;case "layers":layers(root);break;case "refusals":refusals(root);break;case "rollback":rollback(root);break;case "stale":stale(root);break;case "source-race":sourceRace(root);break;case "compiler":compiler(root);break;case "preview-receipts":previewReceipts(root);break;case "history":history(root);break;default:throw new IllegalArgumentException("unknown complete imported Local phase");}
+  switch(phase){case "hostname-four":mixedHostname(root,4);break;case "hostname-nine":mixedHostname(root,9);break;case "hostname-sixteen":mixedHostname(root,16);break;case "selected-fast-nine":selectedExecution(root,9,"2/awg-fast");break;case "selected-fast-sixteen":selectedExecution(root,16,"2/awg-fast");break;case "selected-strong-nine":selectedExecution(root,9,"2/awg-strong");break;case "selected-strong-sixteen":selectedExecution(root,16,"2/awg-strong");break;case "selected-fast-bounds":selectedFastBounds(root);break;case "selected-execution":selectedExecution(root,0,"3/aes-256-gcm");break;case "selected-extended-nine":selectedExecution(root,9,"2/");break;case "selected-extended-sixteen":selectedExecution(root,16,"2/");break;case "custom-entry":customEntry(root);break;case "extended-nine":case "extended-sixteen":roundtrip(root,phase);mixedExtended(root,phase.equals("extended-nine")?9:16);if(phase.equals("extended-sixteen"))mixedLatePacket(root);break;case "adjacent":case "separated":case "single-interior":case "maximum":case "awg-fast":case "awg-strong":roundtrip(root,phase);break;case "layers":layers(root);break;case "refusals":refusals(root);break;case "rollback":rollback(root);break;case "stale":stale(root);break;case "source-race":sourceRace(root);break;case "compiler":compiler(root);break;case "preview-receipts":previewReceipts(root);break;case "history":history(root);break;default:throw new IllegalArgumentException("unknown complete imported Local phase");}
   System.out.println("Android independent imported Local "+phase+": "+checks+" checks PASS");
  }
 }
@@ -508,7 +514,8 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     controls = (
         ("schema", "AndroidNodeChainCapture", "        return 6;", '        throw new IllegalStateException("old single-import boundary");', "adjacent", "complete independent Local source was refused"),
         ("hostname-candidate", "AndroidNodeChainCapture", "if (schema==2 && i==prefix || schema==6 && AndroidStandardExitStore.importedHostname(source.external()))", "if (schema==2 && i==prefix)", "hostname-four", "mixed hostname candidate omitted original stream"),
-        ("selected-fast-mode", "AndroidNodeChainCapture", '!List.of("wg","awg2-fast").contains(modes.get(0))', '!"wg".equals(modes.get(0))', "selected-fast-nine", "The longer mixed packet and stream route requires Local execution."),
+        ("selected-fast-mode", "AndroidNodeChainCapture", '!List.of("wg","awg2-fast","awg2-strong").contains(modes.get(0))', '!"wg".equals(modes.get(0))', "selected-fast-nine", "The longer mixed packet and stream route requires Local execution."),
+        ("selected-strong-mode", "AndroidNodeChainCapture", '!List.of("wg","awg2-fast","awg2-strong").contains(modes.get(0))', '!List.of("wg","awg2-fast").contains(modes.get(0))', "selected-strong-nine", "The longer mixed packet and stream route requires Local execution."),
         ("first-policy", "AndroidConnectionProfileStore", "                exits.saveIfUnchanged(update.updated,AndroidStandardExitStore.snapshot(update.original));", "                if(appliedImports.size()>1)exits.saveIfUnchanged(update.updated,AndroidStandardExitStore.snapshot(update.original));", "adjacent", "profile Load lost an earlier imported policy"),
         ("rollback", "AndroidConnectionProfileStore", "for(int i=appliedImports.size()-1;i>=0;i--)", "for(int i=appliedImports.size()-1;i>0;i--)", "rollback", "lost exact file rollback"),
         ("complete-preview", "AndroidConnectionProfileStore", "if(schema==6 || schema==7)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);", "if(false)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);", "compiler", "complete Local compiler refusal was ignored before publication"),

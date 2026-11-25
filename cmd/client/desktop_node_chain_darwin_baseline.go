@@ -108,7 +108,7 @@ func (s desktopMacOSNodeChainSelection) validMembers() bool {
 				if s.Family == macosprocess.NodeChainFamily && firstImport < len(rows)-1 && (mode == "awg2-fast" || mode == "awg2-strong") {
 					expectedMode = mode
 				}
-				if s.Family == macosprocess.NodeChainExecutionFamily && i == 0 && firstImport == 1 && mode == "awg2-fast" {
+				if s.Family == macosprocess.NodeChainExecutionFamily && i == 0 && firstImport == 1 && (mode == "awg2-fast" || mode == "awg2-strong") {
 					expectedMode = mode
 				}
 			} else if i == len(rows)-1 {

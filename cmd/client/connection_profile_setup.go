@@ -56,6 +56,7 @@ type capturedResponse struct {
 }
 
 func registerConnectionProfileSetupRoutes(h *http.ServeMux, a *app) {
+	registerConnectionProfileLoadTransactionRoutes(h, a)
 	h.HandleFunc("/api/connection-profile/setup/save", a.saveConnectionProfileSetup)
 	h.HandleFunc("/api/connection-profile/setup/update", a.updateConnectionProfileSetup)
 	h.HandleFunc("/api/connection-profile/setup/load", a.loadConnectionProfileSetup)
@@ -495,7 +496,7 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer release()
-	raw, err := readBoundedBody(r, 8<<10)
+	raw, err := readBoundedBody(r, 16<<10)
 	if err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
@@ -528,7 +529,7 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 	}
 	meta, metaErr := loadConnectionProfileSetupMeta(a)
 	if metaErr == nil {
-		store, err := loadConnectionProfileStore(a)
+		store, err := loadConnectionProfileStoreForRequest(a, r)
 		metaErr = err
 		if err == nil {
 			for _, saved := range store.Profiles {
@@ -543,7 +544,7 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 	}
 	if metaErr == nil && meta.Entries[strings.TrimSpace(ref.ID)].MultihopEntryMode != "" {
 		var store connectionProfileStore
-		store, metaErr = loadConnectionProfileStore(a)
+		store, metaErr = loadConnectionProfileStoreForRequest(a, r)
 		if metaErr == nil {
 			metaErr = validateConnectionProfileSetupEntryMeta(store, strings.TrimSpace(ref.ID), meta.Entries[strings.TrimSpace(ref.ID)].MultihopEntryMode)
 		}
@@ -556,6 +557,7 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 	innerBody, _ := json.Marshal(ref)
 	innerReq, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1/", bytes.NewReader(innerBody))
 	innerReq.Header.Set("content-type", "application/json")
+	innerReq = innerReq.WithContext(r.Context())
 	innerReq = withInternalMutationContext(innerReq)
 	recorder := httptest.NewRecorder()
 	a.loadConnectionProfile(recorder, innerReq)

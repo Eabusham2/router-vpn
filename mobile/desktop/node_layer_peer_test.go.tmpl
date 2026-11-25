@@ -415,6 +415,23 @@ func TestRouterVPNDesktopLayerInitialPacketRetirement(t *testing.T) {
 	})
 }
 
+func (s *desktopNodeLayerServer) rejectOriginalUDP(connection N.PacketConn, destination M.Socksaddr, reason string) error {
+	// The pinned UDP NAT starts its handler before queuing the first packet.
+	// Closing during that gap can recreate the association for the same packet.
+	// Count the rejected datagram only after consuming its original destination.
+	packet := buf.NewPacket()
+	defer packet.Release()
+	actual, err := connection.ReadPacket(packet)
+	if err != nil {
+		return err
+	}
+	if actual != destination {
+		return errors.New("layer peer rejection changed its original UDP destination")
+	}
+	s.rejectedUDP.Add(1)
+	return errors.New(reason)
+}
+
 func (s *desktopNodeLayerServer) NewPacketConnection(_ context.Context, connection N.PacketConn, metadata M.Metadata) error {
 	connection = desktopNodeOwnInitialPacket(connection)
 	if !s.enter(connection) {
@@ -437,8 +454,7 @@ func (s *desktopNodeLayerServer) NewPacketConnection(_ context.Context, connecti
 			defer release()
 		}
 		if !found || operation == nil || operation.Err() != nil {
-			s.rejectedUDP.Add(1)
-			return errors.New("layer peer rejected retired original SOCKS association")
+			return s.rejectOriginalUDP(connection, metadata.Destination, "layer peer rejected retired original SOCKS association")
 		}
 	} else if captured, ok := s.benchmark.Load().route("udp", metadata.Destination.String()); ok {
 		target = captured
@@ -446,8 +462,7 @@ func (s *desktopNodeLayerServer) NewPacketConnection(_ context.Context, connecti
 		var found bool
 		target, found = s.route("udp", metadata.Destination.String())
 		if !found {
-			s.rejectedUDP.Add(1)
-			return errors.New("layer peer rejected an unowned inner tunnel")
+			return s.rejectOriginalUDP(connection, metadata.Destination, "layer peer rejected an unowned inner tunnel")
 		}
 	} else if metadata.Destination.String() == "192.168.50.133:53" {
 		target = s.dnsAddress

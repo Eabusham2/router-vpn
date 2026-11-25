@@ -103,6 +103,10 @@ func connectionProfileStorePath(a *app) string {
 }
 
 func loadConnectionProfileStore(a *app) (connectionProfileStore, error) {
+	return readConnectionProfileStore(a, true)
+}
+
+func readConnectionProfileStore(a *app, migrate bool) (connectionProfileStore, error) {
 	path := connectionProfileStorePath(a)
 	raw, err := readPrivateRegular(path, connectionProfileStoreMaxBytes)
 	if errors.Is(err, os.ErrNotExist) {
@@ -155,12 +159,18 @@ func loadConnectionProfileStore(a *app) (connectionProfileStore, error) {
 			p.Prefs.CustomLayers = layers
 		}
 	}
-	if storedVersion < connectionProfileStoreVersion {
+	if migrate && storedVersion < connectionProfileStoreVersion {
 		if err := persistConnectionProfileStore(a, store); err != nil {
 			return connectionProfileStore{}, fmt.Errorf("migrate connection profile store to schema v%d: %w", connectionProfileStoreVersion, err)
 		}
 	}
 	return store, nil
+}
+
+func loadConnectionProfileStoreForRequest(a *app, r *http.Request) (connectionProfileStore, error) {
+	preview, _ := r.Context().Value(profileLoadPreviewContextKey{}).(bool)
+	_, committing := r.Context().Value(profileLoadWriteContextKey{}).(*profileLoadPublication)
+	return readConnectionProfileStore(a, !preview && !committing)
 }
 
 func persistConnectionProfileStore(a *app, store connectionProfileStore) error {
@@ -496,7 +506,7 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "disconnect or let the active transition finish before loading a connection profile", http.StatusConflict)
 		return
 	}
-	store, err := loadConnectionProfileStore(a)
+	store, err := loadConnectionProfileStoreForRequest(a, r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -580,6 +590,12 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	old := cloneRouterProfileStore(a.profiles)
 	oldState := a.state
+	preview, _ := r.Context().Value(profileLoadPreviewContextKey{}).(bool)
+	if preview {
+		// Preparation validates the same complete restoration as the legacy
+		// loader, while the original selected state stays authoritative.
+		defer func() { a.profiles, a.state = old, oldState }()
+	}
 	for i := range a.profiles.Profiles {
 		if hop, exists := hopUpdates[a.profiles.Profiles[i].ID]; exists {
 			a.profiles.Profiles[i] = hop
@@ -600,10 +616,28 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	if err := a.persistProfilesLocked(); err != nil {
+	var persistErr error
+	if !preview {
+		if publication, ok := r.Context().Value(profileLoadWriteContextKey{}).(*profileLoadPublication); ok {
+			if publication == nil || publication.prepared != a.profileLoad || publication.committed == nil {
+				persistErr = errors.New("profile Load lost its original prepared publication")
+			} else {
+				a.profileLoad = publication.committed
+				persistErr = a.persistProfileLoadLocked(r.Context(), publication.capture)
+				if persistErr != nil {
+					a.profileLoad = publication.prepared
+				} else {
+					publication.published = true
+				}
+			}
+		} else {
+			persistErr = a.persistProfilesLocked()
+		}
+	}
+	if persistErr != nil {
 		a.rollbackProfilesLocked(old)
 		a.state = oldState
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, persistErr.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("content-type", "application/json")

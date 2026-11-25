@@ -1,11 +1,12 @@
-# Only the three non-secret desktop preferences belong here. Controller-owned
-# node profiles, credentials and runtime state retain their separate APIs.
+# The general UI state API reads three nonsecret desktop preferences. The
+# profile transaction privately owns its recovery journal and lock.
 Set-StrictMode -Version 2
 if(-not(Get-Command Get-RouterVPNControllerDataRoot -ErrorAction SilentlyContinue)){
     Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 }
 $script:UIStateNames=@('windows-onboarding-v3.json','windows-selected-mode-v1.txt','windows-custom-presets-v1.json')
 $script:UIStateLimit=4194304
+$script:PreferenceBatchLease=$null
 
 function Assert-RouterVPNUIStateName([string]$Name){
     if($Name-cnotin$script:UIStateNames){throw 'The Windows UI state filename is not supported.'}
@@ -39,15 +40,15 @@ function Assert-RouterVPNUIStateDirectory([string]$Path,[bool]$MissingLeaf=$fals
     return $Full
 }
 
-function Read-RouterVPNUIStateBytes([string]$Path){
+function Read-RouterVPNUIStateBytes([string]$Path,[int]$Limit=$script:UIStateLimit){
     [void](Assert-RouterVPNUIStateDirectory ([IO.Path]::GetDirectoryName($Path)))
     $Before=Get-RouterVPNUIStateEntry $Path $false
-    if($Before.Length-gt$script:UIStateLimit){throw 'The Windows UI state file exceeds its size limit.'}
+    if($Before.Length-gt$Limit){throw 'The Windows UI state file exceeds its size limit.'}
     # No write/delete sharing while consuming an existing preference. Recheck
     # the leaf and ancestry while this exact handle still owns the read.
     $Stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
     try{
-        if($Stream.Length-gt$script:UIStateLimit){throw 'The Windows UI state file exceeds its size limit.'}
+        if($Stream.Length-gt$Limit){throw 'The Windows UI state file exceeds its size limit.'}
         $Buffer=New-Object byte[] ([int]$Stream.Length);$Offset=0
         while($Offset-lt$Buffer.Length){$Count=$Stream.Read($Buffer,$Offset,$Buffer.Length-$Offset);if($Count-le0){throw 'The Windows UI state file changed during read.'};$Offset+=$Count}
         $After=Get-RouterVPNUIStateEntry $Path $false
@@ -57,8 +58,8 @@ function Read-RouterVPNUIStateBytes([string]$Path){
     }finally{$Stream.Dispose()}
 }
 
-function Write-RouterVPNUIStateBytes([string]$Path,[byte[]]$Bytes,[bool]$CreateOnly){
-    if($Bytes.Length-gt$script:UIStateLimit){throw 'The Windows UI state file exceeds its size limit.'}
+function Write-RouterVPNUIStateBytes([string]$Path,[byte[]]$Bytes,[bool]$CreateOnly,[int]$Limit=$script:UIStateLimit){
+    if($Bytes.Length-gt$Limit){throw 'The Windows UI state file exceeds its size limit.'}
     $Directory=Assert-RouterVPNUIStateDirectory ([IO.Path]::GetDirectoryName($Path))
     $Existing=Get-RouterVPNUIStateEntry $Path $false $true
     if($CreateOnly-and$null-ne$Existing){return}
@@ -84,29 +85,49 @@ function Write-RouterVPNUIStateBytes([string]$Path,[byte[]]$Bytes,[bool]$CreateO
     }
 }
 
-function Resolve-RouterVPNUIStateFile([string]$LegacyDirectory,[string]$Name){
-    Assert-RouterVPNUIStateName $Name
-    # UTF-8 helper functions and the composed product are created from strings,
-    # so their PSScriptRoot is empty. This module's own immutable package path
-    # remains available and is the only default for the old client directory.
+function Get-RouterVPNLegacyStateDirectory([string]$LegacyDirectory){
     if([string]::IsNullOrEmpty($LegacyDirectory)){$LegacyDirectory=$PSScriptRoot}
+    return $LegacyDirectory
+}
+function Get-RouterVPNStateDirectory([string]$LegacyDirectory,[bool]$Create=$true){
+    $LegacyDirectory=Get-RouterVPNLegacyStateDirectory $LegacyDirectory
     $Captured=Get-RouterVPNControllerDataRoot
     $Owned=-not[string]::IsNullOrEmpty($Captured)
     $Root=if($Owned){Assert-RouterVPNUIStateDirectory $Captured}else{Assert-RouterVPNUIStateDirectory $LegacyDirectory}
     $Directory=[IO.Path]::Combine($Root,'.routervpn-state')
     [void](Assert-RouterVPNUIStateDirectory $Directory $true)
-    [void][IO.Directory]::CreateDirectory($Directory)
-    [void](Assert-RouterVPNUIStateDirectory $Directory)
+    if($Create){
+        [void][IO.Directory]::CreateDirectory($Directory)
+        [void](Assert-RouterVPNUIStateDirectory $Directory)
+    }
+    return $Directory
+}
+
+function Resolve-RouterVPNUIStateFile([string]$LegacyDirectory,[string]$Name,[bool]$LockHeld=$false){
+    Assert-RouterVPNUIStateName $Name
+    # UTF-8 helper functions and the composed product are created from strings,
+    # so their PSScriptRoot is empty. This module's own immutable package path
+    # remains available and is the only default for the old client directory.
+    $LegacyDirectory=Get-RouterVPNLegacyStateDirectory $LegacyDirectory
+    $Captured=Get-RouterVPNControllerDataRoot
+    $Owned=-not[string]::IsNullOrEmpty($Captured)
+    $Directory=Get-RouterVPNStateDirectory $LegacyDirectory
     $Path=[IO.Path]::Combine($Directory,$Name)
     $Existing=Get-RouterVPNUIStateEntry $Path $false $true
-    if($Owned-and$null-eq$Existing){
+    if($Owned-and$null-eq$Existing-and ($Name -ceq 'windows-onboarding-v3.json' -or -not(Test-RouterVPNIntentAt $Directory))){
         $Legacy=Assert-RouterVPNUIStateDirectory $LegacyDirectory
         $LegacyState=[IO.Path]::Combine($Legacy,'.routervpn-state')
         [void](Assert-RouterVPNUIStateDirectory $LegacyState $true)
         $Old=Get-RouterVPNUIStateEntry ([IO.Path]::Combine($LegacyState,$Name)) $false $true
         if($null-ne$Old){
-            $Bytes=Read-RouterVPNUIStateBytes $Old.FullName
-            Write-RouterVPNUIStateBytes $Path $Bytes $true
+            $migrationLease=$null
+            try{
+                if($Name -cne 'windows-onboarding-v3.json' -and -not $LockHeld){$migrationLease=Open-RouterVPNProfileState $LegacyDirectory}
+                if($Name -ceq 'windows-onboarding-v3.json' -or -not(Test-RouterVPNIntentAt $Directory)){
+                    $Bytes=Read-RouterVPNUIStateBytes $Old.FullName
+                    Write-RouterVPNUIStateBytes $Path $Bytes $true
+                }
+            }finally{if($null-ne$migrationLease){$migrationLease.Stream.Dispose()}}
         }
     }
     return $Path
@@ -114,7 +135,9 @@ function Resolve-RouterVPNUIStateFile([string]$LegacyDirectory,[string]$Name){
 
 function Read-RouterVPNUIState {
     param([Parameter(Mandatory=$true)][AllowEmptyString()][string]$LegacyDirectory,[Parameter(Mandatory=$true)][string]$Name)
-    $Path=Resolve-RouterVPNUIStateFile $LegacyDirectory $Name
+    $batch=$script:PreferenceBatchLease
+    $held=$null-ne$batch -and $batch.Directory -ceq (Get-RouterVPNStateDirectory $LegacyDirectory)
+    $Path=Resolve-RouterVPNUIStateFile $LegacyDirectory $Name $held
     if($null-eq(Get-RouterVPNUIStateEntry $Path $false $true)){return $null}
     $Bytes=Read-RouterVPNUIStateBytes $Path
     # Existing Windows PowerShell files may contain a UTF-8 BOM. Preserve those
@@ -125,8 +148,124 @@ function Read-RouterVPNUIState {
 
 function Write-RouterVPNUIState {
     param([Parameter(Mandatory=$true)][AllowEmptyString()][string]$LegacyDirectory,[Parameter(Mandatory=$true)][string]$Name,[AllowEmptyString()][string]$Text)
-    $Path=Resolve-RouterVPNUIStateFile $LegacyDirectory $Name
-    Write-RouterVPNUIStateBytes $Path ([Text.UTF8Encoding]::new($false,$true).GetBytes($Text)) $false
+    Assert-RouterVPNUIStateName $Name
+    $lease=$null;$release=$false
+    try{
+        if($Name -cne 'windows-onboarding-v3.json'){
+            $lease=$script:PreferenceBatchLease
+            if($null-eq$lease){$lease=Open-RouterVPNProfileState $LegacyDirectory;$release=$true}
+            elseif($lease.Directory -cne (Get-RouterVPNStateDirectory $LegacyDirectory)){throw 'The preference batch belongs to a different state directory.'}
+            if(Test-RouterVPNIntentAt $lease.Directory){throw 'A connection profile load is pending. Reopen Settings to recover it.'}
+        }
+        $Path=Resolve-RouterVPNUIStateFile $LegacyDirectory $Name ($null-ne$lease)
+        Write-RouterVPNUIStateBytes $Path ([Text.UTF8Encoding]::new($false,$true).GetBytes($Text)) $false
+    }finally{if($release){$lease.Stream.Dispose()}}
+}
+function Invoke-RouterVPNPreferenceBatch([string]$LegacyDirectory,[scriptblock]$Action){
+    if($null-ne$script:PreferenceBatchLease){throw 'Another local preference edit is already in progress.'}
+    $lease=Open-RouterVPNProfileState $LegacyDirectory
+    try{
+        if(Test-RouterVPNIntentAt $lease.Directory){throw 'Recover the interrupted connection profile load before editing presets.'}
+        $script:PreferenceBatchLease=$lease
+        & $Action
+    }finally{$script:PreferenceBatchLease=$null;$lease.Stream.Dispose()}
 }
 
-Export-ModuleMember -Function Read-RouterVPNUIState,Write-RouterVPNUIState
+# A stable lock file serializes preference writers, recovery and the entire
+# prepare-to-finish sequence across processes. Never unlink a live lock inode.
+function Open-RouterVPNProfileState([string]$LegacyDirectory){
+    $directory=Get-RouterVPNStateDirectory $LegacyDirectory
+    $path=Join-Path $directory 'windows-profile-load-v1.lock'
+    [void](Get-RouterVPNUIStateEntry $path $false $true)
+    $stream=[IO.File]::Open($path,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+    try{
+        [void](Get-RouterVPNUIStateEntry $path $false)
+        return [pscustomobject]@{Stream=$stream;Directory=$directory;Legacy=$LegacyDirectory;Observed=$false;Digest=$null}
+    }catch{$stream.Dispose();throw}
+}
+function Test-RouterVPNIntentAt([string]$Directory){
+    return $null-ne(Get-RouterVPNUIStateEntry (Join-Path $Directory 'windows-profile-load-v1.json') $false $true)
+}
+function Test-RouterVPNProfileLoadPending([string]$LegacyDirectory){
+    return Test-RouterVPNIntentAt (Get-RouterVPNStateDirectory $LegacyDirectory $false)
+}
+function Assert-RouterVPNProfileAdmission([string]$LegacyDirectory,[string]$Path,[string]$Method){
+    if($Method -ieq 'POST' -and $Path -cin @('/api/auto','/api/connect-logical','/api/external-profile/connect','/api/multihop/connect','/api/strategy/smart-auto','/api/strategy/auto','/api/strategy/custom') -and (Test-RouterVPNProfileLoadPending $LegacyDirectory)){
+        throw 'Recover the pending connection profile in Settings before connecting.'
+    }
+}
+function Get-RouterVPNIntentDigest([byte[]]$Bytes){
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try{return [Convert]::ToBase64String($sha.ComputeHash($Bytes))}finally{$sha.Dispose()}
+}
+function Get-RouterVPNProfileIntent($Lease){
+    if(-not $Lease.Stream.CanRead){throw 'The local profile load lock was released.'}
+    if(-not(Test-RouterVPNIntentAt $Lease.Directory)){
+        if($Lease.Observed -and $null-ne$Lease.Digest){throw 'The local profile load journal disappeared during its operation.'}
+        $Lease.Observed=$true;$Lease.Digest=$null
+        return $null
+    }
+    $path=Join-Path $Lease.Directory 'windows-profile-load-v1.json'
+    $bytes=Read-RouterVPNUIStateBytes $path 25165824
+    $digest=Get-RouterVPNIntentDigest $bytes
+    if($Lease.Observed -and $Lease.Digest -cne $digest){throw 'The local profile load journal changed during its operation.'}
+    $Lease.Observed=$true;$Lease.Digest=$digest
+    $intent=ConvertFrom-Json -InputObject ([Text.UTF8Encoding]::new($false,$true).GetString($bytes)) -ErrorAction Stop
+    if($intent.schema -ne 1 -or $intent.operation_id -cnotmatch '\A[0-9a-f]{32}\z' -or $intent.phase -cnotin @('preparing','staging','committing','complete','rolledback')){
+        throw 'The interrupted profile load journal could not be verified.'
+    }
+    return $intent
+}
+function Set-RouterVPNProfileIntent($Lease,$Intent,[switch]$Remove){
+    $existing=Get-RouterVPNProfileIntent $Lease
+    if(($null-ne$existing -and $existing.operation_id -cne $Intent.operation_id) -or ($null-eq$existing -and ($Remove -or $Intent.phase -cne 'preparing'))){
+        throw 'Another local profile load owns this journal.'
+    }
+    $path=Join-Path $Lease.Directory 'windows-profile-load-v1.json'
+    if($Remove){
+        [IO.File]::Delete($path)
+        if(Test-RouterVPNIntentAt $Lease.Directory){throw 'The completed profile journal is still present.'}
+        $Lease.Digest=$null
+        return
+    }
+    $json=ConvertTo-Json -InputObject $Intent -Depth 10 -Compress
+    $bytes=[Text.UTF8Encoding]::new($false,$true).GetBytes($json)
+    Write-RouterVPNUIStateBytes $path $bytes ($null-eq$existing) 25165824
+    $actual=Read-RouterVPNUIStateBytes $path 25165824
+    $digest=Get-RouterVPNIntentDigest $bytes
+    if((Get-RouterVPNIntentDigest $actual) -cne $digest){throw 'The profile load journal was not persisted.'}
+    $Lease.Digest=$digest
+}
+
+function Get-RouterVPNPreferenceImage($Lease){
+    if(-not $Lease.Stream.CanRead){throw 'The local preference lock was released.'}
+    $image=[ordered]@{}
+    foreach($name in @('windows-custom-presets-v1.json','windows-selected-mode-v1.txt')){
+        $path=Resolve-RouterVPNUIStateFile $Lease.Legacy $name $true
+        $image[$name]=if($null-ne(Get-RouterVPNUIStateEntry $path $false $true)){[Convert]::ToBase64String((Read-RouterVPNUIStateBytes $path))}else{$null}
+    }
+    return [pscustomobject]$image
+}
+function Set-RouterVPNPreferenceImage($Lease,$From,$To,[switch]$VerifyOnly){
+    $names=@('windows-custom-presets-v1.json','windows-selected-mode-v1.txt')
+    foreach($image in @($From,$To)){
+        if($null-eq$image -or @($image.PSObject.Properties).Count -ne 2){throw 'The local profile preference image is incomplete.'}
+        foreach($name in $names){
+            $field=$image.PSObject.Properties[$name]
+            if($null-eq$field -or ($null-ne$field.Value -and $field.Value -isnot [string])){throw 'The local profile preference image is invalid.'}
+            if($null-ne$field.Value -and [Convert]::FromBase64String($field.Value).Length -gt $script:UIStateLimit){throw 'A captured preference exceeds its size limit.'}
+        }
+    }
+    $current=Get-RouterVPNPreferenceImage $Lease
+    foreach($name in $names){
+        if(-not [object]::Equals($current.$name,$To.$name) -and ($VerifyOnly -or -not [object]::Equals($current.$name,$From.$name))){throw 'Another preference writer changed the captured profile state.'}
+    }
+    foreach($name in $names){
+        if([object]::Equals($current.$name,$To.$name)){continue}
+        $path=Join-Path $Lease.Directory $name
+        if($null-eq$To.$name){[IO.File]::Delete($path)}
+        else{Write-RouterVPNUIStateBytes $path ([Convert]::FromBase64String($To.$name)) $false}
+    }
+    if(-not $VerifyOnly){Set-RouterVPNPreferenceImage $Lease $From $To -VerifyOnly}
+}
+Export-ModuleMember -Function Read-RouterVPNUIState,Write-RouterVPNUIState,Invoke-RouterVPNPreferenceBatch,Assert-RouterVPNProfileAdmission,Open-RouterVPNProfileState,Test-RouterVPNProfileLoadPending,Get-RouterVPNProfileIntent,Set-RouterVPNProfileIntent,Get-RouterVPNPreferenceImage,Set-RouterVPNPreferenceImage

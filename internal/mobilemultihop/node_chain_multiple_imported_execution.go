@@ -19,22 +19,44 @@ type nodeChainMultipleImportedExecutionBinding struct {
 	sourceSeal, launch string
 }
 
-// A private stream is eligible only in its original four-position capture.
-func (c *NodeChain) selectedPrivateStream(position int) bool {
-	if c == nil || position != 2 || len(c.nodes) != 4 || len(c.proofs) != 4 || c.importedNodes == nil || c.importedNodes.customEntry || c.nodes[0] == nil ||
-		c.nodes[0].mode != "wg" || c.nodes[1] != nil || c.nodes[2] == nil || c.nodes[2].mode != "shadowsocks" || c.nodes[3] == nil || c.nodes[3].mode != "shadowsocks" {
-		return false
+// The first remote physical member must be an independently keyed literal
+// stream. Each later interior has its original role, with exactly one paired
+// private stream and no interior packet, hostname or Start Layer.
+func (c *NodeChain) selectedPrivateStreamPosition() int {
+	if c == nil || c.importedNodes == nil || c.importedNodes.customEntry || len(c.nodes) < 4 || len(c.nodes) > NodeChainExtendedLocalMaximumNodes || len(c.proofs) != len(c.nodes) || c.nodes[0] == nil || c.nodes[0].mode != "wg" {
+		return 0
 	}
-	middle := c.importedSSMemberAt(1)
-	if middle == nil || middle.hostname != nil {
-		return false
+	last, paired := len(c.nodes)-1, 0
+	if c.nodes[last] == nil || c.nodes[last].mode != "shadowsocks" || c.proofs[0].StartLayer != "off" || c.proofs[last].StartLayer != "off" {
+		return 0
 	}
-	for _, proof := range c.proofs {
-		if proof.StartLayer != "off" {
-			return false
+	for i := 1; i < last; i++ {
+		if c.proofs[i].StartLayer != "off" {
+			return 0
+		}
+		if c.nodes[i] != nil {
+			if i == 1 || paired != 0 || c.nodes[i].mode != "shadowsocks" || c.importedSSMemberAt(i) != nil {
+				return 0
+			}
+			paired = i
+		} else if m := c.importedSSMemberAt(i); m == nil || m.hostname != nil {
+			return 0
 		}
 	}
-	return true
+	return paired
+}
+
+func (c *NodeChain) selectedPrivateStream(position int) bool {
+	return position >= 2 && c.selectedPrivateStreamPosition() == position
+}
+
+// Only sources covered by the original selected transport family can own a
+// Server preparation. A long Local packet graph alone supplies no such owner.
+func (c *NodeChain) selectedMultipleTransportSupported() bool {
+	if c.hasPairedStreamInteriorValidated() {
+		return c.selectedPrivateStreamPosition() > 0
+	}
+	return c.ExtendedMixedLocalPacketCount() == 0 || c.extendedAWGSelectedSource()
 }
 
 // Compare the operator's independent private-stream companion against every
@@ -57,9 +79,9 @@ func privateStreamCompanionUnique(digest string, nodes []*NodeProfile, identitie
 }
 
 func NewNodeChainMultipleImportedExecutionPreparation(original *NodeChain, execution string) (*NodeChainExecutionPreparation, error) {
-	if original == nil || original.validateCapture() != nil || original.importedNodes == nil || original.importedNodes.customEntry || original.importedNodes.hasHostname() || (original.hasPairedStreamInteriorValidated() && !original.selectedPrivateStream(2)) ||
+	if original == nil || original.validateCapture() != nil || original.importedNodes == nil || original.importedNodes.customEntry || original.importedNodes.hasHostname() || !original.selectedMultipleTransportSupported() ||
 		original.importedMiddle != nil || original.openVPNMiddle != nil || original.socksSource != nil || original.connectSource != nil ||
-		execution != "server" && execution != "auto" || len(original.nodes) < 3 || len(original.nodes) > NodeChainMaximumNodes && (original.ExtendedLocalNodeCount() != len(original.nodes) || original.ExtendedMixedLocalPacketCount() != 0 && !original.extendedFastSelectedSource()) ||
+		execution != "server" && execution != "auto" || len(original.nodes) < 3 || len(original.nodes) > NodeChainMaximumNodes && original.ExtendedLocalNodeCount() != len(original.nodes) ||
 		original.nodes[len(original.nodes)-1] == nil || original.nodes[len(original.nodes)-1].mode != "shadowsocks" ||
 		original.projection.Kind != "" || original.projection.TargetOS != "" && original.projection.TargetOS != "ios" && original.projection.TargetOS != "android" {
 		return nil, nodeChainExecutionError
