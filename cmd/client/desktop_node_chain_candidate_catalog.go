@@ -59,6 +59,7 @@ type desktopCandidateSourceFile struct {
 }
 
 type desktopNodeChainCandidateCatalog struct {
+	serverResponse                    bool
 	parsedInputs                      []*mobilemultihop.NodeChainCandidateInput
 	app                               *app
 	launch                            *desktopNodeLaunch
@@ -163,7 +164,7 @@ func captureDesktopCandidateSourceProfiles(ctx context.Context, a *app, launch *
 		}
 		seen[profile.ID] = true
 	}
-	result := &desktopNodeChainCandidateCatalog{app: a, launch: launch, revision: revision, profiles: map[string]string{}}
+	result := &desktopNodeChainCandidateCatalog{serverResponse: candidateServerRequested(ctx), app: a, launch: launch, revision: revision, profiles: map[string]string{}}
 	capture := &desktopNodeChainCapture{root: launch.root}
 	// Pin each original asset directory before and after compilation, including
 	// inodes and modification times. Replacing then restoring a source cannot
@@ -264,7 +265,7 @@ func (result *desktopNodeChainCandidateCatalog) sealSourcePlan(ctx context.Conte
 	} else if scope == orderedCandidateSelectedDraftScope {
 		result.selectedPlan, err = captureDesktopSelectedCandidateDescriptorForPurpose(launch, position, result.inventory, launch.chain.preparation)
 	} else if launch.chain.execution != nil {
-		result.selectedPlan, err = captureDesktopSelectedCandidateDescriptor(launch, position, result.inventory)
+		result.selectedPlan, err = captureDesktopSelectedCandidateForIntent(launch, position, result.inventory, nil, result.serverResponse)
 	} else if launch.chain.policy == nil {
 		result.typedPlan, err = captureDesktopTypedCandidateDescriptor(launch, position, result.inventory)
 	} else {
@@ -281,7 +282,7 @@ func captureDesktopCandidateViewSource(ctx context.Context, a *app, launch *desk
 		return nil, errors.New("candidate view lost its original prefix")
 	}
 	members := launch.chain.selection.Nodes[:position+1]
-	if execution := desktopNodeChainLaunchExecution(launch); execution != nil && execution.preparation.SupportsCompareLocalResponseCandidate(position) {
+	if execution := desktopNodeChainLaunchExecution(launch); execution != nil && (execution.preparation.SupportsCompareLocalResponseCandidate(position) || candidateServerRequested(ctx) && execution.preparation.SupportsServerResponseCandidate(position)) {
 		members = launch.chain.selection.Nodes
 	}
 	for _, member := range members {
@@ -297,7 +298,7 @@ func captureDesktopCandidateViewSource(ctx context.Context, a *app, launch *desk
 	if json.Unmarshal([]byte(part.inventory), &inventory) != nil || len(inventory.Inputs) != 1 || len(part.parsedInputs) != 1 || part.parsedInputs[0] == nil {
 		return nil, errors.New("candidate has no original supported TCP source")
 	}
-	metric := desktopCandidatePrefixMetric(launch, position)
+	metric := desktopCandidateMetricForIntent(launch, position, part.serverResponse)
 	if metric == "" || metric == hopmeasure.CandidatePrivateResponseMeasurement && !mobilemultihop.NodeChainCandidateInputSupportedForMeasurement(inventory.Inputs[0], metric) {
 		return nil, errors.New("candidate has no attributable response through the selected prefix")
 	}
@@ -309,11 +310,11 @@ func combineDesktopCandidateViewSources(ctx context.Context, parts []*desktopNod
 		return nil, errors.New("candidate view has no complete source inventory")
 	}
 	first := parts[0]
-	result := &desktopNodeChainCandidateCatalog{app: first.app, launch: first.launch, revision: first.revision, profiles: map[string]string{}}
+	result := &desktopNodeChainCandidateCatalog{serverResponse: first.serverResponse, app: first.app, launch: first.launch, revision: first.revision, profiles: map[string]string{}}
 	inventory := mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: first.revision}
 	total := 0
 	for _, part := range parts {
-		if ctx.Err() != nil || part == nil || part.app != first.app || part.launch != first.launch || part.revision != first.revision {
+		if ctx.Err() != nil || part == nil || part.app != first.app || part.launch != first.launch || part.serverResponse != first.serverResponse || part.revision != first.revision {
 			return nil, errors.New("candidate view mixed source generations")
 		}
 		captured := sha256.Sum256([]byte(part.inventory))

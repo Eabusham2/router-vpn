@@ -712,6 +712,29 @@ SWIFT_ORDERED_EDITOR = r'''
 '''
 
 SWIFT_ORDERED = r'''
+for count in [3, 9] {
+    let ids = (0..<count).map { "schema8-\($0)" }
+    let tokens = Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($0.element, String(format:"%064x",$0.offset+1)) })
+    var profiles = catalogRows(ids, tokens: tokens)
+    for i in 1..<count {
+        profiles[i]["node_kind"] = "external"
+        profiles[i]["external"] = ["protocol":"shadowsocks","ordered_middle_supported":true,"ordered_local_imported_nodes_supported":true,"ordered_external_final":true] as [String:Any]
+    }
+    let initial = RouterVPNConnectionProfileSelection(selectedNodeID: ids[0], profileTokens:tokens)
+    var editor = try RouterVPNOrderedNodeDraft(selection:initial,generation:UUID(),catalog:profiles)
+    try editor.chooseExternalExit(ids.last!)
+    for id in ids.dropFirst().dropLast() { try editor.add(id) }
+    let saved8 = try editor.selection()
+    let current: [String:Any] = ["selected_id":ids[0],"profiles":profiles]
+    let body8 = try RouterVPNOrderedNodes.connectBody(saved8,current:current)
+    check((body8["external_final"] as? Bool) == true && saved8.orderedNodes.first?["id"] == ids[0] && saved8.orderedNodes.last?["id"] == ids.last! && saved8.profileTokens == tokens, "external final lost its selected WireGuard entry or source tokens")
+    let loaded = try RouterVPNOrderedNodeDraft(selection:saved8,generation:UUID(),catalog:profiles)
+    check(try loaded.selection() == saved8, "saved external final lost its exit in the editor")
+    var other = saved8; other.execution = "server"
+    rejects({ _ = try RouterVPNOrderedNodes.connectBody(other,current:current) }, "external final accepted Server")
+    profiles[count-1]["profile_token"] = String(repeating:"f", count:64)
+    rejects({ _ = try RouterVPNOrderedNodes.connectBody(saved8,current:["selected_id":ids[0],"profiles":profiles]) }, "external final accepted a relinked exit")
+}
 @MainActor func chooseOrdered(_ count: Int = 4, finalMode: String = "shadowsocks", prefixMode: String = "wg") -> [[String: String]] {
     choose(0, 0)
     let ids = (0..<count).map { "ordered-\($0)" }
@@ -1115,15 +1138,15 @@ for count in [4, 9, 16, 96] {
         var penultimate = original
         penultimate.orderedNodes.swapAt(position,count-2)
         let measured = try RouterVPNOrderedNodeDraft(selection: penultimate,generation:UUID(),catalog:profiles)
-        let insert = execution == "auto" && count < 96
-        check(measured.canMeasure(after:count-2) == (execution == "auto") && measured.canMeasure(after:1) == insert,
+        let insert = count < 96
+        check(measured.canMeasure(after:count-2) && measured.canMeasure(after:1) == insert,
               "the editor did not bind its private response to the Compare penultimate source")
-        if position != count-2 { check(editor.canMeasure(after:position) == insert && editor.canMeasure(after:count-2) == (execution == "auto"),
+        if position != count-2 { check(editor.canMeasure(after:position) == insert && editor.canMeasure(after:count-2),
                                        "the editor offered private response for a different saved position") }
         var publicProfiles = profiles
         publicProfiles[position]["node_kind"]="external";publicProfiles[position]["external"]=profiles[1]["external"]
         let allImported = try RouterVPNOrderedNodeDraft(selection: original, generation: UUID(), catalog: publicProfiles)
-        check(allImported.canMeasure(after:count-2) == (execution == "auto"),
+        check(allImported.canMeasure(after:count-2),
               "the all-imported selected route lost its penultimate Compare prefix")
         check(allImported.canMeasure(after:1) == insert && allImported.canMeasure(after:count-3) == insert,
               "Compare insertion lost an eligible imported prefix or exceeded capacity")
@@ -1159,7 +1182,7 @@ for count in [4, 9, 16, 96] {
         }
         for fault in ["entry", "first-remote", "second-private", "layer", "hostname", "relink"] {
             var bad = original, sources = profiles
-            if fault == "entry" { bad.orderedNodes[0]["mode"] = "awg2-fast" }
+            if fault == "entry" { bad.orderedNodes[0]["mode"] = "awg2-pq" }
             if fault == "first-remote" { bad.orderedNodes.swapAt(1, position) }
             if fault == "second-private" {
                 let i = count == 4 ? 1 : position + 1
@@ -1336,7 +1359,7 @@ for count in [9,16] { for requested in ["server","auto"] {
         let draft: RouterVPNOrderedNodeDraft
         do { draft=try RouterVPNOrderedNodeDraft(selection:packet,generation:UUID(),catalog:catalog) }
         catch { check(false,"longer selected AWG2 draft lost its complete original"); continue }
-        check(try draft.selection()==packet && draft.allowedModes(at:0)==["wg","awg2-fast","awg2-strong"] && draft.canMeasure(after:0) && !draft.canMeasure(after:1) && !draft.canMeasure(after:count-2),"longer selected AWG2 retains the exact original entry and packet-only chooser")
+        check(try draft.selection()==packet && draft.allowedModes(at:0)==["wg","awg2-fast","awg2-strong"] && draft.canMeasure(after:0) && draft.canMeasure(after:1) && draft.canMeasure(after:count-2),"longer selected AWG2 permits only its original packet and supported selected response positions")
         check(try RouterVPNOrderedNodes.connectBody(packet,current:["selected_id":packet.selectedNodeID,"profiles":catalog])["nodes"] as? [[String:String]]==packet.orderedNodes,"longer selected AWG2 connect preserves original source order")
         var unknown=catalog;var ext=unknown[1]["external"] as! [String:Any];ext["ordered_multiple_imported_execution_supported"]=false;unknown[1]["external"]=ext
         rejects({ _=try RouterVPNOrderedNodeDraft(selection:packet,generation:UUID(),catalog:unknown) },"longer selected AWG2 borrowed an unqualified imported original")
@@ -1368,7 +1391,7 @@ for count in [9,16] { for requested in ["server","auto"] {
     let measurable=try RouterVPNOrderedNodeDraft(selection:localStream,generation:UUID(),catalog:catalog)
     for last in Set([7,count-2]) {
         check(measurable.canMeasure(after:last),"Longer original Local stream prefix lost response eligibility")
-        check(complete.canMeasure(after:last) == (requested == "auto"),"Longer selected source lost its Compare penultimate position")
+        check(complete.canMeasure(after:last),"Longer selected source lost its Compare penultimate position")
     }
     var layeredSuffix=catalog;layeredSuffix[count-2]["start_layer"]=NSNull()
     rejects({ _ = try RouterVPNOrderedNodeDraft(selection:localStream,generation:UUID(),catalog:layeredSuffix) },"Malformed later import entered a complete Local source")

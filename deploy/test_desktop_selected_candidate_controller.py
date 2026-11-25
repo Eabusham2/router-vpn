@@ -16,6 +16,8 @@ RESPONSE_FINAL_LAYOUTS = ('private-penultimate/4', 'private-penultimate/9', 'pri
 RESPONSE_DEEP_LAYOUTS = ('private-penultimate/16', 'all-imported/16', 'earlier-private/16')
 RESPONSE_INTERMEDIATE_LAYOUTS = ('4/1', '9/6', '16/8', '16/13')
 CASES = {
+    'TestDesktopSelectedServerUnregisteredCannotBeSaved': (),
+    'TestDesktopSelectedServerResponseConnected': ('server/server', 'auto/server', 'auto/local'),
     'TestDesktopSelectedThroughputPublicController': ('server-server','auto-local','auto-server'),
     'TestDesktopSelectedThroughputCancellationJoinsOriginal': (),
     'TestDesktopSelectedThroughputTerminalOwnership': ('provisional','copied-result','changed-result','returned-request'),
@@ -42,6 +44,7 @@ CASES = {
     'TestDesktopSelectedIntermediateResponseCancelCannotBorrowAnotherEligibleStop': (),
 }
 DRAFT_CASES = {
+    'TestDesktopSelectedServerResponseDraft': ('server/server', 'auto/server', 'auto/local'),
     'TestDesktopSelectedDraftCapturesFullUnsavedPacketSource': (
         'paired/server', 'paired/auto', 'sparse/server', 'sparse/auto'),
     'TestDesktopSelectedDraftRejectsMismatchedSourceAndPurpose': (
@@ -89,6 +92,7 @@ REQUIRED_INPUTS = (
     'cmd/client/desktop_node_chain_measurement.go', 'cmd/client/desktop_node_chain_typed_candidate_catalog.go',
     'cmd/client/desktop_selected_candidate_catalog.go', 'cmd/client/desktop_selected_candidate_observation.go',
     'cmd/client/desktop_selected_candidates.go', 'cmd/client/desktop_selected_candidates_test.go',
+    'cmd/client/ordered_candidate_server_response_test.go',
     'cmd/client/desktop_selected_typed_entry_test.go',
     'cmd/client/desktop_native_workspace.go', 'cmd/client/desktop_selected_workspace_test.go',
     'cmd/client/desktop_selected_latency_exchange.go', 'cmd/client/ordered_candidates.go',

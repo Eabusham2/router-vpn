@@ -150,9 +150,23 @@ static gboolean linux_ordered_extended_mixed_shape_v1(JsonArray *nodes) {
     return nodes && json_array_get_length(nodes) > 8 && linux_ordered_imported_packet_prefixes_v1(nodes) > 0;
 }
 
+static gboolean linux_ordered_external_final_shape_v1(JsonArray *nodes, const char *control) {
+    guint count = nodes ? json_array_get_length(nodes) : 0;
+    if (count < 3 || count > ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH) return FALSE;
+    for (guint i = 0; i < count; i++) {
+        JsonNode *raw = json_array_get_element(nodes, i);
+        if (!raw || !JSON_NODE_HOLDS_OBJECT(raw)) return FALSE;
+        JsonObject *row = json_node_get_object(raw);
+        if ((!i && g_strcmp0(linux_ordered_string_v1(row, "id"), control)) ||
+            strcmp(linux_ordered_string_v1(row, "mode"), i ? "shadowsocks" : "wg")) return FALSE;
+    }
+    return TRUE;
+}
+
 static gboolean linux_ordered_rows_v1(JsonArray *nodes, const char *control) {
     guint count = nodes != NULL ? json_array_get_length(nodes) : 0;
     if (count < 2 || (count > 8 && !linux_ordered_extended_shape_v1(nodes) && !linux_ordered_extended_paired_shape_v1(nodes) && !linux_ordered_extended_mixed_shape_v1(nodes)) || !external_source_id_v24(control)) return FALSE;
+    gboolean external_final = linux_ordered_external_final_shape_v1(nodes, control);
     gboolean imported_middle = FALSE;
     for (guint i = 0; i < count; i++) {
         JsonNode *value = json_array_get_element(nodes, i);
@@ -160,7 +174,7 @@ static gboolean linux_ordered_rows_v1(JsonArray *nodes, const char *control) {
         JsonObject *row = json_node_get_object(value);
         const char *id = linux_ordered_string_v1(row, "id"), *mode = linux_ordered_string_v1(row, "mode");
         if (json_object_get_size(row) != 2 || !external_source_id_v24(id) ||
-            (i + 1 == count ? !linux_ordered_final_v1(mode) || strcmp(id, control) != 0 : !linux_ordered_prefix_v1(mode) && !((linux_ordered_imported_position_v1(mode, i, count) || linux_ordered_local_ss_position_v1(mode, i, count) || (i == 0 && linux_ordered_custom_entry_shape_v1(nodes))) && (strcmp(mode, "shadowsocks") == 0 || strcmp(mode, "socks5") == 0 || strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0 || strcmp(mode, "openvpn") == 0)))) return FALSE;
+            (i + 1 == count ? !linux_ordered_final_v1(mode) || (!external_final && strcmp(id, control) != 0) : !linux_ordered_prefix_v1(mode) && !((linux_ordered_imported_position_v1(mode, i, count) || linux_ordered_local_ss_position_v1(mode, i, count) || (i == 0 && linux_ordered_custom_entry_shape_v1(nodes))) && (strcmp(mode, "shadowsocks") == 0 || strcmp(mode, "socks5") == 0 || strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0 || strcmp(mode, "openvpn") == 0)))) return FALSE;
         if (i + 1 < count && (strcmp(mode, "shadowsocks") == 0 || strcmp(mode, "socks5") == 0 || strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0 || strcmp(mode, "openvpn") == 0)) imported_middle = TRUE;
         for (guint j = 0; j < i; j++)
             if (strcmp(id, linux_ordered_string_v1(json_array_get_object_element(nodes, j), "id")) == 0) return FALSE;
@@ -200,6 +214,7 @@ static gboolean linux_ordered_multiple_imported_shape_v1(JsonArray *nodes) {
 
 static gboolean linux_ordered_execution_v1(LinuxOrderedSelectionV1 *selection, const char *execution) {
     if (selection == NULL || (g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0 && g_strcmp0(execution, "auto") != 0)) return FALSE;
+    if (linux_ordered_external_final_shape_v1(selection->nodes, selection->control) && strcmp(execution, "local")) return FALSE;
     if (json_array_get_length(selection->nodes) > 8 && !linux_ordered_extended_selected_shape_v1(selection->nodes) &&
         ((!linux_ordered_extended_paired_shape_v1(selection->nodes) && !linux_ordered_extended_mixed_shape_v1(selection->nodes)) || strcmp(execution, "local") != 0)) return FALSE;
     if (strcmp(execution, "local") != 0 && !linux_ordered_multiple_imported_shape_v1(selection->nodes)) for (guint i = 0; i + 1 < json_array_get_length(selection->nodes); i++) {
@@ -280,6 +295,11 @@ static gboolean linux_ordered_literal_import_off_v1(JsonObject *profile) {
 }
 
 
+static gboolean linux_ordered_external_final_profile_v1(JsonObject *profile) {
+    return linux_ordered_literal_import_off_v1(profile) &&
+        linux_ordered_flag_v1(linux_ordered_object_v1(profile, "external"), "ordered_external_final");
+}
+
 static gboolean linux_ordered_hostname_import_off_v1(JsonObject *profile) {
     JsonObject *external = linux_ordered_object_v1(profile, "external");
     if (!external || !linux_ordered_flag_v1(external,"ordered_hostname_execution_middle_supported")) return FALSE;
@@ -334,7 +354,7 @@ static gboolean linux_ordered_local_imported_path_v1(const LinuxOrderedSelection
             if (position + 1 < count && !linux_ordered_prefix_v1(mode)) {
                 if (!packet_prefixes || position < packet_prefixes || strcmp(mode,"shadowsocks")) return FALSE;
                 if (selected && (position < 2 || packet_prefixes != 1 ||
-                    strcmp(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, 0), "mode"), "wg"))) return FALSE;
+                    !linux_ordered_prefix_v1(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, 0), "mode")))) return FALSE;
                 paired_stream = TRUE;
             }
         }
@@ -392,6 +412,19 @@ static gboolean linux_ordered_openvpn_execution_layers_v1(const LinuxOrderedSele
 
 static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selection, JsonObject *catalog) {
     if (selection == NULL || strcmp(selection->control, linux_ordered_string_v1(catalog, "selected_id")) != 0) return FALSE;
+    if (linux_ordered_external_final_shape_v1(selection->nodes, selection->control)) {
+        if (strcmp(selection->execution, "local")) return FALSE;
+        guint count = json_array_get_length(selection->nodes);
+        for (guint i = 0; i < count; i++) {
+            JsonObject *row = json_array_get_object_element(selection->nodes, i);
+            const char *id = linux_ordered_string_v1(row, "id");
+            JsonObject *profile = external_source_profile_v24(catalog, id);
+            gboolean eligible = !i ? linux_ordered_paired_off_v1(profile) : i + 1 == count ?
+                linux_ordered_external_final_profile_v1(profile) : linux_ordered_literal_import_off_v1(profile);
+            if (!eligible || strcmp(linux_ordered_string_v1(profile, "profile_token"), linux_ordered_string_v1(selection->tokens, id))) return FALSE;
+        }
+        return TRUE;
+    }
     gboolean local_imported = linux_ordered_local_imported_path_v1(selection, catalog);
     gboolean paired_extended = linux_ordered_extended_paired_path_v1(selection, catalog);
     gboolean multiple_imported = strcmp(selection->execution, "local") != 0 && linux_ordered_multiple_imported_shape_v1(selection->nodes);
@@ -453,7 +486,7 @@ static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selectio
 }
 
 static gboolean linux_ordered_measurement_prefix_v1(const LinuxOrderedSelectionV1 *selection, JsonObject *catalog, int position) {
-    if (!selection || position < 0 || !linux_ordered_current_v1(selection, catalog)) return FALSE;
+    if (!selection || position < 0 || linux_ordered_external_final_shape_v1(selection->nodes, selection->control) || !linux_ordered_current_v1(selection, catalog)) return FALSE;
     guint count = json_array_get_length(selection->nodes);
     if ((guint)position + 1 >= count) return FALSE;
     const char *mode = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, position), "mode");
@@ -464,8 +497,8 @@ static gboolean linux_ordered_measurement_prefix_v1(const LinuxOrderedSelectionV
         if (linux_ordered_flag_v1(external, "ordered_hostname_execution_middle_supported") &&
             (linux_ordered_flag_v1(external, "ordered_execution_middle_supported") || linux_ordered_flag_v1(external, "ordered_local_imported_nodes_supported"))) return FALSE;
         gboolean complete = linux_ordered_local_imported_path_v1(selection, catalog);
-        if (!strcmp(selection->execution,"auto") && position >= 1 &&
-            !strcmp(linux_ordered_string_v1(first,"mode"),"wg") && !strcmp(linux_ordered_string_v1(final,"mode"),"shadowsocks")) {
+        if ((!strcmp(selection->execution,"auto") || !strcmp(selection->execution,"server")) && position >= 1 &&
+            linux_ordered_prefix_v1(linux_ordered_string_v1(first,"mode")) && !strcmp(linux_ordered_string_v1(final,"mode"),"shadowsocks")) {
             if (count >= 4) {
                 gboolean insert = (guint)position + 2 < count;
                 if (!complete || (insert && count >= 96)) return FALSE;
@@ -638,6 +671,8 @@ static gboolean linux_ordered_owns_v1(LinuxOrderedStateV1 *owned, guint64 genera
 
 static char *linux_ordered_connect_body_v1(const LinuxOrderedSelectionV1 *selection) {
     JsonObject *body = json_object_new();
+    if (linux_ordered_external_final_shape_v1(selection->nodes, selection->control))
+        json_object_set_boolean_member(body, "external_final", TRUE);
     json_object_set_array_member(body, "nodes", json_array_ref(selection->nodes));
     json_object_set_string_member(body, "execution", selection->execution);
     json_object_set_string_member(body, "expected_selected_node_id", selection->control);
@@ -819,7 +854,7 @@ static gboolean linux_ordered_connect_v1(LinuxUnifiedV8 *unified) {
 typedef struct {
     LinuxOrderedStateV1 *owned;
     guint64 generation;
-    char *control, *final_mode;
+    char *control, *final_mode, *external_exit;
     JsonNode *catalog;
     GPtrArray *ids, *modes;
     GtkWidget *dialog, *list, *candidate, *transport, *execution, *status, *add, *remove, *up, *down;
@@ -842,7 +877,12 @@ static const char *linux_ordered_editor_final_mode_v1(LinuxOrderedEditorV1 *edit
     return editor->final_mode != NULL ? editor->final_mode : "shadowsocks";
 }
 
+static const char *linux_ordered_editor_exit_v1(const LinuxOrderedEditorV1 *editor) {
+    return editor->external_exit ? editor->external_exit : editor->control;
+}
+
 static gboolean linux_ordered_editor_final_allowed_v1(LinuxOrderedEditorV1 *editor, const char *mode) {
+    if (editor->external_exit) return !strcmp(mode, "shadowsocks");
     if (!linux_ordered_final_profile_v1(external_source_profile_v24(json_node_get_object(editor->catalog), editor->control), mode)) return FALSE;
     if (g_strcmp0(mode, "hysteria2") == 0) for (guint i = 0; i < editor->modes->len; i++)
         if (g_strcmp0(g_ptr_array_index(editor->modes, i), "shadowsocks") == 0 || g_strcmp0(g_ptr_array_index(editor->modes, i), "socks5") == 0 || g_strcmp0(g_ptr_array_index(editor->modes, i), "http-connect") == 0 || g_strcmp0(g_ptr_array_index(editor->modes, i), "https-connect") == 0 || g_strcmp0(g_ptr_array_index(editor->modes, i), "openvpn") == 0) return FALSE;
@@ -888,6 +928,11 @@ static gboolean linux_ordered_editor_stream_v1(LinuxOrderedEditorV1 *editor, gui
 }
 
 static gboolean linux_ordered_editor_can_extend_v1(LinuxOrderedEditorV1 *editor) {
+    if (editor->external_exit) {
+        const char *id = gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->candidate));
+        return editor->ids->len + 1 < ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH && id && strcmp(id, editor->external_exit) &&
+            linux_ordered_literal_import_off_v1(external_source_profile_v24(json_node_get_object(editor->catalog), id));
+    }
     if (editor->ids->len < 7) return TRUE;
     if (linux_ordered_editor_stream_v1(editor, editor->ids->len,
         gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->candidate)))) return TRUE;
@@ -919,10 +964,10 @@ static void linux_ordered_selected_v1(GtkListBox *box, GtkListBoxRow *row, gpoin
     editor->syncing = TRUE;
     gtk_combo_box_set_active_id(GTK_COMBO_BOX(editor->transport), prefix ? g_ptr_array_index(editor->modes, index) : linux_ordered_editor_final_mode_v1(editor));
     editor->syncing = FALSE;
-    gtk_widget_set_sensitive(editor->transport, valid && index >= 0 && (guint)index <= editor->ids->len);
-    gtk_widget_set_sensitive(editor->remove, valid && prefix);
-    gtk_widget_set_sensitive(editor->up, valid && prefix && index > 0);
-    gtk_widget_set_sensitive(editor->down, valid && prefix && (guint)(index + 1) < editor->ids->len);
+    gtk_widget_set_sensitive(editor->transport, !editor->external_exit && valid && index >= 0 && (guint)index <= editor->ids->len);
+    gtk_widget_set_sensitive(editor->remove, valid && prefix && (!editor->external_exit || index > 0));
+    gtk_widget_set_sensitive(editor->up, valid && prefix && index > (editor->external_exit ? 1 : 0));
+    gtk_widget_set_sensitive(editor->down, valid && prefix && (!editor->external_exit || index > 0) && (guint)(index + 1) < editor->ids->len);
     gtk_widget_set_sensitive(editor->add, valid && linux_ordered_editor_can_extend_v1(editor));
     gtk_widget_set_sensitive(gtk_dialog_get_widget_for_response(GTK_DIALOG(editor->dialog), GTK_RESPONSE_APPLY), valid && editor->ids->len > 0 && editor->ids->len < ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH);
 }
@@ -940,7 +985,7 @@ static void linux_ordered_render_v1(LinuxOrderedEditorV1 *editor, int selected) 
     g_list_free(children);
     for (guint i = 0; i <= editor->ids->len; i++) {
         gboolean final = i == editor->ids->len;
-        const char *id = final ? editor->control : g_ptr_array_index(editor->ids, i);
+        const char *id = final ? linux_ordered_editor_exit_v1(editor) : g_ptr_array_index(editor->ids, i);
         const char *mode = final ? linux_ordered_editor_final_mode_v1(editor) : g_ptr_array_index(editor->modes, i);
         char *text = g_strdup_printf("%u. %s — %s%s", i + 1, linux_ordered_name_v1(editor, id), linux_ordered_mode_name_v1(mode), final ? " • selected final exit" : "");
         GtkWidget *label = gtk_label_new(text); gtk_label_set_xalign(GTK_LABEL(label), 0); gtk_label_set_line_wrap(GTK_LABEL(label), TRUE);
@@ -949,6 +994,34 @@ static void linux_ordered_render_v1(LinuxOrderedEditorV1 *editor, int selected) 
     gtk_widget_show_all(editor->list);
     gtk_list_box_select_row(GTK_LIST_BOX(editor->list), gtk_list_box_get_row_at_index(GTK_LIST_BOX(editor->list), selected));
     linux_ordered_selected_v1(NULL, NULL, editor);
+}
+
+static void linux_ordered_choose_external_exit_v1(GtkButton *button, gpointer data) {
+    (void)button;
+    LinuxOrderedEditorV1 *editor = data;
+    JsonObject *catalog = json_node_get_object(editor->catalog);
+    const char *id = gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->candidate));
+    if (!linux_ordered_editable_v1(editor) || !id || !linux_ordered_external_final_profile_v1(external_source_profile_v24(catalog, id)) ||
+        !linux_ordered_paired_off_v1(external_source_profile_v24(catalog, editor->control)) ||
+        g_strcmp0(gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->execution)), "local")) {
+        gtk_label_set_text(GTK_LABEL(editor->status), "Choose a linked literal Shadowsocks exit with a WireGuard entry in Local.");
+        return;
+    }
+    for (guint i = editor->external_exit ? 1u : 0u; i < editor->ids->len; i++) {
+        const char *node = g_ptr_array_index(editor->ids, i);
+        if (!strcmp(node, id) || !linux_ordered_literal_import_off_v1(external_source_profile_v24(catalog, node))) {
+            gtk_label_set_text(GTK_LABEL(editor->status), "Choose a different exit and keep only literal Shadowsocks imports after the WireGuard entry.");
+            return;
+        }
+    }
+    if (!editor->external_exit) {
+        if (editor->ids->len + 2 > ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH) return;
+        g_ptr_array_insert(editor->ids, 0, g_strdup(editor->control));
+        g_ptr_array_insert(editor->modes, 0, g_strdup("wg"));
+    }
+    g_free(editor->external_exit); editor->external_exit = g_strdup(id);
+    g_free(editor->final_mode); editor->final_mode = g_strdup("shadowsocks");
+    linux_ordered_render_v1(editor, (int)editor->ids->len);
 }
 
 static void linux_ordered_add_v1(GtkButton *button, gpointer data) {
@@ -971,6 +1044,7 @@ static void linux_ordered_add_v1(GtkButton *button, gpointer data) {
 static void linux_ordered_remove_v1(GtkButton *button, gpointer data) {
     (void)button; LinuxOrderedEditorV1 *editor = data; int index = linux_ordered_index_v1(editor);
     if (!linux_ordered_editable_v1(editor) || index < 0 || (guint)index >= editor->ids->len) return;
+    if (editor->external_exit && index == 0) return;
     g_ptr_array_remove_index(editor->ids, index); g_ptr_array_remove_index(editor->modes, index);
     linux_ordered_render_v1(editor, MIN(index, (int)editor->ids->len));
 }
@@ -979,6 +1053,7 @@ static void linux_ordered_move_v1(GtkButton *button, gpointer data) {
     LinuxOrderedEditorV1 *editor = data; int index = linux_ordered_index_v1(editor);
     int offset = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "ordered-offset")), target = index + offset;
     if (!linux_ordered_editable_v1(editor) || (offset != -1 && offset != 1) || index < 0 || target < 0 || (guint)index >= editor->ids->len || (guint)target >= editor->ids->len) return;
+    if (editor->external_exit && (index == 0 || target == 0)) return;
     gpointer id = editor->ids->pdata[index], mode = editor->modes->pdata[index];
     editor->ids->pdata[index] = editor->ids->pdata[target]; editor->modes->pdata[index] = editor->modes->pdata[target];
     editor->ids->pdata[target] = id; editor->modes->pdata[target] = mode;
@@ -989,6 +1064,7 @@ static void linux_ordered_mode_v1(GtkComboBox *combo, gpointer data) {
     LinuxOrderedEditorV1 *editor = data; int index = linux_ordered_index_v1(editor);
     const char *mode = gtk_combo_box_get_active_id(combo);
     if (editor->syncing || !linux_ordered_editable_v1(editor)) return;
+    if (editor->external_exit) { linux_ordered_selected_v1(NULL, NULL, editor); return; }
     if (index >= 0 && (guint)index == editor->ids->len) {
         if (!linux_ordered_editor_final_allowed_v1(editor, mode)) {
             linux_ordered_selected_v1(NULL, NULL, editor);
@@ -1012,7 +1088,7 @@ static void linux_ordered_mode_v1(GtkComboBox *combo, gpointer data) {
 static LinuxOrderedSelectionV1 *linux_ordered_editor_selection_v1(LinuxOrderedEditorV1 *editor) {
     JsonArray *nodes = json_array_new(); JsonObject *tokens = json_object_new();
     for (guint i = 0; i <= editor->ids->len; i++) {
-        const char *id = i == editor->ids->len ? editor->control : g_ptr_array_index(editor->ids, i);
+        const char *id = i == editor->ids->len ? linux_ordered_editor_exit_v1(editor) : g_ptr_array_index(editor->ids, i);
         const char *mode = i == editor->ids->len ? linux_ordered_editor_final_mode_v1(editor) : g_ptr_array_index(editor->modes, i);
         JsonObject *row = json_object_new(); json_object_set_string_member(row, "id", id); json_object_set_string_member(row, "mode", mode);
         json_array_add_object_element(nodes, row);
@@ -1166,6 +1242,10 @@ static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
     LinuxOrderedEditorV1 editor = {.owned=owned, .generation=owned->generation, .control=g_strdup(control), .catalog=catalog,
         .ids=g_ptr_array_new_with_free_func(g_free), .modes=g_ptr_array_new_with_free_func(g_free), .final_mode=g_strdup("shadowsocks")};
     if (!fresh && owned->selection != NULL) {
+        if (linux_ordered_external_final_shape_v1(owned->selection->nodes, control)) {
+            JsonObject *last = json_array_get_object_element(owned->selection->nodes, json_array_get_length(owned->selection->nodes)-1);
+            editor.external_exit = g_strdup(linux_ordered_string_v1(last, "id"));
+        }
         g_free(editor.final_mode); editor.final_mode=g_strdup(linux_ordered_string_v1(json_array_get_object_element(owned->selection->nodes, json_array_get_length(owned->selection->nodes)-1), "mode"));
     }
     if (!fresh && owned->selection != NULL) for (guint i = 0; i + 1 < json_array_get_length(owned->selection->nodes); i++) {
@@ -1197,7 +1277,10 @@ static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
     gtk_combo_box_set_active(GTK_COMBO_BOX(editor.candidate), -1);
     g_signal_connect(editor.candidate, "popup", G_CALLBACK(linux_ordered_next_popup_v1), &editor);
     GtkWidget *add_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6); gtk_box_pack_start(GTK_BOX(add_row), editor.candidate, TRUE, TRUE, 0);
-    editor.add = make_button("Add entry / hop", G_CALLBACK(linux_ordered_add_v1), &editor); gtk_box_pack_start(GTK_BOX(add_row), editor.add, FALSE, FALSE, 0); gtk_box_pack_start(GTK_BOX(box), add_row, FALSE, FALSE, 6);
+    editor.add = make_button("Add entry / hop", G_CALLBACK(linux_ordered_add_v1), &editor); gtk_box_pack_start(GTK_BOX(add_row), editor.add, FALSE, FALSE, 0);
+    GtkWidget *external_exit = make_button("Use as external exit", G_CALLBACK(linux_ordered_choose_external_exit_v1), &editor);
+    gtk_box_pack_start(GTK_BOX(add_row), external_exit, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), add_row, FALSE, FALSE, 6);
     GtkWidget *actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     editor.up = make_button("Move up", G_CALLBACK(linux_ordered_move_v1), &editor); g_object_set_data(G_OBJECT(editor.up), "ordered-offset", GINT_TO_POINTER(-1));
     editor.down = make_button("Move down", G_CALLBACK(linux_ordered_move_v1), &editor); g_object_set_data(G_OBJECT(editor.down), "ordered-offset", GINT_TO_POINTER(1));
@@ -1226,5 +1309,5 @@ static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
     if (g_signal_handler_is_connected(unified->app->window, parent_closed))
         g_signal_handler_disconnect(unified->app->window, parent_closed);
     g_object_unref(editor.dialog); g_object_unref(unified->app->window);
-    g_ptr_array_unref(editor.ids); g_ptr_array_unref(editor.modes); g_free(editor.control); g_free(editor.final_mode); g_free(editor.offered_draft); json_node_free(editor.catalog);
+    g_ptr_array_unref(editor.ids); g_ptr_array_unref(editor.modes); g_free(editor.control); g_free(editor.final_mode); g_free(editor.external_exit); g_free(editor.offered_draft); json_node_free(editor.catalog);
 }

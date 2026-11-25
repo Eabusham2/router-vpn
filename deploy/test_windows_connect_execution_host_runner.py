@@ -114,7 +114,7 @@ class WindowsExecutionContract(unittest.TestCase):
         windows = G.SCOPE.peer_sources()['routervpn_windows_imported_execution_process_test.go'].decode()
         self.assertEqual(windows.count(body), 1)
         for imported in re.findall(r'^\s*"([^"\n]+)"', original, re.M):
-            expected = imported.replace('router-vpn/internal/multihoprelay', 'github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay')
+            expected = imported.replace('router-vpn/internal/', 'github.com/sagernet/sing-box/experimental/libbox/routervpn/')
             self.assertIn('"'+expected+'"', projected)
         with tempfile.TemporaryDirectory(prefix='candidate-peer-source-') as temporary:
             root = Path(temporary)

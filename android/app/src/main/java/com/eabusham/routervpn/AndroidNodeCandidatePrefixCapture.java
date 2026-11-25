@@ -123,7 +123,10 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
 
     void requireCurrent()throws Exception {original.requireCurrent();}
     @Override public void close()throws Exception {plan.close();}
-    private static String purposeKind(AndroidNodeChainCapture original,JSONObject metadata){
+    private static String purposeKind(AndroidNodeChainCapture original,JSONObject metadata) throws Exception {
+        if (original.plan != null && "routervpn-node-chain-external-final".equals(
+                new JSONObject(original.memberInputs.get(original.memberInputs.size()-1)).optString("kind")))
+            return "routervpn-node-chain-multiple-imported-candidate-preparation";
         return original.connect!=null?"routervpn-node-chain-connect-candidate-preparation"
                 :original.socks!=null?"routervpn-node-chain-socks-candidate-preparation"
                 :original.multipleImported && (original.memberInputs.size()>8||"routed-candidate-response".equals(metadata.optString("measurement")))?"routervpn-node-chain-multiple-imported-candidate-preparation":"routervpn-node-chain-candidate-preparation";

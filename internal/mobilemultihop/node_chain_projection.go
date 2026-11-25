@@ -59,11 +59,12 @@ func projectNodeChainWithDevice(original *NodeChain, inputs desktopNodePolicyInp
 	if err != nil {
 		return nil, err
 	}
-	source, err := projectOrderedDeviceTUN(derived, derived.config, derived.nodes[len(derived.nodes)-1].profile, inputs)
+	final := derived.finalPreferences()
+	source, err := projectOrderedDeviceTUN(derived, derived.config, final, inputs)
 	if err != nil {
 		return nil, err
 	}
-	config, err := projectNodeChainTUN(source, derived.nodes[len(derived.nodes)-1].profile, targetOS, restoredMTU)
+	config, err := projectNodeChainTUN(source, final, targetOS, restoredMTU)
 	if err != nil {
 		return nil, err
 	}

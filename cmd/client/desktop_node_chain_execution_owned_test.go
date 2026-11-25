@@ -544,6 +544,7 @@ func TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement(t *testing.T) {
 			if err := proveDesktopNodeChainContext(f.operation, f.a, f.selection, launch.command); err != nil {
 				t.Fatal(err)
 			}
+			assertDesktopOrderedDNSObservation(t, f)
 			owner, err := capturedNativeMultihopRuntimeContext(f.operation, f.a, launch.command, graph)
 			if err != nil {
 				t.Fatal(err)

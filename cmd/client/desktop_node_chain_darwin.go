@@ -223,7 +223,7 @@ func (h *desktopMacOSNodeChainHost) currentLocked(ctx context.Context, running b
 			a.connectionCancelIntent != h.operation
 	}
 	if h.published {
-		valid = valid && a.cmd == h.launch.command && a.state.RouterID == meta.ProfileID &&
+		valid = valid && a.cmd == h.launch.command && a.state.RouterID == h.launch.chain.selection.Control.ID &&
 			a.state.Mode == "multihop" && a.state.LogicalMode == "multihop" && a.state.RuntimeMode == meta.Mode
 	}
 	a.mu.Unlock()

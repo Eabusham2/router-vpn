@@ -360,7 +360,7 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		}
 		node, err := ParseNodeLaunchInput(launch)
 		if err != nil || node == nil || validateNodeChainIdentity(source.IdentitySources[index], node) != nil ||
-			index < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) && !(multiple && source.EntryMode == "wg" && index > 0 && p.multiple.members[0] != nil && node.mode == "shadowsocks") || index == len(source.Nodes)-1 && !nodeChainServerFinalCapture(source.Schema, node) {
+			index < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) && !(multiple && NodeChainPrefixMode(source.EntryMode) && index > 0 && p.multiple.members[0] != nil && node.mode == "shadowsocks") || index == len(source.Nodes)-1 && !nodeChainServerFinalCapture(source.Schema, node) {
 			return nil, nodeChainServerError
 		}
 		// Every suffix establishment is already a later captured peer. No

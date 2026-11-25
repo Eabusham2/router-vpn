@@ -47,9 +47,9 @@ struct IOSSessionIdentity: Equatable, Sendable {
                     source["schema"] as? Int == 4 && (3...8).contains((source["nodes"] as? [String])?.count ?? 0))), source["execution"] as? String == "local",
                   source["projection_kind"] == nil, source["session_id"] == nil, source["target_os"] == nil, source["restored_mtu"] == nil,
                   let nodes = source["nodes"] as? [String], (2...Self.physicalTraversalDepth).contains(nodes.count) else { throw Self.invalid() }
-            if nodes.count > 8 {
+            if nodes.count > 8 || source["schema"] as? Int == 8 {
                 guard rawProfile == "shadowsocks", Self.extendedLocalMembers(source, nodes: nodes) else { throw Self.invalid() }
-                capturedRows = nodes.count
+                if nodes.count > 8 { capturedRows = nodes.count }
             }
         } else if engine == "multihop-libbox" || engine == "external-libbox" && entryBundleData != nil {
             guard let entryBundleData, !entryBundleData.isEmpty,
@@ -281,9 +281,23 @@ struct IOSSessionIdentity: Equatable, Sendable {
     // native handle. Check each original member's concrete family before
     // retaining the wider reply budget for this immutable session.
     private static func extendedLocalMembers(_ source: [String: Any], nodes: [String], selected: Bool = false) -> Bool {
-        guard let schema = source["schema"] as? Int, schema == 6 || schema == 1, source["kind"] as? String == "routervpn-node-chain-launch-input",
+        guard let schema = source["schema"] as? Int, schema == 6 || schema == 1 || schema == 8, source["kind"] as? String == "routervpn-node-chain-launch-input",
               let identities = source["identity_sources"] as? [String], identities.count == nodes.count else { return false }
         guard !selected || schema == 6 else { return false }
+        if schema == 8 {
+            guard (3...physicalTraversalDepth).contains(nodes.count), !identities[0].isEmpty,
+                  identities.dropFirst().allSatisfy({ $0.isEmpty }) else { return false }
+            return nodes.enumerated().allSatisfy { index, raw in
+                guard let row = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] else { return false }
+                if index == 0 { return row["kind"] as? String == "routervpn-node-launch-input" && row["mode"] as? String == "wg" }
+                let kind = index == nodes.count-1 ? "routervpn-node-chain-external-final" : "routervpn-node-chain-imported-member"
+                guard row["kind"] as? String == kind, let bytes = row["capture"] as? String,
+                      let capture = try? JSONSerialization.jsonObject(with: Data(bytes.utf8)) as? [String:Any],
+                      capture["protocol"] as? String == "shadowsocks", let profile = capture["profile"] as? [String:Any],
+                      profile["node_kind"] as? String == "external", profile["id"] as? String == capture["exit_id"] as? String else { return false }
+                return true
+            }
+        }
         var packets = 0, hasStream = false, hasImport = false
         var entryMode: String?
         for (index, text) in nodes.enumerated() {
@@ -303,7 +317,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
                 guard mode == "shadowsocks" else { return false }
             } else if mode == "shadowsocks" {
                 if selected {
-                    guard index >= 2, packets == 1, entryMode == "wg", hasImport else { return false }
+                    guard index >= 2, packets == 1, ["wg", "awg2-fast", "awg2-strong"].contains(entryMode ?? ""), hasImport else { return false }
                 }
                 guard schema == 6, packets > 0, let id = profile["node_proof_id"] as? String, !id.isEmpty else { return false }
                 hasStream = true

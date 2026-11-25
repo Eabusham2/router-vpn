@@ -35,7 +35,7 @@ struct IOSNodeCandidateMetadata: Decodable {
                   source_sha256 == source, config_sha256 == config else { throw IOSNodeCandidateResult.issue() }
         }
         guard prefix.supported, metric == prefix.metric, requestedExecution == nil || metric == "routed-tcp-connect" ||
-                requestedExecution == "auto" && selectedExecution == "local" && selectedResponse == prefix,
+                selectedResponse == prefix,
               schema == 1, prefix_position == prefix.position, prefix_id == prefix.profile_id,
               IOSCandidateCatalogPublication.isDigest(capture_sha256), !targets.isEmpty,
               Set(targets.map(\.id)) == ids, Set(targets.map(\.id)).count == targets.count,
@@ -67,6 +67,7 @@ struct IOSNodeCandidateResult: Decodable {
         let ready: Bool
         let failure: String?
         let benchmark: Benchmark?
+        let candidate_disposition: String?
     }
     let schema: Int
     let measurement: String
@@ -82,14 +83,31 @@ struct IOSNodeCandidateResult: Decodable {
     let measured_at: Int64
     let expires_at: Int64
     let results: [Row]
-    func score(request: String, target: IOSNodeCandidateMetadata.Target, metadata: IOSNodeCandidateMetadata, now: Int64) throws -> Benchmark {
+    private func originalRow(request: String, target: IOSNodeCandidateMetadata.Target, metadata: IOSNodeCandidateMetadata, now: Int64) throws -> Row {
         guard schema == 1, measurement == metadata.metric, request_id == request, complete, drained,
               stage == "complete", failure?.isEmpty != false, capture_sha256 == metadata.capture_sha256,
               prefix_position == metadata.prefix_position, prefix_id == metadata.prefix_id,
               candidate_id == target.id, candidate_source_sha256 == target.source_sha256,
               measured_at > 0, measured_at <= now, expires_at > measured_at, expires_at - measured_at == 120000, now < expires_at,
               results.count == 1, let row = results.first, row.node_id == target.id,
-              row.role == "candidate", row.kind == (measurement == "routed-candidate-response" ? "private-agent-response" : "tcp-connect"), row.ready, row.failure?.isEmpty != false,
+              row.role == "candidate", row.kind == (measurement == "routed-candidate-response" ? "private-agent-response" : "tcp-connect") else { throw Self.issue() }
+        return row
+    }
+    func selectedServerScore(request: String, target: IOSNodeCandidateMetadata.Target, metadata: IOSNodeCandidateMetadata, now: Int64) throws -> Benchmark? {
+        guard metadata.execution == "server", metadata.metric == "routed-candidate-response" else { throw Self.issue() }
+        let row = try originalRow(request: request, target: target, metadata: metadata, now: now)
+        if !row.ready {
+            guard row.failure?.isEmpty == false, row.benchmark == nil,
+                  row.candidate_disposition == nil || row.candidate_disposition == "not-registered" else { throw Self.issue() }
+            return nil
+        }
+        return try scored(row)
+    }
+    func score(request: String, target: IOSNodeCandidateMetadata.Target, metadata: IOSNodeCandidateMetadata, now: Int64) throws -> Benchmark {
+        try scored(originalRow(request: request, target: target, metadata: metadata, now: now))
+    }
+    private func scored(_ row: Row) throws -> Benchmark {
+        guard row.candidate_disposition == nil, row.ready, row.failure?.isEmpty != false,
               let benchmark = row.benchmark, benchmark.measurement == measurement, benchmark.valid else { throw Self.issue() }
         return benchmark
     }

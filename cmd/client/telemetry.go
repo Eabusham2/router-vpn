@@ -701,12 +701,18 @@ func (a *app) connectionLiveLatency(w http.ResponseWriter, r *http.Request) {
 	if graph := measured.graph; st.Mode == "multihop" && graph.ChainNodes > 0 {
 		a.mu.Lock()
 		entry, found := a.profileByIDLocked(graph.EntryID)
+		exit := p
+		if graph.ControlID != "" {
+			var exitFound bool
+			exit, exitFound = a.profileByIDLocked(graph.ExitID)
+			found = found && exitFound && p.ID == graph.ControlID
+		}
 		a.mu.Unlock()
-		if !found || p.ID != graph.ExitID {
+		if !found || exit.ID != graph.ExitID {
 			http.Error(w, "The original ordered endpoints are unavailable.", http.StatusConflict)
 			return
 		}
-		endpoints, err := a.orderedLiveResponse(measured, graph, entry, p, samples)
+		endpoints, err := a.orderedLiveResponse(measured, graph, entry, exit, samples)
 		value, measureErr = endpoints[1], err
 	} else {
 		value, measureErr = privatePathLatencyContext(measured, p, st, samples)
@@ -803,7 +809,25 @@ func (a *app) connectionSpeedTest(w http.ResponseWriter, r *http.Request) {
 	// Share the bounded download/upload implementation and acknowledgement
 	// validation with per-node speed tests; do not maintain a second HTTP path.
 	var value routedSpeedResult
-	if st.Mode == "multihop" {
+	if graph := measured.graph; st.Mode == "multihop" && graph.ControlID != "" {
+		if q.Bytes != 8<<20 {
+			http.Error(w, "ordered external exit throughput requires 8 MiB per direction", http.StatusBadRequest)
+			return
+		}
+		identity, _, captureErr := captureSpeedLabIdentityContext(measured, a)
+		if captureErr != nil || identity.Ordered == nil || !sameActiveMultihopGraph(identity.Graph, graph) ||
+			identity.Ordered.launch.chain.policy == nil || !identity.Ordered.launch.chain.policy.OriginalChain().HasExternalFinal() {
+			http.Error(w, "ordered external exit lost its original native source", http.StatusConflict)
+			return
+		}
+		var rows []speedLabHopMeasurement
+		rows, err = measureSpeedLabOrderedHops(measured, a, identity)
+		if err == nil && len(rows) == graph.ChainNodes && rows[len(rows)-1].RouterID == graph.ExitID && rows[len(rows)-1].Speed != nil {
+			value = *rows[len(rows)-1].Speed
+		} else if err == nil {
+			err = errors.New("ordered throughput lost its independently measured external exit")
+		}
+	} else if st.Mode == "multihop" {
 		value, err = measureRoutedProfileSpeedViaProxyContext(measured, p, q.Bytes, multihopProofProxy)
 	} else {
 		value, err = measureRoutedProfileSpeedContext(measured, p, q.Bytes)

@@ -480,7 +480,7 @@ final class AndroidNodeStore {
             String mode = reference.getString("mode");
             if(source.imported) {
                 boolean variablePrefix="shadowsocks".equals(mode)||"socks5".equals(mode)||"http-connect".equals(mode)||"https-connect".equals(mode)||"openvpn".equals(mode);
-                if(selected.length()<3||i==selected.length()-1||!variablePrefix&&selected.length()!=3||!mode.equals(AndroidExternalPolicy.protocol(source.external().protocol)))throw new IllegalStateException("A custom ordered node requires its supported penultimate position before the paired final node.");
+                if(selected.length()<3||!variablePrefix&&selected.length()!=3||!mode.equals(AndroidExternalPolicy.protocol(source.external().protocol)))throw new IllegalStateException("A custom ordered node requires its supported penultimate position before the paired final node.");
                 ChainSource.requireImported(source.external());
             } else {
                 source.requirePairedIdentity();
@@ -490,8 +490,8 @@ final class AndroidNodeStore {
             members.add(source); modes.add(mode);
         }
         AndroidNodeChainCapture.requireCompleteShape(members,modes,control.profile().getString("multihop_execution"));
-        ChainSource last = members.get(members.size() - 1);
-        if (last != control) throw new IllegalStateException("The original ordered control must remain the exact final member.");
+        int controlPosition = members.get(members.size() - 1).imported ? 0 : members.size() - 1;
+        if (members.get(controlPosition) != control) throw new IllegalStateException("The original paired control changed position.");
         ChainCapture captured = new ChainCapture(this, control, members, modes);
         requireChainCapture(captured);
         return captured;
@@ -557,15 +557,18 @@ final class AndroidNodeStore {
                 modes.size()!=sources.size()||prefix<0||prefix>=sources.size()-1)
             throw new IllegalStateException("The complete draft or intended next position changed.");
         boolean response=AndroidNodeChainCapture.responsePrefix(sources,modes,prefix,"local");
-        if (!extended&&!response&&prefix!=sources.size()-2)
+        boolean externalExit = sources.get(sources.size()-1).imported;
+        if (externalExit && (prefix!=0 || !catalog.selectedId.equals(sources.get(0).id)))
+            throw new IllegalStateException("An imported final measures candidates through its original WireGuard control.");
+        if (!externalExit&&!extended&&!response&&prefix!=sources.size()-2)
             throw new IllegalStateException("The complete draft or intended next position changed.");
-        if (extended||response) AndroidNodeChainCapture.requireCompleteShape(sources, modes, "local");
+        if (extended||response||externalExit) AndroidNodeChainCapture.requireCompleteShape(sources, modes, "local");
         boolean extendedPaired=extended&&!sources.get(prefix).imported&&java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(modes.get(prefix));
         if(extended&&!extendedPaired&&prefix!=0&&!response) throw new IllegalStateException("The selected imported prefix cannot measure candidates.");
         List<ChainSource> originals=new ArrayList<>();JSONArray refs=new JSONArray();Set<String> proofs=new HashSet<>(),ids=new HashSet<>();long bytes=0;
         for(int i=0;i<sources.size();i++){
             ChainSource expected=sources.get(i),original=catalog.source(expected.id);String mode=modes.get(i);
-            if(original.imported&&!extended&&!response||!java.util.Arrays.equals(original.original,expected.original)||!ids.add(original.profileId)||!proofs.add(original.identityKey()))
+            if(original.imported&&!externalExit&&!extended&&!response||!java.util.Arrays.equals(original.original,expected.original)||!ids.add(original.profileId)||!proofs.add(original.identityKey()))
                 throw new IllegalStateException("Each draft position needs a distinct original paired node.");
             if (original.imported) ChainSource.requireImported(original.external());
             else original.requirePairedIdentity();
@@ -603,7 +606,7 @@ final class AndroidNodeStore {
             originals.add(original);refs.put(new JSONObject().put("id",original.profileId).put("mode",modes.get(i)));
         }
         int schema=AndroidNodeChainCapture.sourceSchema(originals,modes);
-        if (originals.size()>8 && !(schema==6 && "auto".equals(execution)
+        if (originals.size()>8 && !(schema==6 && ("auto".equals(execution) || "server".equals(execution))
                 && AndroidNodeChainCapture.responsePrefix(originals,modes,prefix,execution)))
             throw new IllegalStateException("This longer selected draft has no qualified private response at this position.");
         if((schema==3||schema==4)&&prefix!=0||schema==7||originals.get(0).imported||originals.get(originals.size()-1).imported
@@ -693,7 +696,12 @@ final class AndroidNodeStore {
                     || !ids.add(member.getString("id"))) throw new IllegalStateException("Every ordered position needs a distinct canonical node and exact mode.");
         }
         if (!profile.getString("id").equals(selected.getJSONObject(selected.length() - 1).getString("id"))) {
-            throw new IllegalStateException("The selected control must be the original final ordered member.");
+            if (!"local".equals(profile.getString("multihop_execution")) || selected.length() < 3
+                    || !profile.getString("id").equals(selected.getJSONObject(0).getString("id"))
+                    || !"wg".equals(selected.getJSONObject(0).getString("mode")))
+                throw new IllegalStateException("The selected control must own the final Router or the WireGuard entry of an imported exit.");
+            for (int i=1;i<selected.length();i++) if (!"shadowsocks".equals(selected.getJSONObject(i).getString("mode")))
+                throw new IllegalStateException("Every node after the original WireGuard control must use Shadowsocks 2022.");
         }
         if (!"local".equals(profile.getString("multihop_execution"))) {
             boolean hysteriaFinal="hysteria2".equals(selected.getJSONObject(selected.length()-1).getString("mode"));

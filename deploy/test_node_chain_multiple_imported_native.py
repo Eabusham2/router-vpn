@@ -19,6 +19,14 @@ ROOT = Path(__file__).resolve().parents[1]
 PEER_PACKAGE = 'github.com/sagernet/sing-box/protocol/routervpnamnezia'
 BOX_PACKAGE = 'github.com/sagernet/sing-box'
 PEER_TEMPLATE = 'mobile/chain_component/multiple_imported_test.go.tmpl'
+EXTERNAL_FINAL_TEMPLATE = 'mobile/chain_component/external_final_test.go.tmpl'
+EXTERNAL_FINAL_ROOT = 'TestRouterVPNOrderedExternalFinalEncrypted'
+EXTERNAL_FINAL_CASES = {
+    'three-home': (3, 'home'), 'four-custom': (4, 'custom'),
+    'nine-custom-fifty': (9, 'custom'), 'wrong-exit-key': (4, 'custom'),
+    'wrong-public-exit': (3, 'home'), 'failed-selected-dns': (4, 'custom'),
+}
+
 MIXED_CANDIDATE_TEMPLATE = 'mobile/chain_component/mixed_local_candidates_test.go.tmpl'
 MIXED_CANDIDATE_ROOT = 'TestRouterVPNMixedLocalCandidateMeasurements'
 MIXED_CANDIDATES = ('9-2-7-wg-connected-original', '16-2-14-awg2-strong-closed-original',
@@ -179,6 +187,16 @@ for count, paired, stop in ((5, (2,), 1), (5, (2,), 2), (7, (2, 4), 3), (9, (2, 
         INTERMEDIATE_POSITIONS[leaf] = stop
         RECURSIVE_PRIVATE_POSITIONS[leaf] = paired
         PRIVATE_RESPONSE_SOURCES[leaf] = (count, paired[0], fault)
+AWG_RESPONSE_ENTRIES = {}
+for entry in ('awg2-fast', 'awg2-strong'):
+    for count, stop, paired in ((3, 1, ()), (5, 2, (2,)), (7, 4, (2, 4)), (8, 4, (2, 4)), (9, 3, (2, 4)), (16, 8, (2, 4))):
+        faults = PRIVATE_RESPONSE_FAULTS + ('suffix-alias', 'changed-original-suffix') if count == 7 else ('original',)
+        for fault in faults:
+            leaf = f'{count}-{entry}-recursive-stop-{stop}-{fault}'
+            AWG_RESPONSE_ENTRIES[leaf] = entry
+            INTERMEDIATE_POSITIONS[leaf] = stop
+            RECURSIVE_PRIVATE_POSITIONS[leaf] = paired
+            PRIVATE_RESPONSE_SOURCES[leaf] = (count, paired[0] if paired else 0, fault)
 PRIVATE_RESPONSE_CASES = tuple(PRIVATE_RESPONSE_SOURCES)
 
 
@@ -231,7 +249,10 @@ def selected_marker(leaf):
     if leaf in PRIVATE_RESPONSE_CASES:
         winner = 'server' if leaf.endswith('server-winner') else 'local'
         count = leaf.split('-', 1)[0]
-        return f'QUALIFIED_SELECTED_NATIVE nodes={count} execution=auto winner={winner} samples=0 bytes=0 first={INTERMEDIATE_POSITIONS.get(leaf, 0)} last=0 response_samples=0'
+        marker = f'QUALIFIED_SELECTED_NATIVE nodes={count} execution=auto winner={winner} samples=0 bytes=0 first={INTERMEDIATE_POSITIONS.get(leaf, 0)} last=0 response_samples=0'
+        if leaf in AWG_RESPONSE_ENTRIES:
+            marker += f' entry_mode={AWG_RESPONSE_ENTRIES[leaf]} parameters_current=true'
+        return marker
     if leaf in AWG_SELECTED_CASES:
         entry = 'awg2-fast' if leaf in FAST_SELECTED_CASES else 'awg2-strong'
         count, tail = leaf.split(f'-{entry}-')
@@ -260,6 +281,9 @@ def selected_marker(leaf):
 
 
 PEER_CASES = {LATER_HOSTNAME_ROOT: LATER_HOSTNAME_CASES, PAIRED_INTERIOR_ROOT: PAIRED_INTERIOR, MIXED_CANDIDATE_ROOT: MIXED_CANDIDATES, MIXED_ROOT: MIXED, SELECTED_ROOT: SELECTED_CASES, POSITIVE_ROOT: POSITIVE, NEGATIVE_ROOT: NEGATIVE, THROUGHPUT_ROOT: THROUGHPUT}
+
+
+PEER_CASES[EXTERNAL_FINAL_ROOT] = tuple(EXTERNAL_FINAL_CASES)
 
 
 def inventory():
@@ -296,6 +320,14 @@ def verdict(output, root, leaf=None, *, worker_digest=None):
         raise ValueError('Independent imported native inventory omitted, duplicated or failed a required case')
     if any(any(marker in row.get('Output', '') for marker in (*FATAL, *JOIN_FAILURES)) for row in rows):
         raise ValueError('Independent imported native receipt contains a fatal or unjoined result')
+    if root == EXTERNAL_FINAL_ROOT:
+        count, dns = EXTERNAL_FINAL_CASES[leaf]
+        marker = f"QUALIFIED_EXTERNAL_FINAL case={leaf} nodes={count} dns={dns} owner_joined=true private_exit_calls=0"
+        lines = [row.get('Output', '').strip().split('QUALIFIED_', 1)[-1] for row in rows if row.get('Test') == root+'/'+leaf and 'QUALIFIED_' in row.get('Output', '')]
+        if lines.count(marker.removeprefix('QUALIFIED_')) != 1 or sum(line.startswith('EXTERNAL_FINAL') for line in lines) != 1:
+            raise ValueError('Missing original encrypted external-final receipt')
+        if leaf == 'nine-custom-fifty' and lines.count('LATENCY_HISTORY nodes=9 receipts=9 samples=450') != 1:
+            raise ValueError('Missing per-position external-final response history')
     if root == POSITIVE_ROOT and leaf in ('wg/extended-nine/off', 'wg/extended-sixteen/off'):
         count = 9 if leaf == 'wg/extended-nine/off' else 16
         name = root+'/'+leaf.replace('/', '_')
@@ -403,13 +435,19 @@ def verdict(output, root, leaf=None, *, worker_digest=None):
             if (refusal and (len(suffix_witnesses) != 1 or not suffix_witnesses[0].endswith(refusal))) or (not refusal and suffix_witnesses):
                 raise ValueError('Missing the untouched original suffix refusal')
 
-        if leaf in AWG_SELECTED_CASES:
-            entry = 'awg2-fast' if leaf in FAST_SELECTED_CASES else 'awg2-strong'
+        if leaf in AWG_SELECTED_CASES or leaf in AWG_RESPONSE_ENTRIES:
+            entry = AWG_RESPONSE_ENTRIES.get(leaf) or ('awg2-fast' if leaf in FAST_SELECTED_CASES else 'awg2-strong')
             expected_client = f'QUALIFIED_SELECTED_CLIENT_AWG entry={entry} parameters_current=true other_mode_refused=true'
             clients = [row.get('Output', '').strip() for row in rows if row.get('Test') == name
                        and 'QUALIFIED_SELECTED_CLIENT_AWG' in row.get('Output', '')]
-            if len(clients) != 1 or not clients[0].endswith(expected_client):
+            expected_count = 2 if leaf in AWG_RESPONSE_ENTRIES and PRIVATE_RESPONSE_SOURCES[leaf][2] == 'original' else 1
+            if len(clients) != expected_count or not all(line.endswith(expected_client) for line in clients):
                 raise ValueError('Missing live selected AWG client parameter readback or alternate-mode refusal')
+        if leaf in AWG_RESPONSE_ENTRIES and PRIVATE_RESPONSE_SOURCES[leaf] == (5, 2, 'original'):
+            expected_refusal = f'SELECTED_PRIVATE_AWG_REFUSALS entry={AWG_RESPONSE_ENTRIES[leaf]} original_peer=true wrong_key=true wrong_header=true joined=true'
+            refusals = [r.get('Output', '').strip() for r in rows if r.get('Test') == name and 'SELECTED_PRIVATE_AWG_REFUSALS' in r.get('Output', '')]
+            if len(refusals) != 1 or not refusals[0].endswith(expected_refusal):
+                raise ValueError('Missing encrypted AWG original peer key and handshake header refusal')
         if leaf in AWG_SELECTED_CASES and leaf.endswith('-mtu'):
             count = leaf.split('-')[0]
             entry = 'awg2-fast' if leaf in FAST_SELECTED_CASES else 'awg2-strong'
@@ -463,7 +501,7 @@ def execute(core, target, tags, env, runner, *, strong_diagnostic=False, private
     owner = load('test_node_chain_openvpn_execution_owner.py')
     peers = load('prepare-desktop-external.py')
     native = load('prepare-mobile-node-chain.py')
-    template_bytes = {path: (ROOT/path).read_bytes() for path in (PEER_TEMPLATE, MIXED_TEMPLATE, MIXED_CANDIDATE_TEMPLATE, BOX_TEMPLATE, *SELECTED_TEMPLATES)}
+    template_bytes = {path: (ROOT/path).read_bytes() for path in (PEER_TEMPLATE, MIXED_TEMPLATE, MIXED_CANDIDATE_TEMPLATE, EXTERNAL_FINAL_TEMPLATE, BOX_TEMPLATE, *SELECTED_TEMPLATES)}
     worker = load('prepare-server-node-chain.py')
     worker_sources = {name: raw for name, raw in worker.copies().items()
                       if name.startswith('cmd/sing-box/routervpn_server_chain_') and not name.endswith('_test.go')}
@@ -491,7 +529,7 @@ def execute(core, target, tags, env, runner, *, strong_diagnostic=False, private
         projection.write_bytes(template_bytes[PEER_TEMPLATE])
         overlay = workspace/'peer.json'
         replacement = {str(core/PEER_TARGET): str(projection)}
-        for template in (MIXED_TEMPLATE, MIXED_CANDIDATE_TEMPLATE, *SELECTED_TEMPLATES):
+        for template in (MIXED_TEMPLATE, MIXED_CANDIDATE_TEMPLATE, EXTERNAL_FINAL_TEMPLATE, *SELECTED_TEMPLATES):
             name = Path(template).name.removesuffix('.tmpl')
             replacement[str(core/'protocol/routervpnamnezia'/name)] = str(ROOT/template)
         # The external Go test package imports the same WG peer package as the
@@ -556,10 +594,15 @@ def execute(core, target, tags, env, runner, *, strong_diagnostic=False, private
                         worker_sources={name: hashlib.sha256(raw).hexdigest() for name, raw in worker_sources.items()},
                         encrypted=peer_receipts)
         if private_response_diagnostic:
+            external_final_receipts = {}
+            for leaf in EXTERNAL_FINAL_CASES:
+                external_final_receipts[leaf] = run_case(images['peer'], PEER_PACKAGE, EXTERNAL_FINAL_ROOT, leaf, 90, 105)
             for leaf in PRIVATE_RESPONSE_CASES:
                 peer_receipts[leaf] = run_case(images['peer'], PEER_PACKAGE, SELECTED_ROOT, leaf, 90, 105)
             unchanged()
             return dict(kind='diagnostic-compare-local-private-response-v1', target=target, race=True,
+                        external_final_encrypted=external_final_receipts,
+                        external_final_fixture_sha256=hashlib.sha256(template_bytes[EXTERNAL_FINAL_TEMPLATE]).hexdigest(),
                         source_sha256=source_sha, image_sha256=identities['peer'][1],
                         worker_sources={name: hashlib.sha256(raw).hexdigest() for name, raw in worker_sources.items()},
                         encrypted=peer_receipts)

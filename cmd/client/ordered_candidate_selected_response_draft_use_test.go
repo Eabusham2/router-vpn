@@ -282,7 +282,7 @@ func TestSelectedPrivateResponseDraftUseMultiplePrivateAndCapacity(t *testing.T)
 	members = append(members, selection.Nodes[len(selection.Nodes)-1])
 	profile, _ := a.profileByIDLocked(candidate)
 	position := len(members) - 2
-	if !desktopCompareLocalResponseProposal(members, "auto", position, profile) {
+	if !desktopSelectedResponseProposal(members, "auto", position, profile) {
 		t.Fatal("96-member source shape did not retain its penultimate named grant")
 	}
 	if _, _, err := orderedResponseDraftProposal(ctx, clientRoot(a), "auto", members, position, profile, a.profiles.Profiles); err == nil || !strings.Contains(err.Error(), "cannot be inserted") {

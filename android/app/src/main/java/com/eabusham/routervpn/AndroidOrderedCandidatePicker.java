@@ -250,8 +250,8 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
             requireDraft();AndroidNodeStore.Node choice=choices.get(index);
             if(singleScores!=null)singleScores.requireCurrent();
             AndroidNodeCandidateResult measured=scores.get(profileIds.get(choice.id));
-            if (response && finalNode && "auto".equals(draft.execution())) {
-                if (measured==null) throw new IllegalStateException("Choose a different paired final with a current authenticated response from the Local winner.");
+            if (response && finalNode && ("auto".equals(draft.execution()) || "server".equals(draft.execution()))) {
+                if (measured==null) throw new IllegalStateException("Choose a different paired final with a current authenticated response from the selected route.");
                 if (unconnectable.containsKey(measured.id)) throw new IllegalStateException(unconnectable.get(measured.id));
             }
             if(measured!=null)owner.requireSavedResultCurrent(measured);

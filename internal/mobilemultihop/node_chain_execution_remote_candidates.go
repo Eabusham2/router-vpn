@@ -2,8 +2,10 @@ package mobilemultihop
 
 import (
 	"context"
+	"crypto/hmac"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"reflect"
 	"sync"
@@ -32,6 +34,15 @@ type NodeChainExecutionRemoteCandidatePlan struct {
 }
 
 func (r *NodeChainExecutionRuntime) NewRemoteCandidatePlanContext(ctx context.Context, position int, inventory string) (*NodeChainExecutionRemoteCandidatePlan, error) {
+	return r.remoteCandidatePlanContext(ctx, position, inventory, false)
+}
+
+// NewRemoteResponseCandidatePlanContext can acquire only the selected original
+// Server trial's provisioned stream challenge operation.
+func (r *NodeChainExecutionRuntime) NewRemoteResponseCandidatePlanContext(ctx context.Context, position int, inventory string) (*NodeChainExecutionRemoteCandidatePlan, error) {
+	return r.remoteCandidatePlanContext(ctx, position, inventory, true)
+}
+func (r *NodeChainExecutionRuntime) remoteCandidatePlanContext(ctx context.Context, position int, inventory string, response bool) (*NodeChainExecutionRemoteCandidatePlan, error) {
 	if ctx == nil || r == nil || position < 1 || r.engine == nil || !reflect.TypeOf(r.engine).Comparable() {
 		return nil, nodeChainExecutionError
 	}
@@ -49,12 +60,32 @@ func (r *NodeChainExecutionRuntime) NewRemoteCandidatePlanContext(ctx context.Co
 	}
 	// The original family compiler retains every source member and private
 	// identity. Only an actual paired WG/AWG prefix can acquire TCP timing.
-	packet, err := r.projection.newPacketCandidatePlan(position, inventory)
+	descriptor := r.projection.policy.Descriptor()
+	var packet *NodeChainCandidatePlan
+	var err error
+	if response {
+		if !r.projection.preparation.SupportsServerResponseCandidate(position) || !descriptor.CandidateResponsePrefix(position) {
+			return nil, nodeChainExecutionError
+		}
+		original := r.projection.policy.local
+		if b := r.projection.policy.multiple; b != nil {
+			if b != r.projection.preparation.multiple || b.local != original || b.owners != original.importedNodes {
+				return nil, nodeChainExecutionError
+			}
+			packet, err = original.NewMultipleImportedCandidatePlan(position, inventory)
+		} else {
+			packet, err = original.newPacketCandidatePlan(position, inventory)
+		}
+	} else {
+		if position >= len(descriptor.Members) || descriptor.Members[position-1].NodeKind != "" || !NodeChainPrefixMode(descriptor.Members[position-1].Mode) {
+			return nil, nodeChainExecutionError
+		}
+		packet, err = r.projection.newPacketCandidatePlan(position, inventory)
+	}
 	if err != nil {
 		return nil, err
 	}
-	descriptor := r.projection.policy.Descriptor()
-	if position >= len(descriptor.Members) || descriptor.Members[position-1].NodeKind != "" || !NodeChainPrefixMode(descriptor.Members[position-1].Mode) {
+	if response != (packet.measurement == hopmeasure.CandidatePrivateResponseMeasurement) {
 		return nil, nodeChainExecutionError
 	}
 	p := &NodeChainExecutionRemoteCandidatePlan{runtime: r, projection: r.projection, trial: trial, identity: identity, engine: r.engine, packet: packet}
@@ -116,7 +147,16 @@ func (p *NodeChainExecutionRemoteCandidatePlan) NewMeasurementContext(ctx contex
 	}
 	base := &nodeChainExecutionMeasurementEngine{runtime: p.runtime, projection: p.projection, owner: owner, identity: p.identity, trial: p.trial}
 	e := &nodeChainExecutionRemoteCandidateEngine{plan: p, owner: owner, base: base}
-	service, err := hopmeasure.NewCapturedPrefixCandidatesContext(ctx, e, hopmeasure.CandidatePrefix{Position: p.packet.prefix.Position, ID: p.packet.prefix.ProfileID, Tag: p.packet.prefix.Tag, CaptureSHA256: p.capture}, p.packet.targets, NodeChainInputLimit)
+	prefix := hopmeasure.CandidatePrefix{Position: p.packet.prefix.Position, ID: p.packet.prefix.ProfileID, Tag: p.packet.prefix.Tag, CaptureSHA256: p.capture}
+	var service *hopmeasure.CandidateService
+	var err error
+	if p.packet.measurement != hopmeasure.CandidatePrivateResponseMeasurement {
+		service, err = hopmeasure.NewCapturedPrefixCandidatesContext(ctx, e, prefix, p.packet.targets, NodeChainInputLimit)
+	} else if prefix.Position >= NodeChainMaximumNodes-1 {
+		service, err = hopmeasure.NewExtendedResponseCandidatesContext(ctx, e, prefix, p.packet.targets, NodeChainInputLimit, p.packet, e.response)
+	} else {
+		service, err = hopmeasure.NewCapturedResponseCandidatesContext(ctx, e, prefix, p.packet.targets, NodeChainInputLimit, e.response)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -330,4 +370,88 @@ func remoteCandidateDeadline(ctx context.Context, lease time.Time) time.Time {
 		deadline = lease
 	}
 	return deadline
+}
+
+// SupportsServerResponseCandidate describes the original selected route. A live
+// remote plan still requires the original winning Server trial and lease.
+func (p *NodeChainExecutionPreparation) SupportsServerResponseCandidate(position int) bool {
+	if p == nil || p.validateCapture() != nil || (p.Execution() != "server" && p.Execution() != "auto") {
+		return false
+	}
+	if p.multiple == nil {
+		return p.local.compareLocalResponsePrefix(position)
+	}
+	_, valid := p.local.selectedStreamLayout()
+	last := len(p.local.proofs) - 2
+	return valid && p.multiple.local == p.local && p.multiple.owners == p.local.importedNodes &&
+		position > 0 && position <= last && (position == last || len(p.local.proofs) < NodeChainExtendedLocalMaximumNodes) &&
+		p.local.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement
+}
+
+func (e *nodeChainExecutionRemoteCandidateEngine) response(ctx context.Context, target hopmeasure.CandidateTarget, complete func() error) (result error) {
+	e.mu.Lock()
+	op := e.operation
+	e.mu.Unlock()
+	if op == nil || op.target != target {
+		return nodeChainExecutionError
+	}
+	if err := op.lock(ctx); err != nil {
+		return err
+	}
+	absent := op.absent && !op.prepared && !op.closed && op.ctx.Err() == nil
+	op.gate <- struct{}{}
+	if absent {
+		if err := e.current(ctx); err != nil {
+			return err
+		}
+		return hopmeasure.ErrCandidateNotRegistered
+	}
+	for _, s := range e.plan.packet.responses {
+		if target != s.Target {
+			continue
+		}
+		nonce, err := randomHex(16)
+		if err != nil {
+			return err
+		}
+		request := hopmeasure.CandidateChallengeMAC(s.Token, s.NodeID, nonce, false)
+		expected := hopmeasure.CandidateChallengeMAC(s.Token, s.NodeID, nonce, true)
+		conn, err := e.Dial(ctx, e.plan.packet.prefix.Tag, target.Address)
+		if conn == nil || err != nil {
+			if conn != nil {
+				err = errors.Join(err, conn.Close())
+			}
+			return errors.Join(err, nodeChainExecutionError)
+		}
+		defer func() { result = errors.Join(result, conn.Close()) }()
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			return nodeChainExecutionError
+		}
+		if err = conn.SetDeadline(deadline); err != nil {
+			return err
+		}
+		stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+		defer stop()
+		frame := nonce + request
+		if n, err := io.WriteString(conn, frame); err != nil || n != len(frame) {
+			return errors.Join(err, io.ErrShortWrite)
+		}
+		reply := make([]byte, len(expected))
+		if _, err = io.ReadFull(conn, reply); err != nil {
+			return err
+		}
+		if !hmac.Equal(reply, []byte(expected)) {
+			return nodeChainExecutionError
+		}
+		if err := complete(); err != nil {
+			return err
+		}
+		var tail [1]byte
+		if n, err := conn.Read(tail[:]); n != 0 || err != io.EOF {
+			return nodeChainExecutionError
+		}
+		return nil
+	}
+	return nodeChainExecutionError
 }

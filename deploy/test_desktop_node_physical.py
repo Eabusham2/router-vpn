@@ -131,6 +131,12 @@ ORDERED_PHYSICAL_VERDICTS += (
 ORDERED_PHYSICAL_VERDICTS += tuple(
     ORDERED_PHYSICAL_ROOT + "CapturesActualBox/paired-" + str(count) for count in (9, 16))
 ORDERED_PHYSICAL_SUITE = ("ordered-local-physical", ".", "^" + ORDERED_PHYSICAL_ROOT, ORDERED_PHYSICAL_VERDICTS)
+EXTERNAL_FINAL_PHYSICAL_ROOT = "TestRouterVPNDesktopExternalFinalPhysical"
+EXTERNAL_FINAL_PHYSICAL_SUITE = (
+    "external-final-physical", ".", "^" + EXTERNAL_FINAL_PHYSICAL_ROOT + "$",
+    (EXTERNAL_FINAL_PHYSICAL_ROOT, *(EXTERNAL_FINAL_PHYSICAL_ROOT + "/" + case for case in (
+        "linux-home", "windows-custom", "darwin-home", "original", "final-key", "final-detour", "home-resolver", "physical-source"))),
+)
 EXECUTION_PHYSICAL_ROOT = "TestRouterVPNDesktopNodeChainExecutionPhysical"
 EXECUTION_COMMAND_ROOT = "TestRouterVPNDesktopNodeChainExecutionCommand"
 EXECUTION_DISPATCH_ROOT = "TestRouterVPNDesktopNodeChainExecutionDispatch"
@@ -1581,7 +1587,7 @@ def execute_baseline_suite(baselines, suite):
         require_native_verdicts(output, required, "ordinary fifty captured native child")
     if name == OPENVPN_CAPACITY_SUITE[0]:
         require_native_verdicts(output, OPENVPN_CAPACITY_VERDICTS, "OpenVPN authenticated live capacity")
-    if name in {suite[0] for suite in (ORDERED_PHYSICAL_SUITE, *EXECUTION_DESKTOP_SUITES, *CONNECT_EXECUTION_DESKTOP_SUITES, *CANDIDATE_PREFIX_DESKTOP_SUITES)}:
+    if name in {suite[0] for suite in (ORDERED_PHYSICAL_SUITE, EXTERNAL_FINAL_PHYSICAL_SUITE, *EXECUTION_DESKTOP_SUITES, *CONNECT_EXECUTION_DESKTOP_SUITES, *CANDIDATE_PREFIX_DESKTOP_SUITES)}:
         require_native_verdicts(output, required, name)
     if name == CANDIDATE_COMMAND_SUITE[0]:
         require_native_verdicts(output, CANDIDATE_COMMAND_VERDICTS, "ordered candidate original native owner")
@@ -1801,6 +1807,7 @@ def baseline_suites(windows, *, bootstrap_only=False):
                     "TestRouterVPNDesktopNodeChainMeasurementHTTPComposition")))
     suites.append(ORDINARY_FIFTY_SUITE)
     suites.append(ORDERED_PHYSICAL_SUITE)
+    suites.append(EXTERNAL_FINAL_PHYSICAL_SUITE)
     suites.append(CANDIDATE_COMMAND_SUITE)
     suites.extend(EXECUTION_DESKTOP_SUITES)
     suites.extend(CONNECT_EXECUTION_DESKTOP_SUITES)

@@ -516,6 +516,7 @@ func newMultipleImportedFixtureWithRoutes(t *testing.T, layout multipleImportedL
 		t.Fatal(err)
 	}
 	defer clear(ipcs)
+	externalFinal := layout.name == "external-final-home" || layout.name == "external-final-custom"
 	imported := map[int]bool{}
 	for _, position := range layout.imports {
 		if position < 0 || position == 0 && (layout.name != "custom-entry" || layout.count != 3) || position >= layout.count-1 || imported[position] {
@@ -541,6 +542,9 @@ func newMultipleImportedFixtureWithRoutes(t *testing.T, layout multipleImportedL
 	for position := layout.count - 1; position >= 0; position-- {
 		member := &multipleImportedMember{position: position, imported: imported[position], publicIP: fmt.Sprintf("203.0.113.%d", 100+position), entered: make(chan struct{}, 1)}
 		f.members[position] = member
+		if externalFinal && position == layout.count-1 {
+			member.imported = true
+		}
 		if position == layout.count-1 {
 			member.virtual = "10.77.0.1:8388"
 			if finalLayer == "aes-256-gcm+xor-whitening" {
@@ -568,6 +572,9 @@ func newMultipleImportedFixtureWithRoutes(t *testing.T, layout multipleImportedL
 			routes = append(routes, desktopNodeLayerRoute{"tcp", "10.78.0.53:5353", address})
 		} else if host != nil && host.misplaced && position == 0 {
 			routes = append(routes, desktopNodeLayerRoute{"tcp", "10.78.0.53:5353", resolver})
+		}
+		if externalFinal && (position == 0 && layout.name == "external-final-home" || position == layout.count-1 && layout.name == "external-final-custom") {
+			routes = append(routes, desktopNodeLayerRoute{"udp", "192.168.50.133:53", dnsAddress})
 		}
 		for _, setup := range candidate {
 			if setup.position == position {
@@ -597,7 +604,7 @@ func newMultipleImportedFixtureWithRoutes(t *testing.T, layout multipleImportedL
 				private := f.privateServer(t, member, target, identity.APIToken, identity.NodeProofID)
 				routes = append(routes, desktopNodeLayerRoute{"tcp", target, private})
 			}
-			if position == layout.count-1 {
+			if position == layout.count-1 && !externalFinal {
 				private := f.privateServer(t, member, desktopNodeRouterHealthTarget, request.FinalAPIToken, request.FinalNodeProofID)
 				routes = append(routes, desktopNodeLayerRoute{"tcp", desktopNodeRouterHealthTarget, private}, desktopNodeLayerRoute{"udp", "192.168.50.133:53", dnsAddress})
 			}
@@ -743,6 +750,9 @@ func newMultipleImportedFixtureWithRoutes(t *testing.T, layout multipleImportedL
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+	if externalFinal {
+		f.source = externalFinalNativeSource(t, f, layout.name == "external-final-home", fault)
 	}
 	f.chain, err = mobilemultihop.NewNodeChain(desktopNodeChainJSON(t, f.source))
 	if err != nil {
@@ -1400,4 +1410,48 @@ func TestRouterVPNMultipleImportedExtendedThroughput(t *testing.T) {
 			t.Logf("QUALIFIED_ORIGINAL_THROUGHPUT_STATUS %d %s", len(proofs), raw)
 		})
 	}
+}
+
+// Capture the external final's own ordinary paired policy without installing
+// that two-node graph. Only the ordered compiler connects the actual interiors.
+func externalFinalNativeSource(t *testing.T, f *multipleImportedFixture, home bool, fault string) mobilemultihop.NodeChainSource {
+	t.Helper()
+	source := f.source
+	last := len(source.Nodes) - 1
+	exit := f.members[last]
+	key := exit.key
+	if fault == "wrong-exit-key" {
+		key = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{251}, 32))
+	}
+	var original struct {
+		Config  string `json:"config"`
+		Capture string `json:"capture"`
+	}
+	if err := json.Unmarshal([]byte(multipleImportedInput(t, exit, key)), &original); err != nil {
+		t.Fatal(err)
+	}
+	var selection, entryProfile map[string]any
+	var entryLaunch struct {
+		Profile string `json:"profile_json"`
+	}
+	if json.Unmarshal([]byte(source.Nodes[0]), &entryLaunch) != nil || json.Unmarshal([]byte(entryLaunch.Profile), &entryProfile) != nil || json.Unmarshal([]byte(original.Capture), &selection) != nil {
+		t.Fatal("lost selected external entry or exit")
+	}
+	entry, err := mobilemultihop.ParseNodeLaunchInput(source.Nodes[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := selection["profile"].(map[string]any)
+	profile["multihop_enabled"], profile["multihop_entry_mode"], profile["multihop_execution"] = true, "wg", "local"
+	profile["multihop_entry_id"], profile["multihop_exit_id"] = entryProfile["id"], profile["id"]
+	if !home {
+		profile["dns_mode"], profile["dns_host"], profile["dns_protocol"], profile["dns_port"] = "custom", "192.168.50.133", "udp", 53
+	}
+	selection["entry"], selection["entry_tag"], selection["predecessor_config"] = entryProfile, "external-entry", entry.Config()
+	source.Nodes[last], err = mobilemultihop.NodeChainExternalFinalInput(original.Config, desktopNodeChainJSON(t, selection))
+	if err != nil {
+		t.Fatal("ordinary external-final capture", err)
+	}
+	source.Schema, source.IdentitySources[last] = 8, ""
+	return source
 }

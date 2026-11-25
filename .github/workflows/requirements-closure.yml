@@ -15,6 +15,12 @@ concurrency:
 
 jobs:
   source-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    env:
+      ROUTERVPN_SOURCE_SHARD: ${{ matrix.shard }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:

@@ -91,11 +91,27 @@ CASES=r'''
     ids[paired]="";forged["identity_sources"]=ids
     try reject("lost private stream identity cannot create a session"){_ = try IOSSessionIdentity(connectedAt:Date(),engine:"multihop-libbox",rawProfile:"shadowsocks",bundleData:saved.last!,entryBundleData:nil,nodeChainSource:data(forged))}
    }
+   if packets == 1 {
+    var ordered=saved
+    ordered[count-1]=try editProfile(ordered[count-1]){$0["multihop_execution"]="auto"}
+    let selected=try IOSNodeChainCapture.compileOriginalForMultipleImportedExecution(bundles:ordered,requested:"auto")
+    defer {try? selected.plan.close()}
+    var crossed=ordered
+    crossed.swapAt(1,count-2)
+    try check("swapped sources keep two valid literal roles",imports.contains(1) && imports.contains(count-2) && nodes[1].id != nodes[count-2].id)
+    try reject("another valid literal source cannot take the original position"){
+     _=try IOSNodeChainCapture.compileOriginalForMultipleImportedExecution(bundles:crossed,requested:"auto")
+    }
+   }
    for at in paired..<count-1 {
     try check("retained private intermediate and subsequent import preserve complete measured route",try editor.measurementPath(through:at,profiles:profiles)==nodes)
     try check("native original authorizes private responses after retained intermediate",LibboxRouterNodeChainCandidatePrefixMeasurement(retained.plan,Int32(at))=="routed-candidate-response")
-    try reject("Server cannot measure an authenticated response through a retained stream"){_ = try editor.measurementPath(through:at,execution:"server",profiles:profiles)}
-    if count == 5 && at == count-2 {
+    if packets == 1 {
+     try check("Server stages the exact original response prefix",try editor.measurementPath(through:at,execution:"server",profiles:profiles)==nodes)
+    } else {
+     try reject("Server response cannot borrow a second packet entry"){_ = try editor.measurementPath(through:at,execution:"server",profiles:profiles)}
+    }
+    if packets == 1 {
      try check("Compare can stage the original WG/import/paired/import/final through its penultimate import",
                try editor.measurementPath(through:at,execution:"auto",profiles:profiles)==nodes)
      try reject("Compare needs the independently saved original paired stream"){_ = try editor.measurementPath(through:at,execution:"auto",profiles:profiles.filter{$0.id != nodes[paired].id})}
@@ -323,7 +339,7 @@ def main():
           ('old-source-family','IOSNodeChainCapture.swift','importedNodes ? 6 : importedOpenVPN ? 5 : imported ? 2 : 1','importedNodes ? 2 : importedOpenVPN ? 5 : imported ? 2 : 1','ordered node chain requires its complete bounded original Local capture'),
           ('old-readback-family','IOSNodeChainCapture.swift','schema == 6 && (selectionExecution == "local" || multipleExecution)','schema == 6 && false','another source or platform owner'),
           ('literal-source','Models.swift','eligible(profile) && profile.external?.shadowsocks.map { literal($0.server) } == true','eligible(profile)','independent literal eligibility'),
-          ('final-owner','IOSNodeChainCapture.swift','try json(selectedProfile, maximum: 256 * 1024) == json(capture.finalProfile, maximum: 256 * 1024)','true','ACCEPTED independent final substitution'),
+          ('final-owner','IOSNodeChainCapture.swift','try json(selectedProfile, maximum: 256 * 1024) == json(capture.controlMember.profile, maximum: 256 * 1024)','true','ACCEPTED independent final substitution'),
           ('public-inventory','IOSNodeChainPresentation.swift','publicPath == expectedPublicPositions.contains(position)','true','independent unowned public progress refused'),
           ('old-presentation-family','IOSNodeChainPresentation.swift','launch.schema == 2 || launch.schema == 5 || launch.schema == 6','launch.schema == 2 || launch.schema == 5','independent complete captured presentation'),
           ('lost-later-hostname','Models.swift','position == packets || packets == 1 && position > packets && position < nodes.count-1','position == packets','hostname response requires the whole qualified route and original resolver at 2 of 4'),

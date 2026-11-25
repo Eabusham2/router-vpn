@@ -79,7 +79,7 @@ extension IOSRuntimeSelector {
                   IOSMultihopNodeSelection.supportsNativePrefix(member.mode) && member.profile["node_kind"] as? String == "router-vpn" ||
                   (IOSMultihopNodeSelection.supportsImportedMiddle(member.mode, position: position, count: capture.members.count) && ["shadowsocks", "openvpn"].contains(member.mode) || IOSMultihopNodeSelection.supportsLocalImportedNode(member.mode, position: position, count: capture.members.count, importedEntry: importedEntry)) && member.profile["node_kind"] as? String == "external"
               }),
-              let final = capture.members.last, final.profile["node_kind"] as? String == "router-vpn",
+              let final = capture.members.last, final.profile["node_kind"] as? String == (capture.sourceSchema == 8 ? "external" : "router-vpn"),
               final.mode == "shadowsocks" || final.mode == "hysteria2" &&
                 (final.profile["start_layer"] == nil ||
                  (final.profile["start_layer"] as? String).map({ ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains($0) }) == true) &&

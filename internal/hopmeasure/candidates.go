@@ -17,6 +17,10 @@ import (
 
 const CandidateReceiptLifetime = 120 * time.Second
 
+var ErrCandidateNotRegistered = errors.New("paired candidate is not registered on the selected server")
+
+const CandidateNotRegistered = "not-registered"
+
 const (
 	CandidateTCPMeasurement             = "routed-tcp-connect"
 	CandidatePrivateResponseMeasurement = "routed-candidate-response"
@@ -275,7 +279,12 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 			cancel()
 			failure = errors.Join(clockErr, dialErr, elapsedErr, closeErr, probeErr)
 			if failure != nil || connection == nil && s.response == nil || elapsed <= 0 || math.IsNaN(elapsed) || math.IsInf(elapsed, 0) {
-				failure = fmt.Errorf("candidate %s did not complete", phase)
+				if s.response != nil && len(samples) == 0 && errors.Is(dialErr, ErrCandidateNotRegistered) && ctx.Err() == nil && probeErr == nil && clockErr == nil && closeErr == nil {
+					result.CandidateDisposition = CandidateNotRegistered
+					failure = ErrCandidateNotRegistered
+				} else {
+					failure = fmt.Errorf("candidate %s did not complete", phase)
+				}
 				break
 			}
 			if boundaryFailure = verify(); boundaryFailure != nil {
@@ -299,7 +308,11 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 		result.Benchmark = &LatencyBenchmark{Schema: 1, Measurement: s.measurement(), Attempts: LatencyBenchmarkSamples, Distribution: distribution(samples), TrimmedMean: mean}
 		result.Ready = true
 	} else {
-		result.Failure = fmt.Sprintf("No complete 50-sample %s result; this candidate has no score", phase)
+		if result.CandidateDisposition == CandidateNotRegistered {
+			result.Failure = ErrCandidateNotRegistered.Error()
+		} else {
+			result.Failure = fmt.Sprintf("No complete 50-sample %s result; this candidate has no score", phase)
+		}
 	}
 	finalError := service.valid(ctx)
 	service.mu.Lock()

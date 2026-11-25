@@ -53,8 +53,8 @@ func (c NodeChainExecutionCandidateStopCapture) validate() error {
 	if err != nil || leaseErr != nil || apiErr != nil || c.lease.Validate() != nil ||
 		!reflect.DeepEqual(q, c.request) || !reflect.DeepEqual(q.Lease, c.lease.Request) ||
 		q.OwnerID != c.lease.OwnerID || q.CaptureSHA256 != digest || q.ExecutionSHA256 != c.identity.SourceSHA256 ||
-		q.Position >= len(c.lease.Source.Members) || !NodeChainPrefixMode(c.lease.Source.Members[q.Position-1].Mode) ||
-		c.lease.Source.Members[q.Position-1].NodeKind != "" ||
+		q.Position >= len(c.lease.Source.Members) || q.Schema == 1 && (!NodeChainPrefixMode(c.lease.Source.Members[q.Position-1].Mode) || c.lease.Source.Members[q.Position-1].NodeKind != "") ||
+		q.Schema == 2 && !c.lease.Source.CandidateResponsePrefix(q.Position) ||
 		!exactID.MatchString(c.entryTag) || !exactID.MatchString(c.selectedTag) || c.address != u.Host || c.token == "" ||
 		!nodeChainIdentityText(c.identity.EngineID) || !nodeChainIdentityText(c.identity.SessionID) || !nodeChainIdentityText(c.identity.NetworkID) ||
 		!proofID.MatchString(c.identity.ConfigSHA256) || c.seal == "" || c.seal != c.digest() {

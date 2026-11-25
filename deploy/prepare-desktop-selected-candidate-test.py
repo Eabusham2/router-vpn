@@ -7,12 +7,13 @@ spec = importlib.util.spec_from_file_location('original_selected_latency_fixture
 LATENCY = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(LATENCY)
 REMOTE = ROOT/'internal/mobilemultihop/node_chain_execution_remote_candidates_test.go'
+RESPONSES = ROOT/'internal/mobilemultihop/node_chain_server_response_candidate_test.go'
 WRAPPER = ROOT/'mobile/desktop_test/selected_candidate_fixture.go.tmpl'
 TARGET = 'experimental/libbox/routervpn/mobilemultihop/routervpn_desktop_candidate_fixture.go'
 
 
 def inputs():
-    return [Path(__file__).resolve(), REMOTE, WRAPPER]
+    return [Path(__file__).resolve(), REMOTE, RESPONSES, WRAPPER]
 
 
 def copies():
@@ -26,5 +27,6 @@ def copies():
     ack = 'if _, e := conn.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0}); e != nil {'
     if methods[1].count(ack) != 1:
         raise ValueError('original candidate admission no longer brackets the SOCKS acknowledgement')
-    methods[1] = methods[1].replace(ack, 'upstream, err := net.Dial("tcp",r.destination.Addr().String()); if err!=nil{return}; upstream.Close()\n\t'+ack)
-    return {TARGET: (WRAPPER.read_text()+'\n'+stop+'\n'+'\n'.join(methods)+'\n').encode()}
+    methods[1] = methods[1].replace(ack, 'if capture.Request.Schema == 1 { upstream, err := net.Dial("tcp",r.destination.Addr().String()); if err!=nil{return}; upstream.Close() }\n\t'+ack)
+    reply = LATENCY.one(LATENCY.declarations(RESPONSES.read_text()), 'func fixtureServerCandidateReply(')
+    return {TARGET: (WRAPPER.read_text()+'\n'+reply+'\n'+stop+'\n'+'\n'.join(methods)+'\n').encode()}

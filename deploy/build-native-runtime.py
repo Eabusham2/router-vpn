@@ -243,6 +243,7 @@ def inputs():
                              ROOT/'mobile/chain_component/mixed_local_candidates_test.go.tmpl',
                              ROOT/'mobile/chain_component/multiple_imported_test.go.tmpl',
                              ROOT/'mobile/chain_component/mixed_local_traffic_test.go.tmpl',
+                             ROOT/'mobile/chain_component/external_final_test.go.tmpl',
                              ROOT/'mobile/chain_component/extended_execution_client_test.go.tmpl',
                              ROOT/'mobile/chain_component/extended_execution_peer_test.go.tmpl',
                              ROOT/'mobile/server_chain_component/extended_execution_test.go.tmpl',

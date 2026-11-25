@@ -33,14 +33,13 @@ func (a *app) candidatePreparationNodesLocked(scope string, control common.Route
 	return append([]common.MultihopNodeSelection(nil), draft.Nodes...), nil
 }
 
-// This source-only preview cannot authorize a measurement. A fresh native
-// receipt from the original Compare Local winner is required for adoption.
-func desktopCompareLocalResponseProposal(members []desktopNodeChainMember, execution string, position int, candidate common.RouterProfile) bool {
-	if execution != "auto" || len(members) < 3 || candidate.External != nil {
+// Adoption requires a fresh native receipt from the originally selected trial.
+func desktopSelectedResponseProposal(members []desktopNodeChainMember, execution string, position int, candidate common.RouterProfile) bool {
+	if (execution != "auto" && execution != "server") || len(members) < 3 || candidate.External != nil {
 		return false
 	}
 	if len(members) == 3 {
-		if position != 1 || members[0].Mode != "wg" || members[0].Profile.External != nil ||
+		if position != 1 || !mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[0].Profile.External != nil ||
 			members[1].Mode != "shadowsocks" || members[1].Profile.External == nil ||
 			members[2].Mode != "shadowsocks" || members[2].Profile.External != nil {
 			return false
@@ -53,7 +52,7 @@ func desktopCompareLocalResponseProposal(members []desktopNodeChainMember, execu
 		if err != nil || address.Zone() != "" || address.IsUnspecified() {
 			return false
 		}
-	} else if !desktopCompareLocalPrivateResponseMembers(members, execution, position) {
+	} else if !desktopCompareLocalPrivateResponseMembers(members, "auto", position) {
 		return false
 	}
 	for _, m := range members {
@@ -69,8 +68,8 @@ func desktopCompareLocalResponseProposal(members []desktopNodeChainMember, execu
 // only when the complete original suffix and all of its sources still compile.
 func orderedResponseProfile(ctx context.Context, root, execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, string, error) {
 	var empty common.RouterProfile
-	if execution != "local" && !desktopCompareLocalResponseProposal(members, execution, position, candidate) || position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" {
-		return empty, nil, "", errors.New("this measurement has no complete Local stream path")
+	if execution != "local" && !desktopSelectedResponseProposal(members, execution, position, candidate) || position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" {
+		return empty, nil, "", errors.New("this measurement has no complete supported stream path")
 	}
 	p, rows, err := orderedCandidateProposalForExecution(members, position, candidate, profiles, execution)
 	if err != nil {
@@ -100,7 +99,7 @@ const orderedCandidateDraftInsertAction = "insert-measured-hop"
 // adoption; this preview cannot confer a selected-trial or measurement grant.
 func orderedResponseDraftProposal(ctx context.Context, root, execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var empty common.RouterProfile
-	if execution != "local" && !desktopCompareLocalResponseProposal(members, execution, position, candidate) ||
+	if execution != "local" && !desktopSelectedResponseProposal(members, execution, position, candidate) ||
 		position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" {
 		return empty, nil, errors.New("this response has no complete supported draft insertion")
 	}

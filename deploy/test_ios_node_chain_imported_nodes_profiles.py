@@ -10,6 +10,34 @@ import test_ios_node_chain_connect_profiles as C
 ROUNDTRIP=r'''
  static func independentRoundtrip()throws {
   let choice=CommandLine.arguments.last!, count=Int(choice) ?? (["private-sixteen","all-imported-sixteen"].contains(choice) ? 16:9)
+  if choice == "external-final" {
+   let (model,ids)=try setupTyped(9),store=IOSNodeBundleStore.shared
+   let refs=ids.enumerated().map { IOSMultihopNodeSelection(id:$0.element,mode:$0.offset==0 ? "wg":"shadowsocks") }
+   for i in 1..<ids.count {
+    var value=try stored(ids[i]),profile=value.routerProfiles[0]
+    profile.nodeKind="external";profile.nodeProofID=nil;profile.apiToken="";profile.routerAPI="";profile.startLayer="off"
+    profile.multihopEnabled=false;profile.multihopNodes=nil;profile.multihopExecution=nil
+    profile.endpoint="203.0.113.\(30+i)";profile.dnsMode="home";profile.dnsHost=nil;profile.dnsProtocol=nil;profile.dnsPort=nil;profile.dnsPath=nil;profile.dnsServerName=nil;profile.killSwitchPolicy="on-connect"
+    let raw:[String:Any]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.\(80+i)","shadowsocks":["server":profile.endpoint,"port":8388+i,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:UInt8(61+i),count:32).base64EncodedString()]]
+    profile.external=try JSONDecoder().decode(ExternalNodeConfig.self,from:JSONSerialization.data(withJSONObject:raw))
+    value.routerProfiles=[profile];value.profiles=[:];try store.save(value)
+   }
+   var selected=try stored(ids[0]);selected.routerProfiles[0].startLayer="off"
+   selected.routerProfiles[0].multihopNodes=refs;selected.routerProfiles[0].multihopEnabled=true;selected.routerProfiles[0].multihopExecution="local"
+   selected.routerProfiles[0].multihopEntryID=nil;selected.routerProfiles[0].multihopEntryMode=nil
+   selected.routerProfiles[0].multihopExitID=nil;selected.routerProfiles[0].multihopExitMode=nil
+   do {try store.save(selected)} catch {throw failure("external entry selection: "+error.localizedDescription)};model.bundle=selected
+   let ui=TypedProfileActions(model);ui.name="Original external exit";ui.add()
+   guard let saved=IOSConnectionProfileStore.all().first(where:{$0.id==ui.selectedID}) else {throw failure("external Add: "+ui.status)}
+   try check("saved imported exit and distinct selected control",saved.nodeID==ids[0] && saved.chainPolicies?.last?.nodeID==ids.last! && saved.chainPolicies?.last?.externalProtocol=="shadowsocks")
+   ui.name="Updated external exit";ui.update();ui.load()
+   guard ui.status.hasPrefix("Loaded "),let restored=model.bundle else {throw failure("external Load: "+ui.status)}
+   let bundles=try model.iosNodeChainBundles(for:restored),native=try IOSNodeChainCapture.compile(bundles:bundles.map{try encoded($0)})
+   defer{try? native.plan.close()}
+   try check("loaded original imported exit and resolver",native.sourceSchema==8 && native.controlMember.id==ids[0] && native.finalProfile["dns_mode"] as? String=="home")
+   ui.delete();try check("durable external exit removal",IOSConnectionProfileStore.all().isEmpty)
+   return
+  }
   let cases: [(Bool,Bool,Bool)]
   switch choice {
   case "private-nine","private-sixteen","all-imported-sixteen","insert-nine": cases=[(false,false,true)]
@@ -91,13 +119,13 @@ ROUNDTRIP=r'''
      let profiles=linked.map { bundle in bundle.routerProfiles.first(where:{$0.id==bundle.selectedRouterID})! }
      let draft=IOSNodeChainDraft(saved:nodes,finalID:ids.last!)
      try check("sixteen-member editor retains the original Compare source",try draft.measurementPath(through:count-2,execution:"auto",profiles:profiles)==nodes)
-     try reject("Server cannot request a private response at position fourteen"){_=try draft.measurementPath(through:count-2,execution:"server",profiles:profiles)}
+     try check("Server stages the original stream at position fourteen",try draft.measurementPath(through:count-2,execution:"server",profiles:profiles)==nodes)
      let expectedStops=Array(1...count-2)
      try check("every earlier editor stop retains the original selected graph",try expectedStops.allSatisfy {try draft.measurementPath(through:$0,execution:"auto",profiles:profiles)==nodes})
      try reject("penultimate chooser requires every original source"){_=try draft.measurementPath(through:count-2,execution:"auto",profiles:Array(profiles.dropFirst()))}
      let original=try IOSNodeChainExecutionCapture.compile(bundles:linked.map {try encoded($0)},requested:"auto")
      defer {try? original.close()}
-     try check("extended editor derives its stops from the original selected capture",original.extendedOriginalNodeCount==count && original.responsePositions(for:"local")==expectedStops && original.responsePositions(for:"server").isEmpty)
+     try check("extended editor derives its stops from the original selected capture",original.extendedOriginalNodeCount==count && original.responsePositions(for:"local")==expectedStops && original.responsePositions(for:"server")==expectedStops)
     }
     continue
    }
@@ -132,14 +160,12 @@ ROUNDTRIP=r'''
      let draft=IOSNodeChainDraft(saved:nodes,finalID:ids.last!)
      if qualified {
       try check("selected entry candidate retains every private and public reference",try draft.measurementPath(through:0,execution:execution,profiles:pairedProfiles)==nodes)
-      try check("only Compare can measure through the retained private stream",((try? draft.measurementPath(through:2,execution:execution,profiles:pairedProfiles)) == nodes) == (execution == "auto"))
+      try check("Server and Compare retain the complete original private stream",try draft.measurementPath(through:2,execution:execution,profiles:pairedProfiles)==nodes)
       var penultimate=nodes;penultimate.swapAt(2,count-2)
       let complete=IOSNodeChainDraft(saved:penultimate,finalID:ids.last!)
-      if execution=="auto" {
-       try check("private penultimate chooser retains its complete Compare source",try complete.measurementPath(through:count-2,execution:execution,profiles:pairedProfiles)==penultimate)
-      } else {try reject("Server cannot measure through the private penultimate"){_ = try complete.measurementPath(through:count-2,execution:execution,profiles:pairedProfiles)}}
-      var crossed=nodes;crossed[0].mode="awg2-fast"
-      try reject("private stream requires WG entry for candidate selection"){_ = try IOSNodeChainDraft(saved:crossed,finalID:ids.last!).measurementPath(through:0,execution:execution,profiles:pairedProfiles)}
+      try check("private penultimate chooser retains its complete selected source",try complete.measurementPath(through:count-2,execution:execution,profiles:pairedProfiles)==penultimate)
+      var crossed=nodes;crossed[0].mode="awg2-pq"
+      try reject("private stream rejects an unsupported packet entry for candidate selection"){_ = try IOSNodeChainDraft(saved:crossed,finalID:ids.last!).measurementPath(through:0,execution:execution,profiles:pairedProfiles)}
       let linked=try model.iosNodeChainBundles(for:selected),bytes=try linked.map{try encoded($0)}
       let original=try IOSNodeChainExecutionCapture.compile(bundles:bytes,requested:execution)
       defer { try? original.close() }
@@ -248,5 +274,5 @@ def main():
     C.P.BOUNDARIES='import CoreFoundation\n'+C.P.BOUNDARIES+'\nenum ProfileProgress {\n'+boolean+'\n'+progress+'\n}\n'
     C.P.BOUNDARIES+='\n'+C.L.S.member((C.P.APP/'IOSNodeChainEditor.swift').read_text(),'struct IOSNodeChainDraft {')+'\n'
     C.TYPED=source
-    C.main(label='independent Local imports',roundtrip='independentRoundtrip',binary_cases=[(str(n),) for n in range(3,10)]+[("private-nine",),("private-sixteen",),("all-imported-sixteen",),("insert-nine",),("later-nine",)],extra_source_names=("IOSSessionIdentity.swift",))
+    C.main(label='independent Local imports',roundtrip='independentRoundtrip',binary_cases=[("external-final",)]+[(str(n),) for n in range(3,10)]+[("private-nine",),("private-sixteen",),("all-imported-sixteen",),("insert-nine",),("later-nine",)],extra_source_names=("IOSSessionIdentity.swift",))
 if __name__=='__main__':main()

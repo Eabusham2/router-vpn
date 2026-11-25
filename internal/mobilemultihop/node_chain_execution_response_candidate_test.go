@@ -10,6 +10,16 @@ import (
 )
 
 func TestNodeChainCompareLocalImportedResponseCandidate(t *testing.T) {
+	testThreeNodeImportedResponse(t, "wg")
+}
+
+func TestNodeChainCompareAWGImportedResponseCandidate(t *testing.T) {
+	for _, mode := range []string{"awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) { testThreeNodeImportedResponse(t, mode) })
+	}
+}
+
+func testThreeNodeImportedResponse(t *testing.T, mode string) {
 	input, err := nodeChainFixtureNodes(t, 8, "")[7].LaunchInput()
 	if err != nil {
 		t.Fatal(err)
@@ -21,7 +31,7 @@ func TestNodeChainCompareLocalImportedResponseCandidate(t *testing.T) {
 			if outcome == "server" {
 				requested = "server"
 			}
-			f := newNodeChainExecutionRuntimeFixtureFromSource(t, nodeChainImportedPrefixExecutionSource(t, 1, "wg", requested))
+			f := newNodeChainExecutionRuntimeFixtureFromSource(t, nodeChainImportedPrefixExecutionSource(t, 1, mode, requested))
 			entryRun(t, f, outcome)
 			runtime := f.runtime
 			trial := runtime.active

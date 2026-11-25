@@ -280,7 +280,7 @@ func orderedCandidateAdoptable(owner *viaEntryOwner, q orderedCandidateSaveReque
 		return false
 	}
 	for _, row := range job.results {
-		if row.CandidateID == q.CandidateID && validateDesktopCandidateCatalogStatus(job.catalog, q.CandidateID, row, now) == nil {
+		if row.CandidateID == q.CandidateID && len(row.Results) == 1 && row.Results[0].Ready && validateDesktopCandidateCatalogStatus(job.catalog, q.CandidateID, row, now) == nil {
 			return true
 		}
 	}

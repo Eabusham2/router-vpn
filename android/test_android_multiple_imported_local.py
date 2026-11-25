@@ -22,7 +22,7 @@ def compiler_source(source):
     assert source.count(marker) == 1
     return source.replace(marker, extra + marker)
 
-PHASES = ("selected-private","selected-execution","selected-extended-nine","selected-extended-sixteen","selected-fast-nine","selected-fast-sixteen","selected-strong-nine","selected-strong-sixteen","selected-fast-bounds","hostname-four","hostname-nine","hostname-sixteen", "adjacent", "separated", "single-interior", "maximum", "extended-nine", "extended-sixteen", "awg-fast", "awg-strong", "layers", "refusals", "rollback", "stale", "source-race", "compiler", "preview-receipts", "history", "custom-entry")
+PHASES = ("external-final-home", "external-final-custom", "selected-private","selected-execution","selected-extended-nine","selected-extended-sixteen","selected-fast-nine","selected-fast-sixteen","selected-strong-nine","selected-strong-sixteen","selected-fast-bounds","hostname-four","hostname-nine","hostname-sixteen", "adjacent", "separated", "single-interior", "maximum", "extended-nine", "extended-sixteen", "awg-fast", "awg-strong", "layers", "refusals", "rollback", "stale", "source-race", "compiler", "preview-receipts", "history", "custom-entry")
 HARNESS = r'''package com.eabusham.routervpn;
 import org.json.*;import java.io.*;import java.nio.file.*;import java.nio.charset.StandardCharsets;import java.util.*;
 public final class MultipleImportedLocalHarness {
@@ -99,7 +99,7 @@ public final class MultipleImportedLocalHarness {
   if(count>=7)try(var live=AndroidNodeChainCapture.compile(source)){
    int selected=source.modes.size()-2;
    check(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,selected,"local")&&"routed-candidate-response".equals(io.nekohasekai.libbox.Libbox.routerIndependentCandidateMetric(live.launchInput,selected)),"late imported UI disagreed with sealed native response capability");
-   check(!AndroidNodeChainCapture.responsePrefix(source.members,source.modes,selected,"server"),"Server offered a late imported response");
+   check(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,selected,"server"),"Server omitted the original late imported response");
    check(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,selected,"auto"),"Compare omitted the eligible late imported response");
    check(!live.ownsSelectedCandidatePrefix(source,selected),"Local capture acquired selected candidate ownership");
    var mixed=new ArrayList<>(source.modes);mixed.set(selected,"wg");check(!AndroidNodeChainCapture.responsePrefix(source.members,mixed,selected,"local"),"late imported UI admitted a mixed original suffix");
@@ -202,10 +202,12 @@ public final class MultipleImportedLocalHarness {
  }
  static void selectedPrivate(Path root)throws Exception {
   for (int total : List.of(4,9)) for (String requested : List.of("server","auto")) {
-   var f = new Fixture(root,"3/",total-3);
+   String entry = total == 4 ? "awg2-fast" : "awg2-strong";
+   var f = new Fixture(root,total==4 ? "3/mixed-awg" : "3/awg-strong",total-3);
    var draft = f.draft();
    String paired = draft.members().get(1).source.id;
    draft.removePrefix(1);
+   draft.setPrefixMode(0,entry);
    draft.setExecution(requested);
    f.addAll(draft);
    check(draft.prefixModes(paired).contains("shadowsocks"),"editor lost the qualified private stream choice");
@@ -227,7 +229,7 @@ public final class MultipleImportedLocalHarness {
       proofs.getJSONObject(privatePosition).getString("node_id").equals(restored.members.get(privatePosition).proofId),
       "private stream borrowed a public or final identity");
    }
-   var wrong = new ArrayList<>(restored.modes); wrong.set(0,"awg2-fast");
+   var wrong = new ArrayList<>(restored.modes); wrong.set(0,"awg2-pq");
    reject(()->AndroidNodeChainCapture.requireCompleteShape(restored.members,wrong,requested),"accepted a private stream after an unqualified packet mode");
    f.paired.profiles.delete(named.id);
   }
@@ -415,6 +417,53 @@ public final class MultipleImportedLocalHarness {
    }
   }
  }
+ static void externalFinal(Path root,int count,String dns)throws Exception {
+  var f=new Fixture(root,"2/",count-1);
+  var last=f.imports.get(count-2);
+  last.policy.put("dns_mode",dns);
+  if(dns.equals("custom"))last.policy.put("dns_protocol","tcp").put("dns_host","198.51.100.198").put("dns_port",5353);
+  f.exits.save(last);
+  var draft=f.draft(); while(draft.members().size()>1)draft.removePrefix(0);
+  String control=draft.members().get(0).source.id;
+  check(draft.finalModes(last.id).contains("shadowsocks"),"literal external final missing from eligible picker");
+  draft.setFinal(last.id,"shadowsocks");
+  check(draft.members().size()==2 && draft.members().get(0).source.id.equals(control) && draft.members().get(0).mode.equals("wg"),"external exit lost selected original entry");
+  reject(()->draft.save(),"two-position external final escaped without distinct imported intermediate");
+  for(int i=0;i<count-2;i++)draft.addPrefix(f.imports.get(i).id,"shadowsocks");
+  reject(()->draft.setExecution("auto"),"external final acquired Compare authority");
+  reject(()->draft.setPrefixMode(0,"awg2-fast"),"external final accepted a swapped entry transport");
+  var candidateDraft=draft.candidateDraftCapture(0).call();
+  try(var graph=AndroidNodeChainCapture.compile(candidateDraft,0)) {
+   check(graph.ownsSource(candidateDraft) && new JSONObject(graph.launchInput).getInt("schema")==8 && "routed-tcp-connect".equals(io.nekohasekai.libbox.Libbox.routerIndependentCandidateMetric(graph.launchInput,0)),"closed original WG entry lost its candidate metric");
+  }
+  reject(()->draft.candidateDraftCapture(count-2).call(),"unqualified public stream gained a private response candidate");
+  var saved=draft.save();
+  check(saved.control.id.equals(control)&&f.paired.nodes.activeId().equals(control),"external final replaced paired control");
+  var record=f.paired.profiles.add("Imported exit");f.paired.profiles.update(record.id,"Saved imported exit");
+  f.paired.profiles.load(record.id);
+  var reopened=f.paired.profiles.currentOrderedPath();
+  try(var graph=AndroidNodeChainCapture.compile(reopened);var replay=AndroidNodeChainCapture.reopen(graph.launchInput,reopened)){
+   JSONObject launch=new JSONObject(graph.launchInput);
+   JSONArray inputs=launch.getJSONArray("nodes"),identities=launch.getJSONArray("identity_sources");
+   JSONObject typed=new JSONObject(inputs.getString(count-1)),raw=new JSONObject(typed.getString("capture"));
+   check(launch.getInt("schema")==8 && typed.getString("kind").equals("routervpn-node-chain-external-final") && raw.getJSONObject("profile").getString("dns_mode").equals(dns),"external final lost its typed original resolver");
+   check(graph.finalProfile().getString("id").equals(last.id) && graph.controlProfile().getString("id").equals(reopened.members.get(0).profileId),"entry control and final profile collapsed");
+   check(!identities.getString(0).isEmpty() && identities.getString(count-1).isEmpty() && !raw.getJSONObject("profile").has("api_token") && replay.launchInput.equals(graph.launchInput),"imported exit borrowed paired credentials or failed canonical replay");
+   JSONArray proofs=new JSONArray(io.nekohasekai.libbox.Libbox.routerIndependentProofs(graph.launchInput));
+   JSONObject config=new JSONObject(graph.config),settings=config.getJSONObject("dns"),resolver=NodeChainCaptureHarness.tagged(settings.getJSONArray("servers"),settings.getString("final"));
+   check(resolver.getString("detour").equals(proofs.getJSONObject(dns.equals("home")?0:count-1).getString("tag")) && proofs.getJSONObject(count-1).getString("kind").equals("public-path"),"wrong public exit or DNS detour");
+   JSONArray roles=new JSONArray();roles.put("private-node");for(int i=1;i<count;i++)roles.put("public-path");
+   String req="9".repeat(32);JSONObject receipt=historyReceipt(graph,reopened,count-1,req);
+   receipt.getJSONObject("result").put("role","exit");
+   int depth=count>8?count:0;
+   var entry=AndroidOrderedLatencyStore.completed(historyStatus(receipt,req),receipt.toString(),req,graph.sourceSHA256,graph.configSHA256,count-1,last.id,"public-path","",false,depth,false,1,roles.toString());
+   AndroidOrderedLatencyStore.save(f.paired.context,entry,reopened::requireCurrent);
+   check(AndroidOrderedLatencyStore.load(f.paired.context,graph.sourceSHA256,graph.configSHA256,count-1,last.id,"public-path",depth,1,roles.toString()).raw.equals(receipt.toString()),"external final fifty-response history lost original roles");
+   reject(()->AndroidOrderedLatencyStore.load(f.paired.context,graph.sourceSHA256,graph.configSHA256,count-1,last.id,"public-path",depth),"ordinary source read external final with no original roles");
+   reject(()->AndroidOrderedLatencyStore.completed(historyStatus(receipt,req),receipt.toString(),req,graph.sourceSHA256,graph.configSHA256,count-1,last.id,"public-path"),"ordinary source admitted a public exit receipt");
+  }
+  f.paired.profiles.delete(record.id);check(f.paired.profiles.list().isEmpty(),"external-final saved profile deletion failed");
+ }
  static void customEntry(Path root)throws Exception{
   var f=new Fixture(root,"2/",2);var draft=f.draft();draft.removePrefix(0);
   var before=new NodeChainCaptureHarness.State(f.paired);
@@ -457,7 +506,7 @@ public final class MultipleImportedLocalHarness {
  }
  public static void main(String[] args)throws Exception{
   Path root=Path.of(args[0]);String phase=args[1];
-  switch(phase){case "hostname-four":mixedHostname(root,4);break;case "hostname-nine":mixedHostname(root,9);break;case "hostname-sixteen":mixedHostname(root,16);break;case "selected-fast-nine":selectedExecution(root,9,"2/awg-fast");break;case "selected-fast-sixteen":selectedExecution(root,16,"2/awg-fast");break;case "selected-strong-nine":selectedExecution(root,9,"2/awg-strong");break;case "selected-strong-sixteen":selectedExecution(root,16,"2/awg-strong");break;case "selected-fast-bounds":selectedFastBounds(root);break;case "selected-private":selectedPrivate(root);break;case "selected-execution":selectedExecution(root,0,"3/aes-256-gcm");break;case "selected-extended-nine":selectedExecution(root,9,"2/");break;case "selected-extended-sixteen":selectedExecution(root,16,"2/");break;case "custom-entry":customEntry(root);break;case "extended-nine":case "extended-sixteen":roundtrip(root,phase);mixedExtended(root,phase.equals("extended-nine")?9:16);if(phase.equals("extended-sixteen"))mixedLatePacket(root);break;case "adjacent":case "separated":case "single-interior":case "maximum":case "awg-fast":case "awg-strong":roundtrip(root,phase);break;case "layers":layers(root);break;case "refusals":refusals(root);break;case "rollback":rollback(root);break;case "stale":stale(root);break;case "source-race":sourceRace(root);break;case "compiler":compiler(root);break;case "preview-receipts":previewReceipts(root);break;case "history":history(root);break;default:throw new IllegalArgumentException("unknown complete imported Local phase");}
+  switch(phase){case "external-final-home":externalFinal(root,3,"home");break;case "external-final-custom":externalFinal(root,9,"custom");break;case "hostname-four":mixedHostname(root,4);break;case "hostname-nine":mixedHostname(root,9);break;case "hostname-sixteen":mixedHostname(root,16);break;case "selected-fast-nine":selectedExecution(root,9,"2/awg-fast");break;case "selected-fast-sixteen":selectedExecution(root,16,"2/awg-fast");break;case "selected-strong-nine":selectedExecution(root,9,"2/awg-strong");break;case "selected-strong-sixteen":selectedExecution(root,16,"2/awg-strong");break;case "selected-fast-bounds":selectedFastBounds(root);break;case "selected-private":selectedPrivate(root);break;case "selected-execution":selectedExecution(root,0,"3/aes-256-gcm");break;case "selected-extended-nine":selectedExecution(root,9,"2/");break;case "selected-extended-sixteen":selectedExecution(root,16,"2/");break;case "custom-entry":customEntry(root);break;case "extended-nine":case "extended-sixteen":roundtrip(root,phase);mixedExtended(root,phase.equals("extended-nine")?9:16);if(phase.equals("extended-sixteen"))mixedLatePacket(root);break;case "adjacent":case "separated":case "single-interior":case "maximum":case "awg-fast":case "awg-strong":roundtrip(root,phase);break;case "layers":layers(root);break;case "refusals":refusals(root);break;case "rollback":rollback(root);break;case "stale":stale(root);break;case "source-race":sourceRace(root);break;case "compiler":compiler(root);break;case "preview-receipts":previewReceipts(root);break;case "history":history(root);break;default:throw new IllegalArgumentException("unknown complete imported Local phase");}
   System.out.println("Android independent imported Local "+phase+": "+checks+" checks PASS");
  }
 }
@@ -542,7 +591,7 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     if imported_only:
         raise ValueError("independent imports require their complete Local inventory")
     generator = work / "android_chain_fixture_test.go"
-    generator.write_text(BASE.GENERATOR.replace("   if node.inputs.Start!=\"\"{", '''   if test.count==3 && test.layer=="" && position==1 {
+    generator.write_text(BASE.GENERATOR.replace("   if node.inputs.Start!=\"\"{", '''   if test.count==3 && (test.layer=="" || test.layer=="mixed-awg" || test.layer=="awg-strong") && position==1 {
     alternate:=append([]string(nil),modes...);alternate[position]="shadowsocks"
     middle:=nodeChainModeFixtureNodes(t,alternate,layers)[position]
     var ss map[string]string;if err:=json.Unmarshal([]byte(middle.inputs.Files),&ss);err!=nil{t.Fatal(err)};assets["shadowsocks"]=ss
@@ -565,7 +614,7 @@ def run(root, work, app, classes, jar, env, imported_only=False):
         ("selected-strong-mode", "AndroidNodeChainCapture", '!List.of("wg","awg2-fast","awg2-strong").contains(modes.get(0))', '!List.of("wg","awg2-fast").contains(modes.get(0))', "selected-strong-nine", "The longer mixed packet and stream route requires Local execution."),
         ("first-policy", "AndroidConnectionProfileStore", "                exits.saveIfUnchanged(update.updated,AndroidStandardExitStore.snapshot(update.original));", "                if(appliedImports.size()>1)exits.saveIfUnchanged(update.updated,AndroidStandardExitStore.snapshot(update.original));", "adjacent", "profile Load lost an earlier imported policy"),
         ("rollback", "AndroidConnectionProfileStore", "for(int i=appliedImports.size()-1;i>=0;i--)", "for(int i=appliedImports.size()-1;i>0;i--)", "rollback", "lost exact file rollback"),
-        ("complete-preview", "AndroidConnectionProfileStore", "if(schema==6 || schema==7)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);", "if(false)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);", "compiler", "complete Local compiler refusal was ignored before publication"),
+        ("complete-preview", "AndroidConnectionProfileStore", "if(schema==6 || schema==7 || schema==8)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);", "if(false)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);", "compiler", "complete Local compiler refusal was ignored before publication"),
         ("preview-seal", "AndroidNodeChainCapture", "RouterNodeChain sealed=Libbox.routerNodeChainLaunch(launch);", "RouterNodeChain sealed=preview;", "preview-receipts", "native preview receipt drift was accepted: metadata-valid"),
         ("history-middle", "AndroidOrderedLatencyStore", "(!selectedExecution.isEmpty()&&!multipleImported&&position!=count-2)", "position!=count-2", "history", "earlier imported history was refused"),
     )

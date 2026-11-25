@@ -54,11 +54,11 @@ func resolveDesktopNodeChainSelection(control common.RouterProfile, profiles []c
 	if err := desktopOrderedExecutionMembers(members, execution); err != nil {
 		return multihopSelection{}, err
 	}
-	// The concrete physical policy has one final authenticated control source.
-	// A third profile cannot supply credentials or a weaker protection policy.
+	// Paired finals retain their exact selected control. A separately typed
+	// external final uses its exact original entry as the private control.
 	final := members[len(members)-1]
-	if control.ID != final.Profile.ID || liveMeasurementProfileToken(control) != liveMeasurementProfileToken(final.Profile) {
-		return multihopSelection{}, errors.New("ordered native control must be its exact final selected node")
+	if !desktopNodeChainControlCurrent(control, members) || desktopNodeChainHasExternalFinal(members) && execution != "local" {
+		return multihopSelection{}, errors.New("ordered native control must match its original paired final or typed external-final entry")
 	}
 	return multihopSelection{Control: common.CloneRouterProfile(control), Entry: common.CloneRouterProfile(members[0].Profile),
 		Exit: common.CloneRouterProfile(final.Profile), Base: desktopExternalEntryBase(members[0].Mode), EntryMode: members[0].Mode, ExitMode: final.Mode,
@@ -127,7 +127,7 @@ func (capture *nativeMultihopCapture) validateNodeChainSelection(selection multi
 	bad := errors.New("ordered native source or any selected member changed")
 	if capture == nil || capture.chain == nil || capture.chain.chain == nil || capture.imported || capture.importedHost != nil ||
 		capture.importedPlatform != nil || capture.openVPN != nil || capture.importedInput != "" || capture.importedOriginalSource != "" ||
-		selection.Native != capture || selection.Control.ID != selection.Exit.ID || !mobilemultihop.NodeChainPrefixMode(selection.EntryMode) && !(selection.EntryMode == "shadowsocks" && desktopNodeChainHasCustomEntry(selection.Nodes)) ||
+		selection.Native != capture || !desktopNodeChainControlCurrent(selection.Control, selection.Nodes) || !mobilemultihop.NodeChainPrefixMode(selection.EntryMode) && !(selection.EntryMode == "shadowsocks" && desktopNodeChainHasCustomEntry(selection.Nodes)) ||
 		selection.Base != desktopExternalEntryBase(selection.EntryMode) || !desktopNodeChainFinalSupported(selection.ExitMode, selection.Exit.StartLayer) ||
 		capture.base != selection.Base || capture.entryMode != selection.EntryMode || capture.entrySelection != selection.EntryMode ||
 		capture.entryID != selection.Entry.ID || capture.exitID != selection.Exit.ID || capture.root != capture.chain.root || capture.endpoint != capture.chain.endpoint ||

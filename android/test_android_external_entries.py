@@ -18,6 +18,7 @@ T.EXTRA_SOURCES = ("AndroidExternalPolicy", "AndroidExternalEntry", "AndroidDire
 T.TOR_BOUNDARIES = T.TOR_BOUNDARIES[:T.TOR_BOUNDARIES.index("final class AndroidOpenVPN")]
 T.EXTRA_LIBBOX = r'''
  public static String routerNodeChainImportedMemberInput(String config,String capture)throws Exception{return call("chain-imported",config,capture);}
+public static String routerNodeChainExternalFinalFromEntry(String entry,String imported)throws Exception{return call("chain-external-final",entry,imported);}
  public static String version(){return "1.14.1";}
  public static void routerValidateExternalOpenVPNResponseProbes(String profile,String probes)throws Exception{call("external-openvpn-probes",profile,probes);}
  public static void routerValidateExternalOpenVPNStartLayers(String profile,String probes,String layers,String mode)throws Exception{call("external-openvpn-layers",profile,new JSONObject().put("probes",probes).put("layers",layers).put("mode",mode).toString());}
@@ -37,6 +38,7 @@ T.GO = T.GO.replace('case "tor-profile":', '''case "external-openvpn":
  case "external-execution":
   var selected struct{Capture,Restored string};err=json.Unmarshal([]byte(r.Policy),&selected)
   if err==nil{value,err=mobilemultihop.PrepareExternalExecutionCapture(r.Config,selected.Capture,selected.Restored)}
+ case "chain-external-final":value,err=mobilemultihop.NodeChainExternalFinalFromEntry(r.Config,r.Policy)
  case "chain-imported":value,err=mobilemultihop.NodeChainImportedMemberInput(r.Config,r.Policy)
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "external-transport":err=mobilemultihop.ValidateExternalTransport(r.Config,r.Policy)

@@ -115,12 +115,12 @@ var nodeChainError = errors.New("ordered node chain requires its complete bounde
 func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 	var source NodeChainSource
 	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil ||
-		(source.Schema != 1 && source.Schema != 2 && source.Schema != 5 && source.Schema != 6 && source.Schema != 7) || source.Execution != "local" ||
+		(source.Schema != 1 && source.Schema != 2 && source.Schema != 5 && source.Schema != 6 && source.Schema != 7 && source.Schema != 8) || source.Execution != "local" ||
 		len(source.Nodes) < 2 || len(source.Nodes) > NodeChainExtendedLocalMaximumNodes {
 		return nil, nodeChainError
 	}
 	if len(source.Nodes) > NodeChainMaximumNodes {
-		if source.Schema != 1 && source.Schema != 6 || len(source.IdentitySources) != len(source.Nodes) {
+		if source.Schema != 1 && source.Schema != 6 && source.Schema != 8 || len(source.IdentitySources) != len(source.Nodes) {
 			return nil, nodeChainError
 		}
 		// Schema one requires a paired companion for every node. Schema six
@@ -151,13 +151,23 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		source.IdentitySources[0] != "" || source.IdentitySources[1] != "" || source.IdentitySources[2] == "") {
 		return nil, nodeChainError
 	}
+	if source.Schema == 8 {
+		if len(source.Nodes) < 3 || len(source.IdentitySources) != len(source.Nodes) || source.IdentitySources[0] == "" {
+			return nil, nodeChainError
+		}
+		for _, companion := range source.IdentitySources[1:] {
+			if companion != "" {
+				return nil, nodeChainError
+			}
+		}
+	}
 	canonical, err := json.Marshal(source)
 	if err != nil || len(canonical) > NodeChainInputLimit {
 		return nil, nodeChainError
 	}
 	c := &NodeChain{sourceJSON: string(canonical)}
-	if source.Schema == 6 || source.Schema == 7 {
-		c.importedNodes = &nodeChainImportedNodes{customEntry: source.Schema == 7, members: make([]*nodeChainImportedMember, len(source.Nodes))}
+	if source.Schema == 6 || source.Schema == 7 || source.Schema == 8 {
+		c.importedNodes = &nodeChainImportedNodes{externalFinal: source.Schema == 8, customEntry: source.Schema == 7, members: make([]*nodeChainImportedMember, len(source.Nodes))}
 	}
 	digest, _ := json.Marshal([]string{"routervpn-node-chain-source-v1", c.sourceJSON})
 	c.sourceSHA = externalDigest(digest)
@@ -175,11 +185,17 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 			continue
 		}
 		if source.Schema == 2 && position == len(source.Nodes)-2 || c.importedNodes != nil && source.IdentitySources[position] == "" {
-			middle, err := parseNodeChainImportedMember(input)
+			var middle *nodeChainImportedMember
+			var err error
+			if source.Schema == 8 && position == len(source.Nodes)-1 {
+				middle, err = parseNodeChainExternalFinal(input)
+			} else {
+				middle, err = parseNodeChainImportedMember(input)
+			}
 			if err != nil {
 				return nil, err
 			}
-			if source.Schema == 6 && c.importedNodes != nil && middle.hostname == nil {
+			if (source.Schema == 6 || source.Schema == 8) && c.importedNodes != nil && middle.hostname == nil {
 				if err := middle.rememberMultipleImportedMember(); err != nil {
 					return nil, err
 				}

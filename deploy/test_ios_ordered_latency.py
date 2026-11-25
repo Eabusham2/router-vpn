@@ -67,6 +67,20 @@ TESTS=r'''
  }
  @MainActor static func records()throws {
   try selectedPrivateStreamRecords()
+  for count in [3,9] {
+   let ids=(0..<count).map{"exit-check-\($0)"},kinds=["private-node"]+Array(repeating:"public-path",count:count-1)
+   let src=String(repeating:count==3 ? "4":"5",count:64),cfg=String(repeating:"2",count:64),profile=String(repeating:"a",count:64)
+   let owner=try IOSOrderedLatencyExtendedLocal(source:src,config:cfg,ids:ids,kinds:kinds,provedCount:count,provedKinds:kinds,externalFinal:true)
+   var payload=receipt(1);payload["source_sha256"]=src;payload["position"]=count-1;payload["node_id"]=ids.last!
+   var result=payload["result"] as! [String:Any];result["role"]="exit";result["node_id"]=ids.last!;result["label"]="Cumulative path through custom node \(count) of \(count) → Cloudflare edge";payload["result"]=result
+   let raw=json(payload),record=try IOSOrderedLatencyRecord(raw,extended:owner)
+   _=try IOSOrderedLatencyHistory.save(record,profile:profile,current:{})
+   let read=try IOSOrderedLatencyHistory.load(profile:profile,source:src,config:cfg,position:count-1,node:ids.last!,extended:owner)
+   check("original public final readback",read?.kind=="public-path" && read?.count==count)
+   rejects("standalone public final receipt with no original source"){_=try IOSOrderedLatencyRecord(raw)}
+   let legacy=try IOSOrderedLatencyHistory.load(profile:profile,source:src,config:cfg,position:count-1,node:ids.last!)
+   check("legacy history cannot acquire an external exit",legacy==nil)
+  }
   for p in 0..<3 {let r=try IOSOrderedLatencyRecord(json(receipt(p)));check("exact50 captured node",r.position==p && r.median==2 && r.trimmed==2.25)}
   for count in 2...8 { for position in 0..<count {
    var value=receipt(0);value["position"]=position;value["node_id"]="ordinary-\(position)"
@@ -242,8 +256,8 @@ def main():
             ('request-tombstone','tombstones[owner.request.key] == nil','true','late open cannot reuse cancelled request'),
             ('failed-close-history','guard cleanClose else { throw CancellationError() }','_ = cleanClose','failed close cannot produce new history'),
             ('post-close-current','        try require(current)\n        guard let receipt','        // omitted original owner check\n        guard let receipt','stale close committed'),
-            ('all-interior-positions','(position > 0 || capturedCount == 3), position < capturedCount - 1','position == 0 && capturedCount == 3 || position == capturedCount - 2','mixed original receipt unavailable at captured role'),
-            ('public-endpoints','(position > 0 || capturedCount == 3), position < capturedCount - 1','position < capturedCount','public receipt cannot become an endpoint'),
+            ('all-interior-positions','(position > 0 || capturedCount == 3), (position < capturedCount - 1 || position == capturedCount - 1 && extended?.externalFinal == true && execution == nil)','(position == 0 && capturedCount == 3 || position == capturedCount - 2 || position == capturedCount - 1 && extended?.externalFinal == true && execution == nil)','mixed original receipt unavailable at captured role'),
+            ('public-endpoints','(position > 0 || capturedCount == 3), (position < capturedCount - 1 || position == capturedCount - 1 && extended?.externalFinal == true && execution == nil)','position < capturedCount','standalone public final receipt with no original source'),
         ]:
             assert source.count(before)==1,name
             result=run(source.replace(before,after,1));assert result.returncode!=0 and witness in result.stdout+result.stderr,(name,result.stdout+result.stderr)

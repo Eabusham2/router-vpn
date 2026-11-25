@@ -13,13 +13,15 @@ import (
 // A connected cancellation retains only the original public view identities.
 // It grants no native capability, and cannot revive a request after cancellation.
 type orderedCandidateResponseAdmission struct {
-	token    string
-	position int
-	epoch    uint64
-	nodes    []orderedCandidateResponseSourceNode
-	created  time.Time
-	started  bool
-	drained  bool
+	token               string
+	position            int
+	epoch               uint64
+	nodes               []orderedCandidateResponseSourceNode
+	owners              []string
+	selected, requested string
+	created             time.Time
+	started             bool
+	drained             bool
 }
 
 func rememberOrderedCandidateResponseViewLocked(c *viaEntryControl, view *orderedCandidateView) error {
@@ -35,7 +37,7 @@ func rememberOrderedCandidateResponseViewLocked(c *viaEntryControl, view *ordere
 	}
 	c.orderedResponseViews[view.token] = &orderedCandidateResponseAdmission{
 		token: view.token, position: view.position, epoch: view.responseEpoch,
-		nodes: slices.Clone(view.responseNodes), created: time.Now(), drained: true,
+		owners: slices.Clone(view.responseOwners), requested: view.responseRequested, selected: view.responseSelected, nodes: slices.Clone(view.responseNodes), created: time.Now(), drained: true,
 	}
 	return nil
 }
@@ -145,6 +147,10 @@ func writeOrderedCandidateResponseCancel(w http.ResponseWriter, c *viaEntryContr
 		"cleanup_error": cleanup, "failure": "", "saved_profile_id": "",
 		"results": []hopmeasure.CandidateStatus{}, "errors": []viaEntryCandidateError{},
 		"active_path_changed": false, "ok": failure == nil && drained,
+	}
+	if len(admission.owners) > 0 {
+		response["requested_execution"], response["selected_execution"] = admission.requested, admission.selected
+		publishCandidateResponseOwners(response, admission.owners, admission.selected)
 	}
 	c.mu.Unlock()
 	viaEntryJSON(w, response)

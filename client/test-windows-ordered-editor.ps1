@@ -174,7 +174,7 @@ foreach($name in @('RefreshUnifiedOrderedSelection','RefreshUnifiedOrderedContro
 $xaml=[regex]::Match($Editor,'(?s)\[xml\]\$x=@"\r?\n(.*?)\r?\n"@')
 Check $xaml.Success 'actual editor XAML missing'
 [xml]$xml=$xaml.Groups[1].Value
-foreach($name in @('Available','PrefixMode','Order','Add','Up','Down','Remove','ChangeMode','Final','FinalMode','Status','Cancel','Apply')){
+foreach($name in @('Available','PrefixMode','Order','Add','ExternalExit','Up','Down','Remove','ChangeMode','Final','FinalMode','Status','Cancel','Apply')){
     Check ($null-ne$xml.SelectSingleNode("//*[@Name='$name']")) ('actual editor control missing '+$name)
 }
 function New-Widget {
@@ -195,7 +195,7 @@ if($WPF){
     $dialog|Add-Member ScriptMethod Show {$this.IsVisible=$true}
     $dialog|Add-Member ScriptMethod FindName {param($name)return $this.Controls[$name]}
     $dialog|Add-Member ScriptMethod Close {$this.Closed=$true}
-    foreach($name in @('Available','PrefixMode','Order','Add','Up','Down','Remove','ChangeMode','Final','FinalMode','Status','Cancel','Apply')){$dialog.Controls[$name]=New-Widget}
+    foreach($name in @('Available','PrefixMode','Order','Add','ExternalExit','Up','Down','Remove','ChangeMode','Final','FinalMode','Status','Cancel','Apply')){$dialog.Controls[$name]=New-Widget}
 }
 try{
     if($Group -notin @('socks','openvpn')) {
@@ -335,11 +335,11 @@ try{
                 foreach($index in @(1,2)){
                     $rootControls['UnifiedExecution'].SelectedIndex=$index;&$refresh
                     $script:MeasuredBody=$null;$list.SelectedIndex=$count-2;&$measureNext
-                    Check (($null -ne $MeasuredBody) -eq ($index -eq 2)) ('Compare penultimate source did not control the actual editor launch '+$count)
-                    if($index -eq 2){Check ($MeasuredBody.execution -ceq 'auto' -and ($MeasuredBody.nodes.id -join ',') -ceq ($all.id -join ',')) 'Measured Compare changed its original source'}
+                    Check ($null -ne $MeasuredBody) ('Compare penultimate source did not control the actual editor launch '+$count)
+                    if($MeasuredBody){Check ($MeasuredBody.execution -ceq $rootControls['UnifiedExecution'].SelectedItem.Tag -and ($MeasuredBody.nodes.id -join ',') -ceq ($all.id -join ',')) 'Measured Compare changed its original source'}
                     foreach($k in @(1,($count-3))){
                         $script:MeasuredBody=$null;$list.SelectedIndex=$k;&$measureNext
-                        $allowed=$index -eq 2 -and $count -lt 96
+                        $allowed=$count -lt 96
                         Check (($null -ne $MeasuredBody) -eq $allowed) 'Earlier authenticated response did not use every retained original source'
                         if($allowed){Check (($MeasuredBody.nodes.id -join ',') -ceq ($all.id -join ',')) 'Earlier Measure dropped the original suffix'}
                     }
@@ -375,6 +375,48 @@ try{
             }
             $id=$keepID;$store.selected_id=$id;$RouterCombo.SelectedValue=$id
         }
+        foreach($externalCount in @(3,9)){
+            $externalRows=@();$externalProfiles=@();$externalTokens=@{}
+            for($i=0;$i -lt $externalCount;$i++){
+                $source=@{id="typed-exit-$i";name="member $i";node_kind='router-vpn';start_layer='off';profile_token=('{0:x64}' -f ($i+90))}
+                if($i){$source.node_kind='external';$source.external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_local_imported_nodes_supported=$true;ordered_external_final=$true}}
+                $externalProfiles+=$source;$externalTokens[$source.id]=$source.profile_token
+                $externalRows+=[pscustomobject]@{id=$source.id;mode=$(if($i){'shadowsocks'}else{'wg'})}
+            }
+            $catalog8=@{profiles=$externalProfiles;selected_id=$externalRows[0].id}
+            $draft8=@{nodes=$externalRows;execution='local';control_id=$externalRows[0].id;profile_tokens=$externalTokens}
+            if($externalCount -eq 3){
+                $previousStore=$store;$previousID=$id;$previousRows=$rows
+                $store=$catalog8;$id=$catalog8.selected_id;$selected=@($externalProfiles[0])
+                $rows=New-Object 'Collections.Generic.List[object]'
+                $rootControls['UnifiedExecution'].SelectedIndex=0
+                $pickExit=Callback 'ExternalExit'
+                $dialog.FindName('Final').Tag=$null
+                &$refresh
+                $available.SelectedIndex=[array]::IndexOf(@($available.ItemsSource.id),$externalRows[-1].id)
+                &$pickExit
+                Check ($dialog.FindName('Final').Tag -ceq $externalRows[-1].id -and $rows.Count -eq 1 -and $rows[0].id -ceq $id) 'external exit action lost the pinned WireGuard control'
+                $available.SelectedIndex=[array]::IndexOf(@($available.ItemsSource.id),$externalRows[1].id)
+                &$add
+                $list.SelectedIndex=0
+                &$remove
+                $saved8=&$captureEditor
+                $editorBody8=New-RouterVPNOrderedConnectPayload $saved8 $store
+                Check ($editorBody8.external_final -and $editorBody8.nodes.Count -eq 3 -and $editorBody8.nodes[-1].id -ceq $externalRows[-1].id) 'external exit editor substituted the final row or removed the first control'
+                $dialog.FindName('Final').Tag=$null
+                $store=$previousStore;$id=$previousID;$rows=$previousRows
+            }
+            $body8=New-RouterVPNOrderedConnectPayload $draft8 $catalog8
+            Check ($body8.external_final -is [bool] -and $body8.external_final -and $body8.expected_selected_node_id -ceq $externalRows[0].id -and $body8.nodes[-1].id -ceq $externalRows[-1].id -and $body8.expected_profile_tokens.Count -eq $externalCount) 'external final lost its independent control or tokens'
+            foreach($fault8 in @('server','hint','token')){
+                if($fault8 -ceq 'server'){$draft8.execution='server'}
+                if($fault8 -ceq 'hint'){$externalProfiles[-1].external.ordered_external_final=$false}
+                if($fault8 -ceq 'token'){$externalProfiles[-1].profile_token='e'*64}
+                $refused=$false;try{[void](New-RouterVPNOrderedConnectPayload $draft8 $catalog8)}catch{$refused=$true}
+                Check $refused ('external final accepted '+$fault8)
+                $draft8.execution='local';$externalProfiles[-1].external.ordered_external_final=$true;$externalProfiles[-1].profile_token=$externalTokens[$externalRows[-1].id]
+            }
+        }
         $members=@();$sources=@();$tokens=@{}
         foreach($i in 0..4){
             $source=@{id="named-$i";node_kind='router-vpn';start_layer='off';profile_token=('{0:x64}' -f ($i+20))}
@@ -394,7 +436,7 @@ try{
             Check (($request.nodes.id -join ',') -ceq ($members.id -join ',') -and $request.execution -ceq $execution -and $request.expected_profile_tokens.Count -eq 5) 'Selected private stream lost its exact saved route'
             Check (Test-RouterVPNOrderedStreamEdit @($members[0..3]) 2 $members[2].id $members[4].id 'shadowsocks' $execution $sources) 'Editor could not choose a qualified private stream'
             foreach($fault in @('entry','layer','first-private','relinked')){
-                if($fault -ceq 'entry'){$members[0].mode='awg2-strong'}
+                if($fault -ceq 'entry'){$members[0].mode='awg2-pq'}
                 if($fault -ceq 'layer'){$sources[4].start_layer='aes-256-gcm'}
                 if($fault -ceq 'first-private'){$old=$members[1];$members[1]=$members[2];$members[2]=$old}
                 if($fault -ceq 'relinked'){$sources[2].profile_token='e'*64}

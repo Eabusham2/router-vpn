@@ -115,6 +115,9 @@ func desktopNodeChainThroughputRows(status hopmeasure.Status, members []desktopN
 	if err != nil {
 		return nil, bad
 	}
+	if schema == 8 && selected != "" {
+		return nil, bad
+	}
 	rows := make([]speedLabHopMeasurement, len(members))
 	finite := func(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) && v > 0 }
 	transfer := func(t *hopmeasure.Transfer) bool {
@@ -133,13 +136,16 @@ func desktopNodeChainThroughputRows(status hopmeasure.Status, members []desktopN
 		imported := desktopNodeChainOpenVPNMiddle(p, members[i].Mode) || desktopNodeChainImported(p, members[i].Mode) || desktopNodeChainSOCKSMiddle(p, members[i].Mode) || desktopNodeChainCONNECTMiddle(p, members[i].Mode)
 		if imported {
 			middle := len(members) - 2
-			bounded := len(members) >= 3 && (len(members) <= mobilemultihop.NodeChainMaximumNodes || schema == 6)
+			bounded := len(members) >= 3 && (len(members) <= mobilemultihop.NodeChainMaximumNodes || schema == 6 || schema == 8)
 			positioned := i == middle
 			if schema == 6 {
 				positioned = i > 0 && i < len(members)-1 && members[i].Mode == "shadowsocks" && desktopNodeChainSchemaSixImport(members, i)
 			}
 			if schema == 7 {
 				positioned = len(members) == 3 && i < 2 && members[i].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(p)
+			}
+			if schema == 8 {
+				positioned = i > 0 && members[i].Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(p)
 			}
 			if !bounded || !positioned {
 				return nil, bad
@@ -153,6 +159,15 @@ func desktopNodeChainThroughputRows(status hopmeasure.Status, members []desktopN
 			return nil, bad
 		}
 		label := fmt.Sprintf("Cumulative path through node %d of %d", i+1, len(members))
+		if schema == 8 {
+			expected := label
+			if imported {
+				expected = fmt.Sprintf("Cumulative path through custom node %d of %d → Cloudflare edge", i+1, len(members))
+			}
+			if r.Label != expected {
+				return nil, bad
+			}
+		}
 		if selected != "" {
 			if selected != "local" && selected != "server" {
 				return nil, bad

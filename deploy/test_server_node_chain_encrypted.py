@@ -58,7 +58,7 @@ IMPORTED_CASES = ('original', 'wrong-middle-key', 'wrong-final-key', 'wrong-fina
                   'prefix-hostname-wg-one', 'prefix-hostname-awg-fast', 'prefix-hostname-awg-strong',
                   'prefix-hostname-max-five', 'prefix-hostname-wrong-transport-dns', 'prefix-hostname-wrong-middle-key',
                   'prefix-hostname-failed-selected-dns', 'prefix-hostname-joined-active-udp',
-                  'prefix-hostname-wrong-first-packet-key', 'prefix-hostname-wrong-later-packet-key')
+                  'prefix-hostname-wrong-first-packet-key', 'prefix-hostname-wrong-later-packet-key', 'stream-response')
 IMPORTED_NATIVE = 'TestServerChainImportedEncryptedNative'
 IMPORTED_SOURCE = 'TestServerChainImportedEncryptedSource'
 IMPORTED_TEMPLATE = 'mobile/server_chain_acceptance/imported_linux_test.go.tmpl'
@@ -348,6 +348,10 @@ def check_imported_verdict(output, case, *, source_only=False, multiple=False):
                 receipts.append(value)
                 continue
             fields = {'case', 'prefix_modes', 'prefix_packets', 'prefix_proofs', 'capture_sha256', 'source_sha256', 'ready', 'selected_dns', 'middle_tcp', 'middle_udp', 'final_tcp', 'final_udp', 'transport_dns_queries', 'retired', 'worker_joined', 'peer_joined', 'private_udp_refused', 'private_sink_packets', 'private_sink_replies'}
+            if case == 'stream-response':
+                fields.add('candidate_responses')
+                if value.get('candidate_responses') != 50 or type(value.get('candidate_responses')) is not int:
+                    raise ValueError('Original private candidate did not authenticate fifty encrypted challenges')
             if set(value) != fields or len(keys) != len(set(keys)) or value['case'] != case:
                 raise ValueError('Imported Server receipt identity changed')
             if any(value[k] is not True for k in ('retired','worker_joined','peer_joined')):
@@ -355,7 +359,7 @@ def check_imported_verdict(output, case, *, source_only=False, multiple=False):
             if any(not isinstance(value[k], str) or re.fullmatch('[0-9a-f]{64}', value[k]) is None for k in ('capture_sha256','source_sha256')):
                 raise ValueError('Imported Server source identity missing')
             original = case.removeprefix('prefix-').removeprefix('hostname-')
-            ready = original in ('original', 'joined-active-udp', 'admission-restrictions', 'wg-one', 'awg-fast', 'awg-strong', 'max-five')
+            ready = case == 'stream-response' or original in ('original', 'joined-active-udp', 'admission-restrictions', 'wg-one', 'awg-fast', 'awg-strong', 'max-five')
             modes = []
             if case.startswith('prefix-'):
                 modes = {'wg-one': ['wg'], 'awg-fast': ['wg', 'awg2-fast'], 'awg-strong': ['awg2-strong', 'wg'],

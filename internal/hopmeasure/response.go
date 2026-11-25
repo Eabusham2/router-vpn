@@ -106,7 +106,7 @@ func (s *Service) StartOrderedResponseContext(ctx context.Context, id string, sa
 		return errors.New("an ordered private path and 1–10 responses are required")
 	}
 	entry, exit := s.hops[0], s.hops[len(s.hops)-1]
-	if entry.Role != "entry" || exit.Role != "exit" || (entry.Kind != "private-node" && entry.Kind != "public-path") || exit.Kind != "private-node" {
+	if entry.Role != "entry" || exit.Role != "exit" || (entry.Kind != "private-node" && entry.Kind != "public-path") || exit.Kind != "private-node" && !(s.orderedExternalFinal && exit.Kind == "public-path" && entry.Kind == "private-node") {
 		return errors.New("ordered live responses require the original private final endpoint")
 	}
 	endpoints := []Hop{entry, exit}
@@ -126,15 +126,16 @@ func (s *Service) StartOrderedResponseContext(ctx context.Context, id string, sa
 			return s.valid(worker)
 		}
 		for _, hop := range endpoints {
-			if verify() != nil || s.phase(worker, id, hop.Role+": live private response") != nil {
+			if verify() != nil || s.phase(worker, id, hop.Role+": live "+hop.Kind+" response") != nil {
 				break
 			}
 			measured, err := s.latency(worker, hop, samples)
 			if err != nil || verify() != nil {
 				break
 			}
+			method, target := orderedResponseMethod(hop)
 			rows = append(rows, Result{ID: hop.ID, Role: hop.Role, Kind: hop.Kind, Label: hop.Label, Ready: true,
-				Response: &PathResponse{Schema: 1, Measurement: "routed-private-response-including-connection", Attempts: samples, Distribution: measured}})
+				Response: &PathResponse{Schema: 1, Measurement: method, Endpoint: target, Attempts: samples, Distribution: measured}})
 		}
 		valid := len(rows) == len(endpoints) && verify() == nil && worker.Err() == nil
 		s.mu.Lock()
@@ -154,8 +155,15 @@ func (s *Service) StartOrderedResponseContext(ctx context.Context, id string, sa
 	})
 }
 
-// OrderedResponseLatencies validates every original private endpoint, with a
-// mandatory private final. An imported entry has no private response row.
+func orderedResponseMethod(hop Hop) (string, string) {
+	if hop.Kind == "public-path" {
+		return "routed-https-response-after-tls", "https://" + PublicHost + "/__down?bytes=1"
+	}
+	return "routed-private-response-including-connection", ""
+}
+
+// OrderedResponseLatencies validates the retained paired endpoints. An imported
+// entry has no private response row; a public final uses its own HTTPS receipt.
 func OrderedResponseLatencies(status Status, request string, samples int, endpoints [2]Hop) ([2]Latency, error) {
 	var values [2]Latency
 	bad := errors.New("incomplete ordered private response")
@@ -168,7 +176,7 @@ func OrderedResponseLatencies(status Status, request string, samples int, endpoi
 	} else if endpoints[0].Kind != "private-node" {
 		return values, bad
 	}
-	if endpoints[0].ID == "" || endpoints[0].ID == endpoints[1].ID || endpoints[1].Kind != "private-node" || len(status.Results) != len(endpoints)-first {
+	if endpoints[0].ID == "" || endpoints[0].ID == endpoints[1].ID || endpoints[1].Kind != "private-node" && !(first == 0 && endpoints[1].Kind == "public-path" && orderedPrefixTag.MatchString(endpoints[1].Tag)) || len(status.Results) != len(endpoints)-first {
 		return values, bad
 	}
 	for i := first; i < len(endpoints); i++ {
@@ -178,9 +186,10 @@ func OrderedResponseLatencies(status Status, request string, samples int, endpoi
 			role = "exit"
 		}
 		r := row.Response
-		if original.ID == "" || original.Label == "" || row.ID != original.ID || row.Label != original.Label || row.Kind != "private-node" || row.Role != role || !row.Ready ||
+		method, target := orderedResponseMethod(original)
+		if original.ID == "" || original.Label == "" || row.ID != original.ID || row.Label != original.Label || row.Kind != original.Kind || row.Role != role || !row.Ready ||
 			row.Failure != "" || row.Idle != nil || row.Download != nil || row.Upload != nil || row.Benchmark != nil || r == nil || r.Schema != 1 ||
-			r.Measurement != "routed-private-response-including-connection" || r.Endpoint != "" || r.Attempts != samples || r.Distribution == nil {
+			r.Measurement != method || r.Endpoint != target || r.Attempts != samples || r.Distribution == nil {
 			return values, bad
 		}
 		d := r.Distribution

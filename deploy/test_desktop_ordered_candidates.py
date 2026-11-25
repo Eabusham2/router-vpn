@@ -233,10 +233,10 @@ sparse.capture();RouterVPNMacSpeedLabTransport.calls.last!.finish(sparseCatalog)
 check(sparse.prefix.items.compactMap{$0.representedObject as? Int}==[0,2,4,6],"connected packet picker changed the original sparse positions")
 sparse.prefix.selectedItem=sparse.prefix.items[2];sparse.capture()
 let sparseRequest=RouterVPNMacSpeedLabTransport.calls.last!
-check(sparseRequest.url.path=="/api/multihop/prefix-candidates/catalog" && sparseRequest.url.query=="prefix_position=4" && sparseRequest.body==nil && sparse.view==nil,"connected packet recapture used a different purpose or an index in the displayed list")
+check(sparseRequest.url.path=="/api/multihop/prefix-candidates/catalog" && sparseRequest.url.query=="prefix_position=4&server_response=true" && sparseRequest.body==nil && sparse.view==nil,"connected packet recapture used a different purpose or an index in the displayed list")
 sparseCatalog["prefix_position"]=4;sparseCatalog["view_token"]=String(repeating:"b",count:64);sparseRequest.finish(sparseCatalog);settle()
 check(sparse.position==4 && sparse.view?["view_token"] as? String==String(repeating:"b",count:64),"connected sparse recapture lost its new token or selected position")
-let f=Form();f.capture();let first=RouterVPNMacSpeedLabTransport.calls.last!;check(first.started&&first.url.query=="prefix_position=0","catalog request did not start exact prefix")
+let f=Form();f.capture();let first=RouterVPNMacSpeedLabTransport.calls.last!;check(first.started&&first.url.query=="prefix_position=0&server_response=true","catalog request did not start exact prefix")
 first.finish(catalog);settle();check(f.view != nil,"original catalog was not adopted")
 f.measure();let run=RouterVPNMacSpeedLabTransport.calls.last!;check(run.started&&run.body?["samples"] as? Int==50&&run.body?["candidate_ids"] as? [String]==["custom"]&&run.timeout==180,"actual test lost original inputs")
 let result:[String:Any]=["measurement":"routed-tcp-connect","request_id":f.requestID,"view_token":catalog["view_token"]!,"prefix_position":0,"drained":true,"accepted":true,"results":[row()]]
@@ -362,7 +362,7 @@ for (requested, winner) in [("server","server"),("auto","local"),("auto","server
         delivered += 1
     }
     form.capture();let admission=RouterVPNMacSpeedLabTransport.calls.last!
-    check(admission.url.query=="prefix_position=2&scope=draft-complete-selected" && admission.body?["nodes"] as? [[String:String]] == original && admission.body?["execution"] as? String == requested && admission.body?["scope"] == nil, "selected catalog lost original input")
+    check(admission.url.query=="prefix_position=2&scope=draft-complete-selected&server_response=true" && admission.body?["nodes"] as? [[String:String]] == original && admission.body?["execution"] as? String == requested && admission.body?["scope"] == nil, "selected catalog lost original input")
     var offer=savedCatalog;offer["scope"]="draft-complete-selected";offer["origin"]="editor-draft";offer["prefix_position"]=2;offer["requested_execution"]=requested
     offer["prefixes"]=[["id":"packet","position":2,"mode":"awg2-fast","name":"Packet"]];offer["candidates"]=[["id":"custom","name":"Added","proposed_path":proposed]]
     for (key,bad) in [("scope","saved-prefix-local" as Any),("requested_execution","local"),("selected_execution",winner),("prefixes",[["position":2,"mode":"wg","id":"packet"]])] {
@@ -438,7 +438,8 @@ for (depth,pos,privatePosition) in [(4,2,-1),(9,7,2),(16,14,-1),(96,94,94),(4,1,
     let insert = pos < depth-2
     let action = insert ? "save-intermediate-profile" : "save-final-profile"
     let crossedAction = insert ? "save-final-profile" : "save-intermediate-profile"
-    let source = (0..<depth).map { ["id":"member-\($0)","mode":$0 == 0 ? "wg":"shadowsocks","kind":$0 == 0 || $0 == privatePosition || $0 == depth-1 ? "router-vpn":"external"] }
+    let entry = depth == 9 ? "awg2-fast" : depth == 16 ? "awg2-strong" : "wg"
+    let source = (0..<depth).map { ["id":"member-\($0)","mode":$0 == 0 ? entry:"shadowsocks","kind":$0 == 0 || $0 == privatePosition || $0 == depth-1 ? "router-vpn":"external"] }
     let nodes = source.map { ["id":$0["id"]!, "mode":$0["mode"]!] }
     var proposal = Array(nodes[...pos]) + [["id":"custom","mode":"shadowsocks"]]
     if insert { proposal += nodes[(pos+1)...] }
@@ -451,9 +452,45 @@ for (depth,pos,privatePosition) in [(4,2,-1),(9,7,2),(16,14,-1),(96,94,94),(4,1,
         offer["scope"] = temporary ? "draft-complete-selected":"";offer["prefix_position"]=pos;offer["candidates"]=[choice]
         offer["prefixes"]=[["position":pos,"id":nodes[pos]["id"]!,"mode":"shadowsocks","measurement":responseMetric]]
         if !temporary { offer["selected_execution"]="local";offer["selection_epoch"]=37 }
+        for requested in ["server","auto"] {
+            var typed=offer
+            let owners = requested == "server" ? ["server"] : ["local","server"]
+            typed["response_executions"]=owners; typed["requested_execution"]=requested
+            typed["selected_execution"]="server"; typed["required_selected_execution"]="server"; typed["selection_epoch"]=42
+            let typedDraft:[String:Any]? = temporary ? ["execution":requested,"nodes":nodes] : nil
+            check(RouterVPNOrderedCandidateDisplay.responseWinner(typed,position:pos,draft:typedDraft),"typed Server lost its actual captured owner")
+            if !temporary && depth==4 && pos==2 && requested=="server" {
+                let mixed = Form(position:pos)
+                var missingChoice=choice, missingPath=proposal
+                missingPath[pos+1]["id"]="not-provisioned"
+                missingChoice["id"]="not-provisioned"; missingChoice["proposed_path"]=missingPath
+                typed["candidates"]=[missingChoice,choice]
+                try! mixed.receive(typed,action:"catalog"); mixed.requestID="mixed-registration"
+                var receipt=typed; receipt["request_id"]=mixed.requestID; receipt["drained"]=true; receipt["accepted"]=true
+                var missing=streamRow, disposition=inner
+                missing["candidate_id"]="not-provisioned"; disposition["node_id"]="not-provisioned"
+                disposition["candidate_disposition"]="not-registered"; disposition["failure"]="Not registered on the selected server."
+                for conflictingBenchmark in [false,true] {
+                    disposition["ready"]=conflictingBenchmark
+                    disposition["benchmark"]=conflictingBenchmark ? benchmark : nil
+                    missing["results"]=[disposition]; receipt["results"]=[missing,streamRow]
+                    try! mixed.receive(receipt,action:"run")
+                    check(mixed.rows.compactMap{$0["id"] as? String}==["custom"],"an unregistered Server candidate displaced its measured peer or borrowed a score")
+                }
+            }
+            var stale=typed; stale["selection_epoch"]=0
+            check(!RouterVPNOrderedCandidateDisplay.responseWinner(stale,position:pos,draft:typedDraft),"typed Server accepted stale selection")
+            stale=typed; stale["response_executions"]=["local"]
+            check(!RouterVPNOrderedCandidateDisplay.responseWinner(stale,position:pos,draft:typedDraft),"typed Server borrowed a Local-only grant")
+            if temporary {
+                typed.removeValue(forKey:"selection_epoch");typed.removeValue(forKey:"selected_execution")
+                if owners.count == 2 { typed.removeValue(forKey:"required_selected_execution") }
+                check(RouterVPNOrderedCandidateDisplay.responseWinner(typed,position:pos,draft:typedDraft),"pending typed source invented an actual winner")
+            }
+        }
         if !temporary && pos == 1 {
             var missing = offer; missing.removeValue(forKey:"response_source_nodes")
-            let twoPrefixes:[[String:Any]] = [["id":nodes[0]["id"]!,"mode":"wg","position":0],
+            let twoPrefixes:[[String:Any]] = [["id":nodes[0]["id"]!,"mode":entry,"position":0],
                                               ["id":nodes[1]["id"]!,"mode":"shadowsocks","position":1,"measurement":responseMetric]]
             missing["prefixes"] = twoPrefixes
             do { try form.receive(missing,action:"catalog"); fatalError("connected first import lost its source map") } catch { checks += 1 }
@@ -511,7 +548,8 @@ for (depth,pos,privatePosition) in [(4,2,-1),(9,7,2),(16,14,-1),(96,94,94),(4,1,
         alternate[privatePosition >= 0 ? privatePosition : pos]["kind"] = privatePosition >= 0 ? "external" : "router-vpn"
         var rerolled=result;rerolled["response_source_nodes"]=alternate
         do {try form.receive(rerolled,action:"run");fatalError("a different valid source map was adopted")} catch {checks+=1}
-        for (key,wrong) in [("response_source_nodes",crossed as Any),("response_source_nodes",NSNull()),("selected_execution","server"),("view_token",String(repeating:"b",count:64))] {
+        var switched=source;switched[0]["mode"] = entry == "awg2-strong" ? "awg2-fast":"awg2-strong"
+        for (key,wrong) in [("response_source_nodes",switched as Any),("response_source_nodes",crossed as Any),("response_source_nodes",NSNull()),("selected_execution","server"),("view_token",String(repeating:"b",count:64))] {
             var bad=result;bad[key]=wrong
             do {try form.receive(bad,action:"run");fatalError("crossed selected response acknowledged: "+key)} catch {checks+=1}
         }
@@ -700,6 +738,11 @@ let streamPath=[["id":"entry","mode":"wg"],["id":"imported","mode":"shadowsocks"
 let streamDraft:[String:Any]=["execution":"local","nodes":streamPath,"expected_selected_node_id":"original","expected_profile_tokens":["entry":view,"imported":view,"original":view]]
 admit("/api/multihop/draft-candidates/catalog?prefix_position=1&scope=saved-prefix-local",streamDraft,25,true)
 var selectedStream=streamDraft;selectedStream["execution"]="server"
+admit("/api/multihop/prefix-candidates/catalog?prefix_position=1&server_response=true",nil,25,true)
+admit("/api/multihop/saved-candidates/catalog?prefix_position=1&server_response=true",nil,25,false)
+admit("/api/multihop/draft-candidates/catalog?prefix_position=1&scope=draft-complete-selected&server_response=true",selectedStream,25,true)
+admit("/api/multihop/draft-candidates/catalog?prefix_position=1&scope=saved-prefix-local&server_response=true",streamDraft,25,false)
+admit("/api/multihop/prefix-candidates/catalog?prefix_position=1&server_response=true&server_response=true",nil,25,false)
 admit("/api/multihop/draft-candidates/catalog?prefix_position=1&scope=draft-complete-selected",selectedStream,25,false)
 for packet in ["wg","awg2-fast","awg2-strong"] {
  var qualified=streamDraft
@@ -803,7 +846,7 @@ def linux_policy(directory):
     guards='\n'.join(block(source,'static gboolean '+name+'(') for name in ['routervpn_phase_busy','routervpn_mutation_busy_from_status','routervpn_mutation_busy'])
     candidates=(ROOT/'client/linux/routervpn-ordered-candidates-v1.inc').read_text()
     declarations=candidates[candidates.index('typedef struct {'):candidates.index('} LinuxOrderedCandidates;')+len('} LinuxOrderedCandidates;')]
-    guards+='\n'+declarations+'\n'+linux_candidate_json_helpers()+'\n'+'\n'.join(block(candidates,marker) for marker in ['static const char*linux_oc_measurement_kind(', 'static const char*linux_oc_prefix_measurement(', 'static JsonObject*linux_oc_root(', 'static gboolean linux_oc_response_id(', 'static gboolean linux_oc_response_source(', 'static gboolean linux_oc_response_proposal(', 'static gboolean linux_oc_response_winner(', 'static gboolean linux_oc_response_draft(', 'static gboolean linux_oc_catalog_measurement(', 'static double linux_oc_score(', 'static gboolean linux_oc_same_measurement(', 'static double linux_oc_current_score(', 'static const char*linux_oc_scope(', 'static gboolean linux_oc_draft_execution(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_final_choice(', 'static gboolean linux_oc_final_saved(', 'static gboolean linux_oc_view_fresh('])
+    guards+='\n'+declarations+'\n'+linux_candidate_json_helpers()+'\n'+'\n'.join(block(candidates,marker) for marker in ['static const char*linux_oc_measurement_kind(', 'static gboolean linux_oc_packet_mode(', 'static const char*linux_oc_prefix_measurement(', 'static JsonObject*linux_oc_root(', 'static gboolean linux_oc_response_id(', 'static gboolean linux_oc_response_source(', 'static gboolean linux_oc_response_proposal(', 'static gboolean linux_oc_response_winner(', 'static gboolean linux_oc_response_draft(', 'static gboolean linux_oc_catalog_measurement(', 'static double linux_oc_score(', 'static gboolean linux_oc_same_measurement(', 'static double linux_oc_current_score(', 'static const char*linux_oc_scope(', 'static gboolean linux_oc_draft_execution(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_final_choice(', 'static gboolean linux_oc_final_saved(', 'static gboolean linux_oc_view_fresh('])
     program=r"""
 #include <gtk/gtk.h>
 #include <glib-object.h>
@@ -957,6 +1000,20 @@ int main(void){
  JsonObject*packet_before=json_array_get_object_element(json_node_get_array(packet_original),0),*packet_after=json_array_get_object_element(json_node_get_array(packet_proposal),0);
  json_object_set_string_member(packet_before,"mode","wg-pq");json_object_set_string_member(packet_after,"mode","wg-pq");check(!linux_oc_final_choice(&candidate,paired),"response proposal borrowed an unqualified packet transport");
  json_node_free(candidate.draft_source);json_node_free(response);json_node_free(response_view);
+ JsonNode *remote=json_from_string("{\"response_source_nodes\":[{\"id\":\"entry\",\"mode\":\"wg\",\"kind\":\"router-vpn\"},{\"id\":\"import\",\"mode\":\"shadowsocks\",\"kind\":\"external\"},{\"id\":\"exit\",\"mode\":\"shadowsocks\",\"kind\":\"router-vpn\"}],\"response_executions\":[\"server\"],\"requested_execution\":\"server\",\"required_selected_execution\":\"server\",\"selected_execution\":\"server\",\"selection_epoch\":42,\"prefix_position\":1}",NULL); JsonObject *typed=linux_oc_root(remote);
+ check(linux_oc_response_winner(typed,1),"typed Server lost its original triple and actual lease");
+ json_object_set_int_member(typed,"selection_epoch",0);
+ check(!linux_oc_response_winner(typed,1),"Server response accepted a stale selection epoch");
+ json_object_remove_member(typed,"selected_execution");json_object_remove_member(typed,"selection_epoch");
+ json_object_set_string_member(typed,"scope","draft-complete-selected");
+ check(linux_oc_response_winner(typed,1),"pending explicit Server source invented an actual winner");
+ json_object_set_string_member(typed,"requested_execution","auto");
+ json_object_set_member(typed,"response_executions",json_from_string("[\"local\",\"server\"]",NULL));
+ json_object_remove_member(typed,"required_selected_execution");
+ check(linux_oc_response_winner(typed,1),"pending Compare source lost its two possible owners");
+ json_object_set_string_member(typed,"selected_execution","server");json_object_set_int_member(typed,"selection_epoch",13);
+ check(!linux_oc_response_winner(typed,1),"actual Server response lost its required owner");
+ json_node_free(remote);
  printf("Shipping GTK candidate status guards: %u checks PASS; actual GObject, controlled HTTP.\n",checks);return 0;
 }
 """
@@ -1076,7 +1133,8 @@ def linux_form(directory):
     packet_catalog['candidates'][0]['proposed_path']=json.loads(json.dumps(packet_draft['nodes']));packet_catalog['candidates'][0]['proposed_path'][-1]['id']='paired'
     for depth,position,private_position in [(4,2,-1),(9,7,2),(16,14,-1),(96,94,94),(4,1,-1),(16,9,-1),(9,6,-1),(95,92,-1)]:
         early=position<depth-2
-        nodes=[{'id': 'entry' if i==0 else 'final' if i==depth-1 else f'source-{i}', 'mode':'wg' if i==0 else 'shadowsocks'} for i in range(depth)]
+        entry = {9:'awg2-fast',16:'awg2-strong'}.get(depth,'wg')
+        nodes=[{'id': 'entry' if i==0 else 'final' if i==depth-1 else f'source-{i}', 'mode':entry if i==0 else 'shadowsocks'} for i in range(depth)]
         draft={'execution':'auto','expected_selected_node_id':'final','nodes':nodes}
         offer=json.loads(json.dumps(response_catalog))
         offer.update(scope='draft-complete-selected', requested_execution='auto', required_selected_execution='local', prefix_position=position,
@@ -1134,7 +1192,7 @@ int main(int argc,char**argv){
  JsonNode*catalog=fixture("catalog"),*row=fixture("row");JsonObject*ro=linux_oc_root(row);gint64 at=(gint64)linux_ec_number(ro,"measured_at");
  check(linux_oc_score(ro,at)==2,"valid50 TCP score rejected");check(isnan(linux_oc_score(ro,at+120000)),"poll renewed expired receipt");
  JsonObject*benchmark=linux_ec_object(json_array_get_object_element(linux_ec_array(ro,"results"),0),"benchmark");json_object_set_int_member(benchmark,"attempts",49);check(isnan(linux_oc_score(ro,at)),"partial sample result sorted");json_object_set_int_member(benchmark,"attempts",50);
- linux_ordered_candidates_open(&app);LinuxOrderedCandidates*s=g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates");check(s&&s->job&&strcmp(g_ptr_array_index(paths,0),"/api/multihop/prefix-candidates/catalog?prefix_position=0")==0,"real dialog did not capture prefix0");reply(s,catalog);choose(s);
+ linux_ordered_candidates_open(&app);LinuxOrderedCandidates*s=g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates");check(s&&s->job&&strcmp(g_ptr_array_index(paths,0),"/api/multihop/prefix-candidates/catalog?prefix_position=0&server_response=true")==0,"real dialog did not capture prefix0");reply(s,catalog);choose(s);
  guint before=paths->len;busy=TRUE;gtk_button_clicked(GTK_BUTTON(s->test));check(paths->len==before,"busy main state started candidate job");busy=FALSE;gtk_button_clicked(GTK_BUTTON(s->test));check(s->pending&&async_state.auxiliary_jobs==1,"original native job lease missing");
  JsonNode*body=parse_json(g_ptr_array_index(bodies,paths->len-1));JsonObject*bo=linux_oc_root(body);check(linux_ec_number(bo,"samples")==50&&strcmp(linux_ec_string(bo,"view_token"),linux_ec_string(linux_oc_root(catalog),"view_token"))==0&&strcmp(json_array_get_string_element(linux_ec_array(bo,"candidate_ids"),0),"custom")==0,"actual test callback lost exact source selection");json_node_free(body);
  JsonNode*result=json_node_new(JSON_NODE_OBJECT);JsonObject*result_object=json_object_new();json_node_take_object(result,result_object);json_object_set_string_member(result_object,"request_id",s->request);json_object_set_string_member(result_object,"view_token",linux_ec_string(linux_oc_root(catalog),"view_token"));json_object_set_int_member(result_object,"prefix_position",0);json_object_set_boolean_member(result_object,"accepted",TRUE);json_object_set_boolean_member(result_object,"drained",TRUE);JsonArray*results=json_array_new();json_array_add_element(results,json_node_copy(row));json_object_set_array_member(result_object,"results",results);fixture_saved_envelope(result_object);reply(s,result);choose(s);linux_oc_controls(s);
@@ -1228,7 +1286,7 @@ int main(int argc,char**argv){
   char*raw=g_strdup_printf("{\"execution\":\"%s\",\"nodes\":[{\"id\":\"entry\",\"mode\":\"wg\"},{\"id\":\"source\",\"mode\":\"shadowsocks\"},{\"id\":\"packet\",\"mode\":\"awg2-fast\"},{\"id\":\"final\",\"mode\":\"shadowsocks\"}],\"expected_selected_node_id\":\"final\",\"expected_profile_tokens\":{\"entry\":\"e\",\"source\":\"s\",\"packet\":\"p\",\"final\":\"f\"}}",requested);
   linux_ordered_candidates_open_draft(&app,GTK_WINDOW(owner),raw,2);
   LinuxOrderedCandidates*form=g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates");
-  check(!strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/draft-candidates/catalog?prefix_position=2&scope=draft-complete-selected")&&!strcmp(g_ptr_array_index(bodies,bodies->len-1),raw),"selected draft catalog changed original input or scope");
+  check(!strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/draft-candidates/catalog?prefix_position=2&scope=draft-complete-selected&server_response=true")&&!strcmp(g_ptr_array_index(bodies,bodies->len-1),raw),"selected draft catalog changed original input or scope");
   JsonNode*offer=fixture("catalog");JsonObject*o=linux_oc_root(offer);
   fixture_saved_envelope(o);json_object_set_string_member(o,"origin","editor-draft");json_object_set_string_member(o,"scope","draft-complete-selected");
   json_object_set_string_member(o,"requested_execution",requested);json_object_set_int_member(o,"prefix_position",2);json_object_set_int_member(o,"samples",50);
@@ -1275,7 +1333,7 @@ int main(int argc,char**argv){
   json_object_set_array_member(value,"prefixes",prefixes);reply(selected,sparse);
   check(gtk_combo_box_set_active_id(GTK_COMBO_BOX(selected->prefix),"4")&&!gtk_combo_box_set_active_id(GTK_COMBO_BOX(selected->prefix),"3"),"connected picker lost sparse packet stop or offered an imported position");
   gtk_combo_box_set_active_id(GTK_COMBO_BOX(selected->prefix),"4");gtk_button_clicked(GTK_BUTTON(selected->refresh));
-  check(selected->position==4&&strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/prefix-candidates/catalog?prefix_position=4")==0,"connected packet recapture used an ordinal or a saved purpose");
+  check(selected->position==4&&strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/prefix-candidates/catalog?prefix_position=4&server_response=true")==0,"connected packet recapture used an ordinal or a saved purpose");
   json_object_set_int_member(value,"prefix_position",4);char*token=g_strnfill(64,'b');json_object_set_string_member(value,"view_token",token);reply(selected,sparse);
   check(selected->view&&!strcmp(linux_ec_string(linux_oc_root(selected->view),"view_token"),token),"sparse packet recapture lost its new token");g_free(token);json_node_free(sparse);gtk_widget_destroy(selected->dialog);
  }
@@ -1308,7 +1366,8 @@ int main(int argc,char**argv){
   check(!linux_oc_receive(form,value,1),"additional stop borrowed a three-node catalog");
   reply_code(form,discovery,409);gtk_widget_destroy(form->dialog);json_node_free(discovery);json_node_free(offer);
  }
- for(int early=0;early<2;early++){
+ for(int trial=0;trial<3;trial++){
+  const gboolean early=trial==1,mixed=trial==2;
   const int pos=early?9:14;
   const char *action=early?"save-intermediate-profile":"save-final-profile", *crossed=early?"save-final-profile":"save-intermediate-profile";
   linux_ordered_candidates_open_captured(&app,FALSE,FALSE);
@@ -1321,7 +1380,15 @@ int main(int argc,char**argv){
   gtk_button_clicked(GTK_BUTTON(form->refresh));check(form->position==pos,"connected refresh selected a different prefix");
   json_object_remove_member(catalog_value,"origin");json_object_remove_member(catalog_value,"scope");
   json_object_set_string_member(catalog_value,"selected_execution","local");json_object_set_int_member(catalog_value,"selection_epoch",37);
-  reply(form,offer);choose(form);gtk_button_clicked(GTK_BUTTON(form->test));
+  if(mixed){
+   JsonNode*other=fixture("selected-16-catalog");JsonNode*missing_choice=json_node_copy(json_array_get_element(linux_ec_array(linux_oc_root(other),"candidates"),0));
+   JsonObject*choice=linux_oc_root(missing_choice);
+   json_object_set_string_member(choice,"id","not-provisioned");json_object_set_string_member(json_array_get_object_element(linux_ec_array(choice,"proposed_path"),pos+1),"id","not-provisioned");
+   json_array_add_element(linux_ec_array(catalog_value,"candidates"),missing_choice);json_node_free(other);
+   JsonArray*owners=json_array_new();json_array_add_string_element(owners,"local");json_array_add_string_element(owners,"server");json_object_set_array_member(catalog_value,"response_executions",owners);
+   json_object_set_string_member(catalog_value,"selected_execution","server");json_object_set_string_member(catalog_value,"required_selected_execution","server");
+  }
+  reply(form,offer);choose(form);if(mixed)gtk_tree_selection_select_all(gtk_tree_view_get_selection(GTK_TREE_VIEW(form->table)));gtk_button_clicked(GTK_BUTTON(form->test));
   JsonNode*receipt=parse_json("{}"),*sample=fixture("response-row");JsonObject*value=linux_oc_root(receipt);
   json_object_set_string_member(value,"request_id",form->request);json_object_set_string_member(value,"view_token",linux_ec_string(catalog_value,"view_token"));
   json_object_set_string_member(value,"measurement","routed-candidate-response");json_object_set_int_member(value,"prefix_position",pos);
@@ -1330,10 +1397,27 @@ int main(int argc,char**argv){
   json_object_set_member(value,"response_source_nodes",json_node_copy(linux_ec_member(catalog_value,"response_source_nodes")));
   json_object_set_boolean_member(value,"drained",TRUE);json_object_set_boolean_member(value,"accepted",TRUE);
   JsonArray*scores=json_array_new();json_array_add_element(scores,json_node_copy(sample));json_object_set_array_member(value,"results",scores);
+  if(mixed){
+   json_object_set_string_member(value,"selected_execution","server");json_object_set_string_member(value,"required_selected_execution","server");
+   json_object_set_member(value,"response_executions",json_node_copy(linux_ec_member(catalog_value,"response_executions")));
+   JsonNode*missing=fixture("response-row");JsonObject*row=linux_oc_root(missing),*item=json_array_get_object_element(linux_ec_array(row,"results"),0);
+   json_object_set_string_member(row,"candidate_id","not-provisioned");json_object_set_string_member(item,"node_id","not-provisioned");
+   json_object_set_string_member(item,"candidate_disposition","not-registered");json_object_set_boolean_member(item,"ready",FALSE);
+   json_object_set_string_member(item,"failure","Not registered on the selected server.");json_object_remove_member(item,"benchmark");
+   json_array_add_element(scores,missing);
+  }
   check(!linux_oc_receive(form,value,2),"connected receipt borrowed another selected epoch");json_object_set_int_member(value,"selection_epoch",37);
   JsonObject*original_import=json_array_get_object_element(linux_ec_array(value,"response_source_nodes"),1);
   json_object_set_string_member(original_import,"id","different-import");check(!linux_oc_receive(form,value,2),"connected receipt borrowed a different original import");json_object_set_string_member(original_import,"id","source-1");
-  reply(form,receipt);choose(form);linux_oc_controls(form);check(gtk_widget_get_sensitive(form->save),"connected selected final was unavailable to Save");
+  reply(form,receipt);
+  if(mixed){
+   check(gtk_tree_model_iter_n_children(GTK_TREE_MODEL(form->store),NULL)==1,"unregistered Server candidate displaced its measured peer");
+   JsonObject*item=json_array_get_object_element(linux_ec_array(json_array_get_object_element(scores,1),"results"),0);
+   JsonObject*measured=json_array_get_object_element(linux_ec_array(linux_oc_root(sample),"results"),0);
+   json_object_set_boolean_member(item,"ready",TRUE);json_object_set_member(item,"benchmark",json_node_copy(linux_ec_member(measured,"benchmark")));
+   check(linux_oc_receive(form,value,2)&&gtk_tree_model_iter_n_children(GTK_TREE_MODEL(form->store),NULL)==1,"unregistered Server candidate borrowed a contradictory benchmark");
+  }
+  choose(form);linux_oc_controls(form);check(gtk_widget_get_sensitive(form->save),"connected selected final was unavailable to Save");
   gtk_entry_set_text(GTK_ENTRY(form->name),"Measured paired exit");gtk_button_clicked(GTK_BUTTON(form->save));
   JsonNode*write=parse_json(g_ptr_array_index(bodies,bodies->len-1));JsonObject*posted=linux_oc_root(write);
   check(!strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/prefix-candidates/save-profile")&&!strcmp(linux_ec_string(posted,"name"),"Measured paired exit")&&

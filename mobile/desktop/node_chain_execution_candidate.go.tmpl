@@ -244,7 +244,7 @@ func (m *routerVPNDesktopExecutionMeasurement) newSelectedCandidate(ctx context.
 	op := &routerVPNSelectedCandidateOperation{owner: m, input: input}
 	q := &op.request
 	now := time.Now()
-	if !routerVPNSelectedCandidateDecode(input.raw, q, 11) || q.Schema != 1 || q.Operation != "selected-packet-candidate-50" && q.Operation != "selected-local-private-response-50" ||
+	if !routerVPNSelectedCandidateDecode(input.raw, q, 11) || q.Schema != 1 || q.Operation != "selected-packet-candidate-50" && q.Operation != "selected-local-private-response-50" && q.Operation != "selected-server-private-response-50" ||
 		!routerVPNExternalSession.MatchString(q.Request) || q.Request == m.owner.candidateLast || m.owner.candidateGeneration == ^uint64(0) ||
 		q.Generation != m.owner.candidateGeneration+1 || q.Deadline <= 0 || q.Deadline > now.Add(hopmeasure.RequestTimeout).UnixMilli() ||
 		!routerVPNExternalSource.MatchString(q.InventorySHA) || !routerVPNExternalSource.MatchString(q.Path) || q.Position < 0 || q.Candidate == "" ||
@@ -281,14 +281,21 @@ func (m *routerVPNDesktopExecutionMeasurement) newSelectedCandidate(ctx context.
 	if q.Position != 0 && (m.owner.prep.RequiresSOCKSExecutionObserver() || m.owner.prep.RequiresCONNECTExecutionObserver()) {
 		return op, routerVPNExternalFailure
 	}
-	response := m.owner.prep.SupportsCompareLocalResponseCandidate(q.Position)
-	if response != (q.Operation == "selected-local-private-response-50") || response && m.runtime.Progress().Execution != "local" {
+	localResponse := m.owner.prep.SupportsCompareLocalResponseCandidate(q.Position)
+	serverResponse := m.owner.prep.SupportsServerResponseCandidate(q.Position)
+	winner := m.runtime.Progress().Execution
+	response := q.Operation != "selected-packet-candidate-50"
+	if q.Operation == "selected-local-private-response-50" && (!localResponse || winner != "local") ||
+		q.Operation == "selected-server-private-response-50" && (!serverResponse || winner != "server") ||
+		!response && (localResponse || serverResponse) {
 		return op, routerVPNExternalFailure
 	}
 	var capture, metadata string
 	if q.Position == 0 {
 		op.local, err = m.runtime.NewEntryCandidatePlanContext(ctx, 0, string(op.source.raw))
-	} else if m.runtime.Progress().Execution == "local" {
+	} else if q.Operation == "selected-server-private-response-50" {
+		op.remote, err = m.runtime.NewRemoteResponseCandidatePlanContext(ctx, q.Position, string(op.source.raw))
+	} else if winner == "local" {
 		op.local, err = m.runtime.NewLocalCandidatePlanContext(ctx, q.Position, string(op.source.raw))
 	} else {
 		op.remote, err = m.runtime.NewRemoteCandidatePlanContext(ctx, q.Position, string(op.source.raw))
@@ -531,9 +538,16 @@ func (op *routerVPNSelectedCandidateOperation) poll(ctx context.Context) error {
 	}
 	success := status.Stage == "complete" && status.Failure == "" && !cancelled && !expired
 	if success {
-		if status.Schema != 1 || status.Measurement != "routed-tcp-connect" || status.CaptureSHA256 != op.metadata.CaptureSHA || status.PrefixPosition != op.request.Position ||
+		if status.Schema != 1 || status.Measurement != op.measurementKind() || status.CaptureSHA256 != op.metadata.CaptureSHA || status.PrefixPosition != op.request.Position ||
 			status.CandidateID != op.request.Candidate || len(status.Results) != 1 || status.Results[0].ID != op.request.Candidate ||
 			op.CandidateInventoryCurrentContext(ctx, status.CaptureSHA256) != nil {
+			return routerVPNExternalFailure
+		}
+	}
+	if success && status.Results[0].CandidateDisposition != "" {
+		row := status.Results[0]
+		if op.request.Operation != "selected-server-private-response-50" || row.CandidateDisposition != hopmeasure.CandidateNotRegistered || row.Role != "candidate" ||
+			row.Kind != "private-agent-response" || row.Failure != hopmeasure.ErrCandidateNotRegistered.Error() || row.Ready || row.Benchmark != nil || row.Response != nil || row.Idle != nil || row.Upload != nil || row.Download != nil {
 			return routerVPNExternalFailure
 		}
 	}
@@ -573,8 +587,17 @@ func (op *routerVPNSelectedCandidateOperation) poll(ctx context.Context) error {
 	return nil
 }
 
+func (op *routerVPNSelectedCandidateOperation) measurementKind() string {
+	switch op.request.Operation {
+	case "selected-local-private-response-50", "selected-server-private-response-50":
+		return hopmeasure.CandidatePrivateResponseMeasurement
+	default:
+		return hopmeasure.CandidateTCPMeasurement
+	}
+}
+
 func (op *routerVPNSelectedCandidateOperation) cancelledStatus() hopmeasure.CandidateStatus {
-	return hopmeasure.CandidateStatus{Schema: 1, Measurement: "routed-tcp-connect", PrefixPosition: op.request.Position, CaptureSHA256: op.startToken.CaptureSHA,
+	return hopmeasure.CandidateStatus{Schema: 1, Measurement: op.measurementKind(), PrefixPosition: op.request.Position, CaptureSHA256: op.startToken.CaptureSHA,
 		Status: hopmeasure.Status{Request: op.request.Request, Stage: "cancelled", Complete: true, Drained: true, Failure: "Candidate timing cancelled", Results: []hopmeasure.Result{}}}
 }
 

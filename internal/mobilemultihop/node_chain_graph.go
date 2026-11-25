@@ -46,6 +46,7 @@ type nodeChainGraphMember struct {
 	profile      map[string]any
 	source, mode string
 	imported     bool
+	externalHome bool // Final DNS is the authenticated first Router’s selected AdGuard.
 }
 
 func compileNodeChainClosures(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
@@ -149,7 +150,9 @@ func compileNodeChainGraph(nodes []nodeChainGraphMember, closures []*externalPre
 		for _, raw := range originalDNS["servers"].([]any) {
 			server := raw.(map[string]any)
 			server["tag"] = dnsNames[predecessorText(server, "tag")]
-			if original, exists := server["detour"]; exists {
+			if node.externalHome && server["detour"] == externalEntryTag && position == len(nodes)-1 && len(proofs) > 0 {
+				server["detour"] = proofs[0].Tag
+			} else if original, exists := server["detour"]; exists {
 				tag, ok := original.(string)
 				if !ok || names[tag] == "" {
 					return fail(bad)
@@ -227,11 +230,15 @@ func compileNodeChainGraph(nodes []nodeChainGraphMember, closures []*externalPre
 		}
 	}
 	selected := predecessorText(dns, "final")
+	resolverDetour := proofs[resolverPosition].Tag
+	if nodes[resolverPosition].externalHome {
+		resolverDetour = proofs[0].Tag
+	}
 	var resolver map[string]any
 	for _, raw := range servers {
 		row := raw.(map[string]any)
 		if row["tag"] == selected {
-			if resolver != nil || row["detour"] != proofs[resolverPosition].Tag {
+			if resolver != nil || row["detour"] != resolverDetour {
 				return fail(bad)
 			}
 			resolver = row

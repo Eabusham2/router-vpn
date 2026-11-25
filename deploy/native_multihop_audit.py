@@ -311,7 +311,7 @@ if h == nil || ctx == nil || ctx.Err() != nil || h.closing || h.closed || h.oper
 		if a.checkCapturedConnectionOperationLocked(h.operation) != nil || a.connectionCancelIntent == h.operation {
 			return errConnectionOperationCancelled
 		}
-	} else if h.process == nil || a.cmd != h.process.command || a.state.RouterID != meta.ProfileID || a.state.RuntimeMode != meta.Mode {
+	} else if h.process == nil || a.cmd != h.process.command || a.state.RouterID != h.launch.chain.selection.Control.ID || a.state.RuntimeMode != meta.Mode {
 		return errors.New("Linux ordered activation belongs to a replaced connection")
 	}
 	return runtime.capture.sources.currentLocked(a)
@@ -728,6 +728,7 @@ if launch != nil && launch.chain != nil {
         '''),
         ('cmd/client/desktop_node_chain_execution_graph.go', 'func (proof *desktopNodeChainExecutionProof) currentState(e *desktopNodeChainExecutionLaunch, graph activeMultihopGraph) error', r'''
 	if e.projection != proof.projection || e.identity != proof.identity || e.ready == nil || e.ready.Identity != proof.identity ||
+		!e.ready.Progress.Complete || !e.ready.Progress.Ready || !e.ready.Progress.DNSProven || !e.ready.Progress.PublicProven || e.ready.Progress.Failure != "" ||
 		e.ready.SelectionEpoch < proof.epoch || e.ready.Progress.Comparison.Target != proof.target || e.ready.Progress.Comparison.Winner == nil ||
 		*e.ready.Progress.Comparison.Winner != proof.winner || e.ready.Progress.Execution != graph.Execution {
 		return errors.New("ordered execution graph replaced its proved winner, target or identity")
@@ -745,6 +746,111 @@ if launch != nil && launch.chain != nil {
 	}
 	return ctx.Err()
 
+        '''),
+        ('cmd/client/multihop_node_chain_external_final.go', 'func desktopNodeChainExternalFinalSchema(members []desktopNodeChainMember) (int, error)', r'''
+	bad := errors.New("ordered external final requires Local WireGuard entry and independently captured literal SS2022 streams")
+	if len(members) < 3 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes ||
+		members[0].Mode != "wg" || members[0].Profile.External != nil ||
+		members[0].Profile.NodeKind != "" && members[0].Profile.NodeKind != "router-vpn" ||
+		!common.ValidNodeProofID(members[0].Profile.NodeProofID) {
+		return 0, bad
+	}
+	seen := make(map[string]bool, len(members))
+	for i, member := range members {
+		p := member.Profile
+		if !validProfileID(p.ID) || seen[p.ID] || p.StartLayer != "" && p.StartLayer != "off" {
+			return 0, bad
+		}
+		seen[p.ID] = true
+		if i > 0 && (member.Mode != "shadowsocks" || !desktopNodeChainImportedExecutionMiddle(p)) {
+			return 0, bad
+		}
+	}
+	return 8, nil
+        '''),
+        ('cmd/client/multihop_node_chain_external_final.go', 'func desktopNodeChainHasExternalFinal(members []desktopNodeChainMember) bool', r'''
+	_, err := desktopNodeChainExternalFinalSchema(members)
+	return err == nil
+        '''),
+        ('cmd/client/multihop_node_chain_external_final.go', 'func desktopNodeChainControlCurrent(control common.RouterProfile, members []desktopNodeChainMember) bool', r'''
+	if len(members) == 0 {
+		return false
+	}
+	position := len(members) - 1
+	if desktopNodeChainHasExternalFinal(members) {
+		position = 0
+	}
+	return control.ID == members[position].Profile.ID &&
+		liveMeasurementProfileToken(control) == liveMeasurementProfileToken(members[position].Profile)
+        '''),
+        ('cmd/client/multihop_node_chain_external_final.go', 'func desktopNodeChainMetadataMatchesSelection(meta mobilemultihop.DesktopNodeChainMetadata, selection multihopSelection) bool', r'''
+	if !desktopNodeChainControlCurrent(selection.Control, selection.Nodes) || meta.ProfileID != selection.Exit.ID ||
+		meta.NodeID != selection.Exit.NodeProofID || meta.Mode != selection.ExitMode {
+		return false
+	}
+	if !desktopNodeChainHasExternalFinal(selection.Nodes) {
+		return meta.ExternalFinal == nil
+	}
+	if meta.ExternalFinal == nil || len(meta.Prefixes) != len(selection.Nodes) || meta.NodeID != "" ||
+		meta.ExternalFinal.ProfileID != selection.Exit.ID ||
+		meta.ExternalFinal.ExpectedPublicIP != selection.Exit.External.ExpectedPublicIP {
+		return false
+	}
+	entry, final := meta.Prefixes[0], meta.Prefixes[len(meta.Prefixes)-1]
+	return entry.ProfileID == selection.Control.ID && entry.NodeID == selection.Control.NodeProofID && entry.NodeKind == "" && entry.Mode == "wg" &&
+		final.ProfileID == selection.Exit.ID && final.NodeID == "" && final.NodeKind == "external" && final.Kind == "public-path" &&
+		final.Mode == "shadowsocks" && final.Tag == meta.FinalTag && meta.ExternalFinal.SourceSHA256 == final.SourceSHA256
+        '''),
+        ('cmd/client/desktop_ordered_dns.go', 'func proveDesktopOrderedDNS(ctx context.Context, a *app, observed observedConnection, runtimeID string) (dnsProofState, bool)', r'''
+	result := dnsProofState{Status: "failed", Reason: "ordered DNS lost its original native source"}
+	if a == nil {
+		return result, false
+	}
+	graph, graphOK := getActiveMultihopGraph(a)
+	raw, found := nativeMultihopOwners.Load(a)
+	retained, typed := raw.(*nativeMultihopRuntime)
+	ordered := graphOK && graph.ChainNodes >= 2 || observed.Mode == "multihop" && len(observed.Profile.MultihopNodes) >= 2
+	if found && typed && retained != nil && (retained.launch != nil && retained.launch.chain != nil ||
+		retained.selection.Native != nil && retained.selection.Native.chain != nil) {
+		ordered = true
+	}
+	if registered, exists := desktopNodeOwners.Load(a); exists {
+		if launch, ok := registered.(*desktopNodeLaunch); ok && launch != nil && launch.chain != nil {
+			ordered = true
+		}
+	}
+	if !ordered {
+		return result, false
+	}
+	if ctx == nil || ctx.Err() != nil || !graphOK || !found || !typed || retained == nil || retained.launch == nil ||
+		retained.launch.chain == nil || !retained.launch.chain.hasPolicy() {
+		return result, true
+	}
+	owner, err := capturedNativeMultihopRuntimeContext(ctx, a, retained.launch.command, graph)
+	if err != nil || owner != retained {
+		return result, true
+	}
+	selection := owner.selection
+	if !observed.Connected || observed.Phase != "connected" || observed.Mode != "multihop" || observed.RouterID != selection.Control.ID ||
+		runtimeID != selection.ExitMode ||
+		mtuProfileSnapshotToken(observed.Profile) != mtuProfileSnapshotToken(selection.Control) ||
+		graph.ChainNodes != len(selection.Nodes) {
+		return result, true
+	}
+	_, meta, capture, err := owner.launch.chain.readPolicy()
+	if err != nil || !desktopNodeChainMetadataMatchesSelection(meta, selection) || len(meta.Prefixes) != len(selection.Nodes) ||
+		meta.ExternalFinal != nil && graph.ControlID != selection.Control.ID || meta.ExternalFinal == nil && graph.ControlID != "" {
+		return result, true
+	}
+	result.Mode, result.Host = capture.SelectedDNS.Mode, capture.SelectedDNS.Host
+	if err := proveDesktopNodeChainContext(ctx, a, selection, owner.launch.command); err != nil {
+		return result, true
+	}
+	// The heartbeat validates the original DNS config, proof generation, reader
+	// and process. It does not publish a new query time or pretend to run Retest.
+	result.Status = "passed"
+	result.Reason = "the original native route verified the captured final DNS policy; its source, selected execution, proof generation and reader remain current"
+	return result, true
         '''),
     )
     expected += (
@@ -847,6 +953,11 @@ if launch != nil && launch.chain != nil {
         '''),
     )
     sources = {path: _tokens(read(path)) for path, _, _ in expected}
+    observation = _function(_tokens(read("cmd/client/dns_proof.go")),
+                            "func proveSelectedDNSWithClock(parent context.Context, a *app, s observedConnection, runtimeID string, lookup func(context.Context, string) ([]string, error), startClock clientMeasurementClock) dnsProofState")
+    dispatch = _tokens("if proof, owned := proveDesktopOrderedDNS(parent, a, s, runtimeID); owned { return proof }")
+    if observation is None or observation[:len(dispatch)] != dispatch:
+        return False
     return all(_function(sources[path], declaration) == _tokens(body)
                for path, declaration, body in expected)
 
@@ -1213,6 +1324,9 @@ return q.nodesPresent || q.Nodes != nil
         '''),
         ('cmd/client/multihop_node_chain_request.go', 'func (q multihopConnectRequest) validateOrdered() error', r'''
 if !q.ordered() {
+	if q.ExternalFinal {
+		return errors.New("external final requires its complete explicit ordered source")
+	}
 	return nil
 }
 if !validDesktopOrderedExecution(q.Execution) || q.EntryID != "" || q.ExitID != "" || q.Base != "" || q.EntryMode != "" || q.ExitMode != "" ||
@@ -1222,7 +1336,11 @@ if !validDesktopOrderedExecution(q.Execution) || q.EntryID != "" || q.ExitID != 
 if err := desktopOrderedExecutionSelection(q.Nodes, q.Execution); err != nil {
 	return err
 }
-if q.Nodes[len(q.Nodes)-1].ID != *q.ExpectedSelectedNodeID {
+if q.ExternalFinal {
+	if q.Execution != "local" || !desktopExternalFinalReferences(q.Nodes) || q.Nodes[0].ID != *q.ExpectedSelectedNodeID {
+		return errors.New("ordered external final requires its original selected WireGuard entry and Local execution")
+	}
+} else if q.Nodes[len(q.Nodes)-1].ID != *q.ExpectedSelectedNodeID {
 	return errors.New("ordered Connect must end at its original selected node")
 }
 return nil
@@ -1242,13 +1360,19 @@ for name := range fields {
 	}
 }
 rawNodes, ordered := fields["nodes"]
+if _, present := fields["external_final"]; present && !ordered {
+	return errors.New("external final cannot be detached from its ordered source")
+}
 if ordered {
 	for name := range fields {
 		switch name {
-		case "nodes", "execution", "expected_selected_node_id", "expected_profile_tokens":
+		case "nodes", "execution", "expected_selected_node_id", "expected_profile_tokens", "external_final":
 		default:
 			return errors.New("ordered Connect cannot mix another selection or an unknown field")
 		}
+	}
+	if value, present := fields["external_final"]; present && string(value) != "true" {
+		return errors.New("ordered external final requires its explicit canonical true intent")
 	}
 	var rows []json.RawMessage
 	if json.Unmarshal(rawNodes, &rows) != nil || len(rows) < 2 || len(rows) > hopmeasure.PhysicalTraversalDepth {
@@ -1641,8 +1765,8 @@ return err == nil
 	// The concrete physical policy has one final authenticated control source.
 	// A third profile cannot supply credentials or a weaker protection policy.
 	final := members[len(members)-1]
-	if control.ID != final.Profile.ID || liveMeasurementProfileToken(control) != liveMeasurementProfileToken(final.Profile) {
-		return multihopSelection{}, errors.New("ordered native control must be its exact final selected node")
+if !desktopNodeChainControlCurrent(control, members) || desktopNodeChainHasExternalFinal(members) && execution != "local" {
+	return multihopSelection{}, errors.New("ordered native control must match its original paired final or typed external-final entry")
 	}
 	return multihopSelection{Control: common.CloneRouterProfile(control), Entry: common.CloneRouterProfile(members[0].Profile),
 		Exit: common.CloneRouterProfile(final.Profile), Base: desktopExternalEntryBase(members[0].Mode), EntryMode: members[0].Mode, ExitMode: final.Mode,
@@ -2091,7 +2215,7 @@ return ctx.Err()
         '''),
         ("internal/mobilemultihop/node_chain_multiple_imported_execution.go",
          "func (c *NodeChain) selectedStreamLayout() (int, bool)", r'''
-	if c == nil || c.importedNodes == nil || c.importedNodes.customEntry || len(c.nodes) < 4 || len(c.nodes) > NodeChainExtendedLocalMaximumNodes || len(c.proofs) != len(c.nodes) || c.nodes[0] == nil || c.nodes[0].mode != "wg" {
+	if c == nil || c.importedNodes == nil || c.importedNodes.customEntry || len(c.nodes) < 4 || len(c.nodes) > NodeChainExtendedLocalMaximumNodes || len(c.proofs) != len(c.nodes) || c.nodes[0] == nil || !NodeChainPrefixMode(c.nodes[0].mode) {
 		return 0, false
 	}
 	last, paired := len(c.nodes)-1, 0
@@ -2167,7 +2291,7 @@ return ctx.Err()
 '''),)
     expected += (
         ('cmd/client/multihop_node_chain_imported_nodes.go', 'func desktopSelectedPrivateStreamRoles(rows []common.MultihopNodeSelection, imported func(int) bool) bool', r'''
-	if len(rows) < 4 || len(rows) > mobilemultihop.NodeChainExtendedLocalMaximumNodes || rows[0].Mode != "wg" || imported(0) ||
+	if len(rows) < 4 || len(rows) > mobilemultihop.NodeChainExtendedLocalMaximumNodes || !mobilemultihop.NodeChainPrefixMode(rows[0].Mode) || imported(0) ||
 		rows[len(rows)-1].Mode != "shadowsocks" || imported(len(rows)-1) || !imported(1) {
 		return false
 	}
@@ -2211,6 +2335,9 @@ return ctx.Err()
     if not _ordered_once(schema, r'''bad := errors.New("ordered imports require their complete Local source and supported positions")
 	if len(members) < 2 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes {
 		return 0, bad
+	}
+	if final := members[len(members)-1].Profile; final.NodeKind == "external" || final.External != nil {
+		return desktopNodeChainExternalFinalSchema(members)
 	}
 	if desktopPairedStreamRoles(nodeChainSelectedReferences(members), func(i int) bool { return members[i].Profile.NodeKind == "external" }) {
 		for position, member := range members {

@@ -79,7 +79,7 @@ func (p *nodeChainFixtureProcess) Snapshot(ctx context.Context, challenge string
 	if p.ready.Load() {
 		r.Phase, r.TrafficAllowed, r.DNSProven, r.PublicProven, r.ProofAt = NodeChainReady, true, true, true, now
 		for _, member := range c.Source.Members {
-			r.Prefixes = append(r.Prefixes, NodeChainPrefixReceipt{Position: member.Position, ProfileID: member.ProfileID, NodeID: member.NodeID, Mode: member.Mode, Proven: true, ResponseMS: float64(member.Position) + 0.25})
+			r.Prefixes = append(r.Prefixes, NodeChainPrefixReceipt{Position: member.Position, ProfileID: member.ProfileID, NodeID: member.NodeID, Mode: member.Mode, NodeKind: member.NodeKind, ProofKind: member.ProofKind, SourceSHA256: member.SourceSHA256, Proven: true, ResponseMS: float64(member.Position) + 0.25})
 		}
 	}
 	p.mu.Lock()

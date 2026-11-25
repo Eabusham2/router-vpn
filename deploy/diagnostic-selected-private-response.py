@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Topic-branch Linux amd64 qualification using the shipping prepared source and encrypted worker."""
+"""Exact-source Linux amd64 qualification using the shipping prepared source and encrypted worker."""
 import argparse
 import importlib.util
 import json
@@ -69,7 +69,8 @@ def encrypted(stage):
     build.run(['go', 'build', '-race', '-p=2', '-mod=readonly', '-tags='+tags, '-ldflags=-checklinkname=0',
                '-o', str(stage/'warm-sing-box'), './cmd/sing-box'], cwd=core, env=env, timeout=2400)
     receipt = native.execute(core, TARGET, tags, env, build.run, private_response_diagnostic=True)
-    if (set(receipt['encrypted']) != set(native.PRIVATE_RESPONSE_CASES) or len(receipt['encrypted']) != 48
+    if (set(receipt['encrypted']) != set(native.PRIVATE_RESPONSE_CASES) or len(receipt['encrypted']) != 76
+            or receipt.get('external_final_encrypted') != dict.fromkeys(native.EXTERNAL_FINAL_CASES, 2)
             or build.PQ.verify(archive, TARGET) != pq):
         raise ValueError('Diagnostic lost a private response case or its original native archive')
     sha = build.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT)

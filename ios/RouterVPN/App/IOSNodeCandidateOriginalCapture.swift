@@ -18,7 +18,7 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
     func selectedResponse(in proofs: [Self]) -> Bool {
         guard (3...IOSMultihopNodeSelection.physicalTraversalDepth).contains(proofs.count), position > 0, position < proofs.count - 1,
               proofs[position] == self, metric == "routed-candidate-response",
-              proofs.first?.mode == "wg", proofs.dropFirst().allSatisfy({ $0.mode == "shadowsocks" }),
+              IOSMultihopNodeSelection.supportsNativePrefix(proofs.first?.mode ?? ""), proofs.dropFirst().allSatisfy({ $0.mode == "shadowsocks" }),
               Set(proofs.map(\.profile_id)).count == proofs.count else { return false }
         let privateIDs = proofs.map(\.node_id).filter { !$0.isEmpty }
         let privateStops = proofs.dropFirst().dropLast().filter { !$0.node_id.isEmpty }
@@ -70,6 +70,7 @@ enum IOSNodeCandidateOriginalCapture {
     func preparationKind(at position: Int) -> String {
         switch self {
         case .ordinary(let capture):
+            if capture.sourceSchema == 8 && position == 0 { return "routervpn-node-chain-multiple-imported-candidate-preparation" }
             if capture.sourceSchema == 6, capture.selectionExecution == "local",
                Int(capture.plan.extendedLocalNodeCount()) == capture.members.count ||
                 LibboxRouterNodeChainCandidatePrefixMeasurement(capture.plan, Int32(position)) == "routed-candidate-response" {

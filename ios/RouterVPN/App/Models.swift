@@ -682,10 +682,17 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
             extendedLocalModes(modes, execution: execution) || ["server", "auto"].contains(execution ?? "") && extendedSelectedModeShape(modes)
     }
 
+    static func externalExitReferences(_ nodes: [Self], controlID: String, execution: String?) -> Bool {
+        execution == "local" && (3...physicalTraversalDepth).contains(nodes.count) &&
+            nodes.first?.id == controlID && nodes.first?.mode == "wg" &&
+            nodes.dropFirst().allSatisfy { $0.mode == "shadowsocks" }
+    }
+
     static func extendedLocalSource(_ schema: Int?, execution: String?, count: Int, identities: [String]?, allowPairedStreams: Bool = false, selectedPrivateStream: Bool = false) -> Bool {
         guard execution == "local", (maximumNodes + 1...physicalTraversalDepth).contains(count),
               let identities, identities.count == count else { return false }
         if schema == 1 { return identities.allSatisfy { !$0.isEmpty } }
+        if schema == 8 { return !identities[0].isEmpty && identities.dropFirst().allSatisfy { $0.isEmpty } }
         let prefix = identities.dropLast().prefix(while: { !$0.isEmpty }).count
         return schema == 6 && prefix > 0 && prefix < count - 1 && !identities[count - 1].isEmpty &&
             (allowPairedStreams || identities.dropFirst(prefix).dropLast().allSatisfy { $0.isEmpty } ||
@@ -768,7 +775,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         }
         if let hostname, hostname != packets, !privateStreams.isEmpty { return nil }
         if execution != "local" {
-            guard packets == 1, nodes[0].mode == "wg", hostname == nil,
+            guard packets == 1, supportsNativePrefix(nodes[0].mode), hostname == nil,
                   !privateStreams.contains(1) else { return nil }
         }
         return hasImport ? (privateStreams, hostname) : nil
@@ -779,7 +786,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
     }
 
     static func compareResponsePositions(_ nodes: [Self], profiles: [RouterProfile]) -> [Int] {
-        guard nodes.first?.mode == "wg", nodes.dropFirst().allSatisfy({ $0.mode == "shadowsocks" }),
+        guard supportsNativePrefix(nodes.first?.mode ?? ""), nodes.dropFirst().allSatisfy({ $0.mode == "shadowsocks" }),
               let layout = localStreamLayout(nodes, execution: "local", profiles: profiles),
               layout.hostname == nil, !layout.paired.contains(1) else { return [] }
         let finalPrefix = nodes.count - 2
@@ -862,7 +869,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
                 throw issue("Each ordered position needs a distinct linked node and its exact transport.")
             }
         }
-        if let controlID, nodes.last?.id != controlID {
+        if let controlID, nodes.last?.id != controlID, !externalExitReferences(nodes, controlID: controlID, execution: execution) {
             throw issue("The selected Router node must be the final node of this ordered chain.")
         }
     }

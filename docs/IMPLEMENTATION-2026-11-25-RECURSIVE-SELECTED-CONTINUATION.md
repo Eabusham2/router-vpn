@@ -164,16 +164,31 @@ imports before the original bounded test invocation. Windows initializes its
 pinned compiler toolchain before the independent WPF contract. No native,
 source, packaging, signing, networking or release gate is removed.
 
+## AWG2 Fast and Strong entry support
+
+Compare Local now accepts the original paired WireGuard, AWG2 Fast, or AWG2
+Strong entry for authenticated stream-prefix candidates. All three preserve the
+literal-address first import, independent paired or imported stream interiors,
+paired final, and Off Start Layer at every position. The three-node source can
+grow into a recursive draft. The original 96-node physical limit still applies.
+The native diagnostic inventories 48 WireGuard and 28 AWG cases. Its AWG
+cases require real client and peer parameter readback, 50 authenticated
+responses for each successful choice, and reloaded DNS and application traffic.
+The diagnostic also checks that changing the packet key or handshake header
+reaches the original encrypted peer and yields no decrypted connection.
+
 ## Remaining implementation and acceptance boundaries
+
+The following describes this record's original source generation. The later
+[external-final and Server response continuation](IMPLEMENTATION-2026-11-25-EXTERNAL-FINAL-AND-SERVER-RESPONSES.md)
+implements separately qualified families for both gaps and records their
+remaining restrictions and native acceptance requirements.
 
 The following source restrictions remain explicit; they are not described as
 finished merely because unavailable paths fail closed:
 
 - Authenticated stream-prefix candidate responses for an explicit Server or
   Compare Server winner need their own original remote measurement owner.
-- Selected private-stream response measurement still requires a WireGuard
-  entry; the qualified AWG2 Fast/Strong selected all-import family does not
-  automatically qualify this additional response path.
 - Ordered paths of three or more members still require a paired final. Direct
   and pair external-exit support does not establish an imported final in those
   longer ordered paths.

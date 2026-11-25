@@ -61,6 +61,7 @@ def copies():
 package routervpnamnezia
 
 import (
+ "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
  "bufio"
  "context"
  "crypto/rand"

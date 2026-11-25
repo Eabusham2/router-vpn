@@ -120,7 +120,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         var eligiblePrefixes: [IOSNodeCandidatePrefix] {
             proofs.filter { prefix in
                 if let requested_execution, prefix.metric == "routed-candidate-response" {
-                    return requested_execution == "auto" && execution == "local" && candidate_positions?.contains(prefix.position) == true &&
+                    return (requested_execution == "auto" && execution == "local" || ["server", "auto"].contains(requested_execution) && execution == "server") && candidate_positions?.contains(prefix.position) == true &&
                         prefix.selectedResponse(in: proofs)
                 }
                 return prefix.supported(in: proofs) && (candidate_positions?.contains(prefix.position) ?? true)
@@ -281,7 +281,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                               info.proofs == temporary.prefixes else { throw CancellationError() }
                     }
                     let capture = try IOSNodeCandidateCapture.make(request: owner, prefixPosition: position, proofs: info.proofs,
-                        chainSource: info.source_sha256, chainConfig: info.config_sha256, selectedResponse: info.requested_execution == "auto" && info.proofs[position].metric == "routed-candidate-response")
+                        chainSource: info.source_sha256, chainConfig: info.config_sha256, selectedResponse: info.requested_execution != nil && info.proofs[position].metric == "routed-candidate-response")
                     let owned = try IOSNodeCandidateTransaction(epoch: info.session_id, owner: owner,
                         send: { op, request, candidate, prefix, deadline in
                             try await self.send(binding.connection, operation: op, request: request, epoch: info.session_id,
@@ -314,9 +314,17 @@ private final class IOSCandidateReply: @unchecked Sendable {
                             let raw = try await owned.measure(request: request, candidate: target.id, current: current)
                             lastRequest = request
                             try current()
-                            if let receipt = try? JSONDecoder().decode(IOSNodeCandidateResult.self, from: raw),
-                               let benchmark = try? receipt.score(request: request, target: target, metadata: metadata,
-                                   now: Int64(Date().timeIntervalSince1970 * 1000)) {
+                            let now = Int64(Date().timeIntervalSince1970 * 1000)
+                            let receipt: IOSNodeCandidateResult?, benchmark: IOSNodeCandidateResult.Benchmark?
+                            if metadata.execution == "server", metadata.metric == "routed-candidate-response" {
+                                let original = try JSONDecoder().decode(IOSNodeCandidateResult.self, from: raw)
+                                receipt = original
+                                benchmark = try original.selectedServerScore(request: request, target: target, metadata: metadata, now: now)
+                            } else {
+                                receipt = try? JSONDecoder().decode(IOSNodeCandidateResult.self, from: raw)
+                                benchmark = try? receipt?.score(request: request, target: target, metadata: metadata, now: now)
+                            }
+                            if let receipt, let benchmark {
                                 let score = Score(id: target.id, name: String(row.name.prefix(100)), receipt: receipt, benchmark: benchmark)
                                 if temporary == nil { self.scores.append(score) } else { detachedScores.append(score) }
                             }

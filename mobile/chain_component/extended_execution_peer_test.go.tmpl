@@ -4,6 +4,8 @@ package routervpnamnezia
 
 import (
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -174,7 +176,7 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 		}
 	}
 	if privateStream || response {
-		if privateStream && (privatePosition < 2 || privatePosition >= count-1) || entryMode != "wg" {
+		if privateStream && (privatePosition < 2 || privatePosition >= count-1) || !mobilemultihop.NodeChainPrefixMode(entryMode) {
 			t.Fatal("invalid original selected private stream")
 		}
 		var imports []int
@@ -193,7 +195,7 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 	var candidateRoute []multipleImportedCandidateSetup
 	var peerRoutes multipleImportedPeerRoutes
 	if response {
-		if count == 3 && entryMode == "wg" {
+		if count == 3 {
 			layout = multipleImportedLayout{"selected-private-response", 3, []int{1}}
 		}
 		measured = &selectedResponseNativeCase{fault: strings.TrimPrefix(measure, "private-response/"), pairedPositions: privatePositions}
@@ -335,6 +337,9 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 		responseSamples = 6
 	}
 	if entryMode == "awg2-fast" || entryMode == "awg2-strong" {
+		if count == 5 && measured != nil && measured.fault == "original" {
+			verifySelectedAWGCipherRefusal(t, f, entryMode)
+		}
 		current, err := f.members[0].prefix.readback()
 		if err != nil || current != originalPacketParameters {
 			t.Fatal("selected execution replaced original AWG parameters", err)
@@ -347,6 +352,72 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 
 // A second named profile receives its own private manager, listener generation,
 // selected Box and lease. All of the preceding owners must join before it starts.
+// Use a second client against the same still-live original AWG peer after the
+// selected owner has joined. Reach the encrypted socket but never its first
+// authenticated TCP target when the client key or handshake headers differ.
+func verifySelectedAWGCipherRefusal(t *testing.T, f *multipleImportedFixture, mode string) {
+	t.Helper()
+	var graph struct{ Endpoints []json.RawMessage }
+	if err := json.Unmarshal([]byte(f.chain.Config()), &graph); err != nil || len(graph.Endpoints) != 1 {
+		t.Fatal("missing the original single packet endpoint", err)
+	}
+	egress, err := f.chain.PhysicalEgress()
+	if err != nil || len(egress) != 1 {
+		t.Fatal("original AWG egress", err)
+	}
+	lower := &desktopSSReferenceLower{virtual: net.JoinHostPort(egress[0].Host, strconv.Itoa(egress[0].Port)), original: f.members[0].physical}
+	ctx := service.ContextWith[adapter.OutboundManager](f.ctx, &desktopSSReferenceManager{owners: map[string]adapter.Outbound{"captured-physical": lower}})
+	ctx = service.ContextWith[adapter.NetworkManager](ctx, &desktopImportedPacketNetwork{})
+	peer := f.members[0].prefix
+	for _, fault := range []string{"key", "header"} {
+		var row map[string]any
+		if err := json.Unmarshal(graph.Endpoints[0], &row); err != nil || row["type"] != mobilemultihop.AmneziaType || row["detour"] != nil {
+			t.Fatal("original AWG entry changed", err)
+		}
+		row["detour"] = "captured-physical"
+		if fault == "key" {
+			key, err := ecdh.X25519().GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			row["private_key"] = base64.StdEncoding.EncodeToString(key.Bytes())
+		} else {
+			row["amnezia"].(map[string]any)["h1"] = "51000000-51999999"
+		}
+		var options Options
+		if err := json.Unmarshal([]byte(desktopNodeChainJSON(t, row)), &options); err != nil {
+			t.Fatal(err)
+		}
+		endpoint, err := NewEndpoint(ctx, &desktopNodeChainRejectInbound{}, log.NewNOPFactory().Logger(), f.chain.PrefixTags()[0], options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, tcp := peer.bind.packets.Load(), peer.handler.tcp.Load()
+		func() {
+			defer func() {
+				if err := endpoint.Close(); err != nil {
+					t.Error("changed AWG endpoint did not join", err)
+				}
+			}()
+			for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+				if err := endpoint.Start(stage); err != nil {
+					t.Fatal(err)
+				}
+			}
+			call, stop := context.WithTimeout(ctx, 500*time.Millisecond)
+			defer stop()
+			conn, err := endpoint.DialContext(call, "tcp", M.ParseSocksaddr("10.80.0.1:8787"))
+			if conn != nil {
+				_ = conn.Close()
+			}
+			if err == nil || peer.bind.packets.Load() <= raw || peer.handler.tcp.Load() != tcp {
+				t.Fatal("changed AWG transport failed to reach encrypted refusal", mode, fault)
+			}
+		}()
+	}
+	t.Logf("SELECTED_PRIVATE_AWG_REFUSALS entry=%s original_peer=true wrong_key=true wrong_header=true joined=true", mode)
+}
+
 func runOriginalSelectedOwner(t *testing.T, f *multipleImportedFixture, api, front *extendedWGFront, health, mode, winner, measure string, first, last, privatePosition int, measured *selectedResponseNativeCase, start ExtendedWorkerFactory) {
 	t.Helper()
 	count := len(f.members)
@@ -718,13 +789,14 @@ func holdPrivateStreamRetirement(ctx context.Context, mgr *multihoprelay.Manager
 }
 
 func originalServerPolicy(t *testing.T, f *multipleImportedFixture) *mobilemultihop.NodeChainServerPolicy {
-	entry := f.chain.ProofInventory()[0]
+	proofs := f.chain.ProofInventory()
+	entry := proofs[0]
 	source := mobilemultihop.NodeChainServerSource{Schema: f.source.Schema, EntryID: entry.ProfileID, EntryNodeID: entry.NodeID, EntryMode: entry.Mode, Nodes: append([]string(nil), f.source.Nodes[1:]...), IdentitySources: append([]string(nil), f.source.IdentitySources[1:]...)}
 	// The real Server final uses its own private identity, while retaining the
 	// same peer public key, original SS endpoint and authenticated final node.
 	last := len(source.Nodes) - 1
 	positions := []int{last}
-	for i, proof := range f.chain.ProofInventory() {
+	for i, proof := range proofs {
 		if i > 0 && i < len(f.members)-1 && !f.members[i].imported && proof.Mode == "shadowsocks" {
 			positions = append(positions, i-1)
 		}
@@ -736,7 +808,7 @@ func originalServerPolicy(t *testing.T, f *multipleImportedFixture) *mobilemulti
 		}
 		seed := "independent encrypted suffix fixture final identity"
 		if pos != last {
-			seed = "independent encrypted private stream identity"
+			seed = "independent encrypted private stream identity/" + strconv.Itoa(pos+1) + "/" + proofs[pos+1].NodeID
 		}
 		key := sha256.Sum256([]byte(seed))
 		wg, e := base64.StdEncoding.DecodeString(finalIdentity["wg.conf"])

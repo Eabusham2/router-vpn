@@ -365,7 +365,7 @@ func validateDesktopSelectedLatencyCaptureBinding(c desktopOrderedLatencyCapture
 	if len(selected.Nodes) > mobilemultihop.NodeChainMaximumNodes {
 		extended = len(selected.Nodes)
 	}
-	if err != nil || c.ExtendedLocalNodes != 0 || c.ExtendedOriginalNodes != extended || selected.SourceSHA256 != c.SourceSHA256 || selected.ConfigSHA256 != c.ConfigSHA256 || selected.GenerationSHA256 != c.GenerationSHA256 {
+	if err != nil || c.ExternalFinalNodeID != "" || c.ExtendedLocalNodes != 0 || c.ExtendedOriginalNodes != extended || selected.SourceSHA256 != c.SourceSHA256 || selected.ConfigSHA256 != c.ConfigSHA256 || selected.GenerationSHA256 != c.GenerationSHA256 {
 		return errors.Join(err, errors.New("selected fifty changed its original public capture"))
 	}
 	return nil

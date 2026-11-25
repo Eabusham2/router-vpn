@@ -235,6 +235,9 @@ func (m *Manager) CreateChainCandidate(ctx context.Context, peer netip.Addr, req
 			op.native = native
 			op.mu.Unlock()
 			if err != nil {
+				if err == ErrCandidateNotRegistered {
+					return NodeChainCandidateReceipt{}, ErrUnavailable
+				}
 				return NodeChainCandidateReceipt{}, err
 			}
 			if native == nil || operationCtx.Err() != nil {
@@ -274,7 +277,22 @@ func (m *Manager) CreateChainCandidate(ctx context.Context, peer netip.Addr, req
 		workErr = ErrUnavailable
 	}
 	// Keep the captured handle attached if the request's cleanup budget expired.
-	_ = op.close(ctx)
+	closeErr := op.close(ctx)
+	if workErr == ErrCandidateNotRegistered {
+		if q.Schema != 2 || closeErr != nil || ctx.Err() != nil || !stopRequest() || m.now().UnixMilli() >= q.DeadlineAt {
+			return NodeChainCandidateReceipt{}, ErrUnavailable
+		}
+		if err := m.candidateCurrent(ctx, peer, q, o); err != nil {
+			return NodeChainCandidateReceipt{}, err
+		}
+		o.mu.Lock()
+		current := o.candidate == nil && o.p == op.process && o.ctx.Err() == nil && o.phase == NodeChainReady && sameNodeChainCandidate(o.candidateAttempts[q.Operation], q)
+		o.mu.Unlock()
+		if !current {
+			return NodeChainCandidateReceipt{}, ErrOwnership
+		}
+		return NodeChainCandidateReceipt{}, &CandidateRegistryAbsence{capture: capture.Clone()}
+	}
 	return NodeChainCandidateReceipt{}, workErr
 }
 func (m *Manager) ChainCandidateStatus(ctx context.Context, peer netip.Addr, request NodeChainCandidateRequest) (NodeChainCandidateReceipt, error) {

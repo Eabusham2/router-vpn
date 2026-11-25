@@ -21,15 +21,17 @@ import (
 // A view is a bounded UI selection snapshot, never a successful path proof.
 // Its private catalog retains original source bytes; none are sent to the UI.
 type orderedCandidateView struct {
-	token, capture string
-	expires        time.Time
-	position       int
-	identity       speedLabPathIdentity
-	catalog        *desktopNodeChainCandidateCatalog
-	candidates     []orderedCandidateChoice
-	prefixes       []orderedCandidatePrefix
-	responseNodes  []orderedCandidateResponseSourceNode
-	responseEpoch  uint64
+	token, capture                      string
+	expires                             time.Time
+	position                            int
+	identity                            speedLabPathIdentity
+	catalog                             *desktopNodeChainCandidateCatalog
+	candidates                          []orderedCandidateChoice
+	prefixes                            []orderedCandidatePrefix
+	responseNodes                       []orderedCandidateResponseSourceNode
+	responseOwners                      []string
+	responseRequested, responseSelected string
+	responseEpoch                       uint64
 }
 type orderedCandidateChoice struct {
 	ID             string                         `json:"id"`
@@ -59,11 +61,14 @@ func candidateViewMetric(prefixes []orderedCandidatePrefix, position int) string
 }
 
 func desktopCandidatePrefixMetric(launch *desktopNodeLaunch, position int) string {
-	if launch == nil || launch.chain == nil || position < 0 || position >= len(launch.chain.selection.Nodes) || !desktopSelectedCandidatePosition(launch, position) {
+	return desktopCandidateMetricForIntent(launch, position, false)
+}
+func desktopCandidateMetricForIntent(launch *desktopNodeLaunch, position int, serverResponse bool) string {
+	if launch == nil || launch.chain == nil || position < 0 || position >= len(launch.chain.selection.Nodes) || !desktopCandidatePositionForIntent(launch, position, serverResponse) {
 		return ""
 	}
 	privateSelected := launch.chain.execution != nil && launch.chain.execution.preparation != nil &&
-		launch.chain.execution.preparation.SupportsCompareLocalResponseCandidate(position)
+		(launch.chain.execution.preparation.SupportsCompareLocalResponseCandidate(position) || serverResponse && launch.chain.execution.preparation.SupportsServerResponseCandidate(position))
 	if position > 7 && !privateSelected && (launch.chain.execution != nil || launch.chain.policy == nil || launch.chain.policy.OriginalChain().ExtendedLocalNodeCount() <= position+1) {
 		return ""
 	}
@@ -71,7 +76,7 @@ func desktopCandidatePrefixMetric(launch *desktopNodeLaunch, position int) strin
 		return hopmeasure.CandidateTCPMeasurement
 	}
 	if launch.chain.execution != nil {
-		if launch.chain.execution.preparation.SupportsCompareLocalResponseCandidate(position) {
+		if privateSelected {
 			return hopmeasure.CandidatePrivateResponseMeasurement
 		}
 		return ""
@@ -126,18 +131,20 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
+	serverResponse, validIntent := takeCandidateServerIntent(query)
 	positions := query["prefix_position"]
 	rawPosition := ""
 	if len(positions) == 1 {
 		rawPosition = positions[0]
 	}
 	position, err := strconv.Atoi(rawPosition)
-	if len(query) != 1 || len(positions) != 1 || err != nil || strconv.Itoa(position) != rawPosition || position < 0 || position >= mobilemultihop.NodeChainExtendedLocalMaximumNodes {
+	if !validIntent || len(query) != 1 || len(positions) != 1 || err != nil || strconv.Itoa(position) != rawPosition || position < 0 || position >= mobilemultihop.NodeChainExtendedLocalMaximumNodes {
 		http.Error(w, "choose an exact connected prefix position", 400)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 	defer cancel()
+	ctx = candidateServerIntent(ctx, serverResponse)
 	identity, capture, _, err := captureOrderedCandidateContext(ctx, a)
 	if err != nil {
 		http.Error(w, err.Error(), 409)
@@ -169,9 +176,13 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 409)
 		return
 	}
-	privateResponse := desktopCompareLocalPrivateResponseMembers(members, requested, position)
+	var owners []string
+	if e := identity.Ordered.launch.chain.execution; serverResponse && e != nil {
+		owners = candidateResponseExecutions(e.preparation, position)
+	}
+	privateResponse := len(owners) > 0 || desktopCompareLocalPrivateResponseMembers(members, requested, position)
 	for i, n := range members {
-		if metric := desktopCandidatePrefixMetric(identity.Ordered.launch, i); metric != "" {
+		if metric := desktopCandidateMetricForIntent(identity.Ordered.launch, i, serverResponse); metric != "" {
 			view.prefixes = append(view.prefixes, orderedPrefixChoice(i, n, metric))
 		}
 	}
@@ -232,19 +243,23 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		note = "50 authenticated private agent responses through the selected prefix and paired candidate. Saving creates a profile for the next connection."
 	}
 	reply := map[string]any{"schema": 1, "view_token": view.token, "expires_at": view.expires.UnixMilli(), "prefix_position": position, "prefixes": view.prefixes, "candidates": view.candidates, "samples": 50, "measurement": metric, "note": note}
-	if requested == "auto" && metric == hopmeasure.CandidatePrivateResponseMeasurement {
+	if (requested == "auto" || len(owners) > 0) && metric == hopmeasure.CandidatePrivateResponseMeasurement {
 		reply["required_selected_execution"] = "local"
 		reply["requested_execution"] = requested
 		launch := identity.Ordered.launch.chain.execution
 		launch.mu.Lock()
 		ready := launch.ready
 		launch.mu.Unlock()
-		if ready == nil || ready.Progress.Execution != "local" || ready.SelectionEpoch == 0 {
-			http.Error(w, "private responses require the original live Compare Local winner", 409)
+		if ready == nil || ready.SelectionEpoch == 0 || (len(owners) == 0 && ready.Progress.Execution != "local") || len(owners) > 0 && !slices.Contains(owners, ready.Progress.Execution) {
+			http.Error(w, "private responses require the original eligible selected execution", 409)
 			return
 		}
 		reply["selected_execution"], reply["selection_epoch"] = ready.Progress.Execution, ready.SelectionEpoch
 		view.responseNodes = orderedCandidateResponseSourceNodes(identity.Ordered.launch.chain.selection, requested, position)
+		if len(owners) > 0 {
+			view.responseNodes = originalCandidateResponseNodes(identity.Ordered.launch.chain.selection)
+			view.responseOwners, view.responseRequested, view.responseSelected = owners, requested, ready.Progress.Execution
+		}
 		if len(view.responseNodes) != 0 {
 			view.responseEpoch = ready.SelectionEpoch
 			view.addResponseSource(reply)
@@ -327,7 +342,7 @@ func orderedCandidateRequestedExecution(launch *desktopNodeLaunch) (string, erro
 
 func orderedCandidateProposalForExecution(members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile, requested string) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var control common.RouterProfile
-	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !common.ExtendedAWGSelectedMultihopSelection(nodeChainSelectedReferences(members)) && !(requested == "local" && (common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)) || common.ExtendedMixedLocalPacketCount(nodeChainSelectedReferences(members)) > 0))) || position < 0 || position >= len(members)-1 || !(mobilemultihop.NodeChainPrefixMode(members[position].Mode) || (requested == "local" || desktopCompareLocalResponseProposal(members, requested, position, candidate)) && members[position].Mode == "shadowsocks" && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
+	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !common.ExtendedAWGSelectedMultihopSelection(nodeChainSelectedReferences(members)) && !(requested == "local" && (common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)) || common.ExtendedMixedLocalPacketCount(nodeChainSelectedReferences(members)) > 0))) || position < 0 || position >= len(members)-1 || !(mobilemultihop.NodeChainPrefixMode(members[position].Mode) || (requested == "local" || desktopSelectedResponseProposal(members, requested, position, candidate)) && members[position].Mode == "shadowsocks" && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
 		return control, nil, errors.New("candidate requires an original packet prefix")
 	}
 	nodes := nodeChainSelectedReferences(members)
@@ -341,9 +356,9 @@ func orderedCandidateProposalForExecution(members []desktopNodeChainMember, posi
 	replacement := position + 1
 	selected := common.MultihopNodeSelection{ID: candidate.ID, Mode: mode}
 	if members[position].Mode == "shadowsocks" && replacement < len(nodes)-1 &&
-		(requested == "local" || desktopCompareLocalResponseProposal(members, requested, position, candidate)) {
+		(requested == "local" || desktopSelectedResponseProposal(members, requested, position, candidate)) {
 		if len(nodes) >= common.MultihopPhysicalTraversalDepth || nodes[replacement].Mode != "shadowsocks" {
-			return control, nil, errors.New("saving this measured intermediate requires the original Local stream suffix and room for another member")
+			return control, nil, errors.New("saving this measured intermediate requires the original stream suffix and room for another member")
 		}
 		nodes = slices.Insert(nodes, replacement, selected)
 	} else {
@@ -481,11 +496,11 @@ func (a *app) runOrderedCandidates(ctx context.Context, c *viaEntryControl, owne
 	if err = view.catalog.current(ctx); err != nil {
 		return err
 	}
-	job.catalog, err = captureDesktopNodeChainCandidates(ctx, a, identity, view.position, q.CandidateIDs)
+	job.catalog, err = captureDesktopNodeChainCandidates(candidateServerIntent(ctx, view.catalog.serverResponse), a, identity, view.position, q.CandidateIDs)
 	if err != nil {
 		return err
 	}
-	if job.catalog.revision != view.catalog.revision {
+	if job.catalog.serverResponse != view.catalog.serverResponse || job.catalog.revision != view.catalog.revision {
 		return errors.New("saved candidate catalog changed")
 	}
 	job.finish, err = beginDesktopNodeChainMeasurementHold(ctx, a, identity.Ordered.launch)
@@ -512,6 +527,9 @@ func (a *app) runOrderedCandidates(ctx context.Context, c *viaEntryControl, owne
 			return e
 		}
 		if e != nil {
+			if view.responseSelected == "server" && len(view.responseOwners) > 0 {
+				return e
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -540,13 +558,7 @@ func orderedCandidateResponseLocked(owner *viaEntryOwner, now time.Time) map[str
 			}
 		}
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		a, b := rows[i].Results[0].Benchmark.TrimmedMean, rows[j].Results[0].Benchmark.TrimmedMean
-		if a == b {
-			return rows[i].CandidateID < rows[j].CandidateID
-		}
-		return a < b
-	})
+	sortOrderedCandidateResults(rows)
 	response := map[string]any{"schema": 1, "request_id": owner.id, "view_token": job.view.token, "prefix_position": job.view.position, "running": owner.running, "drained": owner.drained, "cancelled": owner.cancelled, "accepted": job.accepted && !owner.cancelled, "current_candidate": job.current, "results": rows, "errors": append([]viaEntryCandidateError{}, job.failures...), "failure": job.failure, "measurement": candidateViewMetric(job.view.prefixes, job.view.position)}
 	job.view.addResponseSource(response)
 	return response
@@ -679,4 +691,17 @@ func (o *orderedCandidateObservation) current(ctx context.Context, catalog *desk
 		return errors.Join(err, errors.New("original candidate proof changed"))
 	}
 	return catalog.pulseCurrent(ctx)
+}
+
+func sortOrderedCandidateResults(rows []hopmeasure.CandidateStatus) {
+	sort.Slice(rows, func(i, j int) bool {
+		a, b := rows[i].Results[0].Benchmark, rows[j].Results[0].Benchmark
+		if (a == nil) != (b == nil) {
+			return a != nil
+		}
+		if a != nil && a.TrimmedMean != b.TrimmedMean {
+			return a.TrimmedMean < b.TrimmedMean
+		}
+		return rows[i].CandidateID < rows[j].CandidateID
+	})
 }

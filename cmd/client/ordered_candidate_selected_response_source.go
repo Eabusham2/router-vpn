@@ -1,6 +1,57 @@
 package main
 
-import "router-vpn/internal/mobilemultihop"
+import (
+	"context"
+	"net/url"
+	"slices"
+
+	"router-vpn/internal/mobilemultihop"
+)
+
+// Only a catalog request can set this opt-in. Subsequent operations inherit
+// it from the issued view, together with its source and original owner.
+type orderedServerResponseIntent struct{}
+
+func candidateServerIntent(ctx context.Context, enabled bool) context.Context {
+	if ctx == nil || candidateServerRequested(ctx) == enabled {
+		return ctx
+	}
+	return context.WithValue(ctx, orderedServerResponseIntent{}, enabled)
+}
+func candidateServerRequested(ctx context.Context) bool {
+	return ctx != nil && ctx.Value(orderedServerResponseIntent{}) == true
+}
+func takeCandidateServerIntent(query url.Values) (bool, bool) {
+	values, ok := query["server_response"]
+	if !ok {
+		return false, true
+	}
+	delete(query, "server_response")
+	return true, len(values) == 1 && values[0] == "true"
+}
+
+func candidateResponseExecutions(prep *mobilemultihop.NodeChainExecutionPreparation, pos int) []string {
+	var owners []string
+	if prep.SupportsCompareLocalResponseCandidate(pos) {
+		owners = append(owners, "local")
+	}
+	if prep.SupportsServerResponseCandidate(pos) {
+		owners = append(owners, "server")
+	}
+	return owners
+}
+
+func publishCandidateResponseOwners(reply map[string]any, owners []string, selected string) {
+	if len(owners) == 0 {
+		return
+	}
+	reply["response_executions"] = owners
+	if selected != "" && slices.Contains(owners, selected) {
+		reply["required_selected_execution"] = selected
+	} else if len(owners) == 1 {
+		reply["required_selected_execution"] = owners[0]
+	}
+}
 
 // The UI receives only the original public identities and roles. This map is
 // attached to one immutable candidate view; it grants no measurement authority.
@@ -12,7 +63,7 @@ type orderedCandidateResponseSourceNode struct {
 
 func desktopCompareLocalPrivateResponseMembers(members []desktopNodeChainMember, execution string, position int) bool {
 	if execution != "auto" || len(members) < 4 || position < 1 || position > len(members)-2 ||
-		members[0].Mode != "wg" || members[0].Profile.External != nil ||
+		!mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[0].Profile.External != nil ||
 		members[len(members)-1].Mode != "shadowsocks" || members[len(members)-1].Profile.External != nil {
 		return false
 	}
@@ -45,6 +96,10 @@ func orderedCandidateResponseSourceNodes(selection multihopSelection, execution 
 		!desktopCompareLocalPrivateResponseMembers(selection.Nodes, execution, position) {
 		return nil
 	}
+	return originalCandidateResponseNodes(selection)
+}
+
+func originalCandidateResponseNodes(selection multihopSelection) []orderedCandidateResponseSourceNode {
 	rows := make([]orderedCandidateResponseSourceNode, len(selection.Nodes))
 	for i, member := range selection.Nodes {
 		kind := "router-vpn"
@@ -63,5 +118,11 @@ func (view *orderedCandidateView) addResponseSource(response map[string]any) {
 	response["response_source_nodes"] = view.responseNodes
 	response["view_token"], response["prefix_position"] = view.token, view.position
 	response["requested_execution"], response["required_selected_execution"] = "auto", "local"
-	response["selected_execution"], response["selection_epoch"] = "local", view.responseEpoch
+	selected := "local"
+	if len(view.responseOwners) > 0 {
+		selected = view.responseSelected
+		response["requested_execution"] = view.responseRequested
+		publishCandidateResponseOwners(response, view.responseOwners, selected)
+	}
+	response["selected_execution"], response["selection_epoch"] = selected, view.responseEpoch
 }

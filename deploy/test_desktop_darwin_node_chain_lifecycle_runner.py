@@ -33,7 +33,7 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
     def test_exact_required_inventory_and_bounds(self):
         for package, count in (("protocol/tun", 18), ("adapter/inbound", 12), ("cmd/sing-box", 261),
                                ("experimental/libbox/routervpn/mobilemultihop", 33),
-                               ("routervpn/desktoppt", 7), (".", 64)):
+                               ("routervpn/desktoppt", 7), (".", 73)):
             validator = RUNNER.receipt(package)
             cases = RUNNER.PHASES[package]
             output = "\n".join(json.dumps(row) for row in wire(package, cases))
@@ -57,6 +57,15 @@ class DarwinLifecycleRunnerTests(unittest.TestCase):
         self.assertIn('} else if runtime.GOOS == "darwin" {\n\t\t\t\tmethod = "RouterVPNDesktopDarwinNodeChainPreparePhysicalOwned"', fixture)
         self.assertEqual(RUNNER.COPIES["mobile/desktop/node_chain_box_darwin.go.tmpl"],
                          "routervpn_desktop_node_chain_box_darwin.go")
+
+    def test_external_final_box_verdicts_match_linux_and_windows(self):
+        physical = RUNNER.load("external_final_physical_inventory", "test_desktop_node_physical.py")
+        root = physical.EXTERNAL_FINAL_PHYSICAL_ROOT
+        leaves = RUNNER.PHASES["."][root]
+        self.assertEqual((root, *(root + "/" + leaf for leaf in leaves)), physical.EXTERNAL_FINAL_PHYSICAL_SUITE[3])
+        self.assertEqual(len(leaves), 8)
+        for windows in (False, True):
+            self.assertIn(physical.EXTERNAL_FINAL_PHYSICAL_SUITE, physical.baseline_suites(windows))
 
     def test_concrete_ready_policy_control_matches_current_source_and_real_foreign_capture(self):
         control, = [value for value in RUNNER.MUTATIONS if value[0] == "ordinary-darwin-policy"]
@@ -267,7 +276,7 @@ class DarwinLifecyclePhases(unittest.TestCase):
     def test_both_serial_phases_are_mandatory_with_original_bounds(self):
         result = self.orchestrate()
         self.assertEqual([item["phase"] for item in result], ["baselines", "controls"])
-        self.assertEqual(sum(result[0]["verdicts"].values()), 395)
+        self.assertEqual(sum(result[0]["verdicts"].values()), 404)
         self.assertEqual(len(result[0]["images"]), 6)
         self.assertEqual(len(result[1]["images"]), 47)
         self.assertEqual(RUNNER.TEST_TIMEOUT, "120s")

@@ -830,7 +830,7 @@ public final class ProductActivity extends Activity {
         if(position<draft.members().size()-2){actions.add("Move later");destinations.add(position+1);}
         actions.add("Remove this intermediate node");destinations.add(-1);
         actions.add("Change transport");destinations.add(-2);
-        if(draft.canMeasureResponseThrough(position)){actions.add("Measure candidates through this hop");destinations.add(-3);}
+        if(draft.canMeasureResponseThrough(position) || position==0 && draft.members().size()>=3 && draft.members().get(draft.members().size()-1).source.imported){actions.add("Measure candidates through this hop");destinations.add(-3);}
         new AlertDialog.Builder(this).setTitle("Hop "+(position+1)).setItems(actions.toArray(new CharSequence[0]),(d,w)->{
             try{if(mutationBusy())throw new IllegalStateException("The VPN state changed while editing the ordered path.");int target=destinations.get(w);
                 if(target==-3){measureOrderedDraft(draft,position);return;}

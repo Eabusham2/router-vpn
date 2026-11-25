@@ -14,6 +14,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	BDNS "github.com/sagernet/sing-box/dns"
 	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-tun"
 	M "github.com/sagernet/sing/common/metadata"
@@ -34,7 +35,8 @@ import (
 
 type desktopNodeChainImportedServerEnvelope struct {
 	desktopNodeChainImportedRequest
-	HostnameDNS bool `json:"hostname_dns,omitempty"`
+	HostnameDNS bool                                    `json:"hostname_dns,omitempty"`
+	Candidate   *struct{ Password, Node, Token string } `json:"candidate,omitempty"`
 }
 
 // This resolver exists only behind the final independently encrypted packet
@@ -188,6 +190,31 @@ func TestRouterVPNDesktopNodeChainImportedServerReferenceProcess(t *testing.T) {
 	// Bind the original imported SS endpoint on the owned namespace address.
 	// The server worker reaches this exact captured literal; no compiled graph
 	// rewrite or fake outbound translates its physical destination.
+	var responses atomic.Uint64
+	var candidateAddress string
+	if c := envelope.Candidate; c != nil {
+		if request.Schema != 1 || !desktopSS2022Credentials(request.MiddleMethod, c.Password) || len(c.Node) != 64 || len(c.Token) != 64 || c.Password == request.MiddlePassword || c.Password == request.Paired.FinalPassword {
+			t.Fatal("invalid independent benchmark candidate")
+		}
+		var seen sync.Map
+		api := desktopImportedWGSSHTTP(t, nil, http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+			nonce := q.URL.Query().Get("nonce")
+			if q.Method != "GET" || q.Host != "10.97.0.1:8787" || q.URL.Path != hopmeasure.CandidateChallengePath || q.URL.RawQuery != "nonce="+nonce || !hopmeasure.ValidCandidateNonce(nonce) || q.Header.Get("Authorization") != "Bearer "+hopmeasure.CandidateChallengeMAC(c.Token, c.Node, nonce, false) {
+				http.Error(w, "unauthorized", 403)
+				return
+			}
+			if _, duplicate := seen.LoadOrStore(nonce, true); duplicate {
+				http.Error(w, "replay", 403)
+				return
+			}
+			responses.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]string{"node_id": c.Node, "nonce": nonce, "response": hopmeasure.CandidateChallengeMAC(c.Token, c.Node, nonce, true)})
+		}))
+		ctx, cancel := context.WithCancel(t.Context())
+		t.Cleanup(cancel)
+		owner := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, connections: map[io.Closer]bool{}, routes: []desktopNodeLayerRoute{{Network: "tcp", Destination: "10.97.0.1:8787", Physical: api}}}
+		candidateAddress = desktopStartSSProvider(t, owner, request.MiddleMethod, c.Password, netip.MustParseAddr("127.0.0.1")).address
+	}
 	var peer *desktopNodeChainImportedPeer
 	var chain *desktopNodeChainPeer
 	if request.Schema == 2 {
@@ -196,6 +223,9 @@ func TestRouterVPNDesktopNodeChainImportedServerReferenceProcess(t *testing.T) {
 		peer = desktopNodeChainImportedPeerStartWithHooks(t, request, local, remote, nil, &desktopNodeChainImportedPeerHooks{
 			decorate: func(original *desktopNodeWGHandler) tun.Handler { return original },
 			middle: func(owner *desktopNodeLayerServer) desktopExternalInstalledSSPeer {
+				if candidateAddress != "" {
+					owner.routes = append(owner.routes, desktopNodeLayerRoute{Network: "tcp", Destination: "198.51.100.249:8388", Physical: candidateAddress})
+				}
 				return desktopStartSSProvider(t, owner, request.MiddleMethod, request.MiddlePassword, local)
 			},
 		})
@@ -215,7 +245,11 @@ func TestRouterVPNDesktopNodeChainImportedServerReferenceProcess(t *testing.T) {
 		if transportDNS != nil {
 			queries = transportDNS.queries.Load()
 		}
-		if json.NewEncoder(os.Stdout).Encode(map[string]any{"peer": snapshot, "middle_address": middle, "transport_dns_queries": queries}) != nil {
+		status := map[string]any{"peer": snapshot, "middle_address": middle, "transport_dns_queries": queries}
+		if envelope.Candidate != nil {
+			status["candidate_responses"] = responses.Load()
+		}
+		if json.NewEncoder(os.Stdout).Encode(status) != nil {
 			t.Fatal("custom reply pipe failed")
 		}
 	}

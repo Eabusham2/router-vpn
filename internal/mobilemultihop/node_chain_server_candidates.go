@@ -9,11 +9,24 @@ type NodeChainServerCandidateTarget struct {
 	self    *NodeChainServerCandidateTarget
 	policy  *NodeChainServerPolicy
 	node    *NodeProfile
+	stream  *nodeChainImportedMember
 	capture multihoprelay.NodeChainCandidateCapture
 	tag     string
 }
 
 func (p *NodeChainServerPolicy) CandidateTarget(c multihoprelay.NodeChainCandidateCapture) (*NodeChainServerCandidateTarget, error) {
+	if c.Request.Schema != 1 {
+		return nil, nodeChainServerError
+	}
+	return p.originalCandidateTarget(c)
+}
+func (p *NodeChainServerPolicy) ResponseCandidateTarget(c multihoprelay.NodeChainCandidateCapture) (*NodeChainServerCandidateTarget, error) {
+	if c.Request.Schema != 2 {
+		return nil, nodeChainServerError
+	}
+	return p.originalCandidateTarget(c)
+}
+func (p *NodeChainServerPolicy) originalCandidateTarget(c multihoprelay.NodeChainCandidateCapture) (*NodeChainServerCandidateTarget, error) {
 	if c.Validate() != nil {
 		return nil, nodeChainServerError
 	}
@@ -21,11 +34,28 @@ func (p *NodeChainServerPolicy) CandidateTarget(c multihoprelay.NodeChainCandida
 		return nil, err
 	}
 	index := c.Request.Position - 1
-	if index < 0 || index >= len(p.nodes)-1 || index >= len(p.proofs) || p.nodes[index] == nil || c.Member != p.descriptor.Members[index] {
+	if index < 0 || index >= len(p.nodes)-1 || index >= len(p.proofs) || c.Member != p.descriptor.Members[index] {
 		return nil, nodeChainServerError
 	}
 	node := p.nodes[index]
-	if node.mode != "wg" && node.mode != "awg2-fast" && node.mode != "awg2-strong" {
+	var stream *nodeChainImportedMember
+	if c.Request.Schema == 2 {
+		if !p.descriptor.CandidateResponsePrefix(c.Request.Position) {
+			return nil, nodeChainServerError
+		}
+		if c.Member.NodeKind == "external" {
+			if p.multiple != nil {
+				stream = p.multiple.members[index]
+			} else {
+				stream = p.importedMiddle
+			}
+			if node != nil || stream == nil || stream.source != c.Member.SourceSHA256 || stream.hostname != nil {
+				return nil, nodeChainServerError
+			}
+		} else if node == nil || node.mode != "shadowsocks" || node.source != c.Member.SourceSHA256 {
+			return nil, nodeChainServerError
+		}
+	} else if node == nil || !NodeChainPrefixMode(node.mode) {
 		return nil, nodeChainServerError
 	}
 	// No Destinations: an original API/DNS proof exception must never override
@@ -34,7 +64,7 @@ func (p *NodeChainServerPolicy) CandidateTarget(c multihoprelay.NodeChainCandida
 	if !policy.AllowsDestination("tcp", c.Request.Address) {
 		return nil, nodeChainServerError
 	}
-	target := &NodeChainServerCandidateTarget{policy: p, node: node, capture: c.Clone(), tag: p.proofs[index].Tag}
+	target := &NodeChainServerCandidateTarget{policy: p, node: node, stream: stream, capture: c.Clone(), tag: p.proofs[index].Tag}
 	target.self = target
 	return target, nil
 }
@@ -50,8 +80,8 @@ func (t *NodeChainServerCandidateTarget) Read(p *NodeChainServerPolicy, c multih
 	if err != nil || other != nil || want != got {
 		return "", "", nodeChainServerError
 	}
-	fresh, err := p.CandidateTarget(c)
-	if err != nil || fresh.node != t.node || fresh.tag != t.tag || t.tag == "" {
+	fresh, err := p.originalCandidateTarget(c)
+	if err != nil || fresh.node != t.node || fresh.stream != t.stream || fresh.tag != t.tag || t.tag == "" {
 		return "", "", nodeChainServerError
 	}
 	return t.tag, t.capture.Request.Address, nil

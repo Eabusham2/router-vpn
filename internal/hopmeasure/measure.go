@@ -98,17 +98,18 @@ type Transfer struct {
 	Bufferbloat  *float64 `json:"bufferbloat_ms,omitempty"`
 }
 type Result struct {
-	ID        string            `json:"node_id"`
-	Role      string            `json:"role"`
-	Kind      string            `json:"kind"`
-	Label     string            `json:"label"`
-	Ready     bool              `json:"ready"`
-	Failure   string            `json:"failure,omitempty"`
-	Idle      *Latency          `json:"idle,omitempty"`
-	Download  *Transfer         `json:"download,omitempty"`
-	Upload    *Transfer         `json:"upload,omitempty"`
-	Benchmark *LatencyBenchmark `json:"benchmark,omitempty"`
-	Response  *PathResponse     `json:"response,omitempty"`
+	CandidateDisposition string            `json:"candidate_disposition,omitempty"`
+	ID                   string            `json:"node_id"`
+	Role                 string            `json:"role"`
+	Kind                 string            `json:"kind"`
+	Label                string            `json:"label"`
+	Ready                bool              `json:"ready"`
+	Failure              string            `json:"failure,omitempty"`
+	Idle                 *Latency          `json:"idle,omitempty"`
+	Download             *Transfer         `json:"download,omitempty"`
+	Upload               *Transfer         `json:"upload,omitempty"`
+	Benchmark            *LatencyBenchmark `json:"benchmark,omitempty"`
+	Response             *PathResponse     `json:"response,omitempty"`
 }
 type Status struct {
 	Request  string   `json:"request_id"`
@@ -119,17 +120,18 @@ type Status struct {
 	Results  []Result `json:"results"`
 }
 type Service struct {
-	ordered        bool
-	orderedLatency *OrderedLatencyService
-	mu             sync.Mutex
-	hops           []Hop
-	engine         Engine
-	identity       string
-	closed         bool
-	state          Status
-	cancel         context.CancelFunc
-	done           chan struct{}
-	pending        *measurementAdmission
+	ordered              bool
+	orderedExternalFinal bool
+	orderedLatency       *OrderedLatencyService
+	mu                   sync.Mutex
+	hops                 []Hop
+	engine               Engine
+	identity             string
+	closed               bool
+	state                Status
+	cancel               context.CancelFunc
+	done                 chan struct{}
+	pending              *measurementAdmission
 	// Unexported trusted-root seam for local TLS protocol/lifetime tests.
 	publicTLS *tls.Config
 }

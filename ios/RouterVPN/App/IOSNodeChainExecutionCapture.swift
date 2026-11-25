@@ -123,17 +123,18 @@ final class IOSNodeChainExecutionCapture {
         }
     }
 
-    // Only the retained Local winner can measure the selected response stop. The draft
-    // uses "local" to preview this exact eligible family before starting Compare.
+    // Preview the original geometry. The live native owner separately verifies its
+    // winning epoch and requires the selected server to supply matching candidates.
     func responsePositions(for winner: String) -> [Int] {
-        guard requested == "auto", winner == "local" else { return [] }
+        guard (requested == "auto" && winner == "local") || (["server", "auto"].contains(requested) && winner == "server") else { return [] }
         if case .multipleImported(let capture) = local {
             guard capture.sourceSchema == 6,
                   let profiles = try? members.map({ try JSONDecoder().decode(RouterProfile.self, from: Data($0.profileJSON.utf8)) }) else { return [] }
             return IOSMultihopNodeSelection.compareResponsePositions(members.map { .init(id: $0.id, mode: $0.mode) }, profiles: profiles)
         }
         guard case .ordinary(let capture) = local,
-              capture.sourceSchema == 2, members.map(\.mode) == ["wg", "shadowsocks", "shadowsocks"],
+              capture.sourceSchema == 2, members.count == 3, IOSMultihopNodeSelection.supportsNativePrefix(members[0].mode),
+              members.dropFirst().allSatisfy({ $0.mode == "shadowsocks" }),
               let middle = try? JSONDecoder().decode(RouterProfile.self, from: Data(members[1].profileJSON.utf8)),
               IOSImportedShadowsocksSource.eligibleLiteral(middle),
               members.allSatisfy({ (try? IOSMultihopStartLayer.selected($0.profile)) == "off" }) else { return [] }

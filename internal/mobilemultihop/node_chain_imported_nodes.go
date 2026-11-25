@@ -15,6 +15,7 @@ type nodeChainImportedNodes struct {
 	localSeal       *nodeChainMultipleImportedLocalSeal
 	inputSeal       *nodeChainMultipleImportedInputsSeal
 	customEntry     bool
+	externalFinal   bool
 	self            *nodeChainImportedNodes
 	owner           *NodeChain
 	members         []*nodeChainImportedMember
@@ -97,6 +98,9 @@ func (r *nodeChainImportedNodes) originalOwnersCurrent(c *NodeChain) bool {
 		len(r.policies) != len(r.members) || len(r.hostnames) != len(r.members) {
 		return false
 	}
+	if r.externalFinal && !externalFinalProofs(c.proofs) {
+		return false
+	}
 	if r.customEntry && (len(r.members) != 3 || r.members[0] == nil || r.members[1] == nil) {
 		return false
 	}
@@ -111,7 +115,7 @@ func (r *nodeChainImportedNodes) originalOwnersCurrent(c *NodeChain) bool {
 			}
 			continue
 		}
-		if position == 0 && !r.customEntry || position == len(r.members)-1 || c.nodes[position] != nil ||
+		if position == 0 && !r.customEntry || position == len(r.members)-1 && !r.externalFinal || c.nodes[position] != nil ||
 			member.input != r.inputs[position] ||
 			member.policy != r.policies[position] || member.hostname != r.hostnames[position] || r.customEntry && member.hostname != nil {
 			return false
@@ -167,6 +171,9 @@ func (c *NodeChain) importedPublicIPAt(position int) (string, bool) {
 func (r *nodeChainImportedNodes) compile(nodes []*NodeProfile) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 	fail := func(err error) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 		return "", nil, NodeChainDNSCapture{}, nil, err
+	}
+	if r.externalFinal {
+		return r.compileExternalFinal(nodes)
 	}
 	imported := r.members
 	if len(nodes) < 3 || len(nodes) > NodeChainExtendedLocalMaximumNodes || len(imported) != len(nodes) ||
@@ -329,7 +336,7 @@ func validateExtendedStreamTargets(closures []*externalPredecessor, targets map[
 // These proof rows can select an extended internal graph scan only after the
 // original compiler validated its private providers. They cannot reopen a path.
 func extendedLocalProofs(proofs []NodeChainProof) bool {
-	return extendedImportedPacketCount(proofs) > 0
+	return extendedImportedPacketCount(proofs) > 0 || len(proofs) > NodeChainMaximumNodes && externalFinalProofs(proofs)
 }
 
 // A sealed route already checked every original proof's syntax and role.

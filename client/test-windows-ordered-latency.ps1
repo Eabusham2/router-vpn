@@ -166,6 +166,34 @@ function PairedReceipt([int]$Count,[int]$Position,[string]$Request=('e'*32)) {
     $R.result.node_id=$N.node_id;$R.result.role=$N.role;$R.result.kind='private-node';$R.result.label='Cumulative path through node '+($Position+1)+' of '+$Count
     return $R
 }
+foreach($size8 in @(3,9)){
+    $rows8=PairedNodes $size8
+    $cap8=Capture;$cap8.profile_id=$rows8[0].node_id;$cap8.external_final_node_id=$rows8[-1].node_id
+    if($size8 -gt 8){$cap8.extended_local_nodes=$size8}
+    for($i=1;$i -lt $size8;$i++){
+        $rows8[$i].kind='public-path';$rows8[$i].measurement='routed-https-response-after-tls'
+        $rows8[$i].label='Cumulative path through custom node '+($i+1)+' of '+$size8+' '+[char]0x2192+' Cloudflare edge'
+    }
+    $v8=Status;$v8.capture=$cap8;$v8.nodes=$rows8;$v8.history=@()
+    $state8=New-RouterVPNOrderedState $BaseUrl $cap8.profile_id
+    Receive-RouterVPNOrderedStatus $state8 $v8 -Initial
+    Check ($state8.Nodes.Count -eq $size8) 'public exit lost an original ordered role'
+    $state8.Node=$rows8[-1];$state8.Request='e'*32;$body8=New-RouterVPNOrderedBody $state8
+    Check ($body8.capture.external_final_node_id -ceq $rows8[-1].node_id -and $body8.capture.profile_id -ceq $rows8[0].node_id) 'retest lost external exit binding'
+    foreach($fault8 in @('missing','changed-exit','changed-control','private-middle')){
+        $old=$cap8.external_final_node_id
+        if($fault8 -ceq 'missing'){$cap8.Remove('external_final_node_id')}
+        if($fault8 -ceq 'changed-exit'){$cap8.external_final_node_id='another-exit'}
+        if($fault8 -ceq 'changed-control'){$cap8.profile_id='another-control'}
+        if($fault8 -ceq 'private-middle'){$rows8[1].kind='private-node'}
+        $stateBad=New-RouterVPNOrderedState $BaseUrl $cap8.profile_id
+        $failed=$false;try{Receive-RouterVPNOrderedStatus $stateBad $v8 -Initial}catch{$failed=$true}
+        Check $failed ('external-final status admitted '+$fault8)
+        [void](Close-RouterVPNOrderedView $stateBad)
+        $cap8.external_final_node_id=$old;$cap8.profile_id=$rows8[0].node_id;$rows8[1].kind='public-path'
+    }
+    [void](Close-RouterVPNOrderedView $state8)
+}
 foreach($Count in 2..8){
     $Rows=PairedNodes $Count;$S=New-RouterVPNOrderedState $BaseUrl 'home-a';$S.Client=FakeClient
     $V=Status;$V.nodes=$Rows;$V.history=@((PairedReceipt $Count 0));try{Receive-RouterVPNOrderedStatus $S $V -Initial}catch{Check $false ("whole private inventory $Count was rejected: "+$_.Exception.Message)}
@@ -291,7 +319,7 @@ foreach($Execution in @('local','server')){foreach($layout in @(@{count=4;slots=
         foreach($badPositions in @(@(1),@(2,4))){
             $wrong=CopyValue $native
             foreach($i in $badPositions){$wrong.nodes[$i].kind='private-node'}
-            $wrong.multiple_imported.public=@($wrong.multiple_imported.public|Where-Object{$_.position -notin $badPositions})
+            if($badPositions.Count -eq 1){$wrong.multiple_imported.public=@($wrong.multiple_imported.public|Where-Object{$_.position -notin $badPositions})}
             $bad=CopyValue $captured;$bad.selected_capture=$wrong|ConvertTo-Json -Depth 10 -Compress
             Reject { Assert-RouterVPNOrderedCapture $bad } 'selected private role borrowed a different complete public inventory'
         }

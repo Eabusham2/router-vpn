@@ -742,7 +742,7 @@ func (c *selectedResponseNativeCase) run(t *testing.T, ctx context.Context, f *m
 	}
 	var privatePositions []string
 	proofs := f.chain.ProofInventory()
-	if len(proofs) != len(f.members) || len(f.source.IdentitySources) != len(proofs) || proofs[0].Mode != "wg" || proofs[0].NodeID == "" || proofs[len(proofs)-1].Mode != "shadowsocks" || proofs[len(proofs)-1].NodeID == "" {
+	if len(proofs) != len(f.members) || len(f.source.IdentitySources) != len(proofs) || !mobilemultihop.NodeChainPrefixMode(proofs[0].Mode) || proofs[0].Mode != f.members[0].prefix.mode || proofs[0].NodeID == "" || proofs[len(proofs)-1].Mode != "shadowsocks" || proofs[len(proofs)-1].NodeID == "" {
 		t.Fatal("selected response lost the original paired entry or final")
 	}
 	for i, proof := range proofs {

@@ -200,6 +200,10 @@ func (s candidateResponseSource) exchange(ctx context.Context, engine hopmeasure
 	if err != nil {
 		return err
 	}
+	return s.exchangeNonce(ctx, engine.Dial, wrapCandidateSS2022, tag, nonce, func(string) error { return complete() })
+}
+
+func (s candidateResponseSource) exchangeNonce(ctx context.Context, dial func(context.Context, string, string) (net.Conn, error), wrap func(context.Context, net.Conn, string, string, string) (net.Conn, error), tag, nonce string, accept func(string) error) error {
 	request := hopmeasure.CandidateChallengeMAC(s.Token, s.NodeID, nonce, false)
 	api, err := privateAPI(s.API)
 	if err != nil {
@@ -209,7 +213,7 @@ func (s candidateResponseSource) exchange(ctx context.Context, engine hopmeasure
 		if routedTag != tag || privateAddress != api.Host {
 			return nil, hopmeasure.ErrStale
 		}
-		raw, err := engine.Dial(call, tag, s.Target.Address)
+		raw, err := dial(call, tag, s.Target.Address)
 		if err != nil || raw == nil {
 			return raw, errors.Join(err, errors.New("original candidate transport unavailable"))
 		}
@@ -220,7 +224,7 @@ func (s candidateResponseSource) exchange(ctx context.Context, engine hopmeasure
 		deadline, _ := call.Deadline()
 		var conn net.Conn
 		if err = raw.SetDeadline(deadline); err == nil {
-			conn, err = wrapCandidateSS2022(call, raw, s.Method, s.Password, privateAddress)
+			conn, err = wrap(call, raw, s.Method, s.Password, privateAddress)
 		}
 		if !stop() {
 			<-stopClose
@@ -241,7 +245,7 @@ func (s candidateResponseSource) exchange(ctx context.Context, engine hopmeasure
 		if exactJSON(data, &result, 1024) != nil || result.Node != s.NodeID || result.Nonce != nonce || !hmac.Equal([]byte(result.Response), []byte(expected)) {
 			return errors.New("candidate failed its original fresh private agent challenge")
 		}
-		return complete()
+		return accept(result.Response)
 	})
 	return err
 }

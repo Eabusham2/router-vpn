@@ -21,7 +21,7 @@ import Combine
               let active = identity.nodeChainSource ?? identity.nodeChainExecutionSource, let path = IOSNodeChainPresentation.active(identity), ((2...8).contains(path.count) || path.count > 8 && path.count == identity.hopMeasurementRows) else { throw CancellationError() }
         let captured = try model.captureIOSOrderedRoute(bundle)
         defer { try? captured.close() }
-        var extendedCount = 0, pairedPrefixNodes = 0
+        var extendedCount = 0, pairedPrefixNodes = 0, publicExit = false
         var provedKinds: [String]?
         var requested: String?, validate: (([String]) throws -> Void)?
         switch captured {
@@ -44,7 +44,11 @@ import Combine
         case .ordinary(let original):
             guard original.members.count == path.count, original.selectionExecution == "local", Data(original.launchInput.utf8) == active else { throw CancellationError() }
             source = original.sourceSHA256; config = original.configSHA256; ids = original.members.map(\.id)
-            if path.count > 8 {
+            publicExit = original.sourceSchema == 8
+            if publicExit && path.count <= 8 {
+                extendedCount = path.count
+                provedKinds = original.members.map { $0.profile["node_kind"] as? String == "external" ? "public-path" : "private-node" }
+            } else if path.count > 8 {
                 extendedCount = Int(original.plan.extendedLocalNodeCount())
                 pairedPrefixNodes = Int(original.plan.extendedMixedLocalPacketCount())
                 provedKinds = try JSONDecoder().decode([String].self, from: Data(original.plan.extendedLocalRolesJSON().utf8))
@@ -52,9 +56,9 @@ import Combine
         }
         requestedExecution = requested; validateMultipleImported = validate
         kinds = captured.members.map { $0.profile["node_kind"] as? String == "external" ? "public-path" : "private-node" }
-        if path.count > 8 {
+        if path.count > 8 || publicExit {
             guard path.map(\.id) == ids else { throw CancellationError() }
-            extended = try IOSOrderedLatencyExtendedLocal(source: source, config: config, ids: ids, kinds: kinds, provedCount: extendedCount, pairedPrefixNodes: pairedPrefixNodes, provedKinds: provedKinds)
+            extended = try IOSOrderedLatencyExtendedLocal(source: source, config: config, ids: ids, kinds: kinds, provedCount: extendedCount, pairedPrefixNodes: pairedPrefixNodes, provedKinds: provedKinds, externalFinal: publicExit)
         } else { extended = nil }
         self.identity = identity; selection = model.iosConnectGeneration
         snapshot = try Self.bytes(model); profile = RouterVPNModel.iosStrategyDigest(snapshot)

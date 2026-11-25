@@ -325,7 +325,8 @@ struct IOSCandidateMetadataPages {
         if let metric = body["measurement"] {
             guard let value = metric as? String, value == "routed-tcp-connect" ||
                     value == "routed-candidate-response" && (family != .selected ||
-                        body["requested_execution"] as? String == "auto" && body["execution"] as? String == "local" && selectedResponse != nil &&
+                        (body["requested_execution"] as? String == "auto" && body["execution"] as? String == "local" ||
+                         ["server", "auto"].contains(body["requested_execution"] as? String ?? "") && body["execution"] as? String == "server") && selectedResponse != nil &&
                         Self.integer(body["prefix_position"]) == selectedResponse?.position && body["prefix_id"] as? String == selectedResponse?.id) else { throw Self.issue() }
             fields.insert("measurement")
         }

@@ -17,13 +17,18 @@ import (
 
 func desktopSelectedPrivateStreamFixture(t *testing.T, count, private int) (*app, []common.MultihopNodeSelection) {
 	t.Helper()
+	return desktopPrivateStreamFixtureWithEntry(t, count, private, "wg")
+}
+
+func desktopPrivateStreamFixtureWithEntry(t *testing.T, count, private int, entry string) (*app, []common.MultihopNodeSelection) {
+	t.Helper()
 	var imports []int
 	for position := 1; position < count-1; position++ {
 		if position != private {
 			imports = append(imports, position)
 		}
 	}
-	a, refs := desktopIndependentImportedFixture(t, desktopIndependentImportedLayout{"selected-private-stream", count, imports}, "wg", "off")
+	a, refs := desktopIndependentImportedFixture(t, desktopIndependentImportedLayout{"selected-private-stream", count, imports}, entry, "off")
 	refs[private].Mode = "shadowsocks"
 	path := filepath.Join(clientRoot(a), "generated", refs[private].ID, "shadowsocks", "sing-box.json")
 	raw, err := os.ReadFile(path)
@@ -43,11 +48,21 @@ func desktopSelectedPrivateStreamFixture(t *testing.T, count, private int) (*app
 }
 
 func TestDesktopSelectedPrivateStreamCaptureAndNamedRestore(t *testing.T) {
+	testSelectedPrivateStreamCaptureAndNamedRestore(t, "wg")
+}
+
+func TestDesktopAWGPrivateStreamCaptureAndNamedRestore(t *testing.T) {
+	for _, entry := range []string{"awg2-fast", "awg2-strong"} {
+		t.Run(entry, func(t *testing.T) { testSelectedPrivateStreamCaptureAndNamedRestore(t, entry) })
+	}
+}
+
+func testSelectedPrivateStreamCaptureAndNamedRestore(t *testing.T, entry string) {
 	for _, count := range []int{4, 9, 16} {
 		for _, execution := range []string{"server", "auto"} {
 			t.Run(fmt.Sprintf("%d/%s", count, execution), func(t *testing.T) {
 				private := count - 2
-				a, refs := desktopSelectedPrivateStreamFixture(t, count, private)
+				a, refs := desktopPrivateStreamFixtureWithEntry(t, count, private, entry)
 				selection, err := resolveDesktopNodeChainSelection(a.profiles.Profiles[count-1], a.profiles.Profiles, refs, execution)
 				if err != nil {
 					t.Fatal("qualified selected private route refused", err)
@@ -55,6 +70,14 @@ func TestDesktopSelectedPrivateStreamCaptureAndNamedRestore(t *testing.T) {
 				selection, err = captureNativeNodeChainSelection(t.Context(), clientRoot(a), selection, []string{"shadowsocks"}, nil)
 				if err != nil {
 					t.Fatal("complete original private source refused", err)
+				}
+				if execution == "auto" {
+					for i := 1; i < count-1; i++ {
+						rows := orderedCandidateResponseSourceNodes(selection, execution, i)
+						if len(rows) != count || rows[0].Mode != entry || rows[i].Mode != "shadowsocks" {
+							t.Fatal("chooser lost original packet mode or measured stop", i)
+						}
+					}
 				}
 				launch, err := newDesktopNodeChainLaunch(selection, strings.Repeat("a", 32), "darwin")
 				if err != nil {
@@ -90,7 +113,7 @@ func TestDesktopSelectedPrivateStreamCaptureAndNamedRestore(t *testing.T) {
 					members := append([]desktopNodeChainMember(nil), selection.Nodes...)
 					switch fault {
 					case "entry":
-						members[0].Mode = "awg2-fast"
+						members[0].Mode = "awg2-pq"
 					case "first-private":
 						members[1], members[private] = members[private], members[1]
 					case "second-private":

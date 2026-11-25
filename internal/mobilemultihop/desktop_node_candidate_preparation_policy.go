@@ -89,7 +89,7 @@ func NewDesktopNodeCandidatePreparationPolicy(original *NodeChainCandidatePrepar
 		return bad()
 	}
 	if restoredMTU != 0 {
-		final := derived.original.nodes[len(derived.original.nodes)-1].profile
+		final := derived.original.finalPreferences()
 		fixed, fixedErr := fixedMTU(final)
 		jumbo, jumboErr := externalJumboPreference(final)
 		if _, err := mtuNumber(float64(restoredMTU)); err != nil || fixedErr != nil || jumboErr != nil ||

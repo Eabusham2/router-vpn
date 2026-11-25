@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -28,7 +29,17 @@ func connectionTelemetryPathContext(parent context.Context, a *app, p common.Rou
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	paired, err := captureDesktopPairedMeasurement(parent, a, p, st)
+	control := p
+	if st.Mode == "multihop" && graph.ControlID != "" {
+		a.mu.Lock()
+		original, found := a.profileByIDLocked(graph.ControlID)
+		control = common.CloneRouterProfile(original)
+		a.mu.Unlock()
+		if !found || control.ID != st.RouterID || control.External != nil || !common.ValidNodeProofID(control.NodeProofID) {
+			return nil, nil, nil, errors.New("ordered external telemetry lost its paired control")
+		}
+	}
+	paired, err := captureDesktopPairedMeasurement(parent, a, control, st)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -36,7 +47,7 @@ func connectionTelemetryPathContext(parent context.Context, a *app, p common.Rou
 		if err := paired.current(ctx); err != nil {
 			return err
 		}
-		if err := validateActiveTelemetryPath(a, p, st, sessionID); err != nil {
+		if err := validateActiveTelemetryPath(a, control, st, sessionID); err != nil {
 			return err
 		}
 		if st.Mode == "multihop" {
@@ -108,6 +119,9 @@ func (a *app) connectedMultihopLiveLatency(w http.ResponseWriter, r *http.Reques
 		payload["exit"], payload["current_path"] = hopLatencyForNativeUI(exit, measuredEndpoints[1]), measuredEndpoints[1]
 		payload["measured_at"], payload["active_route_id"] = measuredEndpoints[1].MeasuredAt, graph.mapRouteID()
 		payload["note"] = "Fresh private HTTP responses through the retained ordered route."
+		if graph.ControlID != "" {
+			payload["note"] = "Fresh authenticated entry HTTP and external-exit HTTPS responses through the retained ordered route."
+		}
 		w.Header().Set("content-type", "application/json")
 		w.Header().Set("cache-control", "no-store")
 		_ = json.NewEncoder(w).Encode(payload)

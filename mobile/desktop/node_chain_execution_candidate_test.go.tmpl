@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 )
 
@@ -579,6 +580,68 @@ func TestRouterVPNDesktopSelectedPacketCandidatePublication(t *testing.T) {
 			}
 			if err := op.finishRefusal(t.Context()); err != nil || issued.current(files) != nil || f.owner.measurement.Load().candidate.Load() != nil {
 				t.Fatal("original joined result retry failed", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopSelectedServerResponseCandidate(t *testing.T) {
+	for _, outcome := range []string{"server", "compare-server", "wrong-mac", "wrong-operation"} {
+		t.Run(outcome, func(t *testing.T) {
+			requested := "server"
+			if outcome == "compare-server" {
+				requested = "auto"
+			}
+			prep := desktopMultipleImportedExecutionCommandPreparation(t, "adjacent", "linux", requested)
+			projection := desktopMultipleImportedExecutionCommandProjection(t, prep, "adjacent")
+			original := newDesktopMultipleImportedExecutionChildFixture(t, prep, projection)
+			f := desktopSelectedCandidateComponentFromOriginal(t, original, prep, projection, false, 1)
+			if !prep.SupportsServerResponseCandidate(1) || f.native.Runtime.Progress().Execution != "server" {
+				t.Fatal("missing original selected server stream")
+			}
+			m, trial := f.owner.measurement.Load(), f.native.SelectionCount()
+			q := &f.request
+			q.Operation = "selected-server-private-response-50"
+			if outcome == "wrong-operation" {
+				q.Operation = "selected-local-private-response-50"
+			}
+			f.prepareRaw = f.write(t, routerVPNExecutionCandidateRequest, *q)
+			var inventory mobilemultihop.NodeChainCandidateInventory
+			if json.Unmarshal(f.sourceRaw, &inventory) != nil || len(inventory.Inputs) != 1 {
+				t.Fatal("missing independently captured paired candidate")
+			}
+			f.peer.RegisterResponsePeer(t, inventory.Inputs[0], outcome == "wrong-mac")
+			if outcome == "wrong-operation" {
+				refused := f.finish(t, false)
+				count, put, del := f.peer.Counts()
+				if refused.Status.Failure == "" || refused.Status.Measurement != hopmeasure.CandidatePrivateResponseMeasurement || len(refused.Status.Results) != 0 || refused.CaptureSHA != "" || count != 0 || put != 0 || del != 0 {
+					t.Fatal("wrong operation obtained server authority")
+				}
+				return
+			}
+			f.prepare(t)
+			var metadata struct {
+				Measurement string `json:"measurement"`
+				Execution   string `json:"execution"`
+				Requested   string `json:"requested_execution"`
+				Epoch       uint64 `json:"selection_epoch"`
+			}
+			if json.Unmarshal(f.metadata.Metadata, &metadata) != nil || metadata.Measurement != hopmeasure.CandidatePrivateResponseMeasurement || metadata.Execution != "server" || metadata.Requested != requested || metadata.Epoch != m.epoch {
+				t.Fatal("child published different operation or trial", metadata)
+			}
+			f.start(t)
+			result := f.finish(t, true)
+			count, put, del := f.peer.Counts()
+			if m != f.owner.measurement.Load() || trial != f.native.SelectionCount() || result.MetadataSHA != routerVPNSelectedCandidateDigest(f.metadataRaw) || result.CaptureSHA != f.metadata.CaptureSHA || put != 1 || del != 1 || len(result.Status.Results) != 1 {
+				t.Fatal("response lost original operation, server grant or join", result.Status, count, put, del)
+			}
+			row := result.Status.Results[0]
+			if outcome == "wrong-mac" {
+				if row.Ready || count != 1 {
+					t.Fatal("wrong MAC produced a private response score", row, count)
+				}
+			} else if !row.Ready || count != 50 || row.Kind != "private-agent-response" || row.Benchmark == nil || row.Benchmark.Measurement != hopmeasure.CandidatePrivateResponseMeasurement || row.Benchmark.Attempts != 50 || row.Benchmark.Distribution == nil || row.Benchmark.Distribution.Samples != 50 {
+				t.Fatal("missing fifty independent private responses through the selected Server", row, count)
 			}
 		})
 	}

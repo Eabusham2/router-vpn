@@ -12,32 +12,39 @@ import (
 // source. SourceSHA256 identifies that session/platform owner; the separate
 // OriginalSourceSHA256 is the unchanged ordered source used by NodeChainEngine.
 // ConfigSHA256 is the one final executable graph hash used by both owners.
+type NodeChainExternalFinalMetadata struct {
+	ProfileID        string `json:"profile_id"`
+	ExpectedPublicIP string `json:"expected_public_ip"`
+	SourceSHA256     string `json:"source_sha256"`
+}
+
 type DesktopNodeChainMetadata struct {
-	Schema                 int                       `json:"schema"`
-	SessionID              string                    `json:"session_id"`
-	TargetOS               string                    `json:"target_os"`
-	SourceSHA256           string                    `json:"source_sha256"`
-	ConfigSHA256           string                    `json:"config_sha256"`
-	OriginalSourceSHA256   string                    `json:"original_source_sha256"`
-	OriginalConfigSHA256   string                    `json:"original_config_sha256"`
-	OriginalMetadataSHA256 string                    `json:"original_metadata_sha256"`
-	OriginalCaptureSHA256  string                    `json:"original_capture_sha256"`
-	ProfileID              string                    `json:"profile_id"`
-	NodeID                 string                    `json:"node_id"`
-	Mode                   string                    `json:"mode"`
-	StartLayer             string                    `json:"start_layer"`
-	FinalTag               string                    `json:"final_tag"`
-	TUNTag                 string                    `json:"tun_tag"`
-	OriginalTUNSHA256      string                    `json:"original_tun_sha256"`
-	DerivedTUNSHA256       string                    `json:"derived_tun_sha256"`
-	Prefixes               []NodeChainProof          `json:"prefixes"`
-	Roots                  []DesktopNodeRootMetadata `json:"roots"`
-	KillSwitchPolicy       string                    `json:"kill_switch_policy"`
-	IPv6Mode               string                    `json:"ipv6_mode"`
-	HomeLANAccess          bool                      `json:"home_lan_access"`
-	DeviceRevision         string                    `json:"device_mtu_revision,omitempty"`
-	DeviceFixedMTU         int                       `json:"device_fixed_mtu,omitempty"`
-	RestoredMTU            int                       `json:"restored_mtu,omitempty"`
+	ExternalFinal          *NodeChainExternalFinalMetadata `json:"external_final,omitempty"`
+	Schema                 int                             `json:"schema"`
+	SessionID              string                          `json:"session_id"`
+	TargetOS               string                          `json:"target_os"`
+	SourceSHA256           string                          `json:"source_sha256"`
+	ConfigSHA256           string                          `json:"config_sha256"`
+	OriginalSourceSHA256   string                          `json:"original_source_sha256"`
+	OriginalConfigSHA256   string                          `json:"original_config_sha256"`
+	OriginalMetadataSHA256 string                          `json:"original_metadata_sha256"`
+	OriginalCaptureSHA256  string                          `json:"original_capture_sha256"`
+	ProfileID              string                          `json:"profile_id"`
+	NodeID                 string                          `json:"node_id"`
+	Mode                   string                          `json:"mode"`
+	StartLayer             string                          `json:"start_layer"`
+	FinalTag               string                          `json:"final_tag"`
+	TUNTag                 string                          `json:"tun_tag"`
+	OriginalTUNSHA256      string                          `json:"original_tun_sha256"`
+	DerivedTUNSHA256       string                          `json:"derived_tun_sha256"`
+	Prefixes               []NodeChainProof                `json:"prefixes"`
+	Roots                  []DesktopNodeRootMetadata       `json:"roots"`
+	KillSwitchPolicy       string                          `json:"kill_switch_policy"`
+	IPv6Mode               string                          `json:"ipv6_mode"`
+	HomeLANAccess          bool                            `json:"home_lan_access"`
+	DeviceRevision         string                          `json:"device_mtu_revision,omitempty"`
+	DeviceFixedMTU         int                             `json:"device_fixed_mtu,omitempty"`
+	RestoredMTU            int                             `json:"restored_mtu,omitempty"`
 }
 
 // DesktopNodeChainPolicy is an independent sealed constructor, never a pair
@@ -119,6 +126,10 @@ func deriveDesktopNodeChainPolicy(original *NodeChain, inputs desktopNodePolicyI
 		FinalTag: final.Tag, TUNTag: capture.TUNTag, Prefixes: derived.ProofInventory(),
 		OriginalTUNSHA256: desktopExternalObjectDigest(oldTUN), DerivedTUNSHA256: desktopExternalObjectDigest(tun),
 		KillSwitchPolicy: kill, IPv6Mode: capture.IPv6Mode, HomeLANAccess: lan, RestoredMTU: inputs.restoredMTU, DeviceRevision: inputs.deviceRevision, DeviceFixedMTU: inputs.deviceFixed,
+	}
+	if base.HasExternalFinal() {
+		exit := base.importedSSMemberAt(len(base.proofs) - 1)
+		meta.ExternalFinal = &NodeChainExternalFinalMetadata{ProfileID: exit.id(), ExpectedPublicIP: exit.selection.ExpectedPublicIP, SourceSHA256: exit.source}
 	}
 	physical := make([]map[string]any, 0, len(capture.PhysicalRoots))
 	for _, root := range capture.PhysicalRoots {
@@ -204,7 +215,7 @@ func captureDesktopNodeChain(base, projected *NodeChain) (DesktopPhysicalCapture
 	bad := func() (DesktopPhysicalCapture, string, bool, error) {
 		return DesktopPhysicalCapture{}, "", false, desktopNodeChainPolicyError
 	}
-	finalCapture, err := base.nodes[len(base.nodes)-1].DesktopCapture()
+	finalCapture, err := base.finalDesktopCapture()
 	if err != nil {
 		return bad()
 	}
@@ -276,13 +287,17 @@ func captureDesktopNodeChainGraphWithCONNECT(originalConfig, projectedConfig str
 			return bad()
 		}
 	}
+	selectedDetour := proofs[len(proofs)-1].Tag
+	if externalFinalProofs(proofs) && finalCapture.SelectedDNS.Mode == "home" {
+		selectedDetour = proofs[0].Tag
+	}
 	selectedFound := false
 	for _, raw := range graph["dns"].(map[string]any)["servers"].([]any) {
 		server := raw.(map[string]any)
 		if server["tag"] != dnsCapture.ResolverTag {
 			continue
 		}
-		if selectedFound || server["detour"] != proofs[len(proofs)-1].Tag ||
+		if selectedFound || server["detour"] != selectedDetour ||
 			desktopExternalObjectDigest(server) != dnsCapture.ResolverSHA256 ||
 			collector.dns(ExternalDNSTag, server, false, false, finalCapture.SelectedDNS.Port) != nil {
 			return bad()
@@ -372,6 +387,10 @@ func (p *DesktopNodeChainPolicy) ReadValidated() (string, DesktopNodeChainMetada
 		return "", DesktopNodeChainMetadata{}, DesktopPhysicalCapture{}, err
 	}
 	meta := p.metadata
+	if meta.ExternalFinal != nil {
+		final := *meta.ExternalFinal
+		meta.ExternalFinal = &final
+	}
 	meta.Prefixes = append([]NodeChainProof(nil), meta.Prefixes...)
 	meta.Roots = append([]DesktopNodeRootMetadata(nil), meta.Roots...)
 	return p.chain.config, meta, capture, nil

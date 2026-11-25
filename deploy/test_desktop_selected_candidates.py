@@ -17,6 +17,8 @@ SPEC.loader.exec_module(LATENCY)
 FIXTURE = LATENCY.load('selected_candidate_component_fixture', 'prepare-desktop-selected-candidate-test.py')
 MULTIPLE = LATENCY.load('selected_candidate_private_source', 'test_node_chain_multiple_imported_execution_owner.py')
 PREFIX = 'TestRouterVPNDesktopSelectedPacketCandidate'
+RESPONSE_ROOT = 'TestRouterVPNDesktopSelectedServerResponseCandidate'
+RESPONSE_CASES = ('server', 'compare-server', 'wrong-mac', 'wrong-operation')
 FIFTY = ('server', 'compare-server', 'compare-local', 'ordinary-entry')
 REFUSALS = ('pre-metadata-cancel', 'expired-before-prepare', 'unadmitted-final', 'foreign-start-hash', 'foreign-metadata-inode',
             'foreign-source-inode', 'stale-pulse', 'foreign-revision', 'foreign-selected-capture',
@@ -116,6 +118,7 @@ def execute(core, go, tags, race=True):
                       (PREFIX+'Generation', (), '^'+PREFIX+'Generation$'),
                       (PREFIX+'Publication', ('before-link', 'after-link', 'result-before-link', 'result-after-link',
                                               'result-retry', 'result-foreign-before-prepare'), '^'+PREFIX+'Publication$')))
+        cases.extend((RESPONSE_ROOT, (name,), '^'+RESPONSE_ROOT+'$/^'+name+'$') for name in RESPONSE_CASES)
         for root, children, selection in cases:
             if verify(core) != source or fixture_identity(directory) != private or file_identity(image) != compiled:
                 raise ValueError('selected candidate image, source or private inputs changed before test')

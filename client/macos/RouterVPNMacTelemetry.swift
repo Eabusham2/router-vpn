@@ -71,6 +71,7 @@ private struct RouterVPNLiveHTTPSReceipt {
 }
 
 struct RouterVPNMacLiveRouteReceipt {
+    let externalFinal: Bool
     let token: String
     let entry: Double?
     let exit: Double
@@ -109,7 +110,7 @@ struct RouterVPNMacLiveRouteReceipt {
             // Longer original routes begin with the paired WireGuard node.
             return nil
         }
-        return Self(token: token, entry: entry, exit: exit, deadline: uptime + remaining)
+        return Self(externalFinal: proof.hasSuffix(" · HTTPS response after TLS through the captured external exit"), token: token, entry: entry, exit: exit, deadline: uptime + remaining)
     }
 }
 
@@ -418,7 +419,7 @@ extension ProductWindowController {
         owner.liveRoute = route
         telemetryLiveLabel?.stringValue = String(format: "%.1f ms", route.exit)
         telemetryLiveLabel?.textColor = .labelColor
-        telemetryLiveLabel?.toolTip = "Authenticated private HTTP response through the current multihop route."
+        telemetryLiveLabel?.toolTip = route.externalFinal ? "HTTPS response after TLS through the captured external exit." : "Authenticated private HTTP response through the current multihop route."
         var labels: [String] = []
         if let entry = route.entry { labels.append(String(format: "IN %.1f", entry)) }
         labels.append(String(format: "OUT %.1f", route.exit))
@@ -554,6 +555,7 @@ private final class RouterVPNMacPerformanceMeasurement {
         let selected, generation: String?
         let ids: [String]
         let pairedWireGuard: Bool
+        let externalFinal: String?
         let pairedPrefixNodes: Int?
         let localRoles: [String]?
         init?(_ root: [String: Any], count: Int, token: String, entry: String, exit: String) {
@@ -564,8 +566,16 @@ private final class RouterVPNMacPerformanceMeasurement {
             }
             let selectedSource = root["ordered_original_source"] != nil
             let key = selectedSource ? "ordered_original_source" : "ordered_local_source"
-            guard (9...96).contains(count), root[selectedSource ? "ordered_local_source" : "ordered_original_source"] == nil,
+            guard (3...96).contains(count), root[selectedSource ? "ordered_local_source" : "ordered_original_source"] == nil,
                   let record = root[key] as? [String: Any] else { return nil }
+            if record.keys.contains("external_final_node_id") {
+                guard !selectedSource, let id = record["external_final_node_id"] as? String, id == exit, id != entry,
+                      root["execution"] as? String == "local", Set(record.keys) == ["source_sha256","config_sha256","node_ids","external_final_node_id"] else { return nil }
+                externalFinal = id
+            } else {
+                guard count >= 9 else { return nil }
+                externalFinal = nil
+            }
             if selectedSource {
                 var fields: Set<String> = ["source_sha256", "config_sha256", "generation_sha256", "selected_execution", "node_ids"]
                 if record.keys.contains("selected_roles_json") {
@@ -579,6 +589,7 @@ private final class RouterVPNMacPerformanceMeasurement {
                 selected = winner; generation = epoch; pairedWireGuard = false; pairedPrefixNodes = nil
             } else {
                 var fields: Set<String> = ["source_sha256", "config_sha256", "node_ids"]
+                if externalFinal != nil { fields.insert("external_final_node_id") }
                 if let value = record["paired_wireguard"] {
                     guard let flag = value as? NSNumber, CFGetTypeID(flag) == CFBooleanGetTypeID(), flag.boolValue else { return nil }
                     fields.insert("paired_wireguard")
@@ -600,6 +611,7 @@ private final class RouterVPNMacPerformanceMeasurement {
             guard let source = digest(record["source_sha256"]), let config = digest(record["config_sha256"]),
                   let ids = record["node_ids"] as? [String], ids.count == count, Set(ids).count == count,
                   ids.first == entry, ids.last == exit, ids.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 128 && $0.rangeOfCharacter(from: .controlCharacters) == nil }) else { return nil }
+            if externalFinal != nil && !ids.allSatisfy({ $0.range(of: #"\A[A-Za-z0-9_-]{1,64}\z"#, options: .regularExpression) != nil }) { return nil }
             self.source = source; self.config = config; self.ids = ids; self.token = token
         }
         func matches(_ data: Data) -> Bool {
@@ -612,7 +624,7 @@ private final class RouterVPNMacPerformanceMeasurement {
             for (i, row) in rows.enumerated() {
                 let interior = i > 0 && i < ids.count - 1
                 let role = i == 0 ? "entry" : interior ? "intermediate" : "exit"
-                let publicPath = localRoles.map { $0[i] == "public-path" } ?? (interior && !pairedWireGuard && i >= (pairedPrefixNodes ?? 1))
+                let publicPath = externalFinal != nil ? i > 0 : localRoles.map { $0[i] == "public-path" } ?? (interior && !pairedWireGuard && i >= (pairedPrefixNodes ?? 1))
                 let prefix = (selected.map { "Cumulative " + $0 + " path through node " } ?? "Cumulative path through node ") + "\(i+1) of \(ids.count)" + (publicPath ? " to the public benchmark" : "")
                 guard row["role"] as? String == role, row["router_id"] as? String == ids[i],
                       row["speed_label"] as? String == prefix + " transfer", row["latency_label"] as? String == prefix + " HTTP response",
@@ -670,7 +682,7 @@ private final class RouterVPNMacPerformanceMeasurement {
                           count.doubleValue.rounded() == count.doubleValue, (2...96).contains(count.intValue) else {
                         self.finish(.failure(Self.issue("The ordered native route has no complete measurement capture.")), owner: owner); return
                     }
-                    if count.intValue > 8 {
+                    if count.intValue > 8 || root["ordered_local_source"] != nil {
                         extended = ExtendedRoute(root, count: count.intValue, token: capture, entry: entry, exit: exit)
                         guard let route = extended, root["execution"] as? String == (route.selected ?? "local") else {
                             self.finish(.failure(Self.issue("The ordered native route has no complete measurement capture.")), owner: owner); return
@@ -1136,7 +1148,7 @@ private enum RouterVPNOrderedCandidateDisplay {
         return scope != "saved-prefix-local" || (falseFlag(value,"application_open") && falseFlag(value,"dns_open") && value["proof_scope"] as? String == "selected-prefix")
     }
     static func responseSource(_ value: [String: Any], position: Int, draft: [String: Any]?) -> [[String: String]]? {
-        guard let rows = value["response_source_nodes"] as? [[String: String]], (4...96).contains(rows.count),
+        guard let rows = value["response_source_nodes"] as? [[String: String]], ((value.keys.contains("response_executions") ? 3 : 4)...96).contains(rows.count),
               number(value,"prefix_position") == Double(position),
               position >= 1, position <= rows.count - 2, position == rows.count - 2 || rows.count < 96 else { return nil }
         var ids = Set<String>()
@@ -1148,11 +1160,11 @@ private enum RouterVPNOrderedCandidateDisplay {
             }
             guard row.count == 3, let id = row["id"], (1...64).contains(id.utf8.count),
                   id.utf8.allSatisfy({ (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95 }),
-                  ids.insert(id).inserted, row["mode"] == (i == 0 ? "wg" : "shadowsocks"),
+                  ids.insert(id).inserted, (i == 0 ? ["wg", "awg2-fast", "awg2-strong"].contains(row["mode"] ?? "") : row["mode"] == "shadowsocks"),
                   (boundary ? paired : paired || row["kind"] == "external") else { return nil }
         }
         if let draft {
-            guard draft["execution"] as? String == "auto", let nodes = draft["nodes"] as? [[String:String]],
+            guard draft["execution"] as? String == "auto" || (value.keys.contains("response_executions") && draft["execution"] as? String == "server"), let nodes = draft["nodes"] as? [[String:String]],
                   nodes == rows.map({ ["id":$0["id"]!, "mode":$0["mode"]!] }) else { return nil }
         }
         return rows
@@ -1161,7 +1173,7 @@ private enum RouterVPNOrderedCandidateDisplay {
     static func legacyConnectedResponse(_ value: [String: Any], choices: [[String: Any]]) -> Bool {
         guard responseWinner(value, position: 1, draft: nil),
               let prefixes = value["prefixes"] as? [[String: Any]], prefixes.count == 2,
-              number(prefixes[0], "position") == 0, prefixes[0]["mode"] as? String == "wg",
+              number(prefixes[0], "position") == 0, let entryMode = prefixes[0]["mode"] as? String, ["wg", "awg2-fast", "awg2-strong"].contains(entryMode),
               number(prefixes[1], "position") == 1, prefixes[1]["mode"] as? String == "shadowsocks",
               let entry = prefixes[0]["id"] as? String, let middle = prefixes[1]["id"] as? String,
               !entry.isEmpty, !middle.isEmpty, entry != middle else { return false }
@@ -1170,14 +1182,14 @@ private enum RouterVPNOrderedCandidateDisplay {
                   let id = choice["id"] as? String, !id.isEmpty, id != entry, id != middle else { return false }
             if choice["proposed_path"] == nil { return !(choice["save_reason"] as? String ?? "").isEmpty }
             return choice["proposed_path"] as? [[String:String]] == [
-                ["id":entry,"mode":"wg"], ["id":middle,"mode":"shadowsocks"], ["id":id,"mode":"shadowsocks"]]
+                ["id":entry,"mode":entryMode], ["id":middle,"mode":"shadowsocks"], ["id":id,"mode":"shadowsocks"]]
         }
     }
     static func responseDraft(_ draft: [String: Any]?, position: Int, view: [String:Any] = [:]) -> Bool {
         if view.keys.contains("response_source_nodes") { return responseSource(view,position:position,draft:draft) != nil }
         guard position == 1, draft?["execution"] as? String == "auto",
               let nodes = draft?["nodes"] as? [[String: String]] else { return false }
-        return nodes.map { $0["mode"] } == ["wg","shadowsocks","shadowsocks"]
+        return nodes.count == 3 && ["wg", "awg2-fast", "awg2-strong"].contains(nodes[0]["mode"] ?? "") && nodes.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" }
     }
     static func responseProposal(_ choice: [String:Any], source: [[String:String]], position: Int) -> Bool {
         guard choice["kind"] as? String == "router-vpn", let id = choice["id"] as? String, id.range(of: #"\A[A-Za-z0-9_-]{1,64}\z"#,options:.regularExpression) != nil,
@@ -1190,6 +1202,20 @@ private enum RouterVPNOrderedCandidateDisplay {
         return proposal == expected
     }
     static func responseWinner(_ value: [String: Any], position: Int, draft: [String: Any]?) -> Bool {
+        if value.keys.contains("response_executions") {
+            guard let owners = value["response_executions"] as? [String], let requested = value["requested_execution"] as? String,
+                  requested == "server" ? owners == ["server"] : requested == "auto" && [["local"],["local","server"]].contains(owners),
+                  (draft == nil || draft?["execution"] as? String == requested),
+                  responseSource(value,position:position,draft:draft) != nil else { return false }
+            if value["selected_execution"] == nil && value["selection_epoch"] == nil {
+                guard draft != nil, value["scope"] as? String == "draft-complete-selected" else { return false }
+                return owners.count == 1 ? value["required_selected_execution"] as? String == owners[0] : value["required_selected_execution"] == nil
+            }
+            guard let winner = value["selected_execution"] as? String, owners.contains(winner),
+                  value["required_selected_execution"] as? String == winner, let raw = value["selection_epoch"] as? NSNumber,
+                  CFGetTypeID(raw) != CFBooleanGetTypeID(), let epoch = UInt64(raw.stringValue) else { return false }
+            return epoch > 0
+        }
         let eligible = value.keys.contains("response_source_nodes") ? responseSource(value,position:position,draft:draft) != nil : position == 1
         guard eligible, value["requested_execution"] as? String == "auto",
               value["required_selected_execution"] as? String == "local", draft == nil || responseDraft(draft, position: position, view: value) else { return false }
@@ -1204,6 +1230,7 @@ private enum RouterVPNOrderedCandidateDisplay {
                                catalog: Bool, winner: String, epoch: UInt64) -> Bool {
         guard let draft, let requested = draft["execution"] as? String, ["server","auto"].contains(requested) else { return true }
         guard value["requested_execution"] as? String == requested else { return false }
+        if value.keys.contains("response_executions") && !responseWinner(value,position:position,draft:draft) { return false }
         if catalog {
             guard value["selected_execution"] == nil, value["selection_epoch"] == nil,
                   let nodes = draft["nodes"] as? [[String:String]], nodes.indices.contains(position),
@@ -1304,7 +1331,7 @@ private enum RouterVPNOrderedCandidateDisplay {
         guard ["routed-tcp-connect", "routed-candidate-response"].contains(measurement),
               row["measurement"] as? String == measurement, row["stage"] as? String == "complete", flag(row,"complete"), flag(row,"drained"),
               let at = number(row,"measured_at"), let expires = number(row,"expires_at"), at > 0, at <= now, expires == at + 120000, expires > now,
-              let values = row["results"] as? [[String: Any]], values.count == 1, let value = values.first,
+              let values = row["results"] as? [[String: Any]], values.count == 1, let value = values.first, !value.keys.contains("candidate_disposition"),
               value["node_id"] as? String == row["candidate_id"] as? String, value["role"] as? String == "candidate", value["kind"] as? String == (measurement == "routed-candidate-response" ? "private-agent-response" : "tcp-connect"), flag(value,"ready"),
               let b = value["benchmark"] as? [String: Any], b["measurement"] as? String == measurement, number(b,"attempts") == 50, number(b,"failed") == 0,
               let d = b["distribution"] as? [String: Any], number(d,"samples") == 50, let min = number(d,"min_ms"), let max = number(d,"max_ms"), let score = number(b,"trimmed_mean_ms"), min > 0, score >= min, score <= max else { return nil }
@@ -1319,7 +1346,11 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
     private var selectedWinner = ""
     private var selectedEpoch: UInt64 = 0
     private var savedScope: String { if ["server","auto"].contains(draft?["execution"] as? String ?? "") { return "draft-complete-selected" }; return savedPrefix ? "saved-prefix-local" : "saved-complete-local" }
-    private var catalogSuffix: String { savedPrefix ? "&scope="+savedScope : "" }
+    private var catalogSuffix: String {
+        let scope = savedPrefix ? "&scope="+savedScope : ""
+        let requestServer = !savedPath || ["server","auto"].contains(draft?["execution"] as? String ?? "")
+        return scope + (requestServer ? "&server_response=true" : "")
+    }
     private let draft: [String: Any]?
     private let choose: (([String: Any]) throws -> Void)?
     private var chosenID = ""
@@ -1363,7 +1394,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 820, height: 570), styleMask: [.titled,.closable,.resizable], backing: .buffered, defer: false)
         super.init(window: panel); panel.title = draft != nil ? "Measure the next hop" : savedPrefix ? "Test saved prefix" : self.savedPath ? "Test saved Local path" : "Candidates through connected prefix"; panel.delegate = self; panel.isReleasedWhenClosed = false
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12; stack.edgeInsets = NSEdgeInsets(top: 18,left: 18,bottom: 18,right: 18)
-        stack.addArrangedSubview(NSTextField(wrappingLabelWithString: "WireGuard and AWG prefixes measure TCP connection time. A supported Local Shadowsocks 2022 prefix measures authenticated responses from a paired candidate’s private agent. Each score uses 50 samples of the metric shown in the table."))
+        stack.addArrangedSubview(NSTextField(wrappingLabelWithString: "WireGuard and AWG prefixes measure TCP connection time. Shadowsocks 2022 prefixes time authenticated responses from paired candidates. A Server trial requires a separately provisioned candidate. Each score uses 50 samples of the metric shown in the table."))
         let top = NSStackView(views: [prefix,refresh]); top.orientation = .horizontal; stack.addArrangedSubview(top)
         for (id,title,width) in [("name","Saved candidate",360.0),("timing","Measured time",300.0)] {let column = NSTableColumn(identifier:NSUserInterfaceItemIdentifier(id));column.title=title;column.width=width;table.addTableColumn(column)}
         table.dataSource=self;table.delegate=self;table.allowsMultipleSelection=true;table.usesAlternatingRowBackgroundColors=true
@@ -1509,6 +1540,10 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         controls()
     }
     private func receive(_ value:[String:Any],action:String)throws {
+        if action == "catalog" && value.keys.contains("response_executions") &&
+            !RouterVPNOrderedCandidateDisplay.responseWinner(value,position:position,draft:draft) {
+            throw Self.issue("The candidate catalog lost its original response owners.")
+        }
         if draft != nil, value["origin"] as? String != "editor-draft" { throw Self.issue("The response belongs to another editor capture") }
         if action=="catalog" {
             guard RouterVPNOrderedCandidateDisplay.metric(value, position: position, draft: draft) != nil else { throw Self.issue("This capture cannot measure candidates through the selected prefix.") }
@@ -1540,13 +1575,22 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
             }
             return
         }
+        if value.keys.contains("response_executions") || view?.keys.contains("response_executions") == true {
+            guard let original = view, let owners = original["response_executions"] as? [String],
+                  value["response_executions"] as? [String] == owners,
+                  value["requested_execution"] as? String == original["requested_execution"] as? String,
+                  RouterVPNOrderedCandidateDisplay.responseWinner(value,position:position,draft:draft),
+                  draft != nil || value["selected_execution"] as? String == original["selected_execution"] as? String else {
+                throw Self.issue("The authenticated response owner changed.")
+            }
+        }
         if view?["response_source_nodes"] != nil || value["response_source_nodes"] != nil {
             guard let view, let original = RouterVPNOrderedCandidateDisplay.responseSource(view, position:position, draft:draft),
                   RouterVPNOrderedCandidateDisplay.responseSource(value, position:position, draft:draft) == original,
                   value["view_token"] as? String == view["view_token"] as? String else { throw Self.issue("The private response source changed.") }
             if draft == nil {
                 guard RouterVPNOrderedCandidateDisplay.responseWinner(value,position:position,draft:nil),
-                      (value["selection_epoch"] as? NSNumber)?.stringValue == (view["selection_epoch"] as? NSNumber)?.stringValue else { throw Self.issue("The selected Local path changed.") }
+                      (value["selection_epoch"] as? NSNumber)?.stringValue == (view["selection_epoch"] as? NSNumber)?.stringValue else { throw Self.issue("The selected route changed.") }
                 guard value["request_id"] as? String == requestID else { throw Self.issue("The private response belongs to another request.") }
                 if action == "cancel" {
                     let started = RouterVPNOrderedCandidateDisplay.flag(value,"started")
@@ -1613,7 +1657,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
                       value["draft_action"] as? String == "insert-measured-hop", value["proposed_path"] as? [[String:String]] == path,
                       value["profile_id"] == nil, value["saved"] == nil || RouterVPNOrderedCandidateDisplay.falseFlag(value,"saved"),
                       ["cancelled","running","reviewing","cleanup_pending"].allSatisfy({ RouterVPNOrderedCandidateDisplay.falseFlag(value,$0) }),
-                      draft?["execution"] as? String != "auto" || selectedWinner == "local" && selectedEpoch > 0 else {
+                      view["response_executions"] != nil ? selectedWinner == value["selected_execution"] as? String && selectedEpoch > 0 : draft?["execution"] as? String != "auto" || selectedWinner == "local" && selectedEpoch > 0 else {
                     throw Self.issue("The chosen path differs from the measured draft insertion.")
                 }
             }

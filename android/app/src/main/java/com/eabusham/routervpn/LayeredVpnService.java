@@ -819,7 +819,10 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 extendedCount=count;
             }
             int packets=0;String roles="";
-            if(extendedCount>8&&chain.execution==null){
+            if(chain.execution==null && chain.source.members.get(count-1).imported) {
+                roles=HopMeasurementOwner.captureLocalRoles(chain).toString();
+                packets=1;
+            } else if(extendedCount>8&&chain.execution==null){
                 packets=chain.capture.plan.extendedMixedLocalPacketCount();
                 boolean privateStream=false;
                 for(int i=0;i<count;i++){
@@ -905,7 +908,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             if(ended||!started)throw new IllegalStateException("The original benchmark has no active completed receipt.");
             String status=status(),saved=saved();
             AndroidOrderedLatencyStore.Record record=executionCapture==null
-                    ?AndroidOrderedLatencyStore.completed(status,saved,request,target.source,target.config,target.position,target.node,target.kind,"",false,target.extendedCount,target.extendedCount>8 && target.chain.execution==null && !target.chain.capture.multipleImported,target.pairedPrefixNodes,target.originalRoles)
+                    ?AndroidOrderedLatencyStore.completed(status,saved,request,target.source,target.config,target.position,target.node,target.kind,"",false,target.extendedCount,target.extendedCount>8 && target.chain.execution==null && !target.chain.capture.multipleImported && !target.chain.source.members.get(target.count-1).imported,target.pairedPrefixNodes,target.originalRoles)
                     :AndroidOrderedLatencyStore.completed(status,saved,request,executionCapture.source,executionCapture.config,target.position,target.node,target.kind,executionCapture.selected,executionCapture.originalSource!=null,target.extendedCount,false,0,executionCapture.privateStreamRoles);
             if(target.execution!=null&&executionCapture==null)throw new IllegalStateException("The actual execution capture is missing.");
             if(executionCapture!=null)executionCapture.requireRecord(record);

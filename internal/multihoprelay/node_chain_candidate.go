@@ -53,7 +53,10 @@ func (q NodeChainCandidateRequest) Clone() NodeChainCandidateRequest {
 	return q
 }
 func (q NodeChainCandidateRequest) Validate() error {
-	if q.Schema != 1 || q.Lease.validateShape() != nil || !proofID.MatchString(q.OwnerID) || !proofID.MatchString(q.CaptureSHA256) || !proofID.MatchString(q.Operation) || !proofID.MatchString(q.ExecutionSHA256) || !nonce.MatchString(q.Trial) || q.SelectionEpoch == 0 || !proofID.MatchString(q.InventorySHA256) || q.Position < 1 || q.Position >= NodeChainMaximumMembers || !ident.MatchString(q.CandidateID) || !proofID.MatchString(q.CandidateSourceSHA256) || !nodeChainCandidateAddress(q.Address) || q.DeadlineAt <= 0 || !proofID.MatchString(q.Password) {
+	if (q.Schema != 1 && q.Schema != 2) || q.Lease.validateShape() != nil || !proofID.MatchString(q.OwnerID) || !proofID.MatchString(q.CaptureSHA256) || !proofID.MatchString(q.Operation) || !proofID.MatchString(q.ExecutionSHA256) || !nonce.MatchString(q.Trial) || q.SelectionEpoch == 0 || !proofID.MatchString(q.InventorySHA256) || q.Position < 1 || (q.Schema == 1 && q.Position >= NodeChainMaximumMembers || q.Position >= NodeChainExtendedMaximumMembers) || !ident.MatchString(q.CandidateID) || !proofID.MatchString(q.CandidateSourceSHA256) || !nodeChainCandidateAddress(q.Address) || q.DeadlineAt <= 0 || !proofID.MatchString(q.Password) {
+		return errNodeChainCandidate
+	}
+	if q.Schema == 2 && (q.Lease.Schema != 2 && q.Lease.Schema != 6 || q.Position >= len(q.Lease.Users)) {
 		return errNodeChainCandidate
 	}
 	for _, user := range q.Lease.Users {
@@ -95,10 +98,28 @@ func (c NodeChainCandidateCapture) Clone() NodeChainCandidateCapture {
 func (c NodeChainCandidateCapture) Validate() error {
 	q := c.Request
 	digest, err := c.Lease.Digest()
-	if c.Schema != 1 || c.Lease.Validate() != nil || q.Validate() != nil || err != nil || q.OwnerID != c.Lease.OwnerID || q.CaptureSHA256 != digest || !sameNodeChainRequest(q.Lease, c.Lease.Request) || !proofID.MatchString(c.OperationOwnerID) || q.Position >= len(c.Lease.Source.Members) || c.Member != c.Lease.Source.Members[q.Position-1] || !nodeChainPacketMode(c.Member.Mode) || c.Member.NodeKind != "" {
+	if c.Schema != 1 || c.Lease.Validate() != nil || q.Validate() != nil || err != nil || q.OwnerID != c.Lease.OwnerID || q.CaptureSHA256 != digest || !sameNodeChainRequest(q.Lease, c.Lease.Request) || !proofID.MatchString(c.OperationOwnerID) || q.Position >= len(c.Lease.Source.Members) || c.Member != c.Lease.Source.Members[q.Position-1] {
+		return errNodeChainCandidate
+	}
+	if q.Schema == 1 {
+		if !nodeChainPacketMode(c.Member.Mode) || c.Member.NodeKind != "" {
+			return errNodeChainCandidate
+		}
+	} else if !c.Lease.Source.CandidateResponsePrefix(q.Position) {
 		return errNodeChainCandidate
 	}
 	return nil
+}
+
+// CandidateResponsePrefix is only descriptive. The server worker must additionally
+// hold the original suffix outbound and independently provisioned candidate.
+func (s NodeChainDescriptor) CandidateResponsePrefix(position int) bool {
+	if (s.Schema != 2 && s.Schema != 6) || position < 1 || position >= len(s.Members) || s.Validate() != nil {
+		return false
+	}
+	m := s.Members[position-1]
+	return m.Mode == "shadowsocks" && m.StartLayer == "off" &&
+		(m.NodeKind == "external" && m.ProofKind == "public-path" || s.PrivateStreamAt(position))
 }
 
 // Username is unique to this server-generated operation owner. A client may
@@ -276,4 +297,11 @@ func DecodeNodeChainCandidateCloseAcknowledgement(raw []byte, q NodeChainCandida
 		return NodeChainCandidateCloseAcknowledgement{}, errNodeChainCandidate
 	}
 	return a, nil
+}
+
+func (c NodeChainCandidateCapture) ResponseSourceFile() string {
+	if c.Request.Schema != 2 || c.Validate() != nil {
+		return ""
+	}
+	return "candidate-response-" + c.OperationOwnerID + ".json"
 }

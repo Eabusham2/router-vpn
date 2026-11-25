@@ -29,9 +29,9 @@ final class AndroidNodeCandidateDialog {
             if(session.execution!=null&&!session.capture.ownsSelectedCandidatePrefix(session.source,i))continue;
             String mode=session.source.modes.get(i);
             boolean response=false;
-            if ("shadowsocks".equals(mode) && (session.execution==null || "auto".equals(session.source.execution))) {
+            if ("shadowsocks".equals(mode)) {
                 try {
-                    response=(session.execution==null || "local".equals(session.candidateExecutionOwner().execution()))
+                    response=(session.execution==null || AndroidNodeChainCapture.selectedResponseWinner(session.source.execution,session.candidateExecutionOwner().execution()))
                             && AndroidNodeChainCapture.responsePrefix(session.source.members,session.source.modes,i,session.source.execution);
                 } catch (Exception retired) { return; }
             }

@@ -35,7 +35,7 @@ func desktopPairedStreamRoles(rows []common.MultihopNodeSelection, imported func
 // imported member. The captured compiler still proves every endpoint, key,
 // identity and Off layer; a broader Local stream layout cannot select it.
 func desktopSelectedPrivateStreamRoles(rows []common.MultihopNodeSelection, imported func(int) bool) bool {
-	if len(rows) < 4 || len(rows) > mobilemultihop.NodeChainExtendedLocalMaximumNodes || rows[0].Mode != "wg" || imported(0) ||
+	if len(rows) < 4 || len(rows) > mobilemultihop.NodeChainExtendedLocalMaximumNodes || !mobilemultihop.NodeChainPrefixMode(rows[0].Mode) || imported(0) ||
 		rows[len(rows)-1].Mode != "shadowsocks" || imported(len(rows)-1) || !imported(1) {
 		return false
 	}
@@ -104,6 +104,9 @@ func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error)
 	bad := errors.New("ordered imports require their complete Local source and supported positions")
 	if len(members) < 2 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes {
 		return 0, bad
+	}
+	if final := members[len(members)-1].Profile; final.NodeKind == "external" || final.External != nil {
+		return desktopNodeChainExternalFinalSchema(members)
 	}
 	if desktopPairedStreamRoles(nodeChainSelectedReferences(members), func(i int) bool { return members[i].Profile.NodeKind == "external" }) {
 		for position, member := range members {

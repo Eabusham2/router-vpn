@@ -30,16 +30,18 @@ type desktopOrderedLatencyCapture struct {
 	LocalRolesJSON        string `json:"local_roles_json,omitempty"`
 	ExtendedLocalNodes    int    `json:"extended_local_nodes,omitempty"`
 	ExtendedOriginalNodes int    `json:"extended_original_nodes,omitempty"`
+	ExternalFinalNodeID   string `json:"external_final_node_id,omitempty"`
 }
 type desktopOrderedLatencyNode struct {
-	extended    *mobilemultihop.NodeChain
-	config      string
-	NodeID      string `json:"node_id"`
-	Position    int    `json:"position"`
-	Kind        string `json:"kind"`
-	Role        string `json:"role"`
-	Label       string `json:"label"`
-	Measurement string `json:"measurement"`
+	extended      *mobilemultihop.NodeChain
+	config        string
+	externalFinal string
+	NodeID        string `json:"node_id"`
+	Position      int    `json:"position"`
+	Kind          string `json:"kind"`
+	Role          string `json:"role"`
+	Label         string `json:"label"`
+	Measurement   string `json:"measurement"`
 }
 type desktopOrderedLatencyRequest struct {
 	Capture  desktopOrderedLatencyCapture `json:"capture"`
@@ -134,6 +136,7 @@ func captureDesktopOrderedLatency(ctx context.Context, a *app) (speedLabPathIden
 	}
 	view = desktopOrderedLatencyView{Schema: 1, desktopOrderedLatencyRequest: desktopOrderedLatencyRequest{Capture: desktopOrderedLatencyCapture{SessionID: identity.SessionID, ProfileID: identity.RouterID, ProfileToken: identity.ProfileToken, SourceSHA256: meta.OriginalSourceSHA256, ConfigSHA256: meta.ConfigSHA256, GenerationSHA256: hex.EncodeToString(hash[:])}}, Status: hopmeasure.Status{Stage: "idle", Complete: true, Drained: true, Results: []hopmeasure.Result{}}}
 	view.Nodes = nodes
+	view.Capture.ExternalFinalNodeID = nodes[0].externalFinal
 	if nodes[0].extended != nil {
 		view.Capture.ExtendedLocalNodes = len(nodes)
 		view.Capture.PairedPrefixNodes = nodes[0].extended.ExtendedMixedLocalPacketCount()
@@ -167,6 +170,16 @@ func desktopOrderedLatencyInventory(selection multihopSelection, meta mobilemult
 	if count < 2 || len(meta.Prefixes) != count {
 		return nil, errors.New("ordered fifty lost its complete captured inventory")
 	}
+	externalFinal := ""
+	if meta.ExternalFinal != nil || desktopNodeChainHasExternalFinal(selection.Nodes) {
+		if !desktopNodeChainMetadataMatchesSelection(meta, selection) || selection.Native == nil ||
+			selection.Native.chain == nil || selection.Native.chain.chain == nil || !selection.Native.chain.chain.HasExternalFinal() ||
+			selection.Native.chain.chain.SourceSHA256() != meta.OriginalSourceSHA256 ||
+			!reflect.DeepEqual(selection.Native.chain.chain.ProofInventory(), meta.Prefixes) {
+			return nil, errors.New("ordered public exit lost its original complete source")
+		}
+		externalFinal = selection.Exit.ID
+	}
 	nodes := make([]desktopOrderedLatencyNode, 0, count)
 	seen := map[string]bool{}
 	for position, proof := range meta.Prefixes {
@@ -187,10 +200,13 @@ func desktopOrderedLatencyInventory(selection multihopSelection, meta mobilemult
 			return nil, errors.New("ordered fifty changed its captured private or imported source")
 		}
 		role, kind, label, metric, _ := desktopOrderedLatencyMeaning(position, count, capturedKind)
+		if externalFinal != "" && position == count-1 {
+			role, kind, label, metric, _ = desktopOrderedExternalFinalLatencyMeaning(position, count, capturedKind)
+		}
 		if kind == "" {
 			return nil, errors.New("ordered fifty changed its captured node kind")
 		}
-		node := desktopOrderedLatencyNode{NodeID: id, Position: position, Kind: kind, Role: role, Label: label, Measurement: metric}
+		node := desktopOrderedLatencyNode{NodeID: id, Position: position, Kind: kind, Role: role, Label: label, Measurement: metric, externalFinal: externalFinal}
 		if extended != nil {
 			node.extended, node.config = extended, meta.ConfigSHA256
 		}
@@ -215,6 +231,10 @@ func (o *desktopOrderedLatencyOperation) current(ctx context.Context, a *app) er
 // The server compares this public envelope with the independently retained live
 // capture before starting, polling or cancelling any measurement.
 func (c desktopOrderedLatencyCapture) admitsPosition(position int) bool {
+	if c.ExternalFinalNodeID != "" && (!validProfileID(c.ExternalFinalNodeID) || c.SelectedCaptureJSON != "" ||
+		c.ExtendedOriginalNodes != 0 || c.LocalRolesJSON != "" || c.PairedPrefixNodes != 0) {
+		return false
+	}
 	if c.LocalRolesJSON != "" {
 		if c.PairedPrefixNodes != 0 || c.SelectedCaptureJSON != "" || c.ExtendedOriginalNodes != 0 {
 			return false
@@ -572,7 +592,8 @@ func (a *app) runDesktopOrderedLatency(ctx context.Context, slot *desktopOrdered
 }
 func validateDesktopOrderedLatencyResult(request desktopOrderedLatencyRequest, node desktopOrderedLatencyNode, result desktopNodeChainMeasurementResult, now time.Time) error {
 	bad := errors.New("ordered native saved receipt differs from its original request")
-	if request.Capture.SelectedCaptureJSON != "" || request.Capture.ExtendedOriginalNodes != 0 || result.Schema != 2 || result.Operation != "ordered-latency-50" || result.Bytes != 0 || result.NodeID != request.NodeID || result.Position != request.Position || result.Request != request.Request || result.Saved == nil {
+	if request.Capture.SelectedCaptureJSON != "" || request.Capture.ExtendedOriginalNodes != 0 ||
+		request.Capture.ExternalFinalNodeID != node.externalFinal || result.Schema != 2 || result.Operation != "ordered-latency-50" || result.Bytes != 0 || result.NodeID != request.NodeID || result.Position != request.Position || result.Request != request.Request || result.Saved == nil {
 		return bad
 	}
 	saved := *result.Saved
@@ -616,6 +637,9 @@ func (node desktopOrderedLatencyNode) receiptLimit(r hopmeasure.OrderedLatencyRe
 }
 
 func (node desktopOrderedLatencyNode) saveCapturedHistory(a *app, capture desktopOrderedLatencyCapture, r hopmeasure.OrderedLatencyReceipt, current func() error) error {
+	if capture.ExternalFinalNodeID != node.externalFinal {
+		return errors.New("ordered latency history changed its captured external exit")
+	}
 	if node.extended == nil {
 		return saveDesktopOrderedCapturedHistory(a, capture, r, current)
 	}

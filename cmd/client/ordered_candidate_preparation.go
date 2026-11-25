@@ -19,12 +19,13 @@ import (
 // explicit profile save. It cannot represent an ordinary connection, a draft
 // prefix without its final node, or automatic connection adoption.
 type orderedCandidatePreparationRequest struct {
-	draft        *multihopConnectRequest
-	Scope        string
-	RequestID    string
-	Position     int
-	CandidateIDs []string
-	Samples      int
+	serverResponse bool
+	draft          *multihopConnectRequest
+	Scope          string
+	RequestID      string
+	Position       int
+	CandidateIDs   []string
+	Samples        int
 }
 
 type orderedCandidatePreparation struct {
@@ -180,7 +181,7 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 	if err != nil {
 		return nil, err
 	}
-	inventory, err := captureDesktopNodeChainCandidateSourcesForScope(ctx, a, sourceLaunch, q.Position, q.CandidateIDs, q.Scope)
+	inventory, err := captureDesktopNodeChainCandidateSourcesForScope(candidateServerIntent(ctx, q.serverResponse), a, sourceLaunch, q.Position, q.CandidateIDs, q.Scope)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +298,7 @@ func (p *orderedCandidatePreparation) savedSourcesCurrent(ctx context.Context) e
 		return err
 	}
 	// Re-capture only source inventory. No connected identity is manufactured.
-	current, err := captureDesktopNodeChainCandidateSourcesForScope(ctx, p.app, p.inventory.launch, p.request.Position, p.request.CandidateIDs, p.request.Scope)
+	current, err := captureDesktopNodeChainCandidateSourcesForScope(candidateServerIntent(ctx, p.request.serverResponse), p.app, p.inventory.launch, p.request.Position, p.request.CandidateIDs, p.request.Scope)
 	if err != nil || current.revision != p.revision || current.inventory != p.inventory.inventory || !reflect.DeepEqual(current.assets, p.inventory.assets) {
 		return errors.Join(err, errors.New("temporary candidate original saved inventory changed"))
 	}

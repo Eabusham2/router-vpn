@@ -639,9 +639,9 @@ def _darwin_private_stream_roles(family, rows):
             or rows[0][2] != 'router-vpn'):
         return False
     if family == 'ordered-node-chain-execution-v1':
-        return (rows[0][1] == 'wg' and rows[1][1:3] == ['shadowsocks', 'external']
+        return (rows[0][1] in ('wg', 'awg2-fast', 'awg2-strong') and rows[1][1:3] == ['shadowsocks', 'external']
                 and all(row[1] == 'shadowsocks' and row[2] in ('router-vpn', 'external') for row in rows[1:-1])
-                and sum(row[2] == 'router-vpn' for row in rows[1:-1]) == 1)
+                and any(row[2] == 'router-vpn' for row in rows[2:-1]))
     if family != 'ordered-node-chain-v1':
         return False
     stream = private = public = False
@@ -674,6 +674,13 @@ def _darwin_extended_member_role(family, rows, position):
     return (mode, 'router-vpn') if mode in allowed else (None, None)
 
 
+def _darwin_external_final_roles(family, rows):
+    return (family == 'ordered-node-chain-v1' and 3 <= len(rows) <= 96
+            and all(type(row) is list and len(row) == 6 for row in rows)
+            and rows[0][1:3] == ['wg', 'router-vpn']
+            and all(row[1:3] == ['shadowsocks', 'external'] for row in rows[1:]))
+
+
 def _darwin_isolated_native_state(value: dict[str, Any]) -> bool:
     """Permit durable Off cleanup records only for the captured macOS owner.
 
@@ -694,7 +701,7 @@ def _darwin_isolated_native_state(value: dict[str, Any]) -> bool:
         key, schemas = 'native_candidate_prefix_capture', (2, 3)
     elif family in ('ordered-node-chain-v1', 'ordered-node-chain-socks-v1',
                     'ordered-node-chain-connect-v1', 'ordered-node-chain-execution-v1'):
-        key, schemas = 'native_node_chain_capture', (2, 3)
+        key, schemas = 'native_node_chain_capture', (2, 3, 4)
     else:
         return False
     if any(other in value for other in ('native_external_capture', 'native_candidate_prefix_capture', 'native_node_chain_capture', 'native_node_capture') if other != key):
@@ -702,7 +709,8 @@ def _darwin_isolated_native_state(value: dict[str, Any]) -> bool:
     capture = value.get(key)
     if (type(capture) is not dict or type(capture.get('schema')) is not int or capture['schema'] not in schemas
             or capture.get('policy') != 'off' or capture.get('profile_id') != value.get('profile_id')
-            or value.get('profile_id') != value.get('policy_profile_id')
+            or value.get('policy_profile_id') != (capture.get('control_profile_id')
+                if key == 'native_node_chain_capture' and capture.get('schema') == 4 else value.get('profile_id'))
             or type(capture.get('home_lan_access')) is not bool
             or capture['home_lan_access'] is not value.get('home_lan_access')
             or family != 'external-v1' and capture.get('family') != family
@@ -731,7 +739,7 @@ def _darwin_isolated_native_state(value: dict[str, Any]) -> bool:
     if family == 'node-candidate-prefix-v1' and capture['schema'] == 3:
         if type(capture.get('members_sha256')) is not str or not re.fullmatch('[0-9a-f]{64}', capture['members_sha256']):
             return False
-    if key == 'native_node_chain_capture' and capture['schema'] == 3:
+    if key == 'native_node_chain_capture' and capture['schema'] in (3, 4):
         raw, digest = capture.get('members_json'), capture.get('members_sha256')
         if (type(raw) is not str or not 0 < len(raw) <= 512+192*96 or type(digest) is not str
                 or not re.fullmatch('[0-9a-f]{64}', digest)):
@@ -743,6 +751,11 @@ def _darwin_isolated_native_state(value: dict[str, Any]) -> bool:
                     or json.dumps(rows, separators=(',', ':'), ensure_ascii=True) != raw
                     or hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode('utf-8')).hexdigest() != digest):
                 return False
+            external_final = capture['schema'] == 4
+            if external_final and (not _darwin_external_final_roles(family, rows)
+                    or capture.get('control_profile_id') != rows[0][0]
+                    or capture.get('control_profile_id') == capture['profile_id']):
+                return False
             seen = set()
             lan = True
             for position, row in enumerate(rows):
@@ -752,7 +765,7 @@ def _darwin_isolated_native_state(value: dict[str, Any]) -> bool:
                         or row[2] not in ('router-vpn', 'external') or row[3] != 'off'
                         or row[4] not in ('auto', 'on', 'off') or type(row[5]) is not bool):
                     return False
-                if len(rows) > 8:
+                if len(rows) > 8 and not external_final:
                     expected = _darwin_extended_member_role(family, rows, position)
                     if family not in ('ordered-node-chain-v1', 'ordered-node-chain-execution-v1') or tuple(row[1:3]) != expected:
                         return False

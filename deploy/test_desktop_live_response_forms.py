@@ -221,14 +221,15 @@ f.orderedLatencyVisible=true;f.refreshUnifiedTelemetry();check(f.api.calls.isEmp
 let token=String(repeating:"b",count:64)
 let fullIDs=(0..<16).map{"node-"+String($0)}
 let formatter=ISO8601DateFormatter();formatter.formatOptions=[.withInternetDateTime,.withFractionalSeconds]
-for fault in ["valid","missing-entry","short-imported","donor-token","late-interior","exit","samples","expiry","map-mutation","selection","paused","bad-entry","busy"] {
+for fault in ["valid","external-final","missing-entry","short-imported","donor-token","late-interior","exit","samples","expiry","map-mutation","selection","paused","bad-entry","busy"] {
  let ids=fault=="short-imported" ? ["external-entry","paired-exit"] : fullIDs
  let graph:[String:Any]=["connected":true,"active_node_ids":ids,"active_route_id":token,"actual_entry_id":ids.first!,"actual_exit_id":ids.last!]
  let f=Form()
  let now=formatter.string(from:Date().addingTimeInterval(fault=="expiry" ? -12 : -0.1))
- var path:[String:Any]=["connected":true,"mode":"multihop","router_id":ids.last!,"samples":2,"failed":0,"median_ms":7.0,"proof":"private proof","measured_at":now]
+ let proof=fault=="external-final" ? "Cumulative path through custom node 16 of 16 · HTTPS response after TLS through the captured external exit" : "private proof"
+ var path:[String:Any]=["connected":true,"mode":"multihop","router_id":ids.last!,"samples":2,"failed":0,"median_ms":7.0,"proof":proof,"measured_at":now]
  var entry:[String:Any]=["id":ids.first!,"samples":2,"failed":0,"median_ms":3.0]
- let exit:[String:Any]=["id":ids.last!,"samples":2,"failed":0,"median_ms":7.0,"description":"private proof","measured_at":now]
+ let exit:[String:Any]=["id":ids.last!,"samples":2,"failed":0,"median_ms":7.0,"description":proof,"measured_at":now]
  var current=graph
  if fault=="exit"{path["router_id"]=ids[13]};if fault=="samples"{path["samples"]=true}
  if fault=="bad-entry"{entry["id"]=ids[3]}
@@ -242,9 +243,10 @@ for fault in ["valid","missing-entry","short-imported","donor-token","late-inter
  if fault=="map-mutation"{f.mapMutationGeneration=UUID()};if fault=="selection"{f.connectionProfileSelectionGeneration=UUID()};if fault=="paused"{f.paused=true}
  DispatchQueue.main.flush()
  check(f.api.calls.filter{$0=="/api/multihop/live-latency"}.count==(fault=="busy" ? 0 : 1) && !f.api.calls.contains("/api/connection/live-latency"),"Connect and globe competed for native live response")
- let accepted=fault=="valid" || fault=="short-imported"
+ let accepted=["valid","external-final","short-imported"].contains(fault)
  check((f.unifiedMapChromeView!.path==7)==accepted && (f.telemetryLiveLabel!.stringValue=="7.0 ms")==accepted,"unbound route displayed or lost: "+fault)
- if accepted {check(f.telemetryHopLabel!.stringValue.contains("PATH 7.0 ms") && f.telemetryHopLabel!.stringValue.contains("IN 3.0")==(fault=="valid"),"wrong original private endpoints visible")}
+ if accepted {check(f.telemetryHopLabel!.stringValue.contains("PATH 7.0 ms") && f.telemetryHopLabel!.stringValue.contains("IN 3.0")==(fault != "short-imported"),"wrong original private endpoints visible")
+  check((f.telemetryLiveLabel!.toolTip=="HTTPS response after TLS through the captured external exit.")==(fault=="external-final"),"live proof did not identify its actual exit")}
  DispatchQueue.main.timers=[]
 }
 let r=decode(value())!;check(!r.current(r.deadline),"deadline remained current")

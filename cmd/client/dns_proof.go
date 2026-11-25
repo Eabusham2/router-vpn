@@ -365,6 +365,9 @@ func proveSelectedDNSWithLookup(parent context.Context, a *app, s observedConnec
 }
 
 func proveSelectedDNSWithClock(parent context.Context, a *app, s observedConnection, runtimeID string, lookup func(context.Context, string) ([]string, error), startClock clientMeasurementClock) dnsProofState {
+	if proof, owned := proveDesktopOrderedDNS(parent, a, s, runtimeID); owned {
+		return proof
+	}
 	if torDNSObservation(s, runtimeID) {
 		return proveDesktopTorDNS(parent, a, s, runtimeID)
 	}

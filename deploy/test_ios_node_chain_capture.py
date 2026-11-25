@@ -49,6 +49,7 @@ GO = GO.replace(anchor, r'''
  case "chain-candidate-supported":value=strconv.FormatBool(mobilemultihop.NodeChainCandidateInputSupported(r.Source))
  case "chain-openvpn-endpoint":value,err=nativeopenvpn.CompileEndpoint(r.Source,r.Files,r.Node,r.Mode,"")
  case "chain-openvpn-imported":value,err=mobilemultihop.NodeChainImportedOpenVPNMemberInput(r.Source,r.Policy)
+ case "chain-external-final":value,err=mobilemultihop.NodeChainExternalFinalFromEntry(r.Source,r.Policy)
  case "chain-imported":value,err=mobilemultihop.NodeChainImportedMemberInput(r.Source,r.Policy)
  case "chain-socks-imported":value,err=mobilemultihop.NodeChainImportedSOCKSMemberInput(r.Source,r.Policy)
  case "chain-socks-new":
@@ -229,6 +230,9 @@ func api<T>(_ error:UnsafeMutablePointer<NSError?>?,_ action:()throws->T)->T?{
 }
 // Generated Go string/error helpers return nonnull NSString and report failure
 // through NSErrorPointer. Match that ABI so shipping optional-binding errors fail.
+public func LibboxRouterNodeChainExternalFinalFromEntry(_ entry:String,_ imported:String,_ error:UnsafeMutablePointer<NSError?>?)->String{
+ api(error){try bridge(["Op":"chain-external-final","Source":entry,"Policy":imported])} ?? ""
+}
 public func LibboxRouterNodeChainImportedMemberInput(_ config:String,_ capture:String,_ error:UnsafeMutablePointer<NSError?>?)->String{
  api(error){try bridge(["Op":"chain-imported","Source":config,"Policy":capture])} ?? ""
 }
@@ -320,7 +324,35 @@ func editProfile(_ original:Data,_ action:(inout [String:Any])->Void)throws->Dat
  static func reject(_ name:String,_ action:()throws->Void)throws{do{try action()}catch{checks+=1;return};throw NSError(domain:"ChainRejected",code:1,userInfo:[NSLocalizedDescriptionKey:"ACCEPTED "+name])}
  static func main(){defer{LibboxTestClose()};do{try run();print("Apple ordered native capture: PASS (\(checks) shipping Swift / shared Go checks; no native connection)")}
  catch{FileHandle.standardError.write(Data(("FAIL after \(checks): \(error.localizedDescription)\n").utf8));exit(1)}}
+ static func externalFinal(_ count:Int,_ dns:String)throws {
+  var inputs=try sources(count)
+  var refs=[[String:Any]]()
+  let entryID=try profile(inputs[0])["id"] as! String
+  refs.append(["id":entryID,"mode":"wg"])
+  for position in 1..<count {
+   var root=try object(inputs[position]),saved=try profile(inputs[position])
+   let id="external-final-test-\(position)",ip="198.51.100.\(120+position)"
+   saved["id"]=id;saved["name"]=id;saved["node_kind"]="external";saved.removeValue(forKey:"node_proof_id")
+   for key in ["router_api","api_token","adguard_ipv6","socks_host","socks_username","socks_password"] { saved[key]="" }
+   for key in ["multihop_nodes","multihop_enabled","multihop_execution"] { saved.removeValue(forKey:key) }
+   saved["socks_port"]=0;saved["endpoint"]=ip;saved["dns_mode"]=dns
+   if dns=="custom" { saved["dns_protocol"]="tcp";saved["dns_host"]="198.51.100.198";saved["dns_port"]=5353 }
+   saved["external"]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.\(100+position)","shadowsocks":["server":ip,"port":443+position,"method":"2022-blake3-aes-128-gcm","password":Data(repeating:UInt8(position),count:16).base64EncodedString()]]
+   root["selectedRouterID"]=id;root["routerProfiles"]=[saved];root["profiles"]=[String:[String:String]]()
+   inputs[position]=try data(root);refs.append(["id":id,"mode":"shadowsocks"])
+  }
+  inputs[0]=try editProfile(inputs[0]) { $0["multihop_enabled"]=true;$0["multihop_nodes"]=refs;$0["multihop_execution"]="local" }
+  let chain=try IOSNodeChainCapture.compile(bundles:inputs);defer{try? chain.plan.close()}
+  let saved=try profile(inputs[0]),restored=try IOSNodeChainCapture.reopen(chain.launchInput,selectedProfile:saved);defer{try? restored.plan.close()}
+  let final=chain.members[count-1],launch=try object(Data(chain.launchInput.utf8)),members=launch["nodes"] as! [String]
+  let typed=try object(Data(members[count-1].utf8)),src=try object(Data((typed["capture"] as! String).utf8))
+  try check("external-final original resolver",chain.sourceSchema==8 && restored.launchInput==chain.launchInput && chain.controlMember.id==entryID && final.id==refs[count-1]["id"] as? String && (src["profile"] as? [String:Any])?["dns_mode"] as? String==dns)
+  try check("external-final literal public source",typed["kind"] as? String=="routervpn-node-chain-external-final" && (launch["identity_sources"] as? [String])?.last=="")
+  try reject("external final acting as the paired control"){ _=try IOSNodeChainCapture.reopen(chain.launchInput,selectedProfile:final.profile) }
+  try reject("external final Server execution"){ _=try IOSNodeChainCapture.compileOriginalForExecution(bundles:inputs,requested:"server") }
+ }
  static func run()throws {
+  try externalFinal(3,"home");try externalFinal(9,"custom")
   try socksMiddle()
 
   try hostnameMiddle()
@@ -681,7 +713,7 @@ def main():
         text = source.read_text()
         for name, before, after, failure in (
             ('native-launch-error', 'guard failure == nil, let launch = returned, !launch.isEmpty else {', 'guard let launch = returned, !launch.isEmpty else {', 'ACCEPTED native launch error cannot return usable source'),
-            ('final-profile-bound', 'try json(selectedProfile, maximum: 256 * 1024) == json(capture.finalProfile, maximum: 256 * 1024)', 'true', 'ACCEPTED replaced final control'),
+            ('final-profile-bound', 'try json(selectedProfile, maximum: 256 * 1024) == json(capture.controlMember.profile, maximum: 256 * 1024)', 'true', 'ACCEPTED external final acting as the paired control'),
             ('mobile-projection-bound', 'root["projection_kind"] == nil, root["session_id"] == nil, root["target_os"] == nil, root["restored_mtu"] == nil,', 'true,', 'ACCEPTED foreign or unstaged platform projection'),
         ):
             assert text.count(before) == 1, name

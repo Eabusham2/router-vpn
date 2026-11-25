@@ -42,6 +42,9 @@ func validateDesktopOrderedReceiptBound(r hopmeasure.OrderedLatencyReceipt, now 
 	bad := errors.New("ordered history requires an exact complete fifty-response receipt")
 	count := desktopOrderedReceiptCount(r)
 	role, kind, label, metric, endpoint := desktopOrderedLatencyMeaning(r.Position, count, r.Result.Kind)
+	if kind == "" {
+		role, kind, label, metric, endpoint = desktopOrderedExternalFinalLatencyMeaning(r.Position, count, r.Result.Kind)
+	}
 	if count == 0 || count > limit || kind == "" {
 		return bad
 	}
@@ -110,12 +113,26 @@ func desktopOrderedLatencyMeaning(position, count int, capturedKind string) (rol
 	return
 }
 
+// Public final receipts have a separate historical meaning. This cannot make
+// an ordinary paired final public: live admission also requires the original
+// schema-8 source, its exact exit ID and the complete captured proof inventory.
+func desktopOrderedExternalFinalLatencyMeaning(position, count int, capturedKind string) (role, kind, label, metric, endpoint string) {
+	if count < 3 || count > hopmeasure.PhysicalTraversalDepth || position != count-1 || capturedKind != "public-path" {
+		return
+	}
+	return "exit", "public-path", fmt.Sprintf("Cumulative path through custom node %d of %d → Cloudflare edge", count, count),
+		"routed-https-response-after-tls", "https://" + hopmeasure.PublicHost + "/__down?bytes=1"
+}
+
 // The historical schema already carries the count in its canonical, secret-free
 // label. It is accepted only as a bounded historical meaning; adoption also
 // matches the independently captured live node inventory below.
 func desktopOrderedReceiptCount(r hopmeasure.OrderedLatencyReceipt) int {
 	for count := 2; count <= hopmeasure.PhysicalTraversalDepth; count++ {
 		_, kind, label, _, _ := desktopOrderedLatencyMeaning(r.Position, count, r.Result.Kind)
+		if kind == "" {
+			_, kind, label, _, _ = desktopOrderedExternalFinalLatencyMeaning(r.Position, count, r.Result.Kind)
+		}
 		if kind != "" && r.Result.Label == label {
 			return count
 		}

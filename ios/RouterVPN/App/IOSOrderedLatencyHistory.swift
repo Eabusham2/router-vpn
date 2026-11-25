@@ -74,14 +74,20 @@ struct IOSOrderedLatencyExecution: Sendable {
 /// satisfy the exact captured source, configuration, kind and position.
 struct IOSOrderedLatencyExtendedLocal: Sendable {
     let source: String, config: String, ids: [String], kinds: [String]
+    let externalFinal: Bool
     var statusLimit: Int { max(16384, 512 + 1536 * ids.count) }
-    init(source: String, config: String, ids: [String], kinds: [String], provedCount: Int, pairedPrefixNodes: Int = 0, provedKinds: [String]? = nil) throws {
-        guard (9...IOSMultihopNodeSelection.physicalTraversalDepth).contains(provedCount),
+    init(source: String, config: String, ids: [String], kinds: [String], provedCount: Int, pairedPrefixNodes: Int = 0, provedKinds: [String]? = nil, externalFinal: Bool = false) throws {
+        self.externalFinal = externalFinal
+        if externalFinal {
+            guard provedKinds == kinds, kinds.first == "private-node", kinds.dropFirst().allSatisfy({ $0 == "public-path" }),
+                  pairedPrefixNodes == 0 else { throw IOSOrderedLatencyRecord.issue() }
+        }
+        guard ((externalFinal ? 3 : 9)...IOSMultihopNodeSelection.physicalTraversalDepth).contains(provedCount),
               provedCount == ids.count, Set(ids).count == ids.count, kinds.count == ids.count,
               IOSOrderedLatencyRecord.hex(source), IOSOrderedLatencyRecord.hex(config) else { throw IOSOrderedLatencyRecord.issue() }
         guard pairedPrefixNodes == 0 || (1..<ids.count-1).contains(pairedPrefixNodes) else { throw IOSOrderedLatencyRecord.issue() }
         if let provedKinds {
-            guard provedKinds == kinds, kinds.first == "private-node", kinds.last == "private-node",
+            guard provedKinds == kinds, kinds.first == "private-node", kinds.last == (externalFinal ? "public-path" : "private-node"),
                   kinds.allSatisfy({ $0 == "private-node" || $0 == "public-path" }),
                   kinds.prefix(pairedPrefixNodes).allSatisfy({ $0 == "private-node" }) else { throw IOSOrderedLatencyRecord.issue() }
         }
@@ -159,7 +165,7 @@ struct IOSOrderedLatencyRecord: Sendable {
             let fields = incomingLabel.split(separator: " ")
             let shift = execution == nil ? 0 : 1
             guard fields.count == 11 + shift, let capturedCount = Int(fields[7 + shift]), (3...limit).contains(capturedCount),
-                  (position > 0 || capturedCount == 3), position < capturedCount - 1 else { throw Self.issue() }
+                  (position > 0 || capturedCount == 3), (position < capturedCount - 1 || position == capturedCount - 1 && extended?.externalFinal == true && execution == nil) else { throw Self.issue() }
             count = capturedCount; label = prefix + "custom node \(position + 1) of \(capturedCount) → Cloudflare edge"
         } else {
             guard kind == "private-node", let suffix = incomingLabel.split(separator: " ").last, let capturedCount = Int(suffix), (2...limit).contains(capturedCount), position < capturedCount else { throw Self.issue() }
@@ -174,7 +180,7 @@ struct IOSOrderedLatencyRecord: Sendable {
         }
         if let extended {
             guard source == extended.source, config == extended.config, count == extended.ids.count,
-                  extended.ids[position] == node else { throw Self.issue() }
+                  extended.ids[position] == node, extended.kinds[position] == kind else { throw Self.issue() }
         }
         if let execution {
             guard source == execution.source, config == execution.config, generation == execution.generation,
@@ -237,7 +243,7 @@ struct IOSOrderedLatencyRecord: Sendable {
             self.profile_sha256 = profile_sha256; self.receipt = receipt; self.execution = execution
         }
         func record(extended: IOSOrderedLatencyExtendedLocal? = nil) throws -> IOSOrderedLatencyRecord {
-            try IOSOrderedLatencyRecord(receipt, execution: execution.map { try IOSOrderedLatencyExecution($0, extended: extended) }, extended: nil, stored: true)
+            try IOSOrderedLatencyRecord(receipt, execution: execution.map { try IOSOrderedLatencyExecution($0, extended: extended) }, extended: extended?.externalFinal == true && execution == nil ? extended : nil, stored: true)
         }
     }
     struct Envelope: Codable { let schema: Int; let records: [Entry] }
@@ -260,9 +266,14 @@ struct IOSOrderedLatencyRecord: Sendable {
         }
         return decoded.records
     }
+    private static func localFile(_ binding: IOSOrderedLatencyExtendedLocal?) -> String {
+        guard let binding, binding.externalFinal else { return filename }
+        return "external-exit-node-fifty-" + binding.source + ".json"
+    }
+
     static func load(profile: String, source: String, config: String, position: Int, node: String, extended: IOSOrderedLatencyExtendedLocal? = nil) throws -> IOSOrderedLatencyRecord? {
-        for entry in try entries(IOSPrivateJSONStore.read(filename, maximumBytes: maximumBytes)) where entry.profile_sha256 == profile {
-            let r = try entry.record()
+        for entry in try entries(IOSPrivateJSONStore.read(localFile(extended), maximumBytes: maximumBytes), extended: extended) where entry.profile_sha256 == profile {
+            let r = try entry.record(extended: extended)
             if r.source == source && r.config == config && r.position == position && r.node == node {
                 return try IOSOrderedLatencyRecord(r.raw, extended: extended)
             }
@@ -271,10 +282,10 @@ struct IOSOrderedLatencyRecord: Sendable {
     }
     static func local(profile: String, source: String, config: String, ids: [String], kinds: [String],
                       extended: IOSOrderedLatencyExtendedLocal?) throws -> [IOSOrderedLatencyRecord] {
-        let data = try IOSPrivateJSONStore.read(filename, maximumBytes: maximumBytes)
-        return try entries(data).compactMap { entry in
+        let data = try IOSPrivateJSONStore.read(localFile(extended), maximumBytes: maximumBytes)
+        return try entries(data, extended: extended).compactMap { entry in
             guard entry.profile_sha256 == profile else { return nil }
-            let row = try entry.record()
+            let row = try entry.record(extended: extended)
             guard row.source == source && row.config == config else { return nil }
             guard row.count == ids.count, kinds.count == ids.count, ids.indices.contains(row.position),
                   row.node == ids[row.position], row.kind == kinds[row.position] else { throw IOSOrderedLatencyRecord.issue() }
@@ -315,8 +326,8 @@ struct IOSOrderedLatencyRecord: Sendable {
         try current(); guard IOSOrderedLatencyRecord.hex(profile) else { throw IOSOrderedLatencyRecord.issue() }
         let checked = try IOSOrderedLatencyRecord(record.raw, execution: record.execution, extended: record.extended)
         let selected = record.execution != nil
-        let originalSelection = checked.execution?.extended
-        let filename = selected ? selectedFile(originalSelection, position: checked.position) : Self.filename
+        let originalSelection = checked.execution?.extended ?? (checked.extended?.externalFinal == true ? checked.extended : nil)
+        let filename = selected ? selectedFile(originalSelection, position: checked.position) : localFile(originalSelection)
         let original = try IOSPrivateJSONStore.read(filename, maximumBytes: maximumBytes)
         var values = try entries(original, selected: selected, extended: originalSelection)
         if let index = try values.firstIndex(where: { entry in

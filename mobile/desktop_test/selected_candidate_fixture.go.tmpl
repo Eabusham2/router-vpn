@@ -18,12 +18,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
 )
 
 // Only the transport and remote peer are controlled. The desktop child owns
 // the real shared runtime, selected trial, IPC, grants and fifty-target service.
 type RouterVPNDesktopCandidateTestPeer struct {
+	absence                                                        func(http.ResponseWriter, *http.Request, multihoprelay.NodeChainCandidateCapture) bool
+	reply                                                          func(net.Conn, multihoprelay.NodeChainCandidateCapture)
 	f                                                              *desktopLatencyOriginalNodeChainExecutionRuntimeFixture
 	mu                                                             sync.Mutex
 	capture                                                        multihoprelay.NodeChainCandidateCapture
@@ -37,6 +40,10 @@ type RouterVPNDesktopCandidateTestPeer struct {
 	destination                                                    net.Listener
 	accepts                                                        atomic.Int32
 	destinationAddr, frontAddr, entryTag, localTag, api, proxyAddr string
+}
+
+func (p *RouterVPNDesktopCandidateTestPeer) RegisterResponsePeer(t *testing.T, input string, badMAC bool) {
+	p.reply = fixtureServerCandidateReply(t, input, badMAC, &p.accepts)
 }
 
 func (p *RouterVPNDesktopCandidateTestPeer) Counts() (int, int, int) {

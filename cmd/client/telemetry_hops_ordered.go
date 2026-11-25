@@ -15,12 +15,13 @@ import (
 )
 
 type desktopOrderedPerformanceSource struct {
-	SourceSHA256      string   `json:"source_sha256"`
-	ConfigSHA256      string   `json:"config_sha256"`
-	NodeIDs           []string `json:"node_ids"`
-	PairedPrefixNodes int      `json:"paired_prefix_nodes,omitempty"`
-	PairedWireGuard   bool     `json:"paired_wireguard,omitempty"`
-	LocalRolesJSON    string   `json:"local_roles_json,omitempty"`
+	SourceSHA256        string   `json:"source_sha256"`
+	ConfigSHA256        string   `json:"config_sha256"`
+	NodeIDs             []string `json:"node_ids"`
+	PairedPrefixNodes   int      `json:"paired_prefix_nodes,omitempty"`
+	PairedWireGuard     bool     `json:"paired_wireguard,omitempty"`
+	LocalRolesJSON      string   `json:"local_roles_json,omitempty"`
+	ExternalFinalNodeID string   `json:"external_final_node_id,omitempty"`
 }
 
 func (identity speedLabPathIdentity) addOrderedPerformanceSource(payload map[string]any) {
@@ -48,7 +49,7 @@ func orderedPerformanceCapture(identity speedLabPathIdentity, ready mobilemultih
 	if len(members) < 2 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes || identity.Graph.ChainNodes != len(members) || ready.Generation == 0 || ready.Reader == 0 || ready.Identity.EngineID == "" || ready.Identity.SessionID == "" || ready.Identity.NetworkID == "" || ready.Identity.SourceSHA256 == "" || ready.Identity.ConfigSHA256 == "" {
 		return "", errors.New("ordered Performance capture has no complete native proof")
 	}
-	if len(members) > mobilemultihop.NodeChainMaximumNodes {
+	if len(members) > mobilemultihop.NodeChainMaximumNodes || identity.Graph.ControlID != "" {
 		bad := errors.New("long ordered Performance capture changed its original Local source")
 		owner := identity.Ordered
 		if owner == nil || owner.execution != nil || owner.launch == nil || owner.launch.chain == nil || identity.Graph.Execution != "local" {
@@ -64,7 +65,8 @@ func orderedPerformanceCapture(identity speedLabPathIdentity, ready mobilemultih
 			return "", bad
 		}
 		nodes, err := desktopOrderedLatencyInventory(chain.selection, meta)
-		if err != nil || len(nodes) != len(members) || nodes[0].extended == nil {
+		if err != nil || len(nodes) != len(members) || len(members) > mobilemultihop.NodeChainMaximumNodes && nodes[0].extended == nil ||
+			identity.Graph.ControlID != "" && (nodes[0].externalFinal != identity.Graph.ExitID || chain.selection.Control.ID != identity.Graph.ControlID) {
 			return "", bad
 		}
 		for i, node := range nodes {
@@ -165,7 +167,7 @@ func captureOrderedPerformanceContext(ctx context.Context, a *app) (speedLabPath
 	}
 	chain.mu.Unlock()
 	token, err := orderedPerformanceCapture(identity, ready, members)
-	if err == nil && len(members) > mobilemultihop.NodeChainMaximumNodes {
+	if err == nil && (len(members) > mobilemultihop.NodeChainMaximumNodes || chain.selection.Native.chain.chain.HasExternalFinal()) {
 		identity.orderedLocalSource = &desktopOrderedPerformanceSource{
 			SourceSHA256: ready.Identity.SourceSHA256, ConfigSHA256: ready.Identity.ConfigSHA256, NodeIDs: members,
 			PairedWireGuard:   chain.selection.Native.chain.chain.ExtendedPairedLocalNodeCount() == len(members),
@@ -179,6 +181,9 @@ func captureOrderedPerformanceContext(ctx context.Context, a *app) (speedLabPath
 			identity.orderedLocalSource.PairedWireGuard = false
 			identity.orderedLocalSource.PairedPrefixNodes = 0
 			identity.orderedLocalSource.LocalRolesJSON = roles
+		}
+		if chain.selection.Native.chain.chain.HasExternalFinal() {
+			identity.orderedLocalSource.ExternalFinalNodeID = chain.selection.Exit.ID
 		}
 	}
 	return identity, token, len(members), errors.Join(err, ctx.Err())

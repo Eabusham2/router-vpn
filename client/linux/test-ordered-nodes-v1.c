@@ -1035,16 +1035,16 @@ static void selected_private_stream_model(void) {
             JsonObject *middle = json_array_get_object_element(selection->nodes,private_position);
             JsonObject *penultimate = json_array_get_object_element(selection->nodes,count-2);
             g_autofree char *a = g_strdup(linux_ordered_string_v1(middle,"id")), *b = g_strdup(linux_ordered_string_v1(penultimate,"id"));
-            gboolean insert = !strcmp(executions[e],"auto") && count < 96;
-            if (private_position!=count-2) check(linux_ordered_measurement_prefix_v1(selection,store,private_position)==insert && linux_ordered_measurement_prefix_v1(selection,store,count-2)==!strcmp(executions[e],"auto"),"selected response used a different saved position");
+            gboolean insert = count < 96;
+            if (private_position!=count-2) check(linux_ordered_measurement_prefix_v1(selection,store,private_position)==insert && linux_ordered_measurement_prefix_v1(selection,store,count-2),"selected response used a different saved position");
             json_object_set_string_member(middle,"id",b);json_object_set_string_member(penultimate,"id",a);
-            check(linux_ordered_measurement_prefix_v1(selection,store,count-2)==!strcmp(executions[e],"auto") && linux_ordered_measurement_prefix_v1(selection,store,1)==insert,"selected editor lost its Compare response positions");
+            check(linux_ordered_measurement_prefix_v1(selection,store,count-2) && linux_ordered_measurement_prefix_v1(selection,store,1)==insert,"selected editor lost its Compare response positions");
             json_object_set_string_member(middle,"id",a);json_object_set_string_member(penultimate,"id",b);
             JsonObject *private_source = json_array_get_object_element(profiles,private_position);
             JsonObject *import_source = json_array_get_object_element(profiles,1);
             json_object_set_string_member(private_source,"node_kind","external");
             json_object_set_member(private_source,"external",json_node_copy(json_object_get_member(import_source,"external")));
-            check(linux_ordered_measurement_prefix_v1(selection,store,count-2)==!strcmp(executions[e],"auto"),"all-imported selected route lost its penultimate Compare prefix");
+            check(linux_ordered_measurement_prefix_v1(selection,store,count-2),"all-imported selected route lost its penultimate Compare prefix");
             check(linux_ordered_measurement_prefix_v1(selection,store,1)==insert && linux_ordered_measurement_prefix_v1(selection,store,count-3)==insert,"Compare insertion lost an eligible imported prefix or exceeded capacity");
             JsonObject *first_source = json_array_get_object_element(profiles,0);
             json_object_set_string_member(first_source,"start_layer","aes-256-gcm");
@@ -1097,6 +1097,39 @@ static void selected_private_stream_model(void) {
         json_object_set_object_member(literal, "external", json_object_ref(original));
         json_object_set_string_member(host, "profile_token", "revoked");
         check(!linux_ordered_current_v1(selection,store), "later hostname accepted a changed source");
+        linux_ordered_selection_free_v1(selection);
+    }
+}
+
+static void external_final_source_fixture(void) {
+    for (guint count = 3; count <= 9; count += 6) {
+        g_autoptr(JsonObject) store = json_object_new(), tokens = json_object_new();
+        g_autoptr(JsonArray) nodes = json_array_new();
+        JsonArray *profiles = json_array_new(); json_object_set_array_member(store, "profiles", profiles);
+        json_object_set_string_member(store, "selected_id", "external-route-0");
+        for (guint i = 0; i < count; i++) {
+            g_autofree char *id = g_strdup_printf("external-route-%u", i), *token = g_strdup_printf("%064x", i+1);
+            JsonObject *profile = json_object_new(), *row = json_object_new();
+            json_object_set_string_member(row,"id",id); json_object_set_string_member(row,"mode",i ? "shadowsocks" : "wg");
+            json_array_add_object_element(nodes,row);
+            json_object_set_string_member(profile,"id",id); json_object_set_string_member(profile,"profile_token",token); json_object_set_string_member(tokens,id,token);
+            json_object_set_string_member(profile,"node_kind",i ? "external" : "router-vpn");
+            if (i) {
+                JsonObject *hint = json_object_new(); json_object_set_object_member(profile,"external",hint);
+                json_object_set_string_member(hint,"protocol","shadowsocks"); json_object_set_boolean_member(hint,"ordered_middle_supported",TRUE);
+                json_object_set_boolean_member(hint,"ordered_local_imported_nodes_supported",TRUE); json_object_set_boolean_member(hint,"ordered_external_final",TRUE);
+            }
+            json_array_add_object_element(profiles,profile);
+        }
+        LinuxOrderedSelectionV1 *selection = linux_ordered_selection_v1("external-route-0",nodes,tokens);
+        check(selection && linux_ordered_current_v1(selection,store),"external final failed original entry and exit binding");
+        g_autofree char *raw = linux_ordered_connect_body_v1(selection);
+        g_autoptr(JsonNode) request = parse_json(raw);
+        check(request && linux_ordered_flag_v1(json_node_get_object(request),"external_final"),"external final Connect lost its discriminator");
+        check(!linux_ordered_execution_v1(selection,"server"),"external final accepted Server");
+        JsonObject *final = json_array_get_object_element(profiles,count-1);
+        json_object_set_boolean_member(json_object_get_object_member(final,"external"),"ordered_external_final",FALSE);
+        check(!linux_ordered_current_v1(selection,store),"external final accepted a withdrawn public exit capability");
         linux_ordered_selection_free_v1(selection);
     }
 }
@@ -1273,5 +1306,6 @@ int main(int argc,char **argv) {
     }
     g_object_ref(app.window);edit(5,TRUE);after=snapshot();check(strcmp(original,after)==0,"parent close replaced original path");g_free(after);
     g_free(original);g_object_unref(app.window);gtk_widget_destroy(state.node);gtk_widget_destroy(state.mode);gtk_widget_destroy(state.multihop);json_node_free(catalog);if(saved)json_node_free(saved);g_free(last_body);g_free(last_path);g_free(keypath);
+    external_final_source_fixture();
     printf("Shipping GTK ordered editor + Add/Load/Update/Connect: %u checks PASS; real callbacks/persistence, doubled controller boundary.\n",checks);return 0;
 }

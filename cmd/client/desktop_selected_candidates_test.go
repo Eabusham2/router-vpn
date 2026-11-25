@@ -137,6 +137,7 @@ func publishDesktopSelectedCandidateParentResult(t *testing.T, f *desktopNodeCha
 }
 
 type desktopSelectedCandidateHTTPTestView struct {
+	Owners        []string                             `json:"response_executions"`
 	Token         string                               `json:"view_token"`
 	Prefixes      []orderedCandidatePrefix             `json:"prefixes"`
 	Candidates    []orderedCandidateChoice             `json:"candidates"`
@@ -149,10 +150,18 @@ type desktopSelectedCandidateHTTPTestView struct {
 
 func exerciseDesktopSelectedCandidateHTTP(t *testing.T, f *desktopNodeChainOwnedFixture, catalog *desktopNodeChainCandidateCatalog, id, winner string, position int, prefixes []int) (desktopSelectedCandidateHTTPTestView, orderedCandidateRequest) {
 	t.Helper()
+	return exerciseDesktopSelectedCandidateHTTPResult(t, f, catalog, id, winner, position, prefixes, false)
+}
+func exerciseDesktopSelectedCandidateHTTPResult(t *testing.T, f *desktopNodeChainOwnedFixture, catalog *desktopNodeChainCandidateCatalog, id, winner string, position int, prefixes []int, missing bool) (desktopSelectedCandidateHTTPTestView, orderedCandidateRequest) {
+	t.Helper()
 	mux := http.NewServeMux()
 	registerOrderedCandidateRoutes(mux, f.a)
 	catalogResponse := httptest.NewRecorder()
-	mux.ServeHTTP(catalogResponse, httptest.NewRequest("GET", fmt.Sprintf("/api/multihop/prefix-candidates/catalog?prefix_position=%d", position), nil))
+	url := fmt.Sprintf("/api/multihop/prefix-candidates/catalog?prefix_position=%d", position)
+	if catalog.serverResponse {
+		url += "&server_response=true"
+	}
+	mux.ServeHTTP(catalogResponse, httptest.NewRequest("GET", url, nil))
 	var view desktopSelectedCandidateHTTPTestView
 
 	if catalogResponse.Code != 200 || json.Unmarshal(catalogResponse.Body.Bytes(), &view) != nil {
@@ -232,8 +241,18 @@ func exerciseDesktopSelectedCandidateHTTP(t *testing.T, f *desktopNodeChainOwned
 		t.Fatal(err)
 	}
 	status := desktopSelectedCandidateStatusFixture(t, catalog, request)
-	if request.Operation == "selected-local-private-response-50" {
+	if catalog.serverResponse && winner == "server" && request.Operation != "selected-server-private-response-50" {
+		t.Fatal("private server request changed operation", request.Operation)
+	}
+	if request.Operation == "selected-local-private-response-50" || request.Operation == "selected-server-private-response-50" {
 		status.Measurement, status.Results[0].Kind, status.Results[0].Benchmark.Measurement = hopmeasure.CandidatePrivateResponseMeasurement, "private-agent-response", hopmeasure.CandidatePrivateResponseMeasurement
+	}
+	if missing {
+		row := &status.Results[0]
+		row.Ready = false
+		row.Failure = hopmeasure.ErrCandidateNotRegistered.Error()
+		row.Benchmark = nil
+		row.CandidateDisposition = hopmeasure.CandidateNotRegistered
 	}
 	publishDesktopSelectedCandidateParentResult(t, f, request, metadata, status)
 	var response *httptest.ResponseRecorder

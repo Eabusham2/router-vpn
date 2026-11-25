@@ -27,6 +27,11 @@ def transcript(root, leaf=None, failed=False, witness=''):
     rows = [row('start'), row('run', root)]
     for name in names[1:]:
         rows.append(row('run', name))
+        if root == RUN.EXTERNAL_FINAL_ROOT:
+            count, dns = RUN.EXTERNAL_FINAL_CASES[leaf]
+            rows.append(row('output', name, Output=f'QUALIFIED_EXTERNAL_FINAL case={leaf} nodes={count} dns={dns} owner_joined=true private_exit_calls=0'))
+            if leaf == 'nine-custom-fifty':
+                rows.append(row('output', name, Output='QUALIFIED_LATENCY_HISTORY nodes=9 receipts=9 samples=450'))
         if root == RUN.POSITIVE_ROOT and leaf in ('wg/extended-nine/off', 'wg/extended-sixteen/off'):
             count = 9 if leaf == 'wg/extended-nine/off' else 16
             rows.append(row('output', name, Output=f'QUALIFIED_LATENCY_HISTORY nodes={count} receipts={count} samples={count*50}'))
@@ -42,9 +47,14 @@ def transcript(root, leaf=None, failed=False, witness=''):
                 if RUN.suffix_refusal_marker(leaf):
                     rows.append(row('output', name, Output=RUN.suffix_refusal_marker(leaf)))
                 rows.append(row('output',name,Output=f"SELECTED_PRIVATE_RESPONSE fault={fault} samples={50 if fault=='original' else 0} joined=true"))
-            if leaf in RUN.AWG_SELECTED_CASES:
-                entry = 'awg2-fast' if leaf in RUN.FAST_SELECTED_CASES else 'awg2-strong'
-                rows.append(row('output', name, Output=f'QUALIFIED_SELECTED_CLIENT_AWG entry={entry} parameters_current=true other_mode_refused=true'))
+            if leaf in RUN.AWG_SELECTED_CASES or leaf in RUN.AWG_RESPONSE_ENTRIES:
+                entry = RUN.AWG_RESPONSE_ENTRIES.get(leaf) or ('awg2-fast' if leaf in RUN.FAST_SELECTED_CASES else 'awg2-strong')
+                captures = 2 if leaf in RUN.AWG_RESPONSE_ENTRIES and RUN.PRIVATE_RESPONSE_SOURCES[leaf][2] == 'original' else 1
+                for _ in range(captures):
+                    rows.append(row('output', name, Output=f'QUALIFIED_SELECTED_CLIENT_AWG entry={entry} parameters_current=true other_mode_refused=true'))
+            if leaf in RUN.AWG_RESPONSE_ENTRIES and RUN.PRIVATE_RESPONSE_SOURCES[leaf] == (5, 2, 'original'):
+                entry = RUN.AWG_RESPONSE_ENTRIES[leaf]
+                rows.append(row('output', name, Output=f'SELECTED_PRIVATE_AWG_REFUSALS entry={entry} original_peer=true wrong_key=true wrong_header=true joined=true'))
             if leaf in RUN.AWG_SELECTED_CASES and leaf.endswith('-mtu'):
                 entry = 'awg2-fast' if leaf in RUN.FAST_SELECTED_CASES else 'awg2-strong'
                 count = leaf.split('-')[0]
@@ -252,7 +262,7 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                             RUN.verdict(output(transcript(RUN.MIXED_ROOT, leaf, witness=altered)), RUN.MIXED_ROOT, leaf)
 
     def test_selected_evidence_requires_every_original_count_winner_and_transfer(self):
-        self.assertEqual(len(RUN.SELECTED_CASES), 96)
+        self.assertEqual(len(RUN.SELECTED_CASES), 124)
         self.assertEqual(len(set(RUN.FAST_SELECTED_CASES)), 15)
         self.assertEqual(len(set(RUN.STRONG_SELECTED_CASES)), 15)
         positions = [i for part in RUN.PARTS for first,last in [map(int,part.split('-')[-2:])] for i in range(first,last+1)]
@@ -299,6 +309,15 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                 earlier[leaf] = stop
                 required[leaf] = (n, paired[0], fault)
                 self.assertEqual(RUN.RECURSIVE_PRIVATE_POSITIONS[leaf], paired)
+        for entry in ('awg2-fast', 'awg2-strong'):
+            for n, stop, paired in ((3,1,()), (5,2,(2,)), (7,4,(2,4)), (8,4,(2,4)), (9,3,(2,4)), (16,8,(2,4))):
+                for fault in (('original', 'wrong-candidate-key', 'forged-response', 'wrong-private-id', 'late-catalog', 'late-cancel',
+                               'server-winner', 'suffix-alias', 'changed-original-suffix') if n == 7 else ('original',)):
+                    leaf = f'{n}-{entry}-recursive-stop-{stop}-{fault}'
+                    earlier[leaf] = stop
+                    required[leaf] = (n, paired[0] if paired else 0, fault)
+                    self.assertEqual(RUN.RECURSIVE_PRIVATE_POSITIONS[leaf], paired)
+                    self.assertEqual(RUN.AWG_RESPONSE_ENTRIES[leaf], entry)
         self.assertEqual(RUN.INTERMEDIATE_POSITIONS, earlier)
         self.assertEqual(RUN.PRIVATE_RESPONSE_SOURCES, required)
         for leaf in required:
@@ -320,7 +339,7 @@ class MultipleImportedNativeRunner(unittest.TestCase):
             bad=[dict(r,Output=r['Output'].replace(part,'foreign')) if r is original else r for r in rows]
             with self.assertRaisesRegex(ValueError,'Missing loaded Compare'):
                 RUN.verdict(output(bad),root,leaf)
-        self.assertEqual(len(set(RUN.PRIVATE_RESPONSE_CASES)), 48)
+        self.assertEqual(len(set(RUN.PRIVATE_RESPONSE_CASES)), 76)
         for leaf,(count, _, fault) in RUN.PRIVATE_RESPONSE_SOURCES.items():
             if fault != 'original':
                 continue
@@ -369,6 +388,18 @@ class MultipleImportedNativeRunner(unittest.TestCase):
         for root, cases in RUN.BOX_CASES.items():
             self.assertEqual(RUN.verdict(output(transcript(root)), root), len(cases)+1)
         self.assertIn('equal-source', RUN.BOX_CASES[RUN.BOX_NEGATIVE])
+
+    def test_private_awg_requires_original_and_reloaded_native_witnesses(self):
+        for leaf, entry in RUN.AWG_RESPONSE_ENTRIES.items():
+            rows = transcript(RUN.SELECTED_ROOT, leaf)
+            other = 'awg2-strong' if entry == 'awg2-fast' else 'awg2-fast'
+            for witness in ('QUALIFIED_SELECTED_CLIENT_AWG', 'QUALIFIED_SELECTED_NATIVE', 'SELECTED_PRIVATE_AWG_REFUSALS'):
+                for at, row in enumerate(rows):
+                    if witness not in row.get('Output', ''):
+                        continue
+                    for changes in ([], [row, row], [dict(row, Output=row['Output'].replace(entry,other))]):
+                        with self.subTest(leaf=leaf,witness=witness), self.assertRaises(ValueError):
+                            RUN.verdict(output(rows[:at]+changes+rows[at+1:]), RUN.SELECTED_ROOT, leaf)
 
     def test_awg_selected_preserves_original_parameters_and_mtu_ownership(self):
         for leaf in RUN.AWG_SELECTED_CASES:
@@ -605,6 +636,17 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                                       {'GOOS':'linux','GOARCH':'amd64','CGO_ENABLED':'1'}, run, strong_diagnostic=True)
         self.assertEqual(receipt['target'], 'linux/amd64')
         self.assertEqual(set(receipt['encrypted']), set(RUN.STRONG_SELECTED_CASES))
+
+    def test_ordered_external_final_requires_original_exit_and_full_measurements(self):
+        root = RUN.EXTERNAL_FINAL_ROOT
+        for leaf in RUN.EXTERNAL_FINAL_CASES:
+            rows = transcript(root, leaf)
+            self.assertEqual(RUN.verdict(output(rows), root, leaf), 2)
+            for token in ('owner_joined=true', 'private_exit_calls=0', 'QUALIFIED_LATENCY_HISTORY') if leaf == 'nine-custom-fifty' else ('owner_joined=true', 'private_exit_calls=0'):
+                changed = [dict(row, Output=row['Output'].replace(token, 'unqualified')) if token in row.get('Output', '') else row for row in rows]
+                with self.subTest(leaf=leaf, token=token), self.assertRaises(ValueError):
+                    RUN.verdict(output(changed), root, leaf)
+        self.assertIn(ROOT/RUN.EXTERNAL_FINAL_TEMPLATE, set(RUN.load('build-native-runtime.py').inputs()))
 
     def test_canonical_box_mapping_and_all_required_inputs(self):
         prep = RUN.load('prepare-mobile-node-chain.py')

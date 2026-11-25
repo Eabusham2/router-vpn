@@ -44,7 +44,7 @@ func newOrderedCandidateSourceLaunch(selection multihopSelection, session, targe
 func captureSelectedDraftPreview(catalog *desktopNodeChainCandidateCatalog, position int) error {
 	launch := catalog.launch
 	e := desktopNodeChainLaunchExecution(launch)
-	if !desktopSelectedCandidateFamily(e) || e.operation != nil || e.draftPurpose != nil || launch.command != nil || launch.directory != "" || e.original.preparation != nil || e.bound(launch) != nil || !desktopSelectedCandidatePosition(launch, position) {
+	if !desktopSelectedCandidateFamily(e) || e.operation != nil || e.draftPurpose != nil || launch.command != nil || launch.directory != "" || e.original.preparation != nil || e.bound(launch) != nil || !desktopCandidatePositionForIntent(launch, position, catalog.serverResponse) {
 		return errors.New("selected preview requires the original unused packet source")
 	}
 	var err error

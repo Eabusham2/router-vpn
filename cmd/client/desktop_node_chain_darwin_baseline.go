@@ -17,16 +17,17 @@ import (
 // the entire native graph; it cannot be presented as an ordinary exit proxy.
 // The Python journal verifies the saved Router control policy before mutation.
 type desktopMacOSNodeChainSelection struct {
-	Schema        int                 `json:"schema"`
-	Family        macosprocess.Family `json:"family"`
-	ProfileID     string              `json:"profile_id"`
-	Session       string              `json:"session_id"`
-	Source        string              `json:"source_sha256"`
-	Config        string              `json:"config_sha256"`
-	HomeLAN       bool                `json:"home_lan_access"`
-	Policy        string              `json:"policy"`
-	MembersJSON   string              `json:"members_json,omitempty"`
-	MembersSHA256 string              `json:"members_sha256,omitempty"`
+	Schema           int                 `json:"schema"`
+	Family           macosprocess.Family `json:"family"`
+	ProfileID        string              `json:"profile_id"`
+	ControlProfileID string              `json:"control_profile_id,omitempty"`
+	Session          string              `json:"session_id"`
+	Source           string              `json:"source_sha256"`
+	Config           string              `json:"config_sha256"`
+	HomeLAN          bool                `json:"home_lan_access"`
+	Policy           string              `json:"policy"`
+	MembersJSON      string              `json:"members_json,omitempty"`
+	MembersSHA256    string              `json:"members_sha256,omitempty"`
 }
 
 type desktopMacOSNodeChainReceipt struct {
@@ -38,7 +39,9 @@ type desktopMacOSNodeChainReceipt struct {
 }
 
 func (s desktopMacOSNodeChainSelection) valid() bool {
-	return (s.Schema == 2 && s.MembersJSON == "" && s.MembersSHA256 == "" || s.Schema == 3 && s.validMembers()) && (s.Family == macosprocess.NodeChainFamily || s.Family == macosprocess.NodeChainSOCKSFamily || s.Family == macosprocess.NodeChainCONNECTFamily || s.Family == macosprocess.NodeChainExecutionFamily) && validProfileID(s.ProfileID) &&
+	return (s.Schema == 2 && s.ControlProfileID == "" && s.MembersJSON == "" && s.MembersSHA256 == "" ||
+		s.Schema == 3 && s.ControlProfileID == "" && s.validMembers() || s.Schema == 4 && s.validMembers()) &&
+		(s.Family == macosprocess.NodeChainFamily || s.Family == macosprocess.NodeChainSOCKSFamily || s.Family == macosprocess.NodeChainCONNECTFamily || s.Family == macosprocess.NodeChainExecutionFamily) && validProfileID(s.ProfileID) &&
 		desktopMacOSExternalShort.MatchString(s.Session) && desktopMacOSExternalLong.MatchString(s.Source) &&
 		desktopMacOSExternalLong.MatchString(s.Config) && (s.Policy == "off" || s.Policy == "on-connect" || s.Policy == "always")
 }
@@ -67,6 +70,18 @@ func (s desktopMacOSNodeChainSelection) validMembers() bool {
 			return false
 		}
 		refs[i].Mode, _ = row[1].(string)
+	}
+	externalFinal := s.Schema == 4
+	if externalFinal {
+		if s.Family != macosprocess.NodeChainFamily || len(rows) < 3 || !validProfileID(s.ControlProfileID) || s.ControlProfileID == s.ProfileID ||
+			rows[0][0] != s.ControlProfileID || rows[0][1] != "wg" || rows[0][2] != "router-vpn" {
+			return false
+		}
+		for _, row := range rows[1:] {
+			if row[1] != "shadowsocks" || row[2] != "external" {
+				return false
+			}
+		}
 	}
 	imported := func(i int) bool { return rows[i][2] == "external" }
 	privateStreams := s.Family == macosprocess.NodeChainFamily && desktopPairedStreamRoles(refs, imported) ||
@@ -111,7 +126,7 @@ func (s desktopMacOSNodeChainSelection) validMembers() bool {
 		if i == len(rows)-1 && id != s.ProfileID {
 			return false
 		}
-		if len(rows) > common.MultihopMaximumNodes && !privateStreams {
+		if len(rows) > common.MultihopMaximumNodes && !privateStreams && !externalFinal {
 			expectedMode, expectedKind := "shadowsocks", "external"
 			if i < firstImport {
 				expectedMode, expectedKind = "wg", "router-vpn"
@@ -163,8 +178,11 @@ func decodeDesktopMacOSNodeChainReceipt(raw []byte, capture desktopMacOSNodeChai
 	}
 	fields, ok := object["capture"].(map[string]any)
 	names := []string{"schema", "family", "profile_id", "session_id", "source_sha256", "config_sha256", "home_lan_access", "policy"}
-	if capture.Schema == 3 {
+	if capture.Schema == 3 || capture.Schema == 4 {
 		names = append(names, "members_json", "members_sha256")
+	}
+	if capture.Schema == 4 {
+		names = append(names, "control_profile_id")
 	}
 	if !ok || !exactDesktopMacOSNodeChainFields(fields, names...) {
 		return value, failure
@@ -188,7 +206,7 @@ func decodeDesktopMacOSNodeChainReceipt(raw []byte, capture desktopMacOSNodeChai
 
 func encodeDesktopMacOSNodeChainBaselineRequest(selection desktopMacOSNodeChainSelection, action string, expected *desktopMacOSNodeChainReceipt) ([]byte, error) {
 	if !selection.valid() || action != "apply" && action != "current" && action != "retire" && action != "release" ||
-		action == "apply" && (expected != nil || selection.Schema != 3) || action == "current" && (expected == nil || expected.Phase != "active") {
+		action == "apply" && (expected != nil || selection.Schema != 3 && selection.Schema != 4) || action == "current" && (expected == nil || expected.Phase != "active") {
 		return nil, errors.New("macOS ordered baseline requires its original typed action")
 	}
 	if expected != nil {

@@ -63,7 +63,10 @@ struct IOSNodeCandidatePrefixProviderCapture {
             guard source.sourceSchema == 1 && IOSMultihopNodeSelection.extendedPairedModes(modes, execution: "local") && metric == "routed-tcp-connect" ||
                     source.sourceSchema == 6 && (retained || mixed || IOSMultihopNodeSelection.extendedLocalModes(modes, execution: "local") && metric == "routed-candidate-response") else { throw IOSNodeCandidatePrefixCapture.issue() }
         }
-        guard let final = original.members.last, final.id == id,
+        let selectedOwner: IOSNodeChainCapture.Member?
+        if case .ordinary(let capture) = original { selectedOwner = capture.controlMember }
+        else { selectedOwner = original.members.last }
+        guard let final = selectedOwner, final.id == id,
               let assets = root["profiles"] as? [String: [String: String]],
               try final.matchesStartLayer(in: assets),
               let originalFiles = try JSONSerialization.jsonObject(with: Data(final.filesJSON.utf8)) as? [String: String],

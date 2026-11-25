@@ -388,6 +388,20 @@ function global:Test-RouterVPNOrderedCustomEntryShape {
     return $true
 }
 
+function global:Test-RouterVPNOrderedExternalFinalShape {
+    param($Nodes,[string]$Control)
+    if($Nodes.Count -lt 3 -or $Nodes.Count -gt (Get-RouterVPNOrderedPhysicalTraversalDepth) -or
+        $Nodes[0].id -cne $Control -or $Nodes[0].mode -cne 'wg'){return $false}
+    for($i=1;$i -lt $Nodes.Count;$i++){if($Nodes[$i].mode -cne 'shadowsocks'){return $false}}
+    return $true
+}
+
+function global:Test-RouterVPNOrderedExternalFinalProfile {
+    param($Profile)
+    $flag=Get-RouterVPNOrderedValue (Get-RouterVPNOrderedValue $Profile 'external') 'ordered_external_final' $false
+    return $flag -is [bool] -and $flag -and (Test-RouterVPNOrderedLiteralOff $Profile)
+}
+
 function global:Copy-RouterVPNOrderedNodes {
     param($Nodes,[string]$ControlID)
     if($Nodes-isnot[Collections.IList]-or$Nodes.Count-lt2-or($Nodes.Count-gt8-and-not(Test-RouterVPNOrderedExtendedLocalShape $Nodes)-and-not(Test-RouterVPNOrderedPairedShape $Nodes)-and(Get-RouterVPNOrderedMixedPacketCount $Nodes)-eq0)){throw 'Choose a supported ordered path. Longer Local routes support paired WireGuard prefixes or paired packet prefixes followed by independent Shadowsocks imports and a paired Shadowsocks exit. Keep Start Layer Off.'}
@@ -399,7 +413,7 @@ function global:Copy-RouterVPNOrderedNodes {
         if($mode-isnot[string]-or($i-lt$Nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $mode)-and-not(((Test-RouterVPNOrderedImportedPosition $mode $i $Nodes.Count)-or(Test-RouterVPNOrderedLocalSSPosition $mode $i $Nodes.Count)-or($i-eq0-and(Test-RouterVPNOrderedCustomEntryShape $Nodes)))-and$mode-cin@('shadowsocks','socks5','http-connect','https-connect','openvpn')-and(Get-RouterVPNOrderedValue $Nodes[-1] 'mode')-ceq'shadowsocks'))-or($i-eq$Nodes.Count-1-and-not(Test-RouterVPNOrderedFinalMode $mode))){throw 'Use paired packet prefixes, supported imported middle hops, or two distinct custom Shadowsocks hops before a paired Shadowsocks exit in Local. Keep SOCKS5, CONNECT and OpenVPN immediately before a Shadowsocks exit.'}
         [void]$copy.Add([pscustomobject]@{id=$id;mode=$mode})
     }
-    if([string]::IsNullOrEmpty($ControlID)-or$copy[$copy.Count-1].id-cne$ControlID){throw 'The final ordered node must be the selected exit node.'}
+    if([string]::IsNullOrEmpty($ControlID)-or($copy[$copy.Count-1].id-cne$ControlID -and -not(Test-RouterVPNOrderedExternalFinalShape $copy $ControlID))){throw 'The final ordered node must be the selected exit node.'}
     return $copy.ToArray()
 }
 
@@ -493,7 +507,7 @@ function global:Test-RouterVPNOrderedLocalImportedPath {
             if(Test-RouterVPNOrderedPrefixMode $row.mode){
                 if($imports -gt 0 -or $pairedStream){$packetAfterStream=$true}
             }else{
-                if($SelectedExecution -and ($position -lt 2 -or $imports -eq 0 -or $Nodes[1].mode -cne 'shadowsocks' -or $Nodes[0].mode -cne 'wg')){return $false}
+                if($SelectedExecution -and ($position -lt 2 -or $imports -eq 0 -or $Nodes[1].mode -cne 'shadowsocks' -or -not (Test-RouterVPNOrderedPrefixMode $Nodes[0].mode))){return $false}
                 if($position -lt 1 -or $row.mode -cne 'shadowsocks' -or -not (Test-RouterVPNOrderedPrefixMode $Nodes[0].mode)){return $false}
                 $pairedStream=$true
             }
@@ -520,7 +534,7 @@ function global:Test-RouterVPNOrderedStreamEdit {
 
 function global:Test-RouterVPNOrderedResponsePrefix {
     param($Nodes,[int]$Position,[string]$Execution,$Profiles)
-    if($Execution -ceq 'auto' -and $Position -le $Nodes.Count-2 -and $Position -ge 1 -and $Nodes[0].mode -ceq 'wg' -and
+    if($Execution -cin @('server','auto') -and $Position -le $Nodes.Count-2 -and $Position -ge 1 -and (Test-RouterVPNOrderedPrefixMode $Nodes[0].mode) -and
         $Nodes[$Position].mode -ceq 'shadowsocks' -and $Nodes[-1].mode -ceq 'shadowsocks'){
         $index=Get-RouterVPNOrderedProfileIndex $Profiles
         if($Nodes.Count -ge 4){
@@ -659,10 +673,18 @@ function global:New-RouterVPNOrderedConnectPayload {
     $profiles=@(Get-RouterVPNOrderedValue $Store 'profiles' @())
     # Each lookup uses the same captured catalog. Duplicate IDs stay ambiguous.
     $profileIndex=Get-RouterVPNOrderedProfileIndex $profiles
+    $externalFinal=$nodes[0].id -ceq $control
+    if($externalFinal){
+        if($execution -cne 'local' -or -not(Test-RouterVPNOrderedExternalFinalShape $nodes $control) -or
+           -not(Test-RouterVPNOrderedPairedOff $profileIndex[$control]) -or -not(Test-RouterVPNOrderedExternalFinalProfile $profileIndex[$nodes[-1].id])){
+            throw 'An external exit requires a paired WireGuard entry and an independently linked literal Shadowsocks exit in Local.'
+        }
+        for($i=1;$i -lt $nodes.Count-1;$i++){if(-not(Test-RouterVPNOrderedLiteralOff $profileIndex[$nodes[$i].id])){throw 'Choose a linked literal Shadowsocks intermediate.'}}
+    }
     $localImported=$execution-ceq'local'-and(Test-RouterVPNOrderedLocalImportedPath $nodes $profiles -ProfileIndex $profileIndex)
     $multipleImported=$execution-cne'local'-and(Test-RouterVPNOrderedLocalImportedPath $nodes $profiles -SelectedExecution -ProfileIndex $profileIndex)
     $paired=$execution -ceq 'local' -and (Test-RouterVPNOrderedPairedShape $nodes)
-    if($nodes.Count-gt8-and-not($localImported-or$multipleImported-or$paired)){throw 'This extended route requires its supported execution and every original transport.'}
+    if($nodes.Count-gt8-and-not($externalFinal-or$localImported-or$multipleImported-or$paired)){throw 'This extended route requires its supported execution and every original transport.'}
     if($execution-cne'local'-and(Test-RouterVPNOrderedMultipleImportedShape $nodes)-and-not$multipleImported){throw 'Each imported Shadowsocks interior must advertise support for this execution.'}
     $expected=Get-RouterVPNOrderedValue $Draft 'profile_tokens';$tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
     for($position=0;$position-lt$nodes.Count;$position++){
@@ -701,16 +723,18 @@ function global:New-RouterVPNOrderedConnectPayload {
                 if($connectFinalLayer-isnot[string]-or$connectFinalLayer-cnotin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')){throw 'The original CONNECT final layer is invalid.'}
             }
         }
-        if($imported){if((-not(Test-RouterVPNOrderedImportedPosition $node.mode $position $nodes.Count)-and-not(($localImported-or$multipleImported)-and((Test-RouterVPNOrderedLocalSSPosition $node.mode $position $nodes.Count)-or($position-eq0-and(Test-RouterVPNOrderedCustomEntryShape $nodes)))))-or$node.mode-cne(Get-RouterVPNOrderedImportedMode $profile)){throw 'An imported node retains its exact Shadowsocks 2022, SOCKS5, HTTP(S) CONNECT or OpenVPN transport between the paired entry and final.'}}
-        elseif([string](Get-RouterVPNOrderedValue $profile 'node_kind' '')-cnotin@('','router-vpn')-or($position-lt$nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $node.mode)-and-not(($localImported-or$multipleImported)-and$node.mode-ceq'shadowsocks'))){throw 'The ordered source kind or transport changed.'}
-        if($position-eq$nodes.Count-1-and@(Get-RouterVPNOrderedFinalModes $profile @($nodes|Select-Object -SkipLast 1))-cnotcontains$node.mode){throw 'The selected final transport is incompatible with its captured Start Layer or imported middle.'}
+        if(-not $externalFinal -and $imported){if((-not(Test-RouterVPNOrderedImportedPosition $node.mode $position $nodes.Count)-and-not(($localImported-or$multipleImported)-and((Test-RouterVPNOrderedLocalSSPosition $node.mode $position $nodes.Count)-or($position-eq0-and(Test-RouterVPNOrderedCustomEntryShape $nodes)))))-or$node.mode-cne(Get-RouterVPNOrderedImportedMode $profile)){throw 'An imported node retains its exact Shadowsocks 2022, SOCKS5, HTTP(S) CONNECT or OpenVPN transport between the paired entry and final.'}}
+        elseif(-not $externalFinal -and ([string](Get-RouterVPNOrderedValue $profile 'node_kind' '')-cnotin@('','router-vpn')-or($position-lt$nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $node.mode)-and-not(($localImported-or$multipleImported)-and$node.mode-ceq'shadowsocks')))){throw 'The ordered source kind or transport changed.'}
+        if(-not$externalFinal-and$position-eq$nodes.Count-1-and@(Get-RouterVPNOrderedFinalModes $profile @($nodes|Select-Object -SkipLast 1))-cnotcontains$node.mode){throw 'The selected final transport is incompatible with its captured Start Layer or imported middle.'}
         $token=Get-RouterVPNOrderedValue $expected $node.id
         if($token-isnot[string]-or$token-cnotmatch'\A[0-9a-f]{64}\z'-or[string](Get-RouterVPNOrderedValue $profile 'profile_token')-cne$token){throw 'An ordered node changed or was relinked. Reopen its editor before connecting.'}
         $tokens[$node.id]=$token
     }
     # Only references cross this UI boundary. Every private source is captured
     # independently by the original native controller before it owns a tunnel.
-    return @{nodes=$nodes;execution=$execution;expected_selected_node_id=$control;expected_profile_tokens=$tokens}
+    $body=@{nodes=$nodes;execution=$execution;expected_selected_node_id=$control;expected_profile_tokens=$tokens}
+    if($externalFinal){$body.external_final=$true}
+    return $body
 }
 
 function global:Get-RouterVPNOrderedConnectionSnapshot {

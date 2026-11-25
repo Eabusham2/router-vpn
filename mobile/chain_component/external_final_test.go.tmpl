@@ -1,0 +1,67 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+)
+
+func TestRouterVPNOrderedExternalFinalEncrypted(t *testing.T) {
+	cases := []struct {
+		name       string
+		count      int
+		dns, fault string
+	}{
+		{"three-home", 3, "home", ""}, {"four-custom", 4, "custom", ""}, {"nine-custom-fifty", 9, "custom", ""},
+		{"wrong-exit-key", 4, "custom", "wrong-exit-key"}, {"wrong-public-exit", 3, "home", "wrong-final"}, {"failed-selected-dns", 4, "custom", "selected-dns"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			imports := make([]int, tc.count-2)
+			for i := range imports {
+				imports[i] = i + 1
+			}
+			f := newMultipleImportedFixture(t, multipleImportedLayout{"external-final-" + tc.dns, tc.count, imports}, "wg", "off", tc.fault)
+			last := f.members[tc.count-1]
+			if !f.chain.HasExternalFinal() || !last.imported {
+				t.Fatal("public exit did not retain its own independent source")
+			}
+			if tc.fault != "" {
+				ctx, cancel := context.WithTimeout(f.ctx, 10*time.Second)
+				err := f.chain.Run(ctx, f.engine)
+				cancel()
+				if err == nil || f.chain.Progress().Ready || last.private.Load() != 0 || f.members[0].private.Load() == 0 {
+					t.Fatal("incorrect public exit was published or failed before original entry proof", err)
+				}
+				if tc.fault == "wrong-final" && (last.public.Load() == 0 || f.dns.Load() != 0) || tc.fault == "wrong-exit-key" && (last.public.Load() != 0 || f.dns.Load() != 0) || tc.fault == "selected-dns" && (last.public.Load() == 0 || f.dns.Load() == 0) {
+					t.Fatal("negative did not reach its original failure boundary")
+				}
+			} else {
+				f.prove(t)
+				f.publicRoute(t, tc.count-1)
+				if tc.count == 9 {
+					f.verifyOrderedLatencyHistory(t)
+				}
+				if last.benchmark.Load() == 0 || last.private.Load() != 0 {
+					t.Fatal("public exit borrowed a private API or missed tagged HTTPS")
+				}
+			}
+			for _, m := range f.members[1 : tc.count-1] {
+				if m.public.Load() == 0 || m.layer.rawTCP.Load() == 0 {
+					t.Fatal("an original encrypted interior was bypassed", m.position)
+				}
+			}
+			if err := f.close(); err != nil {
+				t.Fatal(err)
+			}
+			if c, err := f.engine.Dial(context.Background(), f.chain.FinalTag(), hopmeasure.PublicAddress); err == nil || c != nil {
+				t.Fatal("retired external exit still authorized traffic")
+			}
+			t.Logf("QUALIFIED_EXTERNAL_FINAL case=%s nodes=%d dns=%s owner_joined=true private_exit_calls=0", tc.name, tc.count, tc.dns)
+		})
+	}
+}

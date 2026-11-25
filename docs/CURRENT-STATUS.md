@@ -1,3 +1,30 @@
+# 2026-11-25: Ordered external exits and selected Server responses
+
+The [external-final and Server response record](IMPLEMENTATION-2026-11-25-EXTERNAL-FINAL-AND-SERVER-RESPONSES.md)
+implements Local three-to-96-member WireGuard-to-imported-Shadowsocks paths with
+an independently imported public exit. The original paired entry remains the
+control across native editors, profile replay, DNS status, latency history,
+live response, and throughput. The selected Server response protocol retains
+its own independently provisioned candidate source and authenticated native
+owner. A signed, joined missing-registration result remains unscored while the
+next registered candidate can run on the same original trial. AWG2 Fast and
+Strong recursive Local candidate paths add 28 encrypted
+cases to the previous 48-case inventory.
+
+The final source-fingerprinted controller run passed 16 complete race-enabled
+roots and 128 root/leaf verdicts. The full native shipping source gate passed
+83 tests; the shared measurement and relay race suites and platform callback
+checks also passed. The record links the integrated executable receipt and
+transcript and explains the actual modeled boundaries.
+
+The record distinguishes source/controller and native callback checks from
+the mandatory new encrypted inventories, exact-commit release, signing, and
+installed acceptance. It also documents the repaired ordered DNS observer,
+the remaining source-family restrictions, and exhaustive CI job distribution
+with unchanged operation and job deadlines. The two implementation gaps at
+the end of the earlier recursive record are superseded only for the qualified
+families described in this continuation.
+
 # 2026-11-25: Recursive selected-hop continuation and integration
 
 The [recursive continuation record](IMPLEMENTATION-2026-11-25-RECURSIVE-SELECTED-CONTINUATION.md)

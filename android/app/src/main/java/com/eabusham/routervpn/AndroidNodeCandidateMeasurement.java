@@ -203,8 +203,13 @@ final class AndroidNodeCandidateMeasurement {
                 }
                 nativeOwner.drain(request);requireMetadata();
                 if(cancelled)break;
-                try { results.add(AndroidNodeCandidateResult.capture(raw,request,metadata,row.id,row.name,System.currentTimeMillis())); }
-                catch(Exception noScore){ /* Failed or partial candidates keep an explicit no-score row. */ }
+                if ("server".equals(metadata.optString("execution")) && "routed-candidate-response".equals(catalog.measurement)) {
+                    AndroidNodeCandidateResult receipt=AndroidNodeCandidateResult.captureSelectedServer(raw,request,metadata,row.id,row.name,System.currentTimeMillis());
+                    if (receipt!=null) results.add(receipt);
+                } else {
+                    try { results.add(AndroidNodeCandidateResult.capture(raw,request,metadata,row.id,row.name,System.currentTimeMillis())); }
+                    catch(Exception noScore){ /* Failed or partial candidates keep an explicit no-score row. */ }
+                }
                 publish(results,"50 "+sampleLabel+" per eligible candidate; any failed sample has no score.");
             }
             if(borrowedLease&&!cancelled){catalog.requireCurrent();callback.completed(this,admitted);}

@@ -83,6 +83,9 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 	if err := common.ValidateMultihopNodes(record.Prefs.MultihopNodes); err != nil {
 		return err
 	}
+	if record.NodeChain[len(record.NodeChain)-1].NodeKind == "external" {
+		return validateSavedExternalFinalNodeChain(record)
+	}
 	privateStreams := savedPairedStreamPath(record)
 	paired := common.ExtendedPairedLocalMultihopSelection(record.Prefs.MultihopNodes)
 	mixed := common.ExtendedMixedLocalPacketCount(record.Prefs.MultihopNodes)

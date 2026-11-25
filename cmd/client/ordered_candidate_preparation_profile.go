@@ -145,7 +145,7 @@ func preparedCandidateAdoptableLocked(owner *viaEntryOwner, q orderedCandidateSa
 		return false
 	}
 	for _, result := range job.results {
-		if result.CandidateID == q.CandidateID && validateOrderedCandidatePreparedStatus(job.preparation, q.CandidateID, result, now) == nil {
+		if result.CandidateID == q.CandidateID && len(result.Results) == 1 && result.Results[0].Ready && validateOrderedCandidatePreparedStatus(job.preparation, q.CandidateID, result, now) == nil {
 			return true
 		}
 	}

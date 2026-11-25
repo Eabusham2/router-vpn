@@ -85,14 +85,18 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
         // A catalog GET can select any physical slot. The controller resolves
         // its captured source before it can start a worker at that position.
         let query = url.query ?? ""
-        let parts = query.components(separatedBy: "&")
+        var parts = query.components(separatedBy: "&")
+        let serverResponse = parts.last == "server_response=true"
+        if serverResponse { parts.removeLast() }
         let positionText = String((parts.first ?? "").dropFirst("prefix_position=".count))
         let selectedPosition = Int(positionText)
         let canonicalPosition = query.hasPrefix("prefix_position=") && selectedPosition.map { (0..<96).contains($0) && String($0) == positionText } == true
         let draftCatalog = isDraft && canonicalPosition && parts.count == 2 &&
             (parts[1] == "scope=saved-prefix-local" || parts[1] == "scope=draft-complete-selected" && (selectedPosition ?? 96) < 95)
         let prefixCatalog = candidateBase == savedBase && canonicalPosition && parts.count == 2 && parts[1] == "scope=saved-prefix-local"
-        let candidateCatalog = url.path == candidateBase + "/catalog" && (draftCatalog || prefixCatalog || !isDraft && canonicalPosition && parts.count == 1)
+        let serverQueryAllowed = !serverResponse || (candidateBase == "/api/multihop/prefix-candidates" && parts.count == 1) ||
+            (isDraft && draftCatalog && parts.last == "scope=draft-complete-selected")
+        let candidateCatalog = serverQueryAllowed && url.path == candidateBase + "/catalog" && (draftCatalog || prefixCatalog || !isDraft && canonicalPosition && parts.count == 1)
         let candidateStatus = url.path == candidateBase && url.query?.range(of: "^request_id=[a-f0-9]{32}$", options: .regularExpression) != nil
         let orderedBase = "/api/speed-lab/ordered-latency"
         let orderedStatus = url.path == orderedBase && url.query?.range(of: "^request_id=[a-f0-9]{32}$", options: .regularExpression) != nil
@@ -162,6 +166,20 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                 let ordinaryKeys = Set(["session_id", "profile_id", "profile_token", "source_sha256", "config_sha256", "generation_sha256"])
                 let extendedCount = (capture["extended_local_nodes"] ?? capture["extended_original_nodes"]) as? NSNumber
                 func selectedCaptureValid() -> Bool {
+                    if capture.keys.contains("external_final_node_id") {
+                        guard let exit = capture["external_final_node_id"] as? String,
+                              exit.range(of: #"\A[A-Za-z0-9_-]{1,64}\z"#, options:.regularExpression) != nil,
+                              let control = capture["profile_id"] as? String, exit != control,
+                              let node = body?["node_id"] as? String, let index = position?.intValue,
+                              (index == 0) == (node == control) else { return false }
+                        var keys = ordinaryKeys.union(["external_final_node_id"])
+                        if capture.keys.contains("extended_local_nodes") {
+                            guard let count = extendedCount, CFGetTypeID(count) != CFBooleanGetTypeID(), let n = Int(count.stringValue),
+                                  (9...96).contains(n), (index == n-1) == (node == exit) else { return false }
+                            keys.insert("extended_local_nodes")
+                        }
+                        return Set(capture.keys) == keys && (node != exit || index >= 2)
+                    }
                     if capture.keys.contains("extended_local_nodes") {
                         guard let count = extendedCount, CFGetTypeID(count) != CFBooleanGetTypeID(),
                               count.doubleValue == Double(count.intValue), (9...96).contains(count.intValue) else { return false }
@@ -228,12 +246,12 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                     nodes.last?["mode"] == "shadowsocks" && nodes[packets...prefix].allSatisfy { $0["mode"] == "shadowsocks" }
                 // This envelope exposes only public references. The controller checks
                 // every original source, the Local winner and its selection epoch.
-                let compareStream = execution == "auto" && nodes.count >= 3 && prefix > 0 &&
-                    nodes.first?["mode"] == "wg" && nodes.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" } &&
+                let compareStream = (execution == "auto" || serverResponse && execution == "server") && nodes.count >= 3 && prefix > 0 &&
+                    (nodes.first?["mode"] == "wg" || serverResponse && ["awg2-fast","awg2-strong"].contains(nodes.first?["mode"] ?? "")) && nodes.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" } &&
                     (prefix == nodes.count - 2 || nodes.count < 96)
                 guard packet && (prefix < 7 || execution == "local") || stream || compareStream else { throw URLError(.badURL) }
                 let scope = execution == "local" ? "saved-prefix-local" : "draft-complete-selected"
-                performanceValid = ["local", "server", "auto"].contains(execution) && url.query?.hasSuffix("&scope=" + scope) == true &&
+                performanceValid = ["local", "server", "auto"].contains(execution) && parts.last == "scope=" + scope && serverQueryAllowed &&
                     Set(tokens.keys) == Set(nodes.compactMap { $0["id"] }) && tokens.values.allSatisfy { $0.range(of: #"\A[a-f0-9]{64}\z"#, options: .regularExpression) != nil } &&
                     body["expected_selected_node_id"] as? String == nodes.last?["id"] && bounded(25)
             } else { performanceValid = candidateCatalog && body == nil && bounded(25) }

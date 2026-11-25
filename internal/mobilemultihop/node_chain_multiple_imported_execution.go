@@ -22,7 +22,7 @@ type nodeChainMultipleImportedExecutionBinding struct {
 // Return the first paired stream after the first literal import, or zero if all
 // interior streams are imported. Validate every member before assigning a role.
 func (c *NodeChain) selectedStreamLayout() (int, bool) {
-	if c == nil || c.importedNodes == nil || c.importedNodes.customEntry || len(c.nodes) < 4 || len(c.nodes) > NodeChainExtendedLocalMaximumNodes || len(c.proofs) != len(c.nodes) || c.nodes[0] == nil || c.nodes[0].mode != "wg" {
+	if c == nil || c.importedNodes == nil || c.importedNodes.customEntry || len(c.nodes) < 4 || len(c.nodes) > NodeChainExtendedLocalMaximumNodes || len(c.proofs) != len(c.nodes) || c.nodes[0] == nil || !NodeChainPrefixMode(c.nodes[0].mode) {
 		return 0, false
 	}
 	last, paired := len(c.nodes)-1, 0

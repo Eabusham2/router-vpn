@@ -916,24 +916,31 @@ function ShowUnifiedOrderedNodes {
         $draft=(Control 'UnifiedNodeChainButton').Tag
         $initial=@();if($null-ne$draft-and[string]$draft.control_id-ceq$id-and@($draft.nodes).Count){[void](New-RouterVPNOrderedConnectPayload $draft $store);$initial=@(Copy-RouterVPNOrderedNodes $draft.nodes $id)}
         [xml]$x=@"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Ordered node path" Width="640" Height="570" MinWidth="510" MinHeight="440" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><StackPanel><TextBlock Text="Entry → hops → selected exit" FontSize="22" FontWeight="Bold"/><TextBlock Text="Choose each hop in order. With a paired entry, supported Shadowsocks 2022 imports can occupy any middle hop. Server and Compare require support from every import and the native controller. For a Local custom entry, use two distinct Shadowsocks imports with Start Layer Off followed by a paired Shadowsocks exit. SOCKS5, HTTP(S) CONNECT and OpenVPN belong immediately before a Shadowsocks exit. A Hysteria2 exit uses its saved Start Layer after paired WireGuard or AmneziaWG hops. Server and Compare require the selected path to support remote execution." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,7,0,12"/></StackPanel><Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ComboBox Name="Available" DisplayMemberPath="name" SelectedValuePath="id"/><StackPanel Grid.Column="1" Orientation="Horizontal"><ComboBox Name="PrefixMode" DisplayMemberPath="display" SelectedValuePath="id" MinWidth="155" Margin="8,0,0,0"/><Button Name="Add" Content="Add node" Padding="12,6" Margin="8,0,0,0"/></StackPanel></Grid><ListBox Name="Order" Grid.Row="2" DisplayMemberPath="display" Margin="0,12"/><WrapPanel Grid.Row="3"><Button Name="Up" Content="Move up" Padding="12,6"/><Button Name="Down" Content="Move down" Padding="12,6" Margin="8,0"/><Button Name="Remove" Content="Remove" Padding="12,6"/><Button Name="MeasureNext" Content="Measure next hop…" Padding="12,6" Margin="4,0"/><Button Name="ChangeMode" Content="Set selected transport" Padding="12,6" Margin="8,0,0,0"/></WrapPanel><StackPanel Grid.Row="4" Margin="0,12"><TextBlock Name="Final" FontWeight="SemiBold" TextWrapping="Wrap"/><ComboBox Name="FinalMode" DisplayMemberPath="display" SelectedValuePath="id" Margin="0,6,0,0" ToolTip="Hysteria2 uses the exit node's saved Start Layer after paired WireGuard or AmneziaWG hops."/><TextBlock Name="Status" Foreground="#FFBD8D" TextWrapping="Wrap" Margin="0,7,0,0"/></StackPanel><StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="Cancel" Content="Cancel" Padding="12,7" Margin="4"/><Button Name="Apply" Content="Use this path" Padding="12,7" Margin="4"/></StackPanel></Grid></Window>
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Ordered node path" Width="640" Height="570" MinWidth="510" MinHeight="440" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><StackPanel><TextBlock Text="Entry → hops → exit" FontSize="22" FontWeight="Bold"/><TextBlock Text="Choose each hop in order. In Local, choose a literal Shadowsocks exit to keep the selected WireGuard node as the entry. With a paired entry, supported Shadowsocks 2022 imports can occupy any middle hop. Server and Compare require support from every import and the native controller. For a Local custom entry, use two distinct Shadowsocks imports with Start Layer Off followed by a paired Shadowsocks exit. SOCKS5, HTTP(S) CONNECT and OpenVPN belong immediately before a Shadowsocks exit. A Hysteria2 exit uses its saved Start Layer after paired WireGuard or AmneziaWG hops. Server and Compare require the selected path to support remote execution." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,7,0,12"/></StackPanel><Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ComboBox Name="Available" DisplayMemberPath="name" SelectedValuePath="id"/><StackPanel Grid.Column="1" Orientation="Horizontal"><ComboBox Name="PrefixMode" DisplayMemberPath="display" SelectedValuePath="id" MinWidth="155" Margin="8,0,0,0"/><Button Name="ExternalExit" Content="Use as external exit" Padding="8,6" Margin="8,0,0,0"/><Button Name="Add" Content="Add node" Padding="12,6" Margin="8,0,0,0"/></StackPanel></Grid><ListBox Name="Order" Grid.Row="2" DisplayMemberPath="display" Margin="0,12"/><WrapPanel Grid.Row="3"><Button Name="Up" Content="Move up" Padding="12,6"/><Button Name="Down" Content="Move down" Padding="12,6" Margin="8,0"/><Button Name="Remove" Content="Remove" Padding="12,6"/><Button Name="MeasureNext" Content="Measure next hop…" Padding="12,6" Margin="4,0"/><Button Name="ChangeMode" Content="Set selected transport" Padding="12,6" Margin="8,0,0,0"/></WrapPanel><StackPanel Grid.Row="4" Margin="0,12"><TextBlock Name="Final" FontWeight="SemiBold" TextWrapping="Wrap"/><ComboBox Name="FinalMode" DisplayMemberPath="display" SelectedValuePath="id" Margin="0,6,0,0" ToolTip="Hysteria2 uses the exit node's saved Start Layer after paired WireGuard or AmneziaWG hops."/><TextBlock Name="Status" Foreground="#FFBD8D" TextWrapping="Wrap" Margin="0,7,0,0"/></StackPanel><StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="Cancel" Content="Cancel" Padding="12,7" Margin="4"/><Button Name="Apply" Content="Use this path" Padding="12,7" Margin="4"/></StackPanel></Grid></Window>
 "@
         $dialog=[Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x));$dialog.Owner=$Window
         $rows=New-Object 'Collections.Generic.List[object]';foreach($node in $initial|Select-Object -SkipLast 1){[void]$rows.Add([pscustomobject]@{id=$node.id;mode=$node.mode})}
         $available=$dialog.FindName('Available');$list=$dialog.FindName('Order');$status=$dialog.FindName('Status');$prefixMode=$dialog.FindName('PrefixMode');$finalMode=$dialog.FindName('FinalMode')
         $finalMode.Tag=if($initial.Count){$initial[-1].mode}else{'shadowsocks'}
         $prefixMode.ItemsSource=@('wg','awg2-fast','awg2-strong','shadowsocks','socks5','http-connect','https-connect','openvpn'|ForEach-Object{[pscustomobject]@{id=$_;display=(Get-RouterVPNOrderedModeTitle $_)}});$prefixMode.SelectedIndex=0
-        $dialog.FindName('Final').Text='Final exit: '+[string]$selected[0].name+' · execution follows the main Local / Server / Compare choice'
+        if($initial.Count -and $initial[0].id -ceq $id){$dialog.FindName('Final').Tag=[string]$initial[-1].id}
+        $dialog.FindName('Final').Text='Final exit: '+[string]$selected[0].name
         $refresh={
             $chosenFinal=[string]$finalMode.SelectedValue;if(-not$chosenFinal){$chosenFinal=[string]$finalMode.Tag};if(-not$chosenFinal){$chosenFinal='shadowsocks'}
-            $finalSource=@($store.profiles|Where-Object{[string]$_.id-ceq$id})
-            $finalChoices=@(Get-RouterVPNOrderedFinalModes $finalSource[0] @($rows.ToArray()))
+            $externalExit=[string]$dialog.FindName('Final').Tag
+            $exitID=if($externalExit){$externalExit}else{$id}
+            $finalSource=@($store.profiles|Where-Object{[string]$_.id-ceq$exitID})
+            $dialog.FindName('Final').Text='Final exit: '+[string]$finalSource[0].name
+            $finalChoices=@(if($externalExit){'shadowsocks'}else{Get-RouterVPNOrderedFinalModes $finalSource[0] @($rows.ToArray())})
             $finalMode.ItemsSource=@($finalChoices|ForEach-Object{[pscustomobject]@{id=$_;display=(Get-RouterVPNOrderedModeTitle $_)}});$finalMode.SelectedIndex=[Array]::IndexOf($finalChoices,$chosenFinal)
             $index=$list.SelectedIndex;$labels=@();for($i=0;$i-lt$rows.Count;$i++){$node=$rows[$i];$match=@($store.profiles|Where-Object{[string]$_.id-ceq$node.id});$name=if($match.Count-eq1){[string]$match[0].name}else{'Missing: '+$node.id};$labels+=[pscustomobject]@{id=$node.id;display=('{0}. {1} · {2}' -f ($i+1),$name,(Get-RouterVPNOrderedModeTitle $node.mode))}}
             $list.ItemsSource=$labels;$list.SelectedIndex=[Math]::Min($index,$rows.Count-1)
             $used=@($rows|ForEach-Object{[string]$_.id})
             $available.ItemsSource=@($store.profiles|Where-Object{[string]$_.id-cne$id-and([string](Get-RouterVPNOrderedValue $_ 'node_kind' '')-cin@('','router-vpn')-or(Test-RouterVPNOrderedImportedMiddle $_))-and$used-cnotcontains[string]$_.id});$available.SelectedIndex=0
-            if($rows.Count -ge 7){
+            if($externalExit){
+                $available.ItemsSource=@($available.Items | Where-Object { $_.id -cne $externalExit -and (Test-RouterVPNOrderedLiteralOff $_) })
+                $available.SelectedIndex=0
+            }elseif($rows.Count -ge 7){
                 $catalog=Get-RouterVPNOrderedProfileIndex $store.profiles
                 $choices=@()
                 $local=([string](Control 'UnifiedExecution').SelectedItem.Tag) -ceq 'local'
@@ -961,32 +968,55 @@ function ShowUnifiedOrderedNodes {
                 }
                 $available.ItemsSource=$choices;$available.SelectedIndex=0
             }
-            $dialog.FindName('Add').IsEnabled=$available.Items.Count-gt0
-            $dialog.FindName('Up').IsEnabled=$list.SelectedIndex-gt0;$dialog.FindName('Down').IsEnabled=$list.SelectedIndex-ge0-and$list.SelectedIndex-lt$rows.Count-1;$dialog.FindName('Remove').IsEnabled=$list.SelectedIndex-ge0
-            $dialog.FindName('ChangeMode').IsEnabled=$list.SelectedIndex-ge0
+            $dialog.FindName('Add').IsEnabled=$available.Items.Count -gt 0 -and $rows.Count -lt ((Get-RouterVPNOrderedPhysicalTraversalDepth)-1)
+            $fixed=if($externalExit){1}else{0}
+            $dialog.FindName('Up').IsEnabled=$list.SelectedIndex -gt $fixed
+            $dialog.FindName('Down').IsEnabled=$list.SelectedIndex -ge $fixed -and $list.SelectedIndex -lt $rows.Count-1
+            $dialog.FindName('Remove').IsEnabled=$list.SelectedIndex -ge $fixed
+            $dialog.FindName('ChangeMode').IsEnabled=$list.SelectedIndex -ge 0 -and -not $externalExit
         }
+        $dialog.FindName('ExternalExit').Add_Click({try{
+            $source=$available.SelectedItem
+            if([string](Control 'UnifiedExecution').SelectedItem.Tag -cne 'local' -or -not(Test-RouterVPNOrderedExternalFinalProfile $source) -or
+               -not(Test-RouterVPNOrderedPairedOff $selected[0])){throw 'Choose a linked literal Shadowsocks exit with the selected WireGuard control in Local.'}
+            foreach($row in $rows){if($row.id -cne $id -and -not(Test-RouterVPNOrderedLiteralOff (@($store.profiles|Where-Object {$_.id -ceq $row.id})[0]))){throw 'Keep only literal Shadowsocks imports after the WireGuard entry.'}}
+            if(-not $dialog.FindName('Final').Tag){
+                if($rows.Count -ge ((Get-RouterVPNOrderedPhysicalTraversalDepth)-1)){throw 'The path has reached its supported node limit.'}
+                $rows.Insert(0,[pscustomobject]@{id=$id;mode='wg'})
+            }
+            $dialog.FindName('Final').Tag=$source.id;$finalMode.Tag='shadowsocks'; &$refresh
+        }catch{$status.Text=$_.Exception.Message}})
         $dialog.FindName('Add').Add_Click({try{if($dialog.FindName('Add').IsEnabled-and$null-ne$available.SelectedItem){$mode=$prefixMode.SelectedValue;if(Test-RouterVPNOrderedImportedMiddle $available.SelectedItem){if([string]$finalMode.SelectedValue-cne'shadowsocks'){throw 'Choose a Shadowsocks 2022 exit before adding an imported middle.'};$mode=Get-RouterVPNOrderedImportedMode $available.SelectedItem}else{
                 $selectedStream=$mode -ceq 'shadowsocks' -and (Test-RouterVPNOrderedStreamEdit $rows $rows.Count $available.SelectedValue $id $finalMode.SelectedValue ([string](Control 'UnifiedExecution').SelectedItem.Tag) $store.profiles)
                 if(-not(Test-RouterVPNOrderedPrefixMode $mode) -and -not $selectedStream){throw 'Choose an available transport for this paired node.'}
                 if($rows.Count -ge 7 -and -not $selectedStream -and ($mode -cne 'wg' -or [string](Control 'UnifiedExecution').SelectedItem.Tag -cne 'local')){throw 'Choose an available transport for this extended path.'}
             };[void]$rows.Add([pscustomobject]@{id=[string]$available.SelectedValue;mode=$mode});&$refresh;$list.SelectedIndex=$rows.Count-1}}catch{$status.Text=$_.Exception.Message}})
-        $dialog.FindName('ChangeMode').Add_Click({try{if($list.SelectedIndex-ge0-and$list.SelectedIndex-lt$rows.Count){$mode=$prefixMode.SelectedValue;$position=$list.SelectedIndex;$source=@($store.profiles|Where-Object{[string]$_.id-ceq$rows[$position].id});if($source.Count-ne1){throw 'The source changed.'};if(Test-RouterVPNOrderedImportedMiddle $source[0]){if($mode-cne(Get-RouterVPNOrderedImportedMode $source[0])){throw 'The imported hop retains its saved transport.'}}elseif(-not(Test-RouterVPNOrderedPrefixMode $mode) -and -not ($mode -ceq 'shadowsocks' -and
+        $dialog.FindName('ChangeMode').Add_Click({try{if($dialog.FindName('Final').Tag){return};if($list.SelectedIndex-ge0-and$list.SelectedIndex-lt$rows.Count){$mode=$prefixMode.SelectedValue;$position=$list.SelectedIndex;$source=@($store.profiles|Where-Object{[string]$_.id-ceq$rows[$position].id});if($source.Count-ne1){throw 'The source changed.'};if(Test-RouterVPNOrderedImportedMiddle $source[0]){if($mode-cne(Get-RouterVPNOrderedImportedMode $source[0])){throw 'The imported hop retains its saved transport.'}}elseif(-not(Test-RouterVPNOrderedPrefixMode $mode) -and -not ($mode -ceq 'shadowsocks' -and
                 (Test-RouterVPNOrderedStreamEdit $rows $position $rows[$position].id $id $finalMode.SelectedValue ([string](Control 'UnifiedExecution').SelectedItem.Tag) $store.profiles))){throw 'Choose an available transport for this paired node.'};if($rows.Count -ge 8 -and -not(Test-RouterVPNOrderedImportedMiddle $source[0]) -and $mode -cne 'wg' -and -not @($rows|Where-Object {$_.mode -ceq 'shadowsocks'}).Count){throw 'Choose WireGuard for this extended all-paired path.'};$rows[$position]=[pscustomobject]@{id=$rows[$position].id;mode=$mode};&$refresh;$list.SelectedIndex=$position}}catch{$status.Text=$_.Exception.Message}})
-        $dialog.FindName('Remove').Add_Click({if($list.SelectedIndex-ge0){$rows.RemoveAt($list.SelectedIndex);&$refresh}})
-        $move={param([int]$step)$from=$list.SelectedIndex;$to=$from+$step;if($from-ge0-and$to-ge0-and$to-lt$rows.Count){$item=$rows[$from];$rows.RemoveAt($from);$rows.Insert($to,$item);&$refresh;$list.SelectedIndex=$to}}
+        $dialog.FindName('Remove').Add_Click({if($list.SelectedIndex-ge0 -and (-not $dialog.FindName('Final').Tag -or $list.SelectedIndex -gt 0)){$rows.RemoveAt($list.SelectedIndex);&$refresh}})
+        $move={param([int]$step)$from=$list.SelectedIndex;$to=$from+$step;if($from-ge0-and$to-ge0-and$to-lt$rows.Count -and (-not $dialog.FindName('Final').Tag -or ($from -gt 0 -and $to -gt 0))){$item=$rows[$from];$rows.RemoveAt($from);$rows.Insert($to,$item);&$refresh;$list.SelectedIndex=$to}}
         $dialog.FindName('Up').Add_Click({&$move -1});$dialog.FindName('Down').Add_Click({&$move 1})
-        $list.Add_SelectionChanged({$dialog.FindName('Up').IsEnabled=$list.SelectedIndex-gt0;$dialog.FindName('Down').IsEnabled=$list.SelectedIndex-ge0-and$list.SelectedIndex-lt$rows.Count-1;$dialog.FindName('Remove').IsEnabled=$list.SelectedIndex-ge0;$dialog.FindName('ChangeMode').IsEnabled=$list.SelectedIndex-ge0})
+        $list.Add_SelectionChanged({
+            $external=[bool]$dialog.FindName('Final').Tag
+            $movable=$list.SelectedIndex -ge 0 -and (-not $external -or $list.SelectedIndex -gt 0)
+            $dialog.FindName('Up').IsEnabled=$movable -and $list.SelectedIndex -gt $(if($external){1}else{0})
+            $dialog.FindName('Down').IsEnabled=$movable -and $list.SelectedIndex -lt $rows.Count-1
+            $dialog.FindName('Remove').IsEnabled=$movable
+            $dialog.FindName('ChangeMode').IsEnabled=$movable -and -not $external
+        })
         $dialog.FindName('Cancel').Add_Click({$dialog.Close()})
         $captureEditor={
-            $nodes=@($rows.ToArray())+@([pscustomobject]@{id=$id;mode=[string]$finalMode.SelectedValue})
+            $exitID=if($dialog.FindName('Final').Tag){[string]$dialog.FindName('Final').Tag}else{$id}
+            $nodes=@($rows.ToArray())+@([pscustomobject]@{id=$exitID;mode=[string]$finalMode.SelectedValue})
             $tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
             foreach($node in $nodes){$origin=@($store.profiles|Where-Object{[string]$_.id-ceq[string]$node.id});if($origin.Count-ne1){throw 'The original editor catalog lost a node.'};$tokens.Add($node.id,(Get-RouterVPNOrderedValue $origin[0] 'profile_token'))}
             [pscustomobject]@{control_id=$id;nodes=$nodes;profile_tokens=$tokens;execution=[string](Control 'UnifiedExecution').SelectedItem.Tag}
         }
         $available.Add_DropDownOpened({
             $execution=[string](Control 'UnifiedExecution').SelectedItem.Tag
-            if($rows.Count -lt 1){return}
-            $nodes=@($rows.ToArray())+@([pscustomobject]@{id=$id;mode=[string]$finalMode.SelectedValue})
+            if($rows.Count -lt 1 -or $dialog.FindName('Final').Tag){return}
+            $exitID=if($dialog.FindName('Final').Tag){[string]$dialog.FindName('Final').Tag}else{$id}
+            $nodes=@($rows.ToArray())+@([pscustomobject]@{id=$exitID;mode=[string]$finalMode.SelectedValue})
             if(-not(Test-RouterVPNOrderedCandidatePosition $nodes ($rows.Count-1) $execution $store.profiles)){return}
             $signature=(@($rows.ToArray()|ForEach-Object{$_.id+'/'+$_.mode})-join'|')+'|'+$finalMode.SelectedValue+'|'+$execution
             if([string]$available.Tag-ceq$signature){return}
@@ -994,6 +1024,7 @@ function ShowUnifiedOrderedNodes {
             $dialog.FindName('MeasureNext').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent))
         })
         $dialog.FindName('MeasureNext').Add_Click({try{
+            if($dialog.FindName('Final').Tag){throw 'This external-final route supports connected measurements.'}
             do {
                 $position=$list.SelectedIndex
                 $captured=&$captureEditor

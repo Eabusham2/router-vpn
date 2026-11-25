@@ -11,10 +11,27 @@ struct IOSNodeChainDraft {
         nodes = saved ?? [.init(id: "", mode: "wg"), .init(id: finalID, mode: "shadowsocks")]
     }
 
+    var hasExternalFinal: Bool { !controlID.isEmpty && nodes.last?.id != controlID && nodes.first?.id == controlID }
+
+    mutating func chooseExternalFinal(_ exit: RouterProfile, profiles: [RouterProfile], execution: String) throws {
+        guard execution == "local", IOSImportedShadowsocksSource.eligibleLiteral(exit), exit.id != controlID,
+              let entry = profiles.first(where: { $0.id == controlID }), entry.normalizedNodeKind == "router-vpn",
+              entry.external == nil, [nil,"","off"].contains(entry.startLayer) else {
+            throw IOSMultihopNodeSelection.issue("Choose a literal Shadowsocks 2022 exit and an unlayered WireGuard control.")
+        }
+        var middle = hasExternalFinal ? Array(nodes.dropFirst().dropLast()) : Array(nodes.dropLast())
+        guard middle.allSatisfy({ node in node.id.isEmpty || node.id != exit.id && profiles.contains { $0.id == node.id && IOSImportedShadowsocksSource.eligibleLiteral($0) } }),
+              middle.count <= IOSMultihopNodeSelection.physicalTraversalDepth-2 else {
+            throw IOSMultihopNodeSelection.issue("Retain only distinct imported Shadowsocks 2022 intermediates before choosing the exit.")
+        }
+        if middle.isEmpty { middle = [.init(id: "", mode: "shadowsocks")] }
+        nodes = [.init(id: controlID, mode: "wg")] + middle.map { .init(id: $0.id, mode: "shadowsocks") } + [.init(id: exit.id, mode: "shadowsocks")]
+    }
+
     var canSave: Bool {
         ((2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || IOSMultihopNodeSelection.extendedOriginalModes(nodes.map(\.mode), execution: "local")) &&
             nodes.allSatisfy({ $0.id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil }) &&
-            Set(nodes.map(\.id)).count == nodes.count && nodes.last?.id == controlID &&
+            Set(nodes.map(\.id)).count == nodes.count && (nodes.last?.id == controlID || IOSMultihopNodeSelection.externalExitReferences(nodes, controlID: controlID, execution: "local")) &&
             (nodes.first?.mode != "shadowsocks" || IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) &&
             nodes.dropLast().enumerated().allSatisfy({ position, node in IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || (IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count) || IOSMultihopNodeSelection.supportsLocalImportedNode(node.mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes))) && nodes.last?.mode == "shadowsocks" }) &&
             IOSMultihopNodeSelection.nativeFinalModes.contains(nodes.last?.mode ?? "")
@@ -36,15 +53,24 @@ struct IOSNodeChainDraft {
     /// provider only opens the prefix, and empty editor rows supply no node.
     func measurementPath(through position: Int, execution: String = "local", profiles: @autoclosure () -> [RouterProfile] = []) throws -> [IOSMultihopNodeSelection] {
         guard position >= 0, position < nodes.count - 1, let final = nodes.last,
-              final.id == controlID, !final.id.isEmpty else {
+              (final.id == controlID || hasExternalFinal), !final.id.isEmpty else {
             throw IOSMultihopNodeSelection.issue("Choose a linked final node and a preceding prefix.")
         }
         let prefix = nodes.prefix(position + 1)
         let selected = nodes.filter { !$0.id.isEmpty }
         let linked = profiles()
+        if hasExternalFinal {
+            guard position == 0, IOSMultihopNodeSelection.externalExitReferences(nodes, controlID: controlID, execution: execution),
+                  canSave, selected.count == nodes.count, nodes.enumerated().allSatisfy({ i, node in
+                      let matches = linked.filter { $0.id == node.id }
+                      guard matches.count == 1, let profile = matches.first else { return false }
+                      return i == 0 ? profile.normalizedNodeKind == "router-vpn" && [nil,"","off"].contains(profile.startLayer) : IOSImportedShadowsocksSource.eligibleLiteral(profile)
+                  }) else { throw IOSMultihopNodeSelection.issue("Measure candidates through the original WireGuard entry after selecting every imported node.") }
+            return nodes
+        }
         let hasIndependentHostname = IOSMultihopNodeSelection.hasIndependentHostname(nodes, profiles: linked)
         if ["server", "auto"].contains(execution) {
-            if execution == "auto", position == 1, nodes.map(\.mode) == ["wg", "shadowsocks", "shadowsocks"],
+            if position == 1, nodes.count == 3, IOSMultihopNodeSelection.supportsNativePrefix(nodes[0].mode), nodes.dropFirst().allSatisfy({ $0.mode == "shadowsocks" }),
                Set(nodes.map(\.id)).count == 3, nodes.allSatisfy({ !$0.id.isEmpty }),
                nodes.enumerated().allSatisfy({ index, node in
                    let matches = linked.filter { $0.id == node.id }
@@ -52,7 +78,7 @@ struct IOSNodeChainDraft {
                    return index == 1 ? IOSImportedShadowsocksSource.eligibleLiteral(profile) :
                         profile.normalizedNodeKind == "router-vpn" && profile.external == nil
                }) { return nodes }
-            if execution == "auto", selected == nodes,
+            if selected == nodes,
                IOSMultihopNodeSelection.compareResponsePositions(nodes, profiles: linked).contains(position) { return nodes }
             let hasPairedStream = selected.dropFirst().dropLast().contains { node in
                 node.mode == "shadowsocks" && linked.contains { $0.id == node.id && $0.normalizedNodeKind == "router-vpn" }
@@ -60,7 +86,7 @@ struct IOSNodeChainDraft {
             if hasPairedStream {
                 let privateStops = IOSMultihopNodeSelection.pairedStreamPositions(nodes, execution: execution, profiles: linked)
                 guard selected == nodes, !privateStops.isEmpty, position == 0 else {
-                    throw IOSMultihopNodeSelection.issue("Choose the WireGuard entry or a supported Shadowsocks hop in a Compare route.")
+                    throw IOSMultihopNodeSelection.issue("Choose the WireGuard entry or a supported Shadowsocks hop in the selected route.")
                 }
                 return nodes
             }
@@ -140,6 +166,10 @@ struct IOSNodeChainDraft {
         guard canAppend(execution: execution) else {
             throw IOSMultihopNodeSelection.issue("This route cannot add another preceding node with its current transport and execution choices.")
         }
+        if hasExternalFinal {
+            nodes.insert(.init(id: "", mode: "shadowsocks"), at: nodes.count - 1)
+            return
+        }
         if nodes.count >= IOSMultihopNodeSelection.maximumNodes {
             let paired = IOSMultihopNodeSelection.extendedPairedModes(nodes.dropLast().map(\.mode) + ["wg", nodes.last?.mode ?? ""], execution: execution)
             nodes.insert(.init(id: "", mode: paired ? "wg" : "shadowsocks"), at: nodes.count - 1)
@@ -214,7 +244,7 @@ extension RouterVPNModel {
 
     private func requireIOSNodeChainEditorOwner(_ owner: IOSNodeChainEditorOwner, nodes: [IOSMultihopNodeSelection]) throws {
         guard !profileMutationBlocked, !iosSpeedLabOwnership.active,
-              bundle?.selectedRouterID == owner.controlID, nodes.last?.id == owner.controlID else {
+              bundle?.selectedRouterID == owner.controlID, nodes.last?.id == owner.controlID || IOSMultihopNodeSelection.externalExitReferences(nodes, controlID: owner.controlID, execution: "local") else {
             throw IOSMultihopNodeSelection.issue("The selected final node or connection owner changed. Reopen the ordered route editor.")
         }
         for node in nodes {
@@ -228,7 +258,7 @@ extension RouterVPNModel {
         try IOSMultihopNodeSelection.validate(nodes, execution: execution, entryID: nil, entryMode: nil,
                                              exitID: nil, exitMode: nil, controlID: owner.controlID)
         try requireIOSNodeChainEditorOwner(owner, nodes: nodes)
-        guard let final = nodes.last, var value = bundle else {
+        guard let final = nodes.first(where: { $0.id == owner.controlID }), var value = bundle else {
             throw IOSMultihopNodeSelection.issue("The final node no longer has its linked private source.")
         }
         guard value.routerProfiles.filter({ $0.id == final.id }).count == 1,
@@ -296,8 +326,9 @@ enum IOSNodeChainEditorVisible {
         return nodeCount > IOSMultihopNodeSelection.maximumNodes && !mixedPacket ? ["wg"] : IOSMultihopNodeSelection.nativePrefixModes
     }
     static func finalModes(_ profile: RouterProfile?, nodes: [IOSMultihopNodeSelection]) -> [String] {
-        guard let profile, profile.normalizedNodeKind == "router-vpn", profile.external == nil,
-              nodes.last?.id == profile.id else { return [] }
+        guard let profile, nodes.last?.id == profile.id else { return [] }
+        if IOSImportedShadowsocksSource.eligibleLiteral(profile) && nodes.first?.mode == "wg" { return ["shadowsocks"] }
+        guard profile.normalizedNodeKind == "router-vpn", profile.external == nil else { return [] }
         var modes = ["shadowsocks"]
         if nodes.count <= IOSMultihopNodeSelection.maximumNodes, [nil, "", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(profile.startLayer) &&
             nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) {
@@ -312,6 +343,13 @@ enum IOSNodeChainEditorVisible {
     }
     static func candidates(_ profiles: [RouterProfile], nodes: [IOSMultihopNodeSelection], position: Int, execution: String = "local") -> [RouterProfile] {
         guard nodes.indices.contains(position), position < nodes.count - 1 else { return [] }
+        if let final = nodes.last, profiles.contains(where: { $0.id == final.id && IOSImportedShadowsocksSource.eligibleLiteral($0) }) {
+            guard execution == "local" else { return [] }
+            return unique(profiles).filter { profile in
+                position == 0 ? profile.id == nodes.first?.id && profile.normalizedNodeKind == "router-vpn" :
+                    IOSImportedShadowsocksSource.eligibleLiteral(profile) && !nodes.enumerated().contains { $0.offset != position && $0.element.id == profile.id }
+            }
+        }
         let customEntry = nodes.count == 3 && nodes.last?.mode == "shadowsocks" &&
             (position == 0 || nodes.first?.mode == "shadowsocks")
         let retainedStream = IOSMultihopNodeSelection.pairedStreamPositions(nodes, execution: "local", profiles: profiles).contains(position)

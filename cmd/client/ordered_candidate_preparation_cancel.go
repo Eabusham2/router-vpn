@@ -14,14 +14,15 @@ import (
 // admission. It carries no native or source capability. Its lifetime exceeds
 // the view's 120 seconds, so pruning cannot revive a delayed original POST.
 type orderedCandidatePreparedAdmission struct {
-	token         string
-	requested     string
-	measurement   string
-	scope         string
-	position      int
-	draft         bool
-	created       time.Time
-	responseNodes []orderedCandidateResponseSourceNode
+	token          string
+	requested      string
+	measurement    string
+	scope          string
+	position       int
+	draft          bool
+	created        time.Time
+	responseNodes  []orderedCandidateResponseSourceNode
+	responseOwners []string
 }
 
 // Issued view identities also outlive the UI view's admission window. A
@@ -35,7 +36,7 @@ func rememberOrderedCandidatePreparedViewLocked(control *viaEntryControl, view *
 	if control.preparedViews == nil {
 		control.preparedViews = map[string]*orderedCandidatePreparedAdmission{}
 	}
-	control.preparedViews[view.token] = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, measurement: candidateViewMetric(view.prefixes, view.position), draft: view.draft != nil, created: time.Now(), responseNodes: slices.Clone(view.responseNodes)}
+	control.preparedViews[view.token] = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, measurement: candidateViewMetric(view.prefixes, view.position), draft: view.draft != nil, created: time.Now(), responseOwners: slices.Clone(view.responseOwners), responseNodes: slices.Clone(view.responseNodes)}
 	return nil
 }
 
@@ -48,7 +49,7 @@ func reserveOrderedCandidatePreparedAdmissionLocked(control *viaEntryControl, id
 	if control.preparedAdmissions == nil {
 		control.preparedAdmissions = map[string]*orderedCandidatePreparedAdmission{}
 	}
-	control.preparedAdmissions[id] = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, measurement: candidateViewMetric(view.prefixes, view.position), draft: view.draft != nil, created: time.Now(), responseNodes: slices.Clone(view.responseNodes)}
+	control.preparedAdmissions[id] = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, measurement: candidateViewMetric(view.prefixes, view.position), draft: view.draft != nil, created: time.Now(), responseOwners: slices.Clone(view.responseOwners), responseNodes: slices.Clone(view.responseNodes)}
 	return nil
 }
 
@@ -82,7 +83,7 @@ func (a *app) orderedCandidatePreparedCancel(w http.ResponseWriter, request *htt
 		recorded := control.preparedViews[q.ViewToken]
 		if recorded == nil && control.preparedView != nil && control.preparedView.token == q.ViewToken {
 			view := control.preparedView
-			recorded = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, measurement: candidateViewMetric(view.prefixes, view.position), draft: view.draft != nil, responseNodes: slices.Clone(view.responseNodes)}
+			recorded = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, measurement: candidateViewMetric(view.prefixes, view.position), draft: view.draft != nil, responseOwners: slices.Clone(view.responseOwners), responseNodes: slices.Clone(view.responseNodes)}
 		}
 		// A late cancel may outlive the catalog. Bind its nonce to the
 		// originally issued purpose before any worker can acquire it.
@@ -157,7 +158,11 @@ func orderedCandidatePreparedAdmissionCancelResponse(control *viaEntryControl, o
 		response["origin"] = "editor-draft"
 		if len(admission.responseNodes) != 0 {
 			response["response_source_nodes"] = admission.responseNodes
-			response["required_selected_execution"] = "local"
+			if len(admission.responseOwners) > 0 {
+				publishCandidateResponseOwners(response, admission.responseOwners, "")
+			} else {
+				response["required_selected_execution"] = "local"
+			}
 		}
 	}
 	return response

@@ -413,7 +413,7 @@ function CompleteUnifiedTelemetryRefresh{
    if($Payload['profiles']){ApplyUnifiedFastestStore $Payload['profiles']}
    try{(Control 'UnifiedFastestNode').IsEnabled=($idle -and -not $script:UnifiedProtectionPending -and -not (Test-RouterVPNMutationBusyFromStatus $status))}catch{(Control 'UnifiedFastestNode').IsEnabled=$false}
    $privateMedian=UnifiedLiveNumber $Payload['live'] 'median_ms'
-   if($null-ne$LiveReceipt-and[string]$RouterCombo.SelectedValue-ceq$LiveReceipt.Binding.profile_id-and$Window.IsVisible-and@($Window.OwnedWindows|Where-Object{$_.IsVisible}).Count-eq0-and[System.Diagnostics.Stopwatch]::GetTimestamp()-lt$LiveReceipt.Deadline-and-not(UnifiedAsyncBusy)){$script:UnifiedLiveHTTPS=$LiveReceipt;$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms HTTPS'-f$LiveReceipt.Median);(Control 'UnifiedLiveLatency').ToolTip='3 HTTPS responses through the current proved VPN and selected DNS, timed after DNS/TCP/TLS preparation. Expires after 10 seconds; separate from ICMP, private-node RTT and saved50.';(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}elseif($privateMedian -gt 0 -and $privateMedian -le 10000 -and $null-eq(ExternalComparisonValue $Payload['live'] 'measurement')){ClearUnifiedLiveHTTPS;$script:UnifiedRoutePathMs=$privateMedian;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms'-f$privateMedian);(Control 'UnifiedLiveLatency').ToolTip='HTTP RTT through the current private Router-node path.';(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}else{ClearUnifiedLiveHTTPS;$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Foreground='#A8B6D5'}
+   if($null-ne$LiveReceipt-and[string]$RouterCombo.SelectedValue-ceq$LiveReceipt.Binding.profile_id-and$Window.IsVisible-and@($Window.OwnedWindows|Where-Object{$_.IsVisible}).Count-eq0-and[System.Diagnostics.Stopwatch]::GetTimestamp()-lt$LiveReceipt.Deadline-and-not(UnifiedAsyncBusy)){$script:UnifiedLiveHTTPS=$LiveReceipt;$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms HTTPS'-f$LiveReceipt.Median);(Control 'UnifiedLiveLatency').ToolTip='3 HTTPS responses through the current proved VPN and selected DNS, timed after DNS/TCP/TLS preparation. Expires after 10 seconds; separate from ICMP, private-node RTT and saved50.';(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}elseif($privateMedian -gt 0 -and $privateMedian -le 10000 -and $null-eq(ExternalComparisonValue $Payload['live'] 'measurement')){ClearUnifiedLiveHTTPS;$script:UnifiedRoutePathMs=$privateMedian;(Control 'UnifiedLiveLatency').Text=('{0:N1} ms'-f$privateMedian);(Control 'UnifiedLiveLatency').ToolTip=if(([string](ExternalComparisonValue $Payload['live'] 'proof')).EndsWith(' · HTTPS response after TLS through the captured external exit',[StringComparison]::Ordinal)){'HTTPS response after TLS through the captured external exit.'}else{'HTTP RTT through the current private Router-node path.'};(Control 'UnifiedLiveLatency').Foreground='#E8ECF8'}else{ClearUnifiedLiveHTTPS;$script:UnifiedRoutePathMs=0.0;(Control 'UnifiedLiveLatency').Foreground='#A8B6D5'}
    $script:UnifiedMapLatency=$null
    (Control 'UnifiedMultihopLatency').Text=''
    if($Payload['multihop']){
@@ -578,10 +578,10 @@ function ShowExternalComparison{
 
 function TestOrderedCandidateResponseSource($S,$Value,$Expected=$null){
  $rows=ExternalComparisonValue $Value 'response_source_nodes';$position=$S.Position
- if((OrderedCandidateNumber $Value 'prefix_position') -ne $position -or $rows -isnot [array] -or $rows.Count -lt 4 -or $rows.Count -gt 96 -or $position -lt 1 -or $position -gt $rows.Count-2 -or ($position -lt $rows.Count-2 -and $rows.Count -ge 96)){return $false}
+ if((OrderedCandidateNumber $Value 'prefix_position') -ne $position -or $rows -isnot [array] -or $rows.Count -lt $(if($null -ne (ExternalComparisonValue $Value 'response_executions')){3}else{4}) -or $rows.Count -gt 96 -or $position -lt 1 -or $position -gt $rows.Count-2 -or ($position -lt $rows.Count-2 -and $rows.Count -ge 96)){return $false}
  $draft=ExternalComparisonValue $S 'Draft'
  if($null -ne $Expected -and ($Expected -isnot [array] -or $Expected.Count -ne $rows.Count)){return $false}
- if($null -ne $draft -and ($draft.execution -cne 'auto' -or $draft.nodes.Count -ne $rows.Count)){return $false}
+ if($null -ne $draft -and (($draft.execution -cne 'auto' -and ($draft.execution -cne 'server' -or $null -eq (ExternalComparisonValue $Value 'response_executions'))) -or $draft.nodes.Count -ne $rows.Count)){return $false}
  $ids=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
  for($i=0;$i -lt $rows.Count;$i++){
   $row=$rows[$i];if($null -eq $row){return $false}
@@ -591,8 +591,9 @@ function TestOrderedCandidateResponseSource($S,$Value,$Expected=$null){
   elseif($kind -ceq 'router-vpn'){
    if($i -lt 2){return $false}
   }elseif($kind -cne 'external'){return $false}
-  $mode=if($i -eq 0){'wg'}else{'shadowsocks'}
-  if(@($keys).Count -ne 3 -or $row.id -isnot [string] -or $row.id -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or -not $ids.Add($row.id) -or $kind -isnot [string] -or $row.mode -cne $mode){return $false}
+  $mode=$row.mode
+  if(($i -eq 0 -and $mode -cnotin @('wg','awg2-fast','awg2-strong')) -or ($i -gt 0 -and $mode -cne 'shadowsocks')){return $false}
+  if(@($keys).Count -ne 3 -or $row.id -isnot [string] -or $row.id -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or -not $ids.Add($row.id) -or $kind -isnot [string]){return $false}
   if($null -ne $draft){
    $node=$draft.nodes[$i];$keys=if($node -is [Collections.IDictionary]){$node.Keys}else{$node.PSObject.Properties.Name}
    if(@($keys).Count -ne 2 -or $node.id -cne $row.id -or $node.mode -cne $mode){return $false}
@@ -606,7 +607,8 @@ function TestOrderedCandidateLegacyConnectedResponse($S,$Value){
  if($S.Position -ne 1 -or -not (TestOrderedCandidateLocalResponse $S $Value)){return $false}
  $prefixes=ExternalComparisonValue $Value 'prefixes'
  if($prefixes -isnot [array] -or $prefixes.Count -ne 2){return $false}
- $modes=@('wg','shadowsocks')
+ $modes=@($prefixes[0].mode,'shadowsocks')
+ if($modes[0] -cnotin @('wg','awg2-fast','awg2-strong')){return $false}
  for($i=0;$i -lt 2;$i++){
   $prefix=$prefixes[$i]
   if((OrderedCandidateNumber $prefix 'position') -ne $i -or $prefix.mode -cne $modes[$i] -or -not $prefix.id){return $false}
@@ -646,6 +648,22 @@ function TestOrderedCandidateResponseProposal($Rows,$Choice,[int]$Position){
  return $true
 }
 function TestOrderedCandidateLocalResponse($S,$View){
+ $fields=if($View -is [Collections.IDictionary]){$View.Keys}else{$View.PSObject.Properties.Name}
+ if('response_executions' -cin $fields){
+  $owners=$View.response_executions;$requested=ExternalComparisonValue $View 'requested_execution'
+  if($owners -isnot [array] -or $owners.Count -notin @(1,2) -or @($owners | Where-Object {$_ -isnot [string]}).Count -ne 0 -or
+     -not(TestOrderedCandidateResponseSource $S $View)){return $false}
+  if($requested -ceq 'server'){if($owners.Count -ne 1 -or $owners[0] -cne 'server'){return $false}}
+  elseif($requested -cne 'auto' -or $owners[0] -cne 'local' -or ($owners.Count -eq 2 -and $owners[1] -cne 'server')){return $false}
+  $draft=ExternalComparisonValue $S 'Draft';if($null -ne $draft -and $draft.execution -cne $requested){return $false}
+  $required=ExternalComparisonValue $View 'required_selected_execution'
+  if('selected_execution' -cnotin $fields -and 'selection_epoch' -cnotin $fields){
+   if($null -eq $draft -or (ExternalComparisonValue $View 'scope') -cne 'draft-complete-selected'){return $false}
+   if($owners.Count -eq 1){return $required -ceq $owners[0]};return 'required_selected_execution' -cnotin $fields
+  }
+  $winner=ExternalComparisonValue $View 'selected_execution';$epoch=ExternalComparisonValue $View 'selection_epoch'
+  return $winner -is [string] -and $winner -cin $owners -and $required -ceq $winner -and ($epoch -is [int] -or $epoch -is [long]) -and $epoch -gt 0
+ }
  $mapped=$null -ne (ExternalComparisonValue $View 'response_source_nodes')
  if(($mapped -and -not(TestOrderedCandidateResponseSource $S $View)) -or (-not $mapped -and $S.Position -ne 1) -or [string](ExternalComparisonValue $View 'required_selected_execution') -cne 'local' -or
     [string](ExternalComparisonValue $View 'requested_execution') -cne 'auto'){return $false}
@@ -655,7 +673,7 @@ function TestOrderedCandidateLocalResponse($S,$View){
  $hasEpoch=($epoch -is [int] -or $epoch -is [long]) -and $epoch -gt 0
  if($null -eq $draft){return $winner -ceq 'local' -and $hasEpoch}
  $nodes=@($draft.nodes)
- return $draft.execution -ceq 'auto' -and ($mapped -or ($nodes.Count -eq 3 -and $nodes[0].mode -ceq 'wg' -and
+ return $draft.execution -ceq 'auto' -and ($mapped -or ($nodes.Count -eq 3 -and $nodes[0].mode -cin @('wg','awg2-fast','awg2-strong') -and
     $nodes[1].mode -ceq 'shadowsocks' -and $nodes[2].mode -ceq 'shadowsocks')) -and
     (($null -eq $epoch -and -not $winner) -or ($winner -ceq 'local' -and $hasEpoch))
 }
@@ -740,7 +758,9 @@ function OrderedCandidateScore($Row,[long]$Now,[string]$Metric='routed-tcp-conne
  $at=ExternalComparisonValue $Row 'measured_at';$until=ExternalComparisonValue $Row 'expires_at'
  if(($at -isnot [int] -and $at -isnot [long]) -or ($until -isnot [int] -and $until -isnot [long]) -or $at -le 0 -or $at -gt $Now -or $until -ne ($at+120000) -or $until -le $Now){return $null}
  $rows=@(ExternalComparisonValue $Row 'results');if($rows.Count -ne 1){return $null}
- $r=$rows[0];$b=ExternalComparisonValue $r 'benchmark';$d=ExternalComparisonValue $b 'distribution';$ready=ExternalComparisonValue $r 'ready'
+ $r=$rows[0];if($null -eq $r){return $null};$fields=if($r -is [Collections.IDictionary]){$r.Keys}else{$r.PSObject.Properties.Name}
+ if('candidate_disposition' -cin $fields){return $null}
+ $b=ExternalComparisonValue $r 'benchmark';$d=ExternalComparisonValue $b 'distribution';$ready=ExternalComparisonValue $r 'ready'
  if($ready -isnot [bool] -or -not $ready -or (ExternalComparisonValue $r 'kind') -cne $kind -or (ExternalComparisonValue $r 'role') -cne 'candidate' -or
     (ExternalComparisonValue $r 'node_id') -cne (ExternalComparisonValue $Row 'candidate_id') -or (ExternalComparisonValue $b 'measurement') -cne $Metric -or
     (OrderedCandidateNumber $b 'attempts') -ne 50 -or (OrderedCandidateNumber $b 'failed') -ne 0 -or (OrderedCandidateNumber $d 'samples') -ne 50){return $null}
@@ -753,7 +773,7 @@ function OrderedCandidateBase($S){
  if([bool](ExternalComparisonValue $S 'SavedPath')){return '/api/multihop/saved-candidates'};return '/api/multihop/prefix-candidates'
 }
 function OrderedCandidateScope($S){if([string](ExternalComparisonValue (ExternalComparisonValue $S 'Draft') 'execution')-cin@('server','auto')){return 'draft-complete-selected'};if([bool](ExternalComparisonValue $S 'SavedPrefix')){return 'saved-prefix-local'};return 'saved-complete-local'}
-function OrderedCandidateCatalogPath($S){$Path=(OrderedCandidateBase $S)+'/catalog?prefix_position='+$S.Position;if([bool](ExternalComparisonValue $S 'SavedPrefix')){$Path+='&scope='+(OrderedCandidateScope $S)};return $Path}
+function OrderedCandidateCatalogPath($S){$Path=(OrderedCandidateBase $S)+'/catalog?prefix_position='+$S.Position;if([bool](ExternalComparisonValue $S 'SavedPrefix')){$Path+='&scope='+(OrderedCandidateScope $S)};if(-not [bool](ExternalComparisonValue $S 'SavedPath') -or (OrderedCandidateScope $S) -ceq 'draft-complete-selected'){$Path+='&server_response=true'};return $Path}
 function OrderedCandidateScopedBody($S,[hashtable]$Body){$Captured=@{}+$Body;if([bool](ExternalComparisonValue $S 'SavedPrefix')){$Captured.scope=OrderedCandidateScope $S};return $Captured}
 function OrderedCandidateNumber($Value,[string]$Key){
  $N=ExternalComparisonValue $Value $Key
@@ -770,6 +790,7 @@ function TestOrderedCandidateDraftExecution($S,$Value,[bool]$Catalog){
   return $Found.Count-eq1-and[string]$Found[0].id-ceq[string]$Node.id-and[string]$Found[0].mode-ceq[string]$Node.mode-and([string]$Node.mode-cin@('wg','awg2-fast','awg2-strong')-or((TestOrderedCandidateLocalResponse $S $Value)-and(OrderedCandidateViewMetric $S $Value)-ceq'routed-candidate-response'))
  }
  $Bound=[string](ExternalComparisonValue $S 'SelectedWinner')
+ if($null -ne (ExternalComparisonValue $Value 'response_executions') -and -not(TestOrderedCandidateLocalResponse $S $Value)){return $false}
  if($null-eq$Winner-and$null-eq$Epoch){return -not$Bound-and-not[bool](ExternalComparisonValue $Value 'accepted')-and-not[bool](ExternalComparisonValue $Value 'reviewing')-and-not[bool](ExternalComparisonValue $Value 'chosen')-and@((ExternalComparisonValue $Value 'results')|Where-Object{$null-ne$_}).Count-eq0}
  if([bool](ExternalComparisonValue $Value 'admission_cancelled')){return $false}
  if((ExternalComparisonValue $Value 'measurement') -ceq 'routed-candidate-response' -and -not(TestOrderedCandidateLocalResponse $S $Value)){
@@ -837,6 +858,15 @@ function StartOrderedCandidateRequest($S,[string]$Phase,[string]$Path,$Body=$nul
 function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
  $source=ExternalComparisonValue $Value 'response_source_nodes'
  $expected=ExternalComparisonValue (ExternalComparisonValue $S 'View') 'response_source_nodes'
+ $fields=if($Value -is [Collections.IDictionary]){$Value.Keys}else{$Value.PSObject.Properties.Name}
+ $owners=ExternalComparisonValue $Value 'response_executions'
+ $prior=ExternalComparisonValue $S 'View';$originalOwners=ExternalComparisonValue $prior 'response_executions'
+ if('response_executions' -cin $fields -and -not(TestOrderedCandidateLocalResponse $S $Value)){throw 'The authenticated response owner is invalid.'}
+ if($Phase -cne 'catalog' -and ($null -ne $owners -or $null -ne $originalOwners)){
+  if($null -eq $owners -or $null -eq $originalOwners -or ($owners -join ',') -cne ($originalOwners -join ',') -or
+    (ExternalComparisonValue $Value 'requested_execution') -cne (ExternalComparisonValue $prior 'requested_execution') -or
+    ($null -eq $S.Draft -and (ExternalComparisonValue $Value 'selected_execution') -cne (ExternalComparisonValue $prior 'selected_execution'))){throw 'The authenticated response owner changed.'}
+ }
  if($Phase -eq 'catalog' -and $null -ne $source){
   $prefix=@($Value.prefixes|Where-Object {(OrderedCandidateNumber $_ 'position') -eq $S.Position})
   if(-not(TestOrderedCandidateLocalResponse $S $Value) -or $Value.measurement -cne 'routed-candidate-response' -or $prefix.Count -ne 1 -or
@@ -854,7 +884,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
  }elseif($Phase -ne 'catalog' -and ($null -ne $source -or $null -ne $expected)){
   if($null -eq $expected -or -not(TestOrderedCandidateResponseSource $S $Value $expected) -or
     $Value.view_token -cne $S.View.view_token){throw 'The private response source changed.'}
-  if($null -eq $S.Draft -and (-not(TestOrderedCandidateLocalResponse $S $Value) -or $Value.selection_epoch -ne $S.View.selection_epoch)){throw 'The selected Local path changed.'}
+  if($null -eq $S.Draft -and (-not(TestOrderedCandidateLocalResponse $S $Value) -or $Value.selection_epoch -ne $S.View.selection_epoch)){throw 'The selected route changed.'}
   if($null -eq $S.Draft){
    if((ExternalComparisonValue $Value 'request_id') -cne $S.RequestID){throw 'The private response belongs to another request.'}
    if($Phase -ceq 'cancel'){
@@ -902,12 +932,15 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
   $draft=ExternalComparisonValue $S 'Draft'
   if($Phase -ceq 'choose'){
    $matches=@($S.View.candidates | Where-Object {$_.id -ceq $S.ChoiceID})
+   $ownerMatches=if($null -ne (ExternalComparisonValue $S.View 'response_executions')){
+    $S.SelectedWinner -ceq (ExternalComparisonValue $Value 'selected_execution') -and $S.SelectedEpoch -gt 0
+   }else{$null -eq $draft -or $draft.execution -cne 'auto' -or ($S.SelectedWinner -ceq 'local' -and $S.SelectedEpoch -gt 0)}
    if($null -eq $draft -or $S.CancelWanted -or $S.CloseWanted -or $matches.Count -ne 1 -or
       (ExternalComparisonValue $Value 'candidate_id') -cne $S.ChoiceID -or (ExternalComparisonValue $Value 'draft_action') -cne 'insert-measured-hop' -or
       (ExternalComparisonValue $Value 'saved_profile_id') -cne '' -or
       -not (TestOrderedCandidateDraftInsertion $S $matches[0] (ExternalComparisonValue $matches[0] 'draft_path')) -or
       -not (TestOrderedCandidateDraftInsertion $S $matches[0] (ExternalComparisonValue $Value 'proposed_path')) -or
-      ($draft.execution -ceq 'auto' -and ($S.SelectedWinner -cne 'local' -or $S.SelectedEpoch -le 0))){throw 'The chosen path differs from the measured draft insertion.'}
+      -not $ownerMatches){throw 'The chosen path differs from the measured draft insertion.'}
    foreach($field in @('chosen','drained','native_down')){
     $flag=ExternalComparisonValue $Value $field
     if($flag -isnot [bool] -or -not $flag){throw 'The measured draft choice did not finish cleanup.'}
@@ -999,7 +1032,7 @@ function ShowOrderedCandidates{
  $Existing=Get-Variable RouterVPNOrderedCandidates -Scope Script -ValueOnly -ErrorAction SilentlyContinue
  if(UseExistingOrderedCandidateDialog $Existing $SavedPath $SavedPrefix $Draft){return}
  [xml]$X=@"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Candidates through connected prefix" Width="850" Height="600" MinWidth="700" MinHeight="500" WindowStartupLocation="CenterOwner"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Name="PurposeNote" TextWrapping="Wrap" Text="Measure the next hop through the selected prefix. Packet prefixes time TCP handshakes. Eligible Local Shadowsocks prefixes time authenticated private-agent responses from paired candidates. Save a measured choice for the next connection."/><StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,12"><ComboBox Name="Prefix" Width="520" DisplayMemberPath="display" SelectedValuePath="position"/><Button Name="Refresh" Content="Capture this prefix" Margin="8,0"/></StackPanel><DataGrid Name="Candidates" Grid.Row="2" AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Extended"><DataGrid.Columns><DataGridTextColumn Header="Saved candidate" Binding="{Binding Name}" Width="*"/><DataGridTextColumn Header="Timing" Binding="{Binding Timing}" Width="300"/></DataGrid.Columns></DataGrid><TextBox Name="Preview" Grid.Row="3" Margin="0,10" IsReadOnly="True" TextWrapping="Wrap"/><StackPanel Grid.Row="4" Orientation="Horizontal"><TextBlock Text="Next-connection profile name" VerticalAlignment="Center"/><TextBox Name="ProfileName" Width="320" Margin="10,0" MaxLength="64"/></StackPanel><StackPanel Grid.Row="5"><TextBlock Name="Status" TextWrapping="Wrap" Margin="0,10"/><WrapPanel><Button Name="Run" Content="Test selected candidates" Margin="4" Padding="10,6"/><Button Name="UseDraft" Content="Use in draft" Visibility="Collapsed" Margin="4" Padding="10,6"/><Button Name="Save" Content="Save next-connection profile" Margin="4" Padding="10,6"/><Button Name="Cancel" Content="Cancel test" Margin="4" Padding="10,6"/><Button Name="Close" Content="Close" Margin="4" Padding="10,6"/></WrapPanel></StackPanel></Grid></Window>
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Candidates through connected prefix" Width="850" Height="600" MinWidth="700" MinHeight="500" WindowStartupLocation="CenterOwner"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Name="PurposeNote" TextWrapping="Wrap" Text="Measure the next hop through the selected prefix. Packet prefixes time TCP handshakes. Shadowsocks prefixes time authenticated responses from paired candidates. A Server trial requires a separately provisioned candidate. Save a measured choice for the next connection."/><StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,12"><ComboBox Name="Prefix" Width="520" DisplayMemberPath="display" SelectedValuePath="position"/><Button Name="Refresh" Content="Capture this prefix" Margin="8,0"/></StackPanel><DataGrid Name="Candidates" Grid.Row="2" AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Extended"><DataGrid.Columns><DataGridTextColumn Header="Saved candidate" Binding="{Binding Name}" Width="*"/><DataGridTextColumn Header="Timing" Binding="{Binding Timing}" Width="300"/></DataGrid.Columns></DataGrid><TextBox Name="Preview" Grid.Row="3" Margin="0,10" IsReadOnly="True" TextWrapping="Wrap"/><StackPanel Grid.Row="4" Orientation="Horizontal"><TextBlock Text="Next-connection profile name" VerticalAlignment="Center"/><TextBox Name="ProfileName" Width="320" Margin="10,0" MaxLength="64"/></StackPanel><StackPanel Grid.Row="5"><TextBlock Name="Status" TextWrapping="Wrap" Margin="0,10"/><WrapPanel><Button Name="Run" Content="Test selected candidates" Margin="4" Padding="10,6"/><Button Name="UseDraft" Content="Use in draft" Visibility="Collapsed" Margin="4" Padding="10,6"/><Button Name="Save" Content="Save next-connection profile" Margin="4" Padding="10,6"/><Button Name="Cancel" Content="Cancel test" Margin="4" Padding="10,6"/><Button Name="Close" Content="Close" Margin="4" Padding="10,6"/></WrapPanel></StackPanel></Grid></Window>
 "@
  $Reader=New-Object System.Xml.XmlNodeReader $X;$D=[Windows.Markup.XamlReader]::Load($Reader);$D.Owner=$Window
  $S=@{Dialog=$D;Table=$D.FindName('Candidates');Prefix=$D.FindName('Prefix');Refresh=$D.FindName('Refresh');Run=$D.FindName('Run');UseDraft=$D.FindName('UseDraft');Save=$D.FindName('Save');Cancel=$D.FindName('Cancel');Status=$D.FindName('Status');Preview=$D.FindName('Preview');ProfileName=$D.FindName('ProfileName');Client=(New-RouterVPNControllerClient -TimeoutMilliseconds 180000 -ResponseLimit 2097152);Task=$null;Request=$null;Cts=$null;Phase='';Position=$Position;Draft=$Draft;AutoRun=$false;ChoiceID='';View=$null;Rows=@();Receipt=$null;RequestID='';SavedPath=$SavedPath;SavedPrefix=$SavedPrefix;SavedProfileID='';SavedAdmitted=$false;PendingDrain=$false;CancelWanted=$false;CloseWanted=$false;AllowClose=$false;Closed=$false;Next=[DateTime]::UtcNow;Timer=(New-Object Windows.Threading.DispatcherTimer)}
@@ -1076,9 +1109,14 @@ function FinishUnifiedPerformanceRequest($State,$Token){
 }
 function GetUnifiedPerformanceLocalSource($Value,$Count,$Token,$Entry,$Exit){
  $local=$Value.PSObject.Properties['ordered_local_source'];$selected=$Value.PSObject.Properties['ordered_original_source']
- if(($null-eq$local)-eq($null-eq$selected)-or$Count-lt9-or$Count-gt96){return $null}
+ if(($null-eq$local)-eq($null-eq$selected)-or$Count-lt3-or$Count-gt96){return $null}
  $record=if($null-ne$selected){$selected.Value}else{$local.Value}
  if($null-eq$record){return $null};$keys=@($record.PSObject.Properties.Name)
+ $externalExit=''
+ if('external_final_node_id' -cin $keys){
+  $externalExit=$record.external_final_node_id
+  if($null-ne$selected-or$externalExit-isnot[string]-or$externalExit-cne$Exit-or$externalExit-ceq$Entry-or$Value.execution-cne'local'){return $null}
+ }elseif($Count-lt9){return $null}
  $expected=3;$winner='';$generation='';$paired=$false;$packets=1;$roles=$null;$rolesJSON=''
  if($null-ne$selected){
   $expected=5
@@ -1089,6 +1127,7 @@ function GetUnifiedPerformanceLocalSource($Value,$Count,$Token,$Entry,$Exit){
    $rolesJSON=$record.selected_roles_json;$expected=6
   }
   $winner=$record.selected_execution;$generation=$record.generation_sha256
+ }elseif($externalExit){$expected=4
  }elseif('local_roles_json' -cin $keys){
   $roles=Get-RouterVPNOrderedLocalRoles $record.local_roles_json $Count
   if($null-eq$roles-or'paired_wireguard'-cin$keys-or'paired_prefix_nodes'-cin$keys){return $null}
@@ -1106,20 +1145,20 @@ function GetUnifiedPerformanceLocalSource($Value,$Count,$Token,$Entry,$Exit){
  $ids=$record.node_ids
  if($ids-isnot[array]-or$ids.Count-ne$Count-or$ids[0]-cne$Entry-or$ids[-1]-cne$Exit){return $null}
  $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
- foreach($id in $ids){if($id-isnot[string]-or-not$id-or($null-ne$selected-and($id.Length-gt64-or$id-cnotmatch'^[A-Za-z0-9_-]+$'))-or[Text.Encoding]::UTF8.GetByteCount($id)-gt128-or$id-match'[\p{Cc}]'-or-not$seen.Add($id)){return $null}}
- return @{Source=$record.source_sha256;Config=$record.config_sha256;IDs=@($ids);Token=$Token;Winner=$winner;Generation=$generation;Paired=$paired;Packets=$packets;Roles=$roles;RolesJSON=$rolesJSON}
+ foreach($id in $ids){if($id-isnot[string]-or-not$id-or(($null-ne$selected-or$externalExit)-and($id.Length-gt64-or$id-cnotmatch'^[A-Za-z0-9_-]+$'))-or[Text.Encoding]::UTF8.GetByteCount($id)-gt128-or$id-match'[\p{Cc}]'-or-not$seen.Add($id)){return $null}}
+ return @{Source=$record.source_sha256;Config=$record.config_sha256;IDs=@($ids);Token=$Token;ExternalFinal=$externalExit;Winner=$winner;Generation=$generation;Paired=$paired;Packets=$packets;Roles=$roles;RolesJSON=$rolesJSON}
 }
 function TestUnifiedPerformanceLocalResult($Value,$Original){
  $ids=$Original.IDs;$count=$ids.Count
  if($Value.connected-isnot[bool]-or-not$Value.connected-or$Value.mode-cne'multihop'-or$Value.entry_id-cne$ids[0]-or$Value.exit_id-cne$ids[-1]-or$Value.ordered_capture-cne$Original.Token-or
     ($Value.ordered_nodes-isnot[int]-and$Value.ordered_nodes-isnot[long])-or$Value.ordered_nodes-ne$count-or($Value.bytes-isnot[int]-and$Value.bytes-isnot[long])-or$Value.bytes-ne8388608-or$Value.hops-isnot[array]-or$Value.hops.Count-ne$count){return $false}
  $current=GetUnifiedPerformanceLocalSource $Value $count $Original.Token $ids[0] $ids[-1]
- if($null-eq$current-or$current.Source-cne$Original.Source-or$current.Config-cne$Original.Config-or$current.Winner-cne$Original.Winner-or$current.Generation-cne$Original.Generation-or$current.Paired-ne$Original.Paired-or$current.Packets-ne$Original.Packets-or$current.RolesJSON-cne$Original.RolesJSON){return $false}
+ if($null-eq$current-or$current.Source-cne$Original.Source-or$current.ExternalFinal-cne$Original.ExternalFinal-or$current.Config-cne$Original.Config-or$current.Winner-cne$Original.Winner-or$current.Generation-cne$Original.Generation-or$current.Paired-ne$Original.Paired-or$current.Packets-ne$Original.Packets-or$current.RolesJSON-cne$Original.RolesJSON){return $false}
  for($i=0;$i-lt$count;$i++){
   $id=$ids[$i];$row=$Value.hops[$i];$interior=$i-gt0-and$i-lt($count-1)
   $role=if($i-eq0){'entry'}elseif($interior){'intermediate'}else{'exit'}
   $path=if($Original.Winner){"Cumulative $($Original.Winner) path"}else{"Cumulative path"}
-  $public=if($null-ne$Original.Roles){$Original.Roles[$i]-ceq'public-path'}else{$interior -and $i -ge $Original.Packets -and -not $Original.Paired}
+  $public=if($Original.ExternalFinal){$i -gt 0}elseif($null-ne$Original.Roles){$Original.Roles[$i]-ceq'public-path'}else{$interior -and $i -ge $Original.Packets -and -not $Original.Paired}
   $prefix="$path through node $($i+1) of $count";if($public){$prefix+=' to the public benchmark'}
   if($current.IDs[$i]-cne$id-or$row.role-cne$role-or$row.router_id-cne$id-or$row.speed_label-cne($prefix+' transfer')-or$row.latency_label-cne($prefix+' HTTP response')-or
      $row.latency.router_id-cne$id-or$row.speed.router_id-cne$id-or($row.speed.bytes-isnot[int]-and$row.speed.bytes-isnot[long])-or$row.speed.bytes-ne8388608){return $false}
@@ -1143,7 +1182,7 @@ function StartUnifiedPerformanceRequest($State,[string]$Label,[string]$Path,$Bod
    $source=$R.PSObject.Properties['ordered_local_source'];$selectedSource=$R.PSObject.Properties['ordered_original_source'];$original=$null
    if($null-ne$capture-or$null-ne$count-or$null-ne$source-or$null-ne$selectedSource){
     if($null-eq$capture-or$capture.Value-isnot[string]-or$capture.Value.Length-ne64-or$capture.Value-cnotmatch'^[a-f0-9]{64}$'-or$null-eq$count-or($count.Value-isnot[int]-and$count.Value-isnot[long])-or$count.Value-lt2-or$count.Value-gt96){throw 'The ordered native route has no complete measurement capture.'}
-    if($count.Value-gt8){
+    if($count.Value-gt8-or$null-ne$source){
      $execution=$R.PSObject.Properties['execution']
      $original=GetUnifiedPerformanceLocalSource $R $count.Value $capture.Value $entry.Value $exit.Value
      if($null-eq$execution-or$null-eq$original-or(-not$original.Winner-and$execution.Value-cne'local')){throw 'The ordered native route has no complete measurement capture.'}

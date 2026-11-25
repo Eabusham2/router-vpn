@@ -24,6 +24,7 @@ type orderedCandidatePreparedView struct {
 	candidates     []orderedCandidateChoice
 	prefixes       []orderedCandidatePrefix
 	responseNodes  []orderedCandidateResponseSourceNode
+	responseOwners []string
 }
 
 func captureOrderedCandidatePreparedView(ctx context.Context, a *app, position int,
@@ -113,12 +114,18 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 	}
 	view := &orderedCandidatePreparedView{draft: draft, scope: scope, token: token, network: network, expires: time.Now().Add(120 * time.Second), position: position, selection: selection}
 	view.responseNodes = orderedCandidateResponseSourceNodes(selection, orderedCandidateDraftExecution(draft), position)
+	if candidateServerRequested(ctx) && launch.chain.execution != nil {
+		view.responseOwners = candidateResponseExecutions(launch.chain.execution.preparation, position)
+		if len(view.responseOwners) > 0 {
+			view.responseNodes = originalCandidateResponseNodes(selection)
+		}
+	}
 	for i, member := range selection.Nodes {
-		metric := desktopCandidatePrefixMetric(launch, i)
+		metric := desktopCandidateMetricForIntent(launch, i, candidateServerRequested(ctx))
 		if scope == orderedCandidateSavedPrefixScope && (i == len(selection.Nodes)-1 || metric == "" || metric == hopmeasure.CandidateTCPMeasurement && !mobilemultihop.DesktopNodePhysicalGraphSupported(member.Mode, member.Profile.StartLayer)) {
 			break
 		}
-		if metric != "" && (scope != orderedCandidateSelectedDraftScope || i < len(selection.Nodes)-1 && desktopSelectedCandidatePosition(launch, i)) {
+		if metric != "" && (scope != orderedCandidateSelectedDraftScope || i < len(selection.Nodes)-1 && desktopCandidatePositionForIntent(launch, i, candidateServerRequested(ctx))) {
 			view.prefixes = append(view.prefixes, orderedPrefixChoice(i, member, metric))
 		}
 	}
@@ -194,7 +201,7 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 }
 
 func (view *orderedCandidatePreparedView) matchesPreparation(p *orderedCandidatePreparation, now time.Time) bool {
-	if view == nil || p == nil || !now.Before(view.expires) || view.draft != p.request.draft || view.position != p.request.Position || view.scopeValue() != p.request.Scope || view.catalog == nil ||
+	if view == nil || p == nil || !now.Before(view.expires) || view.draft != p.request.draft || view.position != p.request.Position || view.scopeValue() != p.request.Scope || view.catalog == nil || view.catalog.serverResponse != p.request.serverResponse ||
 		view.selection.Native == nil || p.selection.Native == nil || view.selection.Native.source != p.selection.Native.source ||
 		view.network != p.network || view.catalog.revision != p.revision || p.inventory == nil {
 		return false

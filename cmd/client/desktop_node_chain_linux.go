@@ -176,7 +176,7 @@ func (h *desktopLinuxNodeHost) currentNodeChain(ctx context.Context) error {
 		if a.checkCapturedConnectionOperationLocked(h.operation) != nil || a.connectionCancelIntent == h.operation {
 			return errConnectionOperationCancelled
 		}
-	} else if h.process == nil || a.cmd != h.process.command || a.state.RouterID != meta.ProfileID || a.state.RuntimeMode != meta.Mode {
+	} else if h.process == nil || a.cmd != h.process.command || a.state.RouterID != h.launch.chain.selection.Control.ID || a.state.RuntimeMode != meta.Mode {
 		return errors.New("Linux ordered activation belongs to a replaced connection")
 	}
 	return runtime.capture.sources.currentLocked(a)

@@ -83,6 +83,67 @@ class NativeShippingAuditTests(unittest.TestCase):
         exec(compile(ast.Module(body=functions + invocations, type_ignores=[]), "backend-native-proof", "exec"), scope)
         self.assertEqual(not scope["errors"], expected)
 
+    def test_external_final_request_retains_explicit_intent_and_original_control(self):
+        request = "cmd/client/multihop_node_chain_request.go"
+        self.assertTrue(_NATIVE.native_multihop_request_admission(self.body))
+        changes = (
+            ('if q.ExternalFinal {\n\t\t\treturn errors.New("external final requires its complete explicit ordered source")',
+             'if false {\n\t\t\treturn errors.New("external final requires its complete explicit ordered source")'),
+            ('q.Execution != "local" || !desktopExternalFinalReferences(q.Nodes)', 'false'),
+            ('q.Nodes[0].ID != *q.ExpectedSelectedNodeID', 'false'),
+            ('present && !ordered', 'false'),
+            ('present && string(value) != "true"', 'false'),
+        )
+        for before, after in changes:
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.assertEqual(self.body(request).count(before), 1)
+                self.replace(request, before, after)
+                self.changes[request] += "\n// " + before.replace("\n", "\n// ") + "\n"
+                self.assertFalse(_NATIVE.native_multihop_request_admission(self.body))
+
+    def test_external_final_source_cannot_exchange_the_entry_and_exit(self):
+        source = "cmd/client/multihop_node_chain_external_final.go"
+        self.assertTrue(_NATIVE.native_multihop_ordered_owner(self.body))
+        changes = (
+            ('len(members) < 3', 'len(members) < 2'),
+            ('members[0].Mode != "wg"', 'false'),
+            ('p.StartLayer != "" && p.StartLayer != "off"', 'false'),
+            ('position = 0', 'position = len(members) - 1'),
+            ('liveMeasurementProfileToken(control) == liveMeasurementProfileToken(members[position].Profile)', 'true'),
+            ('meta.ExternalFinal.ExpectedPublicIP != selection.Exit.External.ExpectedPublicIP', 'false'),
+            ('meta.ExternalFinal.SourceSHA256 == final.SourceSHA256', 'true'),
+        )
+        for before, after in changes:
+            with self.subTest(before=before):
+                self.changes.clear()
+                self.assertEqual(self.body(source).count(before), 1)
+                self.replace(source, before, after)
+                self.changes[source] += "\n// " + before + "\n"
+                self.assertFalse(_NATIVE.native_multihop_ordered_owner(self.body))
+
+    def test_ordered_dns_status_requires_original_selected_native_proof(self):
+        source = "cmd/client/desktop_ordered_dns.go"
+        graph = "cmd/client/desktop_node_chain_execution_graph.go"
+        self.assertTrue(_NATIVE.native_multihop_ordered_owner(self.body))
+        changes = (
+            (source, 'capturedNativeMultihopRuntimeContext(ctx, a, retained.launch.command, graph)',
+             'capturedNativeMultihopRuntimeContext(context.Background(), a, retained.launch.command, graph)'),
+            (source, 'err != nil || owner != retained', 'false'),
+            (source, 'observed.RouterID != selection.Control.ID', 'false'),
+            (source, '!desktopNodeChainMetadataMatchesSelection(meta, selection)', 'false'),
+            (source, 'proveDesktopNodeChainContext(ctx, a, selection, owner.launch.command)', 'error(nil)'),
+            (graph, '!e.ready.Progress.DNSProven ||', ''),
+            ('cmd/client/dns_proof.go', 'if proof, owned := proveDesktopOrderedDNS(parent, a, s, runtimeID); owned {',
+             'if proof, owned := proveDesktopOrderedDNS(parent, a, s, runtimeID); false && owned {'),
+        )
+        for path, before, after in changes:
+            with self.subTest(path=path, before=before):
+                self.changes.clear()
+                self.replace(path, before, after)
+                self.changes[path] += "\n// " + before + "\n"
+                self.assertFalse(_NATIVE.native_multihop_ordered_owner(self.body))
+
     def test_multiple_imported_execution_preserves_exact_source_and_advertised_family(self):
         self.assertTrue(_NATIVE.native_multihop_execution_product(self.body))
         family = "cmd/client/desktop_node_chain_multiple_imported_execution.go"
@@ -813,7 +874,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             (middle, 'proxy.Port >= 1 && proxy.Port <= 65535', "true"),
             (selection, 'resolveDesktopNodeChainCONNECTMembers(control, profiles, nodes, "local")', 'resolveDesktopNodeChainCONNECTMembers(control, profiles, nodes, execution)'),
             (selection, 'desktopOrderedExecutionMembers(members, execution)', 'desktopOrderedExecutionMembers(members, "local")'),
-            (selection, 'liveMeasurementProfileToken(control) != liveMeasurementProfileToken(final.Profile)', "false"),
+            (selection, '!desktopNodeChainControlCurrent(control, members)', "false"),
             (product, 'len(nodes) < 3 || len(nodes) > mobilemultihop.NodeChainMaximumNodes', 'false'),
             (product, '!mobilemultihop.NodeChainPrefixMode(node.Mode)', 'false'),
             (product, '(nodes[len(nodes)-2].Mode != "http-connect" && nodes[len(nodes)-2].Mode != "https-connect")', "false"),
@@ -1163,7 +1224,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", transport, "c.selectedPrivateStreamPosition() > 0", "true"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", transport, "c.extendedAWGSelectedSource()", "true"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", "func (c *NodeChain) selectedPrivateStreamPosition() int", "return position", "return 0"),
-            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, 'c.nodes[0].mode != "wg"', "false"),
+            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, '!NodeChainPrefixMode(c.nodes[0].mode)', "false"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, "len(c.nodes) > NodeChainExtendedLocalMaximumNodes", "false"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, 'c.proofs[i].StartLayer != "off"', "false"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, "i == 1", "false"),
@@ -1382,7 +1443,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             (request, 'fields, err := externalConnectJSONObject(data)', 'fields, err := lenientConnectJSONObject(data)'),
             (request, 'capture, err := decodeDesktopProfileExpectations(fields)', 'capture, err := desktopProfileExpectations{}, error(nil)'),
             (request, 'name != "nodes" && strings.EqualFold(name, "nodes")', 'false'),
-            (request, 'case "nodes", "execution", "expected_selected_node_id", "expected_profile_tokens":', 'case "nodes", "execution", "expected_selected_node_id", "expected_profile_tokens", "entry_id":'),
+            (request, 'case "nodes", "execution", "expected_selected_node_id", "expected_profile_tokens", "external_final":', 'case "nodes", "execution", "expected_selected_node_id", "expected_profile_tokens", "external_final", "entry_id":'),
             (request, 'len(rows) < 2 || len(rows) > hopmeasure.PhysicalTraversalDepth', 'false'),
             (request, 'len(row) != 2 || row["id"] == nil || row["mode"] == nil', 'false'),
             (request, 'if err := result.validateOrdered(); err != nil {', 'if err := error(nil); err != nil {'),

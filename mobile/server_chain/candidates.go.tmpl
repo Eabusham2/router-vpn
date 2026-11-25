@@ -3,7 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	ssclient "github.com/sagernet/sing-shadowsocks2"
+	"io"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -15,10 +19,14 @@ import (
 	N "github.com/sagernet/sing/common/network"
 )
 
-// This operation grants only one target's TCP establishment. It never installs
-// a final/proof route and never calls CopyConn or forwards application bytes.
+// The original operation grants one TCP handshake. A response grant instead
+// sends one worker-constructed challenge to the registered private agent. Both
+// use the captured prefix and close each sample without forwarding user traffic.
 type routerVPNServerChainCandidate struct {
 	prepareDone                           chan struct{}
+	response                              *mobilemultihop.NodeChainServerCandidateResponder
+	responseFile                          os.FileInfo
+	nonces                                map[string]bool
 	reads                                 int
 	readDone                              chan struct{}
 	self                                  *routerVPNServerChainCandidate
@@ -50,13 +58,42 @@ func (n *routerVPNServerChain) NewCandidateOperation(ctx context.Context, c mult
 	if err != nil || other != nil || digest != requested {
 		return nil, errServerChainFront
 	}
-	target, err := n.policy.CandidateTarget(c)
+	acquire := n.policy.CandidateTarget
+	if c.Request.Schema == 2 {
+		acquire = n.policy.ResponseCandidateTarget
+	}
+	target, err := acquire(c)
 	if err != nil {
 		return nil, err
 	}
 	tag, address, err := target.Read(n.policy, c)
 	if err != nil || n.outputs[tag] == nil {
 		return nil, errServerChainFront
+	}
+	var responder *mobilemultihop.NodeChainServerCandidateResponder
+	var responseFile os.FileInfo
+	if c.Request.Schema == 2 {
+		if n.root == nil {
+			return nil, errServerChainFront
+		}
+		name := c.ResponseSourceFile()
+		before, err := n.root.Lstat(name)
+		if err != nil {
+			return nil, errServerChainFront
+		}
+		input, err := routerVPNServerChainRead(n.root, name, mobilemultihop.NodeChainInputLimit)
+		if err != nil {
+			return nil, errServerChainFront
+		}
+		responder, err = mobilemultihop.NewNodeChainServerCandidateResponder(c, string(input))
+		clear(input)
+		if err != nil {
+			return nil, errServerChainFront
+		}
+		responseFile, err = n.root.Lstat(name)
+		if err != nil || !os.SameFile(responseFile, before) || responseFile.Size() != before.Size() || !responseFile.ModTime().Equal(before.ModTime()) {
+			return nil, errServerChainFront
+		}
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -77,6 +114,10 @@ func (n *routerVPNServerChain) NewCandidateOperation(ctx context.Context, c mult
 	}
 	op := &routerVPNServerChainCandidate{owner: n, front: n.front, policy: n.policy, target: target, outbound: n.outputs[tag], capture: c.Clone(), tag: tag, address: address, ctx: owned, cancel: cancel, quota: quota, resources: make(map[net.Conn]*routerVPNServerChainClose), closeGate: make(chan struct{}, 1), expiryDone: make(chan struct{})}
 	op.self = op
+	op.response, op.responseFile = responder, responseFile
+	if responder != nil {
+		op.nonces = make(map[string]bool)
+	}
 	n.candidateAttempts[c.Request.Operation] = c.Clone()
 	n.candidate = op
 	go op.expire()
@@ -94,6 +135,15 @@ func (op *routerVPNServerChainCandidate) original() bool {
 func (op *routerVPNServerChainCandidate) current(ctx context.Context) bool {
 	if ctx == nil || ctx.Err() != nil || !op.original() || op.ctx.Err() != nil || !time.Now().Before(time.UnixMilli(op.capture.Request.DeadlineAt)) {
 		return false
+	}
+	if op.capture.Request.Schema == 2 {
+		if op.response == nil || op.responseFile == nil || op.owner.root == nil {
+			return false
+		}
+		now, err := op.owner.root.Lstat(op.capture.ResponseSourceFile())
+		if err != nil || now.Mode().Perm() != 0600 || !os.SameFile(op.responseFile, now) || now.Size() != op.responseFile.Size() || !now.ModTime().Equal(op.responseFile.ModTime()) {
+			return false
+		}
 	}
 	tag, address, err := op.target.Read(op.policy, op.capture)
 	if err != nil || tag != op.tag || address != op.address || !op.owner.trafficCurrent() || !op.owner.nativeCurrent(ctx) {
@@ -373,6 +423,42 @@ func (op *routerVPNServerChainCandidate) connect(ctx context.Context, conn net.C
 	}
 	if err := N.ReportConnHandshakeSuccess(conn, remote); err != nil {
 		return err
+	}
+	if op.response == nil {
+		return nil
+	}
+	// The authenticated stream has one fixed 96-byte challenge and one 64-byte MAC.
+	// Neither client bytes nor a client-provided destination enter the inner HTTP request.
+	if err := conn.SetDeadline(deadline); err != nil {
+		return err
+	}
+	var frame [96]byte
+	if _, err := io.ReadFull(conn, frame[:]); err != nil {
+		return err
+	}
+	nonce := string(frame[:32])
+	op.mu.Lock()
+	replayed := op.nonces[nonce]
+	if !replayed {
+		op.nonces[nonce] = true
+	}
+	op.mu.Unlock()
+	if replayed || !hopmeasure.ValidCandidateNonce(nonce) || !op.current(bounded) {
+		return errServerChainFront
+	}
+	wrap := func(call context.Context, raw net.Conn, method, password, address string) (net.Conn, error) {
+		cipher, err := ssclient.CreateMethod(call, method, ssclient.MethodOptions{Password: password})
+		if err != nil {
+			return nil, err
+		}
+		return cipher.DialConn(raw, M.ParseSocksaddr(address))
+	}
+	reply, err := op.response.Reply(bounded, op.capture, remote, nonce, string(frame[32:]), wrap)
+	if err != nil || len(reply) != 64 || !op.current(bounded) {
+		return errServerChainFront
+	}
+	if n, err := io.WriteString(conn, reply); err != nil || n != len(reply) {
+		return errors.Join(err, io.ErrShortWrite)
 	}
 	return nil
 }

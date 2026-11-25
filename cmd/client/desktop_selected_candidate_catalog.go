@@ -24,22 +24,23 @@ type desktopCandidateDescription interface {
 }
 
 type desktopSelectedCandidateDescriptor struct {
-	socksPolicy   *mobilemultihop.DesktopNodeChainSOCKSPolicy
-	connectPolicy *mobilemultihop.DesktopNodeChainCONNECTPolicy
-	purpose       *orderedCandidatePreparation
-	self          *desktopSelectedCandidateDescriptor
-	launch        *desktopNodeLaunch
-	execution     *desktopNodeChainExecutionLaunch
-	preparation   *mobilemultihop.NodeChainExecutionPreparation
-	policy        *mobilemultihop.DesktopNodeChainPolicy
-	original      *mobilemultihop.NodeChain
-	plan          desktopCandidateDescription
-	mu            sync.Mutex
-	metadata      string
-	expectedRaw   string
-	expected      *desktopSelectedCandidateInventory
-	selected      string
-	ready         *mobilemultihop.DesktopNodeChainExecutionReadyRecord
+	socksPolicy    *mobilemultihop.DesktopNodeChainSOCKSPolicy
+	connectPolicy  *mobilemultihop.DesktopNodeChainCONNECTPolicy
+	serverResponse bool
+	purpose        *orderedCandidatePreparation
+	self           *desktopSelectedCandidateDescriptor
+	launch         *desktopNodeLaunch
+	execution      *desktopNodeChainExecutionLaunch
+	preparation    *mobilemultihop.NodeChainExecutionPreparation
+	policy         *mobilemultihop.DesktopNodeChainPolicy
+	original       *mobilemultihop.NodeChain
+	plan           desktopCandidateDescription
+	mu             sync.Mutex
+	metadata       string
+	expectedRaw    string
+	expected       *desktopSelectedCandidateInventory
+	selected       string
+	ready          *mobilemultihop.DesktopNodeChainExecutionReadyRecord
 }
 
 type desktopSelectedCandidateTarget struct {
@@ -125,6 +126,10 @@ func desktopSelectedCandidateFamily(e *desktopNodeChainExecutionLaunch) bool {
 }
 
 func desktopSelectedCandidatePosition(launch *desktopNodeLaunch, position int) bool {
+	return desktopCandidatePositionForIntent(launch, position, false)
+}
+
+func desktopCandidatePositionForIntent(launch *desktopNodeLaunch, position int, serverResponse bool) bool {
 	e := desktopNodeChainLaunchExecution(launch)
 	if e == nil {
 		return true
@@ -132,10 +137,12 @@ func desktopSelectedCandidatePosition(launch *desktopNodeLaunch, position int) b
 	if launch == nil || launch.chain == nil || position < 0 || position >= len(launch.chain.selection.Nodes) {
 		return false
 	}
-	if e.preparation != nil && e.preparation.SupportsCompareLocalResponseCandidate(position) {
+	local := e.preparation.SupportsCompareLocalResponseCandidate(position)
+	server := serverResponse && e.preparation.SupportsServerResponseCandidate(position)
+	if local || server {
 		e.mu.Lock()
 		defer e.mu.Unlock()
-		return e.ready == nil || e.ready.Progress.Execution == "local"
+		return e.ready == nil || e.ready.Progress.Execution == "local" && local || e.ready.Progress.Execution == "server" && server
 	}
 	return mobilemultihop.NodeChainPrefixMode(launch.chain.selection.Nodes[position].Mode) && (e.socksPhysical == nil && e.connectPhysical == nil || position == 0)
 }
@@ -145,15 +152,19 @@ func captureDesktopSelectedCandidateDescriptor(launch *desktopNodeLaunch, positi
 }
 
 func captureDesktopSelectedCandidateDescriptorForPurpose(launch *desktopNodeLaunch, position int, inventory string, purpose *orderedCandidatePreparation) (*desktopSelectedCandidateDescriptor, error) {
-	bad := errors.New("selected candidate timing requires its original complete packet source")
-	if !desktopSelectedCandidateSourceAllowedForPurpose(launch, purpose) || position < 0 || position >= len(launch.chain.selection.Nodes)-1 || !desktopSelectedCandidatePosition(launch, position) {
+	return captureDesktopSelectedCandidateForIntent(launch, position, inventory, purpose, purpose != nil && purpose.request.serverResponse)
+}
+
+func captureDesktopSelectedCandidateForIntent(launch *desktopNodeLaunch, position int, inventory string, purpose *orderedCandidatePreparation, serverResponse bool) (*desktopSelectedCandidateDescriptor, error) {
+	bad := errors.New("selected candidate timing requires its original complete source")
+	if !desktopSelectedCandidateSourceAllowedForPurpose(launch, purpose) || position < 0 || position >= len(launch.chain.selection.Nodes)-1 || !desktopCandidatePositionForIntent(launch, position, serverResponse) {
 		return nil, bad
 	}
 	e := launch.chain.execution
 	if e.bound(launch) != nil {
 		return nil, bad
 	}
-	d := &desktopSelectedCandidateDescriptor{purpose: purpose, launch: launch, execution: e, preparation: e.preparation,
+	d := &desktopSelectedCandidateDescriptor{serverResponse: serverResponse, purpose: purpose, launch: launch, execution: e, preparation: e.preparation,
 		policy: launch.chain.policy, socksPolicy: launch.chain.socksPolicy, connectPolicy: launch.chain.connectPolicy}
 	d.self = d
 	var err error
@@ -231,8 +242,7 @@ func (d *desktopSelectedCandidateDescriptor) validateMetadata(request desktopSel
 	}
 	if expected.Measurement != "" {
 		if expected.Measurement != hopmeasure.CandidatePrivateResponseMeasurement || metadata.Measurement != expected.Measurement ||
-			request.Operation != "selected-local-private-response-50" || metadata.Requested != "auto" || metadata.Execution != "local" ||
-			!d.preparation.SupportsCompareLocalResponseCandidate(request.Position) {
+			request.Operation != d.responseOperation(request.Position, metadata.Execution) || request.Operation == "" {
 			return envelope, "", bad
 		}
 		names = append(names, "measurement")
@@ -348,5 +358,5 @@ func validateDesktopSelectedCandidateStatus(d *desktopSelectedCandidateDescripto
 	// copy after the original selected capture has independently matched above.
 	description := status
 	description.CaptureSHA256 = d.plan.CaptureSHA256()
-	return validateDesktopNodeChainCandidateStatus(d.plan, id, description, now)
+	return validateDesktopNodeChainCandidateReceipt(d.plan, id, description, now, d.serverResponse && metadata.Measurement == hopmeasure.CandidatePrivateResponseMeasurement && metadata.Execution == "server")
 }

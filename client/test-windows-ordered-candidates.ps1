@@ -90,7 +90,7 @@ ReceiveOrderedCandidates $S $Sparse 'catalog'
 Assert-Candidate ((@($S.Prefix.ItemsSource|ForEach-Object{$_.position})-join',')-ceq'0,2,4,6') 'sparse connected packet positions changed in the picker'
 $S.Prefix.SelectedValue=4;$S.Draft=$null
 &$CaptureClick
-Assert-Candidate ($S.Position-eq4-and$null-eq$S.View-and$SavedRequest.Path-ceq'/api/multihop/prefix-candidates/catalog?prefix_position=4'-and$null-eq$SavedRequest.Body) 'sparse connected packet click did not recapture its exact original position'
+Assert-Candidate ($S.Position-eq4-and$null-eq$S.View-and$SavedRequest.Path-ceq'/api/multihop/prefix-candidates/catalog?prefix_position=4&server_response=true'-and$null-eq$SavedRequest.Body) 'sparse connected packet click did not recapture its exact original position'
 $Sparse.prefix_position=4;$Sparse.view_token='b'*64;ReceiveOrderedCandidates $S $Sparse 'catalog'
 Assert-Candidate ($S.View.view_token-ceq('b'*64)-and$S.Prefix.SelectedValue-eq4) 'sparse connected packet recapture lost its current token or position'
 $S.Position=0;ReceiveOrderedCandidates $S $Catalog 'catalog'
@@ -200,7 +200,7 @@ foreach($Combo in @(@('server','server'),@('auto','local'),@('auto','server'))){
  $S.Dialog=[pscustomobject]@{Tag=$null}
  $Offer=@{}+$Catalog;$Offer.scope='draft-complete-selected';$Offer.origin='editor-draft';$Offer.requested_execution=$Requested;$Offer.prefix_position=2
  $Offer.prefixes=@(@{id='packet';name='Packet';position=2;mode='awg2-fast'});$Offer.candidates=@(@{id='custom-original';name='Candidate';proposed_path=$Proposed})
- Assert-Candidate ((OrderedCandidateCatalogPath $S)-ceq'/api/multihop/draft-candidates/catalog?prefix_position=2&scope=draft-complete-selected') 'selected draft catalog went to the Local prefix owner'
+ Assert-Candidate ((OrderedCandidateCatalogPath $S)-ceq'/api/multihop/draft-candidates/catalog?prefix_position=2&scope=draft-complete-selected&server_response=true') 'selected draft catalog went to the Local prefix owner'
  foreach($Fault in @(@{key='scope';value='saved-prefix-local'},@{key='requested_execution';value='local'},@{key='selected_execution';value=$Winner},@{key='prefixes';value=@(@{position=2;id='other';mode='wg'})})){
   $Bad=@{}+$Offer;$Bad[$Fault.key]=$Fault.value;$Rejected=$false;try{ReceiveOrderedCandidates $S $Bad 'catalog'}catch{$Rejected=$true};Assert-Candidate $Rejected ('foreign selected catalog: '+$Fault.key)
  }
@@ -316,10 +316,11 @@ foreach($depth in @(9,16,96)){
 }
 foreach($layout in @(@(4,2,-1),@(9,7,2),@(16,14,-1),@(96,94,94),@(4,1,-1),@(16,9,-1),@(9,6,-1),@(95,92,-1))){
  $depth,$position,$privatePosition=$layout
+ $entryMode=if($depth -eq 9){'awg2-fast'}elseif($depth -eq 16){'awg2-strong'}else{'wg'}
  $insert=$position -lt $depth-2
  $action=if($insert){'save-intermediate-profile'}else{'save-final-profile'}
  $crossedAction=if($insert){'save-final-profile'}else{'save-intermediate-profile'}
- $nodes=@(for($i=0;$i -lt $depth;$i++){@{id=('member-'+$i);mode=$(if($i){'shadowsocks'}else{'wg'})}})
+ $nodes=@(for($i=0;$i -lt $depth;$i++){@{id=('member-'+$i);mode=$(if($i){'shadowsocks'}else{$entryMode})}})
  $source=@(for($i=0;$i -lt $depth;$i++){@{}+$nodes[$i]+@{kind=$(if($i -eq 0 -or $i -eq $privatePosition -or $i -eq $depth-1){'router-vpn'}else{'external'})}})
  $proposal=@($nodes[0..$position])+@(@{id='candidate-C';mode='shadowsocks'})
  if($insert){$proposal+=@($nodes[($position+1)..($depth-1)])}
@@ -330,9 +331,26 @@ foreach($layout in @(@(4,2,-1),@(9,7,2),@(16,14,-1),@(96,94,94),@(4,1,-1),@(16,9
   $S.CancelWanted=$false;$S.CloseWanted=$false;$S.PendingDrain=$false;$S.SavedAdmitted=$false;$S.Dialog.Tag=$null
   $offer=@{schema=1;samples=50;view_token='7'*64;expires_at=$Now+120000;prefix_position=$position;measurement=$metric;requested_execution='auto';required_selected_execution='local';response_source_nodes=$source;prefixes=@($row);candidates=@($choice)}
   if($temporary){$offer.scope='draft-complete-selected';$offer.origin='editor-draft'}else{$offer.selected_execution='local';$offer.selection_epoch=37L}
+  foreach($requested in @('server','auto')){
+   $savedDraft=$S.Draft
+   $typed=@{}+$offer;$typed.requested_execution=$requested;$typed.response_executions=@(if($requested -ceq 'server'){'server'}else{'local';'server'})
+   $typed.selected_execution='server';$typed.required_selected_execution='server';$typed.selection_epoch=42L
+   if($temporary){$S.Draft=@{execution=$requested;nodes=$nodes}}
+   Assert-Candidate (TestOrderedCandidateLocalResponse $S $typed) 'typed Server lost its original source or actual winner'
+   $stale=@{}+$typed;$stale.selection_epoch=0L
+   Assert-Candidate (-not(TestOrderedCandidateLocalResponse $S $stale)) 'typed Server accepted stale selection epoch'
+   $stale=@{}+$typed;$stale.response_executions=@('local')
+   Assert-Candidate (-not(TestOrderedCandidateLocalResponse $S $stale)) 'typed Server borrowed a Local-only lease'
+   if($temporary){
+    $typed.Remove('selected_execution');$typed.Remove('selection_epoch')
+    if($requested -ceq 'auto'){$typed.Remove('required_selected_execution')}
+    Assert-Candidate (TestOrderedCandidateLocalResponse $S $typed) 'pending typed source invented a prior winner'
+   }
+   $S.Draft=$savedDraft
+  }
   if(-not $temporary -and $position -eq 1){
    $missing=@{}+$offer;$missing.Remove('response_source_nodes')
-   $entry=@{id=$nodes[0].id;position=0;mode='wg';name='Entry'}
+   $entry=@{id=$nodes[0].id;position=0;mode=$entryMode;name='Entry'}
    $missing.prefixes=@($entry,$row)
    $refused=$false;try{ReceiveOrderedCandidates $S $missing 'catalog'}catch{$refused=$true}
    Assert-Candidate $refused 'A connected intermediate at the first import lost its source map'
@@ -384,10 +402,36 @@ foreach($layout in @(@(4,2,-1),@(9,7,2),@(16,14,-1),@(96,94,94),@(4,1,-1),@(16,9
   $value=@{}+$offer;$value.request_id=$S.RequestID;$value.results=@($private);$value.selected_execution='local';$value.selection_epoch=37L
   $value.native_down=$true;$value.accepted=$true;$value.active_path_changed=$false;$value.reviewing=$temporary;$value.drained=-not $temporary;$value.failure=''
   $private.results[0].benchmark.measurement=$metric;$private.results[0].benchmark.distribution.samples=50
+  if(-not $temporary -and $depth -eq 4){
+   $typed=@{}+$offer;$typed.response_executions=@('local','server');$typed.selected_execution='server';$typed.required_selected_execution='server'
+   $missingChoice=@{}+$choice;$missingChoice.id='not-provisioned';$missingChoice.name='Unregistered'
+   $missingChoice.proposed_path=@($proposal.Clone());$missingChoice.proposed_path[$position+1]=@{id=$missingChoice.id;mode='shadowsocks'}
+   $typed.candidates=@($missingChoice,$choice)
+   ReceiveOrderedCandidates $S $typed 'catalog'
+   $terminal=@{}+$value;$terminal.response_executions=@('local','server');$terminal.selected_execution='server';$terminal.required_selected_execution='server'
+   $missing=@{}+$private;$missing.candidate_id=$missingChoice.id
+   $missingResult=@{}+$private.results[0];$missingResult.node_id=$missingChoice.id;$missingResult.candidate_disposition='not-registered';$missingResult.ready=$false;$missingResult.Remove('benchmark')
+   $missing.results=@($missingResult);$terminal.results=@($missing,$private)
+   ReceiveOrderedCandidates $S $terminal 'run'
+   Assert-Candidate ($S.Rows.Count -eq 1 -and $S.Rows[0].ID -ceq $choice.id) 'unregistered candidate displaced its measured Server peer'
+   $missingResult.ready=$true;$missingResult.benchmark=$private.results[0].benchmark
+   ReceiveOrderedCandidates $S $terminal 'poll'
+   Assert-Candidate ($S.Rows.Count -eq 1 -and $S.Rows[0].ID -ceq $choice.id) 'unregistered candidate acquired a contradictory benchmark'
+   foreach($fault in @('owners','epoch','winner')){
+    $cross=@{}+$terminal
+    if($fault -ceq 'owners'){$cross.Remove('response_executions')}
+    if($fault -ceq 'epoch'){$cross.selection_epoch=38L}
+    if($fault -ceq 'winner'){$cross.selected_execution='local';$cross.required_selected_execution='local'}
+    $refused=$false;try{ReceiveOrderedCandidates $S $cross 'status'}catch{$refused=$true}
+    Assert-Candidate $refused ('actual Server receipt crossed its '+$fault)
+   }
+   ReceiveOrderedCandidates $S $offer 'catalog'
+  }
   $crossed=@($source.Clone());$crossed[1]=@{}+$source[1];$crossed[1].id='foreign-import'
   $changedPosition=if($privatePosition -ge 0){$privatePosition}else{$position}
   $alternate=@($source.Clone());$alternate[$changedPosition]=@{}+$alternate[$changedPosition];$alternate[$changedPosition].kind=if($privatePosition -ge 0){'external'}else{'router-vpn'}
-  foreach($field in @(@{key='response_source_nodes';v=$alternate},@{key='response_source_nodes';v=$crossed},@{key='response_source_nodes';v=$null},@{key='selected_execution';v='server'},@{key='view_token';v='a'*64})){
+  $rekeyed=@($source.Clone());$rekeyed[0]=@{}+$source[0];$rekeyed[0].mode=if($entryMode -ceq 'awg2-strong'){'awg2-fast'}else{'awg2-strong'}
+  foreach($field in @(@{key='response_source_nodes';v=$rekeyed},@{key='response_source_nodes';v=$alternate},@{key='response_source_nodes';v=$crossed},@{key='response_source_nodes';v=$null},@{key='selected_execution';v='server'},@{key='view_token';v='a'*64})){
    $bad=@{}+$value;$bad[$field.key]=$field.v;$refused=$false;try{ReceiveOrderedCandidates $S $bad 'poll'}catch{$refused=$true}
    Assert-Candidate $refused ('Changed selected result reached review '+$field.key)
   }

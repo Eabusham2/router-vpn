@@ -91,7 +91,10 @@ def check_requirements_release(source, caller):
         sections = re.split(r"^      - name: [^\n]+\n", job(source, name), flags=re.M)
         contents = [[line for line in section.splitlines() if line.strip() and not line.lstrip().startswith("#")]
                     for section in sections]
-        expected = [setup]
+        matrix = ["    strategy:", "      fail-fast: false", "      matrix:",
+                  "        shard: [" + ", ".join(str(i) for i in range(1,gate.SOURCE_SHARDS+1)) + "]",
+                  "    env:", "      ROUTERVPN_SOURCE_SHARD: ${{ matrix.shard }}"]
+        expected = [matrix + setup if name == "source-contract" else setup]
         for group in commands:
             if len(group) == 1:
                 expected.append(["        run: " + group[0]])
@@ -170,6 +173,19 @@ class RunnerTests(unittest.TestCase):
                          ["go", "test", "-timeout=15m", selected[1], selected[-1]])
         self.assertEqual(gate.other_command(selected[:2], (gate.PACKAGE,)),
                          ["go", "test", "-timeout=15m", selected[1]])
+
+    def test_source_matrix_owns_every_compiled_root_exactly_once(self):
+        roots = tuple("TestCase"+str(i) for i in range(23))+("ExampleNew","FuzzOriginal")
+        parts = [gate.source_phases(roots,i) for i in range(1,gate.SOURCE_SHARDS+1)]
+        selected = (*gate.GROUPED_PACKAGES,"router-vpn/internal/other")
+        ordinary = [gate.other_command(selected,gate.GROUPED_PACKAGES,i) for i in range(1,gate.SOURCE_SHARDS+1)]
+        self.assertEqual([cmd for cmd in ordinary if cmd is not None], [gate.other_command(selected,gate.GROUPED_PACKAGES)])
+        self.assertEqual(gate.source_phases(roots,None), roots)
+        self.assertEqual(sorted(root for part in parts for root in part), sorted(roots))
+        self.assertTrue(all(part == roots[i::gate.SOURCE_SHARDS] for i,part in enumerate(parts)))
+        for invalid in (0,gate.SOURCE_SHARDS+1):
+            with self.assertRaises(ValueError):
+                gate.source_phases(roots,invalid)
 
     def test_partition_rejects_missing_duplicate_reordered_and_child_phases(self):
         roots = ("TestOriginal", "Example", "FuzzSeed", "TestNewNegative")
@@ -364,6 +380,8 @@ class RunnerTests(unittest.TestCase):
         check_requirements_release(source, caller)
         for changed in (
                 source.replace("  source-contract:", "  other-source:"),
+                source.replace("1, 2, 3, 4, 5, 6", "1, 2, 3, 4, 5"),
+                source.replace("ROUTERVPN_SOURCE_SHARD: ${{ matrix.shard }}", "ROUTERVPN_SOURCE_SHARD: 1"),
                 source.replace("  requirements-and-safety:", "  other-safety:"),
                 source.replace("  workflow_call:", "  repository_dispatch:"),
                 source.replace("${{ github.workflow }}-", ""),

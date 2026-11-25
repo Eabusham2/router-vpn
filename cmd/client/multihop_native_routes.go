@@ -48,7 +48,11 @@ func resolveNativeMultihopSelection(control common.RouterProfile, profiles []com
 		if err := q.validateOrdered(); err != nil {
 			return multihopSelection{}, err
 		}
-		return resolveDesktopNodeChainSelection(control, profiles, q.Nodes, q.Execution)
+		selection, err := resolveDesktopNodeChainSelection(control, profiles, q.Nodes, q.Execution)
+		if err == nil && q.ExternalFinal != desktopNodeChainHasExternalFinal(selection.Nodes) {
+			return multihopSelection{}, errors.New("ordered external-final intent differs from its original linked members")
+		}
+		return selection, err
 	}
 	if err := guardLegacyOrderedNodeDispatch(control); err != nil {
 		return multihopSelection{}, err

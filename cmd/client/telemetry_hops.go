@@ -374,7 +374,16 @@ func validateActiveMultihopSpeedGraph(st state, graph activeMultihopGraph, graph
 	if graph.ExitID != exitID {
 		return fmt.Errorf("requested exit %q does not match active multihop exit %q", exitID, graph.ExitID)
 	}
-	if st.RouterID != "" && st.RouterID != graph.ExitID {
+	controlID := graph.ExitID
+	if graph.ControlID != "" {
+		if graph.ControlID != graph.EntryID || graph.ControlID == graph.ExitID || graph.ChainNodes < 3 ||
+			graph.Execution != "local" || graph.EntryMode != "wg" || graph.ExitMode != "shadowsocks" ||
+			!desktopOrderedDigest.MatchString(graph.SourceSHA) || len(graph.mapNodeIDs()) != graph.ChainNodes {
+			return errors.New("ordered external exit lost its distinct original paired control")
+		}
+		controlID = graph.ControlID
+	}
+	if st.RouterID != "" && st.RouterID != controlID {
 		return errors.New("active multihop state and tracked exit identity disagree")
 	}
 	return nil

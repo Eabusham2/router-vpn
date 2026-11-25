@@ -27,6 +27,7 @@ const serverNodeChainSourcesDirectory = "/etc/router-vpn/node-chain-sources"
 type relayNodeChainExecRunner struct {
 	multihoprelay.Runner
 	sources, runtime, core string
+	registered             []multihoprelay.NodeChainDescriptor
 	coreInfo               os.FileInfo
 	coreSHA                string
 }
@@ -50,6 +51,7 @@ func installedRelayRunner(cfg multihoprelay.Config, node string) (multihoprelay.
 		if _, err := r.source(source, node); err != nil {
 			return nil, err
 		}
+		r.registered = append(r.registered, source.Clone())
 	}
 	return r, nil
 }
@@ -158,6 +160,7 @@ func (r *relayNodeChainExecRunner) StartChain(ctx context.Context, capture multi
 		return p, bad
 	}
 	p.original = original
+	p.responseSource = r.originalCandidateSource
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return p, bad
@@ -209,6 +212,7 @@ func (r *relayNodeChainExecRunner) StartChain(ctx context.Context, capture multi
 
 type relayNodeChainProcess struct {
 	candidateOwnerSelf     *relayNodeChainProcess
+	responseSource         func(context.Context, multihoprelay.NodeChainCandidateCapture) (string, func() bool, error)
 	candidateMu            sync.Mutex
 	candidate              *relayNodeChainCandidateOperation
 	pendingCandidate       *multihoprelay.NodeChainCandidateIPCRequest

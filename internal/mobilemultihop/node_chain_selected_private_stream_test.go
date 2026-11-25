@@ -183,8 +183,8 @@ func TestSelectedPairedStreamRefusesChangedFamily(t *testing.T) {
 			member.StreamIdentitySHA256 = d.Members[3].StreamIdentitySHA256
 			d.Members[2] = member
 		},
-		"layered-final":   func(d *multihoprelay.NodeChainDescriptor) { d.Members[len(d.Members)-1].StartLayer = "aes-256-gcm" },
-		"different-entry": func(d *multihoprelay.NodeChainDescriptor) { d.EntryMode = "awg2-strong" },
+		"layered-final":     func(d *multihoprelay.NodeChainDescriptor) { d.Members[len(d.Members)-1].StartLayer = "aes-256-gcm" },
+		"unsupported-entry": func(d *multihoprelay.NodeChainDescriptor) { d.EntryMode = "awg2-pq" },
 		"packet-interior": func(d *multihoprelay.NodeChainDescriptor) {
 			d.Members[2].Mode = "wg"
 			d.Members[2].ClientPublicKey = source.Request.LocalPacketPublicKeys[0]
@@ -210,13 +210,23 @@ func TestSelectedPairedStreamRefusesChangedFamily(t *testing.T) {
 }
 
 func testSelectedPairedStreamRecursive(t *testing.T) {
+	testSelectedPairedStreamRecursiveMode(t, "wg")
+}
+
+func TestSelectedAWGPrivateResponse(t *testing.T) {
+	for _, mode := range []string{"awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) { testSelectedPairedStreamRecursiveMode(t, mode) })
+	}
+}
+
+func testSelectedPairedStreamRecursiveMode(t *testing.T, mode string) {
 	for _, layout := range []nodeChainImportedLayout{
 		{"selected-private-stream", 5, []int{1}},
 		{"selected-private-stream", 7, []int{1, 3}},
 		{"selected-private-stream", 10, []int{1, 2, 5, 7}},
 	} {
 		t.Run(fmt.Sprint(layout.count), func(t *testing.T) {
-			local, prep, source := multipleImportedExecutionFixture(t, layout, "wg", "", "auto", "")
+			local, prep, source := multipleImportedExecutionFixture(t, layout, mode, "", "auto", "")
 			policy, err := NewNodeChainMultipleImportedExecutionPolicy(prep, startJSON(t, source))
 			if err != nil || !slices.Equal(source.Request.LocalPacketPositions, []int{0}) {
 				t.Fatal("private stream became a packet or failed source validation", err)
@@ -245,6 +255,22 @@ func testSelectedPairedStreamRecursive(t *testing.T) {
 				} else {
 					b = i
 					break
+				}
+			}
+			for _, alternative := range []string{"wg", "awg2-fast", "awg2-strong"} {
+				if alternative == mode {
+					continue
+				}
+				foreign := source
+				foreign.Server, foreign.Request = source.Server.Clone(), source.Request.Clone()
+				foreign.Server.EntryMode = alternative
+				digest, err := foreign.Server.Digest()
+				if err != nil {
+					t.Fatal("valid alternate descriptor", err)
+				}
+				foreign.Request.DescriptorSHA256 = digest
+				if got, err := NewNodeChainMultipleImportedExecutionPolicy(prep, startJSON(t, foreign)); got != nil || err == nil {
+					t.Fatal("alternate transport gained the original entry", mode, alternative)
 				}
 			}
 			for _, field := range []string{"source", "identity", "companion", "reorder"} {

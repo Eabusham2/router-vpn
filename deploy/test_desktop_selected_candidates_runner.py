@@ -28,6 +28,9 @@ PUBLICATION = ('before-link', 'after-link', 'result-before-link', 'result-after-
 PHASES = [(PREFIX+'Fifty', (child,), '^'+PREFIX+'Fifty$/^'+child+'$') for child in FIFTY]
 PHASES += [(PREFIX+suffix, children, '^'+PREFIX+suffix+'$') for suffix, children in (
     ('Refusals', REFUSALS), ('Generation', ()), ('Publication', PUBLICATION))]
+RESPONSE_ROOT = 'TestRouterVPNDesktopSelectedServerResponseCandidate'
+RESPONSE_CASES = ('server', 'compare-server', 'wrong-mac', 'wrong-operation')
+PHASES += [(RESPONSE_ROOT,(child,), '^'+RESPONSE_ROOT+'$/^'+child+'$') for child in RESPONSE_CASES]
 TYPED_ROOT = 'TestRouterVPNDesktopSelectedTypedEntryCandidate'
 TYPED_ENTRIES = tuple(family+'-'+outcome for family in ('socks', 'connect') for outcome in
                       ('server', 'compare-local', 'compare-server', 'later-position'))
@@ -67,7 +70,9 @@ class SelectedCandidateRunner(unittest.TestCase):
     def test_exact_native_source_inventory_and_measurement(self):
         source = (ROOT/'mobile/desktop/node_chain_execution_candidate_test.go.tmpl').read_text()
         roots = re.findall(r'^func (Test\w+)\(', source, re.M)
-        self.assertEqual(roots, [PREFIX+'Fifty', TYPED_ROOT, PREFIX+'Refusals', PREFIX+'Generation', PREFIX+'Publication'])
+        self.assertEqual(roots, [PREFIX+'Fifty', TYPED_ROOT, PREFIX+'Refusals', PREFIX+'Generation', PREFIX+'Publication', RESPONSE_ROOT])
+        self.assertEqual(GATE.RESPONSE_CASES, RESPONSE_CASES)
+        self.assertEqual(GATE.RESPONSE_ROOT, RESPONSE_ROOT)
         self.assertEqual((GATE.TYPED_ROOT,GATE.TYPED_ENTRIES),(TYPED_ROOT,TYPED_ENTRIES))
         self.assertEqual(tuple(re.findall(r'\{"([\w-]+)", "(?:auto|server)",', source.split('func exerciseDesktopSelectedCandidateFifty(',1)[0])), FIFTY)
         for loop, expected, section in (('fault', REFUSALS, source.split('func '+PREFIX+'Refusals(', 1)[1]),
@@ -132,6 +137,7 @@ class SelectedCandidateRunner(unittest.TestCase):
         inputs = set(GATE.FIXTURE.inputs())
         self.assertEqual(inputs, {ROOT/'deploy/prepare-desktop-selected-candidate-test.py',
                                   ROOT/'internal/mobilemultihop/node_chain_execution_remote_candidates_test.go',
+                                  ROOT/'internal/mobilemultihop/node_chain_server_response_candidate_test.go',
                                   ROOT/'mobile/desktop_test/selected_candidate_fixture.go.tmpl'})
         templates = {ROOT/'mobile/desktop'/name for name in ('node_chain_execution_candidate.go.tmpl',
                                                               'node_chain_execution_candidate_test.go.tmpl')}

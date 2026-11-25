@@ -37,6 +37,34 @@ let nodes: [[String: Any]] = (0..<3).map { position -> [String: Any] in
     let measurement: String = position == 1 ? "routed-https-response-after-tls" : "routed-private-response-including-connection"
     return ["node_id":"node-\(position)", "position":position, "role":role, "label":label, "kind":kind, "measurement":measurement]
 }
+for count8 in [3,9] {
+    var captured = capture
+    captured["profile_id"] = "node-0"; captured["external_final_node_id"] = "node-\(count8-1)"
+    if count8 > 8 { captured["extended_local_nodes"] = count8 }
+    let owner = try JSONDecoder().decode(RouterVPNOrderedCapture.self, from:raw(captured))
+    for i in 0..<count8 {
+        let publicRow = i > 0
+        let value:[String:Any] = ["node_id":"node-\(i)", "position":i, "role":i == 0 ? "entry" : i == count8-1 ? "exit" : "intermediate",
+          "kind":publicRow ? "public-path" : "private-node","label":publicRow ? "Cumulative path through custom node \(i+1) of \(count8) → Cloudflare edge" : "Cumulative path through node 1 of \(count8)",
+          "measurement":publicRow ? "routed-https-response-after-tls" : "routed-private-response-including-connection"]
+        let row = try JSONDecoder().decode(RouterVPNOrderedLatencyNode.self,from:raw(value))
+        try row.validate(count:count8,externalFinal:owner)
+        if i == count8-1 {
+            check(owner.body["external_final_node_id"] as? String == row.node_id,"external exit identity survives retest")
+            let post:[String:Any]=["capture":owner.body,"node_id":row.node_id,"request_id":String(repeating:"e",count:32),"position":i]
+            let address=URL(string:"http://127.0.0.1:8788/api/speed-lab/ordered-latency")!
+            let transport=try RouterVPNMacSpeedLabTransport(url:address,body:post,timeout:6){_ in}
+            transport.cancel()
+            var changed=post;changed["position"]=0
+            rejected("external exit cannot borrow the paired control position") {
+                let transport=try RouterVPNMacSpeedLabTransport(url:address,body:changed,timeout:6){_ in};transport.cancel()
+            }
+            var stale = owner; stale.external_final_node_id="another-exit"
+            rejected("external final accepted a replacement"){ try row.validate(count:count8,externalFinal:stale) }
+            rejected("ordinary capture accepted a public exit"){ try row.validate(count:count8) }
+        }
+    }
+}
 func receipt(_ request: String, _ position: Int = 0) -> [String: Any] {
     ["schema":1, "position":position, "source_sha256":capture["source_sha256"]!, "config_sha256":capture["config_sha256"]!, "generation_sha256":capture["generation_sha256"]!,
      "node_id":"node-\(position)", "request_id":request, "measured_at":Int64(fixedNow.timeIntervalSince1970*1000)-100,
@@ -395,7 +423,7 @@ for execution in ["local","server"] {
                 for i in invalidPrivate { inventory[i]["kind"] = "private-node" }
                 wrong["nodes"] = inventory
                 wrong["multiple_imported"] = ["schema":6,"original_source_sha256":String(repeating:"7",count:64),
-                    "public":seals.filter { !invalidPrivate.contains($0["position"] as! Int) }] as [String:Any]
+                    "public":invalidPrivate.count == 1 ? seals.filter { !invalidPrivate.contains($0["position"] as! Int) } : seals] as [String:Any]
                 var bad = original; bad["selected_capture"] = String(data:try raw(wrong),encoding:.utf8)!
                 rejected("selected private role borrowed a different complete public inventory") {
                     try JSONDecoder().decode(RouterVPNOrderedCapture.self,from:raw(bad)).validate()

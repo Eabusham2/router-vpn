@@ -37,6 +37,7 @@ struct IOSNodeChainCapture {
     var config: String { plan.config() }
     var sourceSHA256: String { plan.sourceSHA256() }
     var configSHA256: String { plan.configSHA256() }
+    var controlMember: Member { sourceSchema == 8 ? members[0] : members[members.count - 1] }
     var finalProfile: [String: Any] { members[members.count - 1].profile }
     var startupTimeout: TimeInterval { TimeInterval(25 + 10 * members.count) }
 
@@ -67,7 +68,10 @@ struct IOSNodeChainCapture {
         guard (2...IOSMultihopNodeSelection.physicalTraversalDepth).contains(bundles.count) else { throw issue("Capture every ordered node before compiling the chain.") }
         // The final captured profile owns the exact selected order. It is
         // never inferred from map labels or from the current UI selection.
-        let finalRoot = try object(bundles[bundles.count - 1], maximum: 32 * 1024 * 1024)
+        let exitRoot = try object(bundles[bundles.count - 1], maximum: 32 * 1024 * 1024)
+        let exitProfiles = exitRoot["routerProfiles"] as? [[String: Any]]
+        let publicExit = exitProfiles?.first { $0["id"] as? String == exitRoot["selectedRouterID"] as? String }?["node_kind"] as? String == "external"
+        let finalRoot = publicExit ? try object(bundles[0], maximum: 32 * 1024 * 1024) : exitRoot
         guard let finalID = finalRoot["selectedRouterID"] as? String,
               let finalProfiles = finalRoot["routerProfiles"] as? [[String: Any]],
               finalProfiles.filter({ $0["id"] as? String == finalID }).count == 1,
@@ -84,11 +88,14 @@ struct IOSNodeChainCapture {
         guard selectedNodes.count <= IOSMultihopNodeSelection.maximumNodes || (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.extendedOriginalModes(selectedNodes.map(\.mode), execution: selectionExecution) else {
             throw issue("This source cannot extend the selected route beyond eight members.")
         }
+        if publicExit && !IOSMultihopNodeSelection.externalExitReferences(selectedNodes, controlID: finalID, execution: selectionExecution) {
+            throw issue("An imported final requires the original Local WireGuard entry and distinct literal Shadowsocks sources.")
+        }
         let importedEntry = selectionExecution == "local" && IOSMultihopNodeSelection.usesLocalImportedEntry(selectedNodes)
         if multipleExecution && !IOSMultihopNodeSelection.supportsMultipleImportedExecution(selectedNodes) {
             throw issue("The selected execution requires its original paired packet entry and literal Shadowsocks interiors.")
         }
-        let importedNodes = (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.requiresImportedNodesSource(selectedNodes)
+        let importedNodes = !publicExit && (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.requiresImportedNodesSource(selectedNodes)
         var hostnamePosition: Int?
         if importedNodes {
             guard selectedNodes.last?.mode == "shadowsocks", importedEntry || IOSMultihopNodeSelection.supportsNativePrefix(selectedNodes[0].mode),
@@ -121,7 +128,7 @@ struct IOSNodeChainCapture {
                     }
                     hostnamePosition = position
                 }
-                guard (selectionExecution == "local" || !openVPN || openVPNExecution && typed.external?.openVPNPairing != nil), (importedNodes ? !openVPN && IOSMultihopNodeSelection.supportsLocalImportedNode("shadowsocks", position: position, count: bundles.count, importedEntry: importedEntry) : IOSMultihopNodeSelection.supportsImportedMiddle(openVPN ? "openvpn" : "shadowsocks", position: position, count: bundles.count) && !imported),
+                guard (selectionExecution == "local" || !openVPN || openVPNExecution && typed.external?.openVPNPairing != nil), (publicExit ? position > 0 && !openVPN && IOSImportedShadowsocksSource.eligibleLiteral(typed) : importedNodes ? !openVPN && IOSMultihopNodeSelection.supportsLocalImportedNode("shadowsocks", position: position, count: bundles.count, importedEntry: importedEntry) : IOSMultihopNodeSelection.supportsImportedMiddle(openVPN ? "openvpn" : "shadowsocks", position: position, count: bundles.count) && !imported),
                       openVPN ? IOSImportedOpenVPNSource.eligible(typed) : (importedNodes ? IOSImportedShadowsocksSource.eligibleIndependent(typed, position: position, hostnamePosition: hostnamePosition) : IOSImportedShadowsocksSource.eligible(typed)),
                       selection[position]["id"] as? String == selected,
                       selection[position]["mode"] as? String == (openVPN ? "openvpn" : "shadowsocks") else {
@@ -135,7 +142,7 @@ struct IOSNodeChainCapture {
                 }
                 inputs.append(input); identitySources.append(""); imported = true; importedOpenVPN = openVPN; continue
             }
-            guard !(importedEntry && position < 2), selection[position]["id"] as? String == selected,
+            guard (!publicExit || position == 0), !(importedEntry && position < 2), selection[position]["id"] as? String == selected,
                   let mode = selection[position]["mode"] as? String,
                   let files = assets[mode], !files.isEmpty,
                   let identity = assets["wg"], !identity.isEmpty else {
@@ -166,7 +173,14 @@ struct IOSNodeChainCapture {
             }
             inputs.append(input)
         }
-        let source = try json(["schema": importedEntry ? 7 : importedNodes ? 6 : importedOpenVPN ? 5 : imported ? 2 : 1, "execution": "local", "nodes": inputs,
+        if publicExit {
+            var failure: NSError?
+            let last = inputs.count-1
+            let final: String? = LibboxRouterNodeChainExternalFinalFromEntry(inputs[0], inputs[last], &failure)
+            guard let final, !final.isEmpty, failure == nil else { throw failure ?? issue("The original imported exit could not be bound to its WireGuard control.") }
+            inputs[last] = final
+        }
+        let source = try json(["schema": publicExit ? 8 : importedEntry ? 7 : importedNodes ? 6 : importedOpenVPN ? 5 : imported ? 2 : 1, "execution": "local", "nodes": inputs,
                                "identity_sources": identitySources], maximum: maximumInputBytes)
         var failure: NSError?
         let returned = LibboxNewRouterNodeChain(source, &failure)
@@ -187,7 +201,7 @@ struct IOSNodeChainCapture {
         do {
             let capture = try Self(plan: plan)
             guard capture.launchInput == input,
-                  try json(selectedProfile, maximum: 256 * 1024) == json(capture.finalProfile, maximum: 256 * 1024) else {
+                  try json(selectedProfile, maximum: 256 * 1024) == json(capture.controlMember.profile, maximum: 256 * 1024) else {
                 throw issue("The selected final node differs from the chain's original control source.")
             }
             return capture
@@ -215,7 +229,7 @@ struct IOSNodeChainCapture {
               let identitySources = root["identity_sources"] as? [String], identitySources.count == nodes.count,
               (2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.extendedLocalSource(root["schema"] as? Int, execution: "local", count: nodes.count, identities: identitySources, allowPairedStreams: selectionExecution == "local", selectedPrivateStream: multipleExecution) && Int(plan.extendedLocalNodeCount()) == nodes.count,
               identitySources.allSatisfy({ $0.utf8.count <= 16 * 1024 * 1024 }),
-              let schema = root["schema"] as? Int, schema == 1 || (schema == 2 || schema == 5 || schema == 6 && (selectionExecution == "local" || multipleExecution)) && nodes.count >= 3 || schema == 7 && selectionExecution == "local" && nodes.count == 3,
+              let schema = root["schema"] as? Int, schema == 1 || (schema == 2 || schema == 5 || schema == 6 && (selectionExecution == "local" || multipleExecution)) && nodes.count >= 3 || schema == 7 && selectionExecution == "local" && nodes.count == 3 || schema == 8 && selectionExecution == "local" && nodes.count >= 3,
               !multipleExecution || schema == 6 && ["server", "auto"].contains(selectionExecution),
               !openVPNExecution || schema == 5 && ["server", "auto"].contains(selectionExecution) else {
             throw Self.issue("The native chain returned another source or platform owner.")
@@ -225,9 +239,10 @@ struct IOSNodeChainCapture {
         for (position, input) in nodes.enumerated() {
             let node = try Self.object(Data(input.utf8), maximum: Self.maximumInputBytes)
             let mode: String, profileJSON: String, filesJSON: String, profile: [String: Any]
-            if node["kind"] as? String == "routervpn-node-chain-imported-member" || node["kind"] as? String == "routervpn-node-chain-openvpn-member" {
+            let publicExit = node["kind"] as? String == "routervpn-node-chain-external-final"
+            if publicExit || node["kind"] as? String == "routervpn-node-chain-imported-member" || node["kind"] as? String == "routervpn-node-chain-openvpn-member" {
                 let openVPN = node["kind"] as? String == "routervpn-node-chain-openvpn-member"
-                guard ((schema == 6 || schema == 7) ? !openVPN && (selectionExecution == "local" || multipleExecution && schema == 6) && IOSMultihopNodeSelection.supportsLocalImportedNode("shadowsocks", position: position, count: nodes.count, importedEntry: schema == 7) : schema == (openVPN ? 5 : 2) && IOSMultihopNodeSelection.supportsImportedMiddle(openVPN ? "openvpn" : "shadowsocks", position: position, count: nodes.count)), (selectionExecution == "local" || !openVPN || openVPNExecution), identitySources[position].isEmpty,
+                guard publicExit == (schema == 8 && position == nodes.count-1), (schema == 8 ? position > 0 && !openVPN : (schema == 6 || schema == 7) ? !openVPN && (selectionExecution == "local" || multipleExecution && schema == 6) && IOSMultihopNodeSelection.supportsLocalImportedNode("shadowsocks", position: position, count: nodes.count, importedEntry: schema == 7) : schema == (openVPN ? 5 : 2) && IOSMultihopNodeSelection.supportsImportedMiddle(openVPN ? "openvpn" : "shadowsocks", position: position, count: nodes.count)), (selectionExecution == "local" || !openVPN || openVPNExecution), identitySources[position].isEmpty,
                       let config = node["config"] as? String, let capture = node["capture"] as? String,
                       let saved = try Self.object(Data(capture.utf8), maximum: 8 * 1024 * 1024)["profile"] as? [String: Any] else {
                     throw Self.issue("The imported intermediate source lost its original external capture.")
@@ -238,11 +253,11 @@ struct IOSNodeChainCapture {
                     guard hostnamePosition == nil else { throw Self.issue("One Local stream can use its saved hostname resolver.") }
                     hostnamePosition = position
                 }
-                guard openVPN ? IOSImportedOpenVPNSource.eligible(typed) : ((schema == 6 || schema == 7) ? IOSImportedShadowsocksSource.eligibleIndependent(typed, position: position, hostnamePosition: hostnamePosition) : IOSImportedShadowsocksSource.eligible(typed)) else { throw Self.issue("The imported member cannot claim a paired Router identity.") }
+                guard schema == 8 ? IOSImportedShadowsocksSource.eligibleLiteral(typed) : openVPN ? IOSImportedOpenVPNSource.eligible(typed) : ((schema == 6 || schema == 7) ? IOSImportedShadowsocksSource.eligibleIndependent(typed, position: position, hostnamePosition: hostnamePosition) : IOSImportedShadowsocksSource.eligible(typed)) else { throw Self.issue("The imported member cannot claim a paired Router identity.") }
                 guard !openVPNExecution || typed.external?.openVPNPairing != nil else { throw Self.issue("The original OpenVPN Server provider pair is missing.") }
                 mode = openVPN ? "openvpn" : "shadowsocks"; filesJSON = config; profile = saved
             } else {
-                guard !identitySources[position].isEmpty, !((schema == 2 || schema == 5) && position == nodes.count - 2),
+                guard !identitySources[position].isEmpty, schema != 8 || position == 0, !((schema == 2 || schema == 5) && position == nodes.count - 2),
                       !(schema == 7 && position < 2),
                       let nativeMode = node["mode"] as? String, let saved = node["profile_json"] as? String,
                       let files = node["files"] as? String else { throw Self.issue("A complete native member source is missing.") }
@@ -257,7 +272,7 @@ struct IOSNodeChainCapture {
             lan = lan && (profile["home_lan_access"] as? Bool ?? true)
             members.append(Member(id: id, mode: mode, profileJSON: profileJSON, filesJSON: filesJSON, profile: profile, startFilesJSON: node["start"] as? String))
         }
-        guard let final = members.last, schema != 7 || final.mode == "shadowsocks",
+        guard let final = (schema == 8 ? members.first : members.last), schema != 8 || final.mode == "wg", schema != 7 || final.mode == "shadowsocks",
               let enabled = final.profile["multihop_enabled"] as? NSNumber, CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue,
               final.profile["multihop_execution"] as? String == selectionExecution,
               ["multihop_entry_id", "multihop_entry_mode", "multihop_exit_id", "multihop_exit_mode"].allSatisfy({ final.profile[$0] == nil || final.profile[$0] as? String == "" }),

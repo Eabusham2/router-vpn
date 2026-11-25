@@ -31,7 +31,8 @@ def output(rows):
 
 class SelectedCandidateControllerGateTests(unittest.TestCase):
     def test_each_original_test_and_package_verdict_is_required_once(self):
-        counts = {'TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner': 3,
+        counts = {'TestDesktopSelectedServerUnregisteredCannotBeSaved': 0, 'TestDesktopSelectedServerResponseConnected': 3, 'TestDesktopSelectedServerResponseDraft': 3,
+                  'TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner': 3,
                   'TestDesktopSelectedCandidateMetadataRejectsForeignOriginals': 21,
                   'TestDesktopSelectedCandidateCancellationJoinsWithoutStart': 3,
                   'TestDesktopSelectedCandidatePendingRetirementPreservesForeignMetadata': 0,
@@ -66,8 +67,8 @@ class SelectedCandidateControllerGateTests(unittest.TestCase):
                   'TestSelectedPrivateResponseDraftUseMultiplePrivateAndCapacity': 0,
                   'TestOrderedCandidateDraftUseKeepsOriginalFinalAndSuffix': 4}
         self.assertEqual(set(gate.CASES).intersection(gate.DRAFT_CASES), set())
-        self.assertEqual(len(gate.common.expected(gate.CASES)), 86)
-        self.assertEqual(len(gate.common.expected(gate.DRAFT_CASES)), 76)
+        self.assertEqual(len(gate.common.expected(gate.CASES)), 91)
+        self.assertEqual(len(gate.common.expected(gate.DRAFT_CASES)), 80)
         self.assertEqual(len(gate.common.expected(gate.TYPED_ENTRY_CASES)), 14)
         cases = gate.CASES | gate.DRAFT_CASES | gate.TYPED_ENTRY_CASES
         self.assertEqual({root: len(children) for root, children in cases.items()}, counts)

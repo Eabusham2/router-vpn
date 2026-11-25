@@ -44,7 +44,7 @@ LEGACY_RESULTS = ("android", "shared_core", "shared_runtime", "shared_fifty", "s
 EXPECTED = {
     **ANDROID_GROUPS,
     'android': ANDROID_GROUPS['android'] + ('python3 deploy/test_android_multihop_workflow.py',),
-    'shared_core': ('python3 deploy/test_mobile_multihop_groups.py --group core --core-shard "$CORE_SHARD"',),
+    'shared_core': ('python3 deploy/test_mobile_multihop_groups.py --group core --core-shard "$CORE_SHARD" --core-part "$CORE_PART"',),
     'shared_runtime': ('python3 deploy/test_mobile_multihop_groups.py --group runtime',),
     'shared_runtime_depth': ('python3 deploy/test_mobile_multihop_groups.py --group runtime_depth',),
     'shared_runtime_remaining': ('python3 deploy/test_mobile_multihop_groups.py --group runtime_remaining',),
@@ -157,7 +157,7 @@ def validate(source):
         body = jobs[name]
         assert '    timeout-minutes: ' + ('35' if name == 'shared_imported_prefix' else '15') + '\n' in body, 'Job deadline changed'
         matrix = {
-            'shared_core': ('shard: [1, 2, 3, 4]', 'CORE_SHARD: ${{ matrix.shard }}'),
+            'shared_core': ('shard: [1, 2, 3, 4]\n        part: [1, 2, 3]', 'CORE_SHARD: ${{ matrix.shard }}\n          CORE_PART: ${{ matrix.part }}'),
             'android_hosts': ('group: [transports, sessions, execution]', 'HOST_GROUP: ${{ matrix.group }}'),
         }.get(name)
         if matrix:

@@ -112,6 +112,8 @@ PHASES["routervpn/desktoppt"] = {
     "TestRouterVPNNodePhysicalUnixCandidatePrefixDarwinCleanupRetainsOriginal": ("original-owner",),
 }
 PHASES["."] = {
+    "TestRouterVPNDesktopExternalFinalPhysical": (
+        "linux-home", "windows-custom", "darwin-home", "original", "final-key", "final-detour", "home-resolver", "physical-source"),
     "TestRouterVPNDesktopCandidatePrefixPhysicalCapturesClosedBox": (),
     "TestRouterVPNDesktopCandidatePrefixPhysicalRejectsChangedBox": ("prefix-key", "dns", "physical-source", "mtu", "application-gate"),
     "TestRouterVPNDesktopCandidatePrefixPhysicalKeepsTypedTarget": ("linux", "windows", "darwin"),

@@ -21,13 +21,14 @@ import (
 const multihopProofProxy = "http://127.0.0.1:1099"
 
 type multihopConnectRequest struct {
-	EntryID   string                         `json:"entry_id,omitempty"`
-	ExitID    string                         `json:"exit_id,omitempty"`
-	Base      string                         `json:"base,omitempty"`
-	EntryMode string                         `json:"entry_mode,omitempty"`
-	ExitMode  string                         `json:"exit_mode,omitempty"`
-	Execution string                         `json:"execution,omitempty"`
-	Nodes     []common.MultihopNodeSelection `json:"nodes,omitempty"`
+	EntryID       string                         `json:"entry_id,omitempty"`
+	ExitID        string                         `json:"exit_id,omitempty"`
+	Base          string                         `json:"base,omitempty"`
+	EntryMode     string                         `json:"entry_mode,omitempty"`
+	ExitMode      string                         `json:"exit_mode,omitempty"`
+	Execution     string                         `json:"execution,omitempty"`
+	Nodes         []common.MultihopNodeSelection `json:"nodes,omitempty"`
+	ExternalFinal bool                           `json:"external_final,omitempty"`
 	desktopProfileExpectations
 	nodesPresent bool
 }
@@ -71,8 +72,11 @@ type multihopNodeSummary struct {
 type activeMultihopGraph struct {
 	// Copied when the proved graph is published. A later edit to a saved
 	// connection profile cannot change the route shown by a map observer.
-	orderedIDs    [common.MultihopPhysicalTraversalDepth]string
-	Execution     string
+	orderedIDs [common.MultihopPhysicalTraversalDepth]string
+	Execution  string
+	// Only a sealed Local external-final source keeps its paired entry as
+	// control while the actual final has its own public exit identity.
+	ControlID     string
 	EntryID       string
 	ExitID        string
 	Base          string
@@ -154,6 +158,10 @@ func setActiveMultihopGraph(a *app, sel multihopSelection) activeMultihopGraph {
 		if sel.Native.chain != nil {
 			graph.ChainNodes = len(sel.Nodes)
 			graph.captureMapNodes(sel.Nodes)
+			if sel.Native.chain.chain != nil && sel.Native.chain.chain.HasExternalFinal() &&
+				desktopNodeChainHasExternalFinal(sel.Nodes) && desktopNodeChainControlCurrent(sel.Control, sel.Nodes) {
+				graph.ControlID = sel.Control.ID
+			}
 		}
 	}
 	activeMultihopGraphs.Store(a, graph)

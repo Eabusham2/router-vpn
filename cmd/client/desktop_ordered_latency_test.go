@@ -322,6 +322,29 @@ func desktopOrderedLatencyControllerFixture(t *testing.T, a *app, selection mult
 	a.state.Connected, a.state.Phase = true, "connected"
 	a.mu.Unlock()
 	sessionTrackers.Store(a, &sessionTracker{a: a, session: &connectionSession{ID: "session-1-1", Connected: true, Phase: "connected", PathProof: "passed", RouterID: selection.Control.ID}})
+	if desktopNodeChainHasExternalFinal(selection.Nodes) {
+		assertDesktopOrderedDNSObservation(t, f)
+		observed := observedConnection{Connected: true, Phase: "connected", Mode: "multihop", RouterID: selection.Control.ID, Profile: selection.Control}
+		lookup := func(context.Context, string) ([]string, error) {
+			t.Error("ordered external DNS used an ambient resolver")
+			return nil, errors.New("forbidden ambient DNS")
+		}
+		proof := proveSelectedDNSWithLookup(t.Context(), a, observed, selection.ExitMode, lookup)
+		_, _, capture, err := f.launch.chain.readPolicy()
+		if err != nil || proof.Status != "passed" || proof.Mode != capture.SelectedDNS.Mode || proof.Host != capture.SelectedDNS.Host || proof.LatencyMs != 0 {
+			t.Fatal("original exit DNS observation", proof, err)
+		}
+		observed.RouterID = selection.Exit.ID
+		if bad := proveSelectedDNSWithLookup(t.Context(), a, observed, selection.ExitMode, lookup); bad.Status == "passed" {
+			t.Fatal("external exit replaced paired DNS control")
+		}
+		identity, token, count, err := captureOrderedThroughputContext(t.Context(), a)
+		if err != nil || len(token) != 64 || count != len(selection.Nodes) || identity.orderedLocalSource == nil ||
+			identity.orderedLocalSource.ExternalFinalNodeID != selection.Exit.ID || identity.orderedLocalSource.PairedPrefixNodes != 0 ||
+			identity.orderedLocalSource.PairedWireGuard || identity.orderedLocalSource.LocalRolesJSON != "" {
+			t.Fatal("external throughput lost its separately captured exit", err)
+		}
+	}
 	if len(selection.Nodes) > mobilemultihop.NodeChainMaximumNodes {
 		identity, token, count, err := captureOrderedCandidateContext(t.Context(), a)
 		if err != nil || len(token) != 64 || count != len(selection.Nodes) || identity.Ordered == nil || identity.Ordered.launch != f.launch {
@@ -354,6 +377,16 @@ func desktopOrderedLatencyControllerFixture(t *testing.T, a *app, selection mult
 		t.Fatal("original capture", info.Code, info.Body.String())
 	}
 	request := desktopOrderedLatencyRequest{Capture: view.Capture, NodeID: view.Nodes[position].NodeID, Position: position, Request: strings.Repeat("a", 32)}
+	if desktopNodeChainHasExternalFinal(selection.Nodes) {
+		if view.Capture.ExternalFinalNodeID != selection.Exit.ID || view.Capture.ProfileID != selection.Control.ID || view.Nodes[len(view.Nodes)-1].Kind != "public-path" {
+			t.Fatal("external exit lost its distinct captured identity")
+		}
+		missing := request
+		missing.Capture.ExternalFinalNodeID = ""
+		if refused := desktopOrderedHTTP(t, a, "POST", "/api/speed-lab/ordered-latency", missing); refused.Code != 409 {
+			t.Fatal("external exit accepted a request without its original source marker", refused.Code)
+		}
+	}
 	foreign := request
 	foreign.NodeID = view.Nodes[(position+1)%len(view.Nodes)].NodeID
 	if refused := desktopOrderedHTTP(t, a, "POST", "/api/speed-lab/ordered-latency", foreign); refused.Code != 409 {
@@ -397,6 +430,9 @@ func desktopOrderedLatencyControllerFixture(t *testing.T, a *app, selection mult
 		t.Fatal("overlapping Speed Lab admitted")
 	}
 	saved := desktopOrderedReceiptFixtureFor(position, len(view.Nodes), view.Nodes[position].Kind)
+	if desktopNodeChainHasExternalFinal(selection.Nodes) && position == len(view.Nodes)-1 {
+		saved.Result.Role, saved.Result.Kind, saved.Result.Label, saved.Result.Benchmark.Measurement, saved.Result.Benchmark.Endpoint = desktopOrderedExternalFinalLatencyMeaning(position, len(view.Nodes), view.Nodes[position].Kind)
+	}
 	saved.NodeID, saved.Result.ID = request.NodeID, request.NodeID
 	saved.Request = request.Request
 	saved.SourceSHA256, saved.ConfigSHA256, saved.GenerationSHA256 = request.Capture.SourceSHA256, request.Capture.ConfigSHA256, request.Capture.GenerationSHA256

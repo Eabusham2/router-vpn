@@ -31,6 +31,7 @@ type nodeChainExecutionRemoteOperation struct {
 	front                    string
 	mu                       sync.Mutex
 	issued, prepared, closed bool
+	absent                   bool // guarded by gate, after a MAC-verified and joined remote refusal
 	dials                    int
 }
 
@@ -81,6 +82,9 @@ func (op *nodeChainExecutionRemoteOperation) initialize(ctx context.Context) err
 		return err
 	}
 	q := multihoprelay.NodeChainCandidateRequest{Schema: 1, Lease: request, OwnerID: lease.OwnerID, CaptureSHA256: digest, Operation: operation, ExecutionSHA256: e.plan.identity.SourceSHA256, Trial: s.id, SelectionEpoch: s.selectionEpoch, InventorySHA256: externalDigest([]byte(e.plan.packet.inventory)), Position: e.plan.packet.prefix.Position, CandidateID: op.target.ID, CandidateSourceSHA256: op.target.SourceSHA256, Address: op.target.Address, DeadlineAt: deadline.UnixMilli(), Password: password}
+	if e.plan.packet.measurement == hopmeasure.CandidatePrivateResponseMeasurement {
+		q.Schema = 2
+	}
 	capture, err := s.candidateStopCapture(ctx, q)
 	if err != nil {
 		return err
@@ -141,6 +145,9 @@ func (op *nodeChainExecutionRemoteOperation) verify(ctx context.Context) error {
 	defer cancel()
 	stopCancel := context.AfterFunc(op.ctx, cancel)
 	defer stopCancel()
+	if op.absent {
+		return op.engine.current(call)
+	}
 	method := "POST"
 	if !op.prepared {
 		if op.issued {
@@ -162,6 +169,15 @@ func (op *nodeChainExecutionRemoteOperation) verify(ctx context.Context) error {
 		unlock()
 		if err != nil {
 			return err
+		}
+		if method == "PUT" && op.capture.request.Schema == 2 {
+			if multihoprelay.DecodeNodeChainCandidateAbsenceReceipt(raw, op.capture.lease, op.capture.request, op.capture.token, time.Now()) == nil {
+				if err := op.engine.current(call); err != nil {
+					return err
+				}
+				op.absent = true
+				return nil
+			}
 		}
 		var receipt multihoprelay.NodeChainCandidateReceipt
 		if exactJSON(raw, &receipt, multihoprelay.NodeChainCandidateResponseMaximumBytes) != nil {

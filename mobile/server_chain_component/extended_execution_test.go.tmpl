@@ -191,6 +191,34 @@ func TestOriginalExtendedSelectedExecution(t *testing.T) {
 			cases = append(cases, selectedCase{name, layout.count, "wg", "auto", winner, "private-response/" + fault, layout.stop, 0})
 		}
 	}
+	// Start from the original three-node import, cross eight through insertion,
+	// then revisit earlier imported and paired stops with the untouched suffix.
+	for _, entry := range []string{"awg2-fast", "awg2-strong"} {
+		for _, layout := range []struct {
+			count, stop int
+			private     []int
+		}{
+			{3, 1, nil}, {5, 2, []int{2}}, {7, 4, []int{2, 4}},
+			{8, 4, []int{2, 4}}, {9, 3, []int{2, 4}}, {16, 8, []int{2, 4}},
+		} {
+			faults := []string{"original"}
+			if layout.count == 7 {
+				faults = append(faults, "wrong-candidate-key", "forged-response", "wrong-private-id", "late-catalog", "late-cancel", "server-winner", "suffix-alias", "changed-original-suffix")
+			}
+			for _, fault := range faults {
+				name := fmt.Sprintf("%d-%s-recursive-stop-%d-%s", layout.count, entry, layout.stop, fault)
+				winner := "local"
+				if fault == "server-winner" {
+					winner = "server"
+				}
+				if len(layout.private) > 0 {
+					responsePositions[name] = layout.private[0]
+					additionalPrivate[name] = layout.private[1:]
+				}
+				cases = append(cases, selectedCase{name, layout.count, entry, "auto", winner, "private-response/" + fault, layout.stop, 0})
+			}
+		}
+	}
 	registerPrivate := func(count, position int, mode, winner, operation string, first, last int) {
 		name := fmt.Sprintf("%d-private-%d-%s-%s-%s", count, position, mode, winner, operation)
 		if operation == "latency" {

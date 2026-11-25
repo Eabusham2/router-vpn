@@ -157,7 +157,7 @@ func newNodeChainServerPlanFamily(input string, family int) (*NodeChainServerPol
 			return nil, bad
 		}
 		paired, err := nodeChainPlanCapture(pairedRaw)
-		if err != nil || position == len(rows)-1 && !nodeChainServerFinalCapture(source.Schema, paired.node) || position < len(rows)-1 && !NodeChainPrefixMode(paired.mode) && !(multiple && position > 0 && entry.mode == "wg" && paired.mode == "shadowsocks") {
+		if err != nil || position == len(rows)-1 && !nodeChainServerFinalCapture(source.Schema, paired.node) || position < len(rows)-1 && !NodeChainPrefixMode(paired.mode) && !(multiple && position > 0 && NodeChainPrefixMode(entry.mode) && paired.mode == "shadowsocks") {
 			return nil, bad
 		}
 		peerBundle, peerProfile, err := nodeChainPlanSelectedBundle(peerRaw["bundle"], peerRaw["profile_id"])

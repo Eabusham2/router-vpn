@@ -491,7 +491,7 @@ func TestHostnameTCPProbeCounters(t *testing.T){
 class ImportedServerBoundaries(unittest.TestCase):
     def sample(self, case='original'):
         original=case.removeprefix('prefix-').removeprefix('hostname-')
-        ready=original in ('original','joined-active-udp','admission-restrictions','wg-one','awg-fast','awg-strong','max-five')
+        ready=case=='stream-response' or original in ('original','joined-active-udp','admission-restrictions','wg-one','awg-fast','awg-strong','max-five')
         packet_fault=original in ('wrong-first-packet-key','wrong-later-packet-key')
         modes=None
         if case.startswith('prefix-'):
@@ -505,6 +505,7 @@ class ImportedServerBoundaries(unittest.TestCase):
                    transport_dns_queries=2 if case.startswith('prefix-hostname-') and not packet_fault else 0,
                    retired=True,worker_joined=True,peer_joined=True,private_udp_refused=original=='admission-restrictions',
                    private_sink_packets=0 if original=='admission-restrictions' else 1, private_sink_replies=0 if original=='admission-restrictions' else 1)
+        if case=="stream-response": value["candidate_responses"]=50
         root=GATE.IMPORTED_NATIVE
         return '\n'.join(('=== RUN   '+root,'=== RUN   '+root+'/'+case,
             '    source.go:1: IMPORTED_SERVER_RECEIPT '+json.dumps(value),
@@ -527,6 +528,23 @@ class ImportedServerBoundaries(unittest.TestCase):
         for before,after in (('"selected_dns": true','"selected_dns": false'),('"final_udp": 1','"final_udp": 0'),('"capture_sha256": "'+'a'*64+'"','"capture_sha256": "bad"')):
             with self.assertRaises(ValueError):GATE.check_imported_verdict(self.sample().replace(before,after), 'original')
         with self.assertRaises(ValueError):GATE.check_imported_verdict(self.sample('wrong-middle-key').replace('"ready": false','"ready": true'),'wrong-middle-key')
+
+    def test_private_candidate_requires_fifty_independent_responses(self):
+        source = self.sample("stream-response")
+        GATE.check_imported_verdict(source, "stream-response")
+        for field in ('ready', 'selected_dns'):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'success/refusal changed'):
+                before = f'"{field}": true'
+                self.assertEqual(source.count(before), 1)
+                GATE.check_imported_verdict(source.replace(before, f'"{field}": false'), "stream-response")
+        for field in ('middle_tcp', 'middle_udp', 'final_tcp', 'final_udp', 'private_sink_replies'):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                missing, count = re.subn(rf'"{field}": [1-9][0-9]*', f'"{field}": 0', source)
+                self.assertEqual(count, 1)
+                GATE.check_imported_verdict(missing, "stream-response")
+        for count in ("0", "49", "51", "true"):
+            with self.subTest(count=count), self.assertRaises(ValueError):
+                GATE.check_imported_verdict(source.replace('"candidate_responses": 50', '"candidate_responses": '+count), "stream-response")
 
     def test_longer_imported_packet_receipts_are_causal_and_mandatory(self):
         expected = ('prefix-original','prefix-wrong-middle-key','prefix-wrong-final-key','prefix-wrong-final-identity',
@@ -556,7 +574,8 @@ class ImportedServerBoundaries(unittest.TestCase):
                     'prefix-hostname-max-five', 'prefix-hostname-wrong-transport-dns', 'prefix-hostname-wrong-middle-key',
                     'prefix-hostname-failed-selected-dns', 'prefix-hostname-joined-active-udp',
                     'prefix-hostname-wrong-first-packet-key', 'prefix-hostname-wrong-later-packet-key')
-        self.assertEqual(GATE.IMPORTED_CASES[22:], expected)
+        self.assertEqual(GATE.IMPORTED_CASES[22:-1], expected)
+        self.assertEqual(GATE.IMPORTED_CASES[-1], "stream-response")
         for case in GATE.IMPORTED_CASES:
             text = self.sample(case)
             value = json.loads(text.split('IMPORTED_SERVER_RECEIPT ', 1)[1].splitlines()[0])

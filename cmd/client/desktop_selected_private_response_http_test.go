@@ -37,16 +37,21 @@ func desktopSelectedPrivateResponseParentFixture(t *testing.T, count int, winner
 
 func desktopSelectedResponseParentFixture(t *testing.T, count, privatePosition int, winner string) (*desktopNodeChainOwnedFixture, []common.MultihopNodeSelection, string) {
 	t.Helper()
+	return desktopSelectedResponseParentWithRequest(t, count, privatePosition, "auto", winner)
+}
+
+func desktopSelectedResponseParentWithRequest(t *testing.T, count, privatePosition int, requested, winner string) (*desktopNodeChainOwnedFixture, []common.MultihopNodeSelection, string) {
+	t.Helper()
 	a, nodes, id := selectedResponseAppFixture(t, count, privatePosition)
 	for i := range a.profiles.Profiles {
 		p := &a.profiles.Profiles[i]
 		p.MultihopEnabled, p.MultihopExecution, p.MultihopNodes = false, "", nil
 		p.MultihopEntryID, p.MultihopExitID, p.MultihopEntryMode = "", "", ""
 		if p.ID == nodes[len(nodes)-1].ID {
-			p.MultihopEnabled, p.MultihopExecution, p.MultihopNodes = true, "auto", slices.Clone(nodes)
+			p.MultihopEnabled, p.MultihopExecution, p.MultihopNodes = true, requested, slices.Clone(nodes)
 		}
 	}
-	f, session := prepareDesktopCapturedMultipleImportedExecutionModel(t, a, nodes, "auto", winner)
+	f, session := prepareDesktopCapturedMultipleImportedExecutionModel(t, a, nodes, requested, winner)
 	f, _ = finishDesktopMultipleImportedSelectedLatencyFixture(t, f, session, winner, count)
 	identity, _, err := captureSpeedLabIdentityContext(context.Background(), a)
 	if err != nil {

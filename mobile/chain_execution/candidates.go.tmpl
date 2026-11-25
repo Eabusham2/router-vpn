@@ -124,9 +124,9 @@ func (m *RouterNodeChainExecution) newExecutionCandidateMeasurementContext(ctx c
 			return service, err
 		}
 	} else if runtime.Progress().Execution == "server" {
-		// This constructor verifies the already-selected Server winner, the
-		// original paired packet position and its exact candidate-stop engine.
-		remote, err := runtime.NewRemoteCandidatePlanContext(ctx, position, inventory)
+		// The response plan binds the original Server winner and obtains matching
+		// registered sources from that server when the measurement starts.
+		remote, err := runtime.NewSelectedRemoteCandidatePlanContext(ctx, position, inventory)
 		if err != nil {
 			return nil, err
 		}

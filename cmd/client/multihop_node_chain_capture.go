@@ -93,6 +93,7 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 		return nil, errors.New("ordered control capture differs from its linked catalog source")
 	}
 	privateStreams := desktopPairedStreamRoles(nodes, func(i int) bool { return byID[nodes[i].ID].NodeKind == "external" })
+	externalFinal := byID[nodes[len(nodes)-1].ID].NodeKind == "external"
 	var result []desktopNodeChainMember
 	for i, selected := range nodes {
 		profile, found := byID[selected.ID]
@@ -102,7 +103,7 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 		if imported {
 			bounded := len(nodes) >= 3 && (len(nodes) <= common.MultihopMaximumNodes || common.ExtendedLocalMultihopSelection(nodes) || common.ExtendedMixedLocalPacketCount(nodes) > 0)
 			customEntry := i == 0 && len(nodes) == 3 && selected.Mode == "shadowsocks" && desktopNodeChainImportedExecutionMiddle(profile)
-			if !bounded || i == 0 && !customEntry || i == len(nodes)-1 || nodes[len(nodes)-1].Mode != "shadowsocks" {
+			if !bounded || i == 0 && !customEntry || i == len(nodes)-1 && !externalFinal || nodes[len(nodes)-1].Mode != "shadowsocks" {
 				return nil, errors.New("imported ordered member requires its captured placement before a paired SS2022 final")
 			}
 		} else if !paired || i < len(nodes)-1 && !mobilemultihop.NodeChainPrefixMode(selected.Mode) &&
@@ -147,12 +148,18 @@ func captureDesktopNodeChain(ctx context.Context, root string, control common.Ro
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		input, endpoint, identity, err := capture.compileMember(ctx, member, &total, func() applexray.Lookup {
-			if i == 0 {
-				return lookup
-			}
-			return nil
-		}())
+		var input, endpoint, identity string
+		var err error
+		if schema == 8 && i == len(members)-1 {
+			input, endpoint, identity, err = capture.compileExternalFinal(ctx, member, &total)
+		} else {
+			input, endpoint, identity, err = capture.compileMember(ctx, member, &total, func() applexray.Lookup {
+				if i == 0 {
+					return lookup
+				}
+				return nil
+			}())
+		}
 		if err != nil {
 			return nil, err
 		}

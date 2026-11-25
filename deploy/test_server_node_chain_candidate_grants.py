@@ -15,15 +15,18 @@ ROOT = Path(__file__).resolve().parents[1]
 RELAY = ('TestNodeChainCandidateStrictAuthority', 'TestNodeChainCandidateConnectQuotaAndJoin',
          'TestNodeChainCandidateManagerRetainsOriginalOperation', 'TestNodeChainCandidateManagerCancellationJoin',
          'TestNodeChainCandidateManagerHeldStatusAndLeaseStop', 'TestNodeChainCandidateManagerExpiryRetainsJoin', 'TestNodeChainCandidateExpiryHeldCallbacks', 'TestNodeChainCandidateRequestDeadlineRetainsCallback',
-         'TestNodeChainCandidatePrunesOnlyJoinedExpiredAttempts', 'TestNodeChainCandidateWireIdentityCannotFollowReplacement')
-POLICY = ('TestNodeChainServerCandidateOriginalPacketTarget', 'TestNodeChainServerCandidateRetainsLANAndIPv6Policy')
+         'TestNodeChainCandidatePrunesOnlyJoinedExpiredAttempts', 'TestNodeChainCandidateWireIdentityCannotFollowReplacement',
+         'TestServerCandidateMissingRequiresJoinedOriginal')
+POLICY = ('TestNodeChainServerCandidateOriginalPacketTarget', 'TestNodeChainServerCandidateRetainsLANAndIPv6Policy',
+          'TestServerStreamCandidateRegistryAbsence')
 AGENT = 'TestNodeChainCandidateHTTPAuthenticatedUnavailableBoundary'
+REGISTERED = 'TestServerStreamCandidateUsesExistingRegistration'
 STRICT = ('entry', 'final', 'foreign-owner', 'hostname', 'mapped', 'extended-deadline', 'duplicate', 'tag', 'case', 'null')
 HTTP = ('unauthenticated', 'public-peer', 'unknown-tag', 'oversize', 'no-discovery')
 CASES = {
- 'relay': ('./internal/multihoprelay', RELAY, frozenset(RELAY) | {RELAY[0]+'/'+x for x in STRICT} | {RELAY[6]+'/'+x for x in ('prepare','status')}, None),
- 'policy': ('./internal/mobilemultihop', POLICY, frozenset(POLICY), None),
- 'agent': ('./cmd/router-agent', (AGENT,), frozenset((AGENT,)) | {AGENT+'/'+x for x in HTTP}, None),
+ 'relay': ('./internal/multihoprelay', RELAY, frozenset(RELAY) | {RELAY[0]+'/'+x for x in STRICT} | {RELAY[6]+'/'+x for x in ('prepare','status')} | {RELAY[-1]+'/'+x for x in ('original','wrong-registry','failed-close','cancelled')}, None),
+ 'policy': ('./internal/mobilemultihop', POLICY, frozenset(POLICY) | {POLICY[-1]+'/'+x for x in ('missing-then-registered','forged','other-candidate','stale-epoch','unjoined','missing-cleanup-held')}, None),
+ 'agent': ('./cmd/router-agent', (AGENT,REGISTERED), frozenset((AGENT,REGISTERED)) | {AGENT+'/'+x for x in HTTP}, None),
  'quota-control': ('./internal/multihoprelay', (RELAY[1],), frozenset((RELAY[1],)),
     ('internal/multihoprelay/node_chain_candidate.go', ' || a.accepted >= NodeChainCandidateMaximumConnects', '', 'fifty-first candidate admitted')),
  'join-control': ('./internal/multihoprelay', (RELAY[4],), frozenset((RELAY[4],)),

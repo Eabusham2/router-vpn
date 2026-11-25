@@ -21,7 +21,7 @@ ORIGINAL_COMPILER = chain.compiler_source
 
 
 FRAME_HELPER = r"""
-func fixtureSelectedResponsePosition(source, position string) (string, error) {
+func fixtureSelectedResponsePosition(source, position, winner string) (string, error) {
  var header struct{ Schema int }
  if err := json.Unmarshal([]byte(source), &header); err != nil { return "", err }
  var prep *mobilemultihop.NodeChainExecutionPreparation
@@ -34,7 +34,8 @@ func fixtureSelectedResponsePosition(source, position string) (string, error) {
  if err != nil { return "", err }
  var index int
  if _, err := fmt.Sscan(position, &index); err != nil { return "", err }
- return fmt.Sprint(prep.SupportsCompareLocalResponseCandidate(index)), nil
+ if winner == "server" { return fmt.Sprint(prep.SupportsServerResponseCandidate(index)), nil }
+ return fmt.Sprint(winner == "local" && prep.SupportsCompareLocalResponseCandidate(index)), nil
 }
 
 func fixtureCandidateFrames(plan interface{ MetadataPage(int32) string }) ([]string,error) {
@@ -55,7 +56,7 @@ func fixtureCandidateFrames(plan interface{ MetadataPage(int32) string }) ([]str
 """
 
 def compiler(source):
-    return ORIGINAL_COMPILER(source).replace('case len(args)==2:', '''case len(args)==3&&args[0]=="selected-response-position":result,err=fixtureSelectedResponsePosition(args[1],args[2]);case len(args)==3&&args[0]=="candidate-supported-metric":result=fmt.Sprint(mobilemultihop.NodeChainCandidateInputSupportedForMeasurement(args[1],args[2]));case len(args)==3&&(args[0]=="candidate-metric"||args[0]=="candidate-proof"):var p *mobilemultihop.NodeChain;p,err=mobilemultihop.ParseNodeChainLaunchInput(args[1]);if err==nil{var pos int;_,err=fmt.Sscan(args[2],&pos);if err==nil{result=p.CandidatePrefixMeasurement(pos);if args[0]=="candidate-proof"&&result!=""{var b []byte;b,err=json.Marshal(p.ProofInventory()[pos]);result=string(b)}}};case len(args)==2&&args[0]=="candidate-supported":result=fmt.Sprint(mobilemultihop.NodeChainCandidateInputSupported(args[1]));case len(args)==4&&(args[0]=="candidate-metadata"||args[0]=="candidate-frames"):var plan *mobilemultihop.NodeChain;plan,err=mobilemultihop.ParseNodeChainLaunchInput(args[1]);if err==nil{var position int;_,err=fmt.Sscan(args[2],&position);if err==nil{var captured *mobilemultihop.NodeChainCandidatePlan;captured,err=plan.NewCandidatePlan(position,args[3]);if err==nil{result=captured.Metadata();if args[0]=="candidate-frames"{var frames []string;frames,err=fixtureCandidateFrames(captured);if err==nil{var encoded []byte;encoded,err=json.Marshal(map[string]any{"frames":frames,"complete":json.RawMessage(result)});result=string(encoded)}}}}};case len(args)==2:''') + FRAME_HELPER
+    return ORIGINAL_COMPILER(source).replace('case len(args)==2:', '''case len(args)==4&&args[0]=="selected-response-position":result,err=fixtureSelectedResponsePosition(args[1],args[2],args[3]);case len(args)==3&&args[0]=="candidate-supported-metric":result=fmt.Sprint(mobilemultihop.NodeChainCandidateInputSupportedForMeasurement(args[1],args[2]));case len(args)==3&&(args[0]=="candidate-metric"||args[0]=="candidate-proof"):var p *mobilemultihop.NodeChain;p,err=mobilemultihop.ParseNodeChainLaunchInput(args[1]);if err==nil{var pos int;_,err=fmt.Sscan(args[2],&pos);if err==nil{result=p.CandidatePrefixMeasurement(pos);if args[0]=="candidate-proof"&&result!=""{var b []byte;b,err=json.Marshal(p.ProofInventory()[pos]);result=string(b)}}};case len(args)==2&&args[0]=="candidate-supported":result=fmt.Sprint(mobilemultihop.NodeChainCandidateInputSupported(args[1]));case len(args)==4&&(args[0]=="candidate-metadata"||args[0]=="candidate-frames"):var plan *mobilemultihop.NodeChain;plan,err=mobilemultihop.ParseNodeChainLaunchInput(args[1]);if err==nil{var position int;_,err=fmt.Sscan(args[2],&position);if err==nil{var captured *mobilemultihop.NodeChainCandidatePlan;captured,err=plan.NewCandidatePlan(position,args[3]);if err==nil{result=captured.Metadata();if args[0]=="candidate-frames"{var frames []string;frames,err=fixtureCandidateFrames(captured);if err==nil{var encoded []byte;encoded,err=json.Marshal(map[string]any{"frames":frames,"complete":json.RawMessage(result)});result=string(encoded)}}}}};case len(args)==2:''') + FRAME_HELPER
 
 
 SESSION = '''package com.eabusham.routervpn;
@@ -366,13 +367,17 @@ public final class NodeCandidateHarness {
  }
  static void selectedResponse(Path root,String shape)throws Exception{
   for(int count:shape.equals("earlier-private")?List.of(5,9,16):List.of(3,4,9,16)){
+   boolean registry=shape.startsWith("registry-");
+   if (registry && count!=3) continue;
+   String requested=count==4 ? "server":"auto", winner=count==3 && !registry ? "local":"server";
    boolean use=shape.startsWith("use-"),drift=shape.equals("use-drift"),insert=shape.equals("insert-imported")||shape.equals("use-earlier")||drift;
    if ((shape.equals("use-private")||drift) && count!=4) continue;
    int lastPrefix=count-2, prefix=insert ? (count==4 ? 1:count==9 ? 3:12) : lastPrefix;
    if ((insert || shape.equals("all-imported")) && count==3) continue;
    int paired=insert || shape.equals("all-imported") || shape.equals("use-final") || count==3 ? -1 : shape.equals("earlier-private") ? 2 : lastPrefix;
    var originals=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_ANDROID_CHAIN_FIXTURE"))));
-   JSONArray members=originals.getJSONArray("3/");
+   String entry = count == 4 ? "awg2-fast" : count == 9 ? "awg2-strong" : "wg";
+   JSONArray members=originals.getJSONArray(entry.equals("wg")?"3/":entry.equals("awg2-fast")?"3/mixed-awg":"3/awg-strong");
    if(count==16){
     JSONObject wg=members.getJSONObject(0).getJSONObject("profiles").getJSONObject("wg");
     for(String name:List.of("wg.conf","wg-socks.conf"))if(wg.has(name)){
@@ -387,7 +392,7 @@ public final class NodeCandidateHarness {
    JSONArray extra=originals.getJSONArray("8/mixed-awg");
    var alternate=f.nodes.importBundle(extra.getJSONObject(7).toString().getBytes(StandardCharsets.UTF_8));
    String recursiveID="";
-   if (use&&count==3) {
+   if ((use||registry)&&count==3) {
     var second=originals.getJSONArray("7/mixed-awg").getJSONObject(6);
     var linked=f.nodes.importBundle(second.toString().getBytes(StandardCharsets.UTF_8));
     recursiveID=f.nodes.candidateSource(linked.id).profileId;
@@ -402,7 +407,7 @@ public final class NodeCandidateHarness {
    f.nodes.select(f.control().id);
    var draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);
    String privateID=draft.members().get(1).source.id;
-   draft.removePrefix(1);draft.setPrefixMode(0,"wg");draft.addPrefix(middle.id,"shadowsocks");draft.setExecution("auto");
+   draft.removePrefix(1);draft.setPrefixMode(0,entry);draft.addPrefix(middle.id,"shadowsocks");draft.setExecution(requested);
    for(int i=2;i<=lastPrefix;i++)draft.addPrefix(i==paired?privateID:additional.get(i),"shadowsocks");
    var staged=draft.candidateDraftCapture(prefix).call();
    check(staged.selectedCandidateDraft()&&staged.members.size()==count,"complete private candidate draft lost its suffix");
@@ -410,28 +415,54 @@ public final class NodeCandidateHarness {
    var source=use ? staged : f.profiles.currentOrderedPath();
    var capture=use ? new AndroidNodeChainSession(source,new Object()) : new AndroidNodeChainSession(source);
    check(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,"auto")&&capture.capture.ownsSelectedCandidatePrefix(source,prefix),"Compare import lacked original measurable capture");
-   var crossedModes=new ArrayList<>(source.modes);crossedModes.set(0,"awg2-fast");
-   check(!AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,"server")&&!AndroidNodeChainCapture.responsePrefix(source.members,crossedModes,prefix,"auto"),"Server or AWG acquired private response");
+   var crossedModes=new ArrayList<>(source.modes);crossedModes.set(0,"awg2-pq");
+   check(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,"server")&&!AndroidNodeChainCapture.responsePrefix(source.members,crossedModes,prefix,"auto"),"Server source geometry or unsupported entry changed");
    for(int i=1;i<lastPrefix;i++)check(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,i,"auto"),"an earlier import gained the wrong response scope");
    var potential=AndroidNodeCandidateCatalog.captureSources(f.context,source,prefix);
    var alternateSource=f.nodes.candidateSource(alternate.id);
    check(potential.rows.stream().anyMatch(r->r.id.equals(alternateSource.profileId)&&!r.input.isEmpty())&&
          potential.rows.stream().noneMatch(r->source.members.stream().anyMatch(m->m.profileId.equals(r.id))),"distinct Compare response catalog retained original final or omitted real alternative");
-   capture.execution=capture.capture.multipleImported?Libbox.routerNodeChainMultipleImportedExecutionFromLaunch(capture.capture.launchInput,"auto"):Libbox.routerNodeChainExecutionFromLaunch(capture.capture.launchInput,"auto");
+   capture.execution=capture.capture.multipleImported?Libbox.routerNodeChainMultipleImportedExecutionFromLaunch(capture.capture.launchInput,requested):Libbox.routerNodeChainExecutionFromLaunch(capture.capture.launchInput,requested);
    capture.execution.testSource=capture.capture.plan;
-   capture.execution.testWinner="server";
-   reject(()->new AndroidNodeCandidateCatalog(f.context,capture,prefix),"actual Server winner acquired selected Local response authority");
-   capture.execution.testWinner="local";
+   capture.execution.testWinner=requested.equals("server")?"local":"unknown";
+   reject(()->new AndroidNodeCandidateCatalog(f.context,capture,prefix),"an unselected winner acquired response authority");
+   capture.execution.testWinner=winner;
    var catalog=new AndroidNodeCandidateCatalog(f.context,capture,prefix);
-   check(catalog.selectedPrefixID().equals(source.members.get(prefix).profileId)&&catalog.measurement.equals("routed-candidate-response"),"Local winner lost measured import identity");
+   check(catalog.selectedPrefixID().equals(source.members.get(prefix).profileId)&&catalog.measurement.equals("routed-candidate-response"),"Retained winner lost measured import identity");
+   if (registry) {
+    var ids=catalog.rows.stream().filter(row->!row.input.isEmpty()).map(row->row.id).toList();
+    check(ids.size()==2,"registry trial must contain two originally eligible targets");
+    io.nekohasekai.libbox.RouterNodeChainExecutionCandidateMeasurement.registryFault=shape;
+    var finished=new CountDownLatch(1);var second=new CountDownLatch(1);var scored=new java.util.concurrent.CopyOnWriteArrayList<String>();
+    var failure=new java.util.concurrent.atomic.AtomicReference<Throwable>();
+    var operation=AndroidNodeCandidateMeasurement.start(catalog,new AndroidNodeCandidateMeasurement.Callback(){
+     public void changed(List<AndroidNodeCandidateResult> rows,String label){for(var row:rows){scored.add(row.id);if(row.id.equals(ids.get(1)))second.countDown();}}
+     public void finished(Throwable error){failure.set(error);finished.countDown();}
+    });
+    if (shape.equals("registry-missing")) {
+     check(second.await(8,TimeUnit.SECONDS)&&!scored.contains(ids.get(0)),"joined unregistered target blocked the next registered score");
+     operation.cancel();
+    }
+    if (!shape.equals("registry-missing")) {
+     long limit=System.nanoTime()+TimeUnit.SECONDS.toNanos(8);
+     while (finished.getCount()>0 && second.getCount()>0 && System.nanoTime()<limit)Thread.sleep(10);
+     if (second.getCount()==0)operation.cancel();
+    }
+    check(finished.await(8,TimeUnit.SECONDS),"server trial failed to join");
+    check(shape.equals("registry-missing") || failure.get()!=null && scored.isEmpty() &&
+       io.nekohasekai.libbox.RouterNodeChainExecutionCandidateMeasurement.started==1,"invalidated or foreign first result ran another target");
+    continue;
+   }
    var before=new NodeChainCaptureHarness.State(f);
    var published=new CountDownLatch(1);var finished=new CountDownLatch(1);var scored=new java.util.concurrent.atomic.AtomicReference<AndroidNodeCandidateResult>();
+   var outcome=new java.util.concurrent.atomic.AtomicReference<Throwable>();
+   var lastStage=new java.util.concurrent.atomic.AtomicReference<String>();
    var operation=AndroidNodeCandidateMeasurement.start(catalog,new AndroidNodeCandidateMeasurement.Callback(){
-    public void changed(List<AndroidNodeCandidateResult> rows,String detail){for(var row:rows)if(row.id.equals(alternateSource.profileId)){scored.set(row);published.countDown();}}
-    public void finished(Throwable error){finished.countDown();}
+    public void changed(List<AndroidNodeCandidateResult> rows,String detail){lastStage.set(detail);for(var row:rows)if(row.id.equals(alternateSource.profileId)){scored.set(row);published.countDown();}}
+    public void finished(Throwable error){outcome.set(error);finished.countDown();}
    });
    try {
-    check(published.await(8,TimeUnit.SECONDS),"no original Compare Local response score survived the selected receipt checks");
+    check(published.await(8,TimeUnit.SECONDS),"no original selected response score survived the selected receipt checks: "+shape+"/"+count+"/"+prefix+" "+outcome.get()+" "+lastStage.get());
     var proposal=new AndroidNodeCandidateProfile(operation,scored.get());
     if (use) {
      var scoredRow=scored.get();
@@ -456,7 +487,7 @@ public final class NodeCandidateHarness {
       continue;
      }
      var other=new AndroidOrderedPathSelection(f.nodes,f.profiles);
-     other.removePrefix(1);other.setPrefixMode(0,"wg");other.addPrefix(middle.id,"shadowsocks");other.setExecution("auto");
+     other.removePrefix(1);other.setPrefixMode(0,entry);other.addPrefix(middle.id,"shadowsocks");other.setExecution(requested);
      for(int i=2;i<=lastPrefix;i++)other.addPrefix(i==paired?privateID:additional.get(i),"shadowsocks");
      var copy=other.candidateDraftCapture(prefix).call();
      check(copy.modes.equals(source.modes)&&copy.members.size()==source.members.size(),"foreign editor did not reproduce the original selection");
@@ -474,8 +505,8 @@ public final class NodeCandidateHarness {
      try(var compiled=fresh.capture){
       check(compiled.ownsSelectedCandidatePrefix(recaptured,next),"newly inserted private source failed to reopen at its own position");
       if (count==3) {
-       fresh.execution=Libbox.routerNodeChainMultipleImportedExecutionFromLaunch(compiled.launchInput,"auto");
-       fresh.execution.testSource=compiled.plan;fresh.execution.testWinner="local";
+       fresh.execution=Libbox.routerNodeChainMultipleImportedExecutionFromLaunch(compiled.launchInput,requested);
+       fresh.execution.testSource=compiled.plan;fresh.execution.testWinner=winner;
        var live=new AndroidNodeCandidateCatalog(f.context,fresh,next);
        var observed=new CountDownLatch(1);var joined=new CountDownLatch(1);String wanted=recursiveID;
        var repeat=AndroidNodeCandidateMeasurement.start(live,new AndroidNodeCandidateMeasurement.Callback(){
@@ -492,12 +523,12 @@ public final class NodeCandidateHarness {
     var saved=proposal.save(f.context,"Compare private response final");
     var after=new NodeChainCaptureHarness.State(f);check(before.preferences.equals(after.preferences),"future selected final changed Home settings");
     for(Path path:before.files.keySet())if(!path.equals(f.rows))check(Arrays.equals(before.files.get(path),after.files.get(path)),"future selected final changed original source");
-    check(capture.candidateExecutionOwner()==catalog.executionOwner&&"local".equals(catalog.executionOwner.execution()),"future profile reselected or retired the original execution");
+    check(capture.candidateExecutionOwner()==catalog.executionOwner&&winner.equals(catalog.executionOwner.execution()),"future profile reselected or retired the original execution");
     operation.cancel();check(finished.await(10,TimeUnit.SECONDS),"selected response callbacks did not drain");
     f.profiles.load(saved.id);var loaded=f.profiles.currentOrderedPath();
     var expectedModes=new ArrayList<>(source.modes);
     if(insert)expectedModes.add(prefix+1,"shadowsocks");
-    check(loaded.execution.equals("auto")&&loaded.modes.equals(expectedModes)&&loaded.members.get(prefix+1).id.equals(alternate.id),"named profile Load changed the measured successor or requested Compare");
+    check(loaded.execution.equals(requested)&&loaded.modes.equals(expectedModes)&&loaded.members.get(prefix+1).id.equals(alternate.id),"named profile Load changed the measured successor or requested execution");
     for(int i=0;i<count;i++){
      if(!insert&&i==count-1)continue;
      var member=loaded.members.get(insert&&i>prefix ? i+1:i);
@@ -507,7 +538,7 @@ public final class NodeCandidateHarness {
    } finally {operation.cancel();finished.await(10,TimeUnit.SECONDS);}
   }
  }
- public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);if(args.length==2&&List.of("selected-response","all-imported","earlier-private","insert-imported","use-earlier","use-final","use-private","use-drift").contains(args[1])){selectedResponse(root,args[1]);System.out.println("Android selected Compare private response: "+checks+" original store/Go compiler/selected callback checks PASS");return;}if(args.length==2&&args[1].equals("capacity")){largeCatalog(root);System.out.println("Android complete candidate inventory: "+checks+" original store, Go metadata and receipt checks PASS");return;}openVPNTCPCandidates(root);capturedSources(root);sources(root);overlappingSavedSources(root);receipts(root);reservationOwnership(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
+ public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);if(args.length==2&&List.of("registry-missing","registry-invalidated","registry-foreign","registry-malformed","selected-response","all-imported","earlier-private","insert-imported","use-earlier","use-final","use-private","use-drift").contains(args[1])){selectedResponse(root,args[1]);System.out.println("Android selected private response: "+checks+" original store/Go compiler/selected callback checks PASS");return;}if(args.length==2&&args[1].equals("capacity")){largeCatalog(root);System.out.println("Android complete candidate inventory: "+checks+" original store, Go metadata and receipt checks PASS");return;}openVPNTCPCandidates(root);capturedSources(root);sources(root);overlappingSavedSources(root);receipts(root);reservationOwnership(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
 }'''
 
 
@@ -539,7 +570,7 @@ def prepare(src, app, java):
     (native/'RouterNodeChainCandidateMeasurement.java').write_text(framed_native())
     (native/'RouterNodeChainCandidatePreparation.java').write_text('''package io.nekohasekai.libbox;public class RouterNodeChainCandidatePreparation{public String metadataPage(int offset){return "";}public String metadata(){throw new IllegalStateException("No idle prefix in connected candidate fixture");}public String captureSHA256(){return "";}public String statusJSON(){return "{}";}public void start(String request,String id)throws Exception{throw new IllegalStateException("No idle prefix in connected candidate fixture");}public void cancel(String request){}public void drain(String request)throws Exception{throw new IllegalStateException("No idle prefix in connected candidate fixture");}public void close()throws Exception{throw new IllegalStateException("No idle prefix in connected candidate fixture");}}''')
     p=native/'Libbox.java';s=p.read_text();s=s[:-1]+r'''
-public static boolean qualifiedSelectedResponse(RouterNodeChainExecution selected,int position)throws Exception{return "true".equals(call("selected-response-position",selected.source(),Integer.toString(position)));}
+public static boolean qualifiedSelectedResponse(RouterNodeChainExecution selected,int position)throws Exception{return "true".equals(call("selected-response-position",selected.source(),Integer.toString(position),selected.execution()));}
 public static String routerNodeChainCandidatePrefixMeasurement(RouterNodeChain p,int position)throws Exception{return call("candidate-metric",p.launchInput(),Integer.toString(position));}
 public static String routerNodeChainCandidatePrefixProof(RouterNodeChain p,int position)throws Exception{return call("candidate-proof",p.launchInput(),Integer.toString(position));}
 public static boolean routerNodeChainCandidateInputSupportedForMeasurement(String input,String metric)throws Exception{return "true".equals(call("candidate-supported-metric",input,metric));}
@@ -558,18 +589,30 @@ public static RouterNodeChainCandidateMeasurement routerNodeChainNewCandidateMea
     typed.write_text('''package io.nekohasekai.libbox;
 import org.json.*;
 public final class RouterNodeChainExecutionCandidateMeasurement {
+ public static String registryFault="";public static int started;
  private final RouterNodeChainExecution selected;private final RouterNodeChainCandidateMeasurement service;
  RouterNodeChainExecutionCandidateMeasurement(RouterNodeChainExecution selected,RouterNodeChain source,int position,String inventory,RouterNodeChainCandidateCatalog catalog)throws Exception{
-  if(!"local".equals(selected.execution())||!"auto".equals(selected.requestedExecution())||!Libbox.qualifiedSelectedResponse(selected,position))throw new IllegalStateException("No captured Local response trial");
+  if(!("auto".equals(selected.requestedExecution()) || selected.requestedExecution().equals(selected.execution())) || !Libbox.qualifiedSelectedResponse(selected,position))throw new IllegalStateException("No retained response prefix");
   this.selected=selected;service=new RouterNodeChainCandidateMeasurement(source,position,inventory,catalog);
  }
  public void prepare()throws Exception{service.prepare();}
- public String metadata()throws Exception{return new JSONObject(service.metadata()).put("preparation_source_sha256",selected.sourceSHA256()).put("preparation_config_sha256",selected.configSHA256()).put("requested_execution","auto").put("execution",selected.execution()).put("selection_epoch",17).toString();}
+ public String metadata()throws Exception{return new JSONObject(service.metadata()).put("preparation_source_sha256",selected.sourceSHA256()).put("preparation_config_sha256",selected.configSHA256()).put("requested_execution",selected.requestedExecution()).put("execution",selected.execution()).put("selection_epoch",17).toString();}
  public String metadataPage(int offset){throw new AssertionError("Unexpected paged inventory in selected response fixture");}
  public String captureSHA256()throws Exception{return service.captureSHA256();}
- public void start(String r,String id)throws Exception{service.start(r,id);}
+ public void start(String r,String id)throws Exception{service.start(r,id);started++;}
  public void cancel(String r){service.cancel(r);}public void drain(String r)throws Exception{service.drain(r);}
- public String statusJSON()throws Exception{return service.statusJSON();}public void close()throws Exception{service.close();}
+ public String statusJSON()throws Exception{
+  String raw=service.statusJSON();
+  if(registryFault.isEmpty()||started!=1)return raw;
+  JSONObject status=new JSONObject(raw);
+  if(!status.optBoolean("complete")||!status.optBoolean("drained"))return raw;
+  JSONObject row=status.getJSONArray("results").getJSONObject(0);
+  row.remove("benchmark");row.put("ready",false).put("failure","No registration for the captured source.").put("candidate_disposition","not-registered");
+  if(registryFault.equals("registry-invalidated"))status.put("stage","invalidated").put("failure","lost original lease");
+  if(registryFault.equals("registry-foreign"))status.put("candidate_source_sha256","f".repeat(64));
+  if(registryFault.equals("registry-malformed"))row.put("candidate_disposition","unknown");
+  return status.toString();
+ }public void close()throws Exception{service.close();}
 }''')
     marker='throw new IllegalStateException("No typed connected candidate runtime in this ordinary fixture");'
     lib=native/'Libbox.java';text=lib.read_text()
@@ -592,9 +635,20 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidateHarness',str(data)],env=env,check=True,timeout=120)
     response=work/'selected-response';response.mkdir()
     subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidateHarness',str(response),'selected-response'],env=env,check=True,timeout=120)
-    for shape in ('all-imported','earlier-private','insert-imported','use-earlier','use-final','use-private','use-drift'):
+    for shape in ('registry-missing','registry-invalidated','registry-foreign','registry-malformed','all-imported','earlier-private','insert-imported','use-earlier','use-final','use-private','use-drift'):
         target=work/shape;target.mkdir()
         subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidateHarness',str(target),shape],env=env,check=True,timeout=120)
+    target=work/'registry-control';target.mkdir()
+    source=(JAVA/'AndroidNodeCandidateMeasurement.java').read_text()
+    original='if ("server".equals(metadata.optString("execution")) && "routed-candidate-response".equals(catalog.measurement))'
+    assert source.count(original)==1
+    changed=target/'AndroidNodeCandidateMeasurement.java';changed.write_text(source.replace(original,'if (false)'))
+    cp=os.pathsep.join(map(str,[target,classes,jar]))
+    subprocess.run(['javac','--release','17','-cp',cp,'-d',str(target),str(changed)],check=True,timeout=60)
+    data=target/'data';data.mkdir()
+    failed=subprocess.run(['java','-cp',cp,'com.eabusham.routervpn.NodeCandidateHarness',str(data),'registry-invalidated'],env=env,capture_output=True,text=True,timeout=120)
+    assert failed.returncode!=0 and 'invalidated or foreign first result ran another target' in failed.stderr,failed.stdout+failed.stderr
+    print('Android registry causal control rejected: invalidated target admitted further work', flush=True)
     for name, before, after, witness in (
         ('AndroidNodeStore', 'if (draftCatalog != catalog || draftCatalog == null)', 'if (draftCatalog == null)', 'a different editor adopted the measured result'),
         ('AndroidNodeCandidateProfile', 'requireSavedCurrent();\n            draft.insertMeasured', 'draft.insertMeasured', 'unjoined measurement changed the draft'),
@@ -616,7 +670,7 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     cp=os.pathsep.join(map(str,[changed,classes,jar]))
     subprocess.run(['javac','--release','17','-cp',cp,'-d',str(changed),str(mutant)],check=True,timeout=60)
     failed=subprocess.run(['java','-cp',cp,'com.eabusham.routervpn.NodeCandidateHarness',str(response),'selected-response'],env=env,capture_output=True,text=True,timeout=120)
-    assert failed.returncode!=0 and 'no original Compare Local response score survived the selected receipt checks' in failed.stderr,failed.stdout+failed.stderr
+    assert failed.returncode!=0 and 'no original selected response score survived the selected receipt checks' in failed.stderr,failed.stdout+failed.stderr
     capacity=work/'candidate-capacity';capacity.mkdir()
     subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidateHarness',str(capacity),'capacity'],env=env,check=True,timeout=120)
     controls = (

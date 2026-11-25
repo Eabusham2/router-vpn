@@ -364,7 +364,11 @@ func exchangeDesktopNodeChainCandidateObserved(parent context.Context, catalog *
 }
 
 func validateDesktopNodeChainCandidateStatus(plan desktopCandidateDescription, id string, status hopmeasure.CandidateStatus, now time.Time) error {
-	bad := errors.New("candidate result did not retain its exact fifty-sample original prefix and source")
+	return validateDesktopNodeChainCandidateReceipt(plan, id, status, now, false)
+}
+
+func validateDesktopNodeChainCandidateReceipt(plan desktopCandidateDescription, id string, status hopmeasure.CandidateStatus, now time.Time, allowServerNoScore bool) error {
+	bad := errors.New("candidate result did not retain its exact original prefix and source")
 	if plan == nil {
 		return bad
 	}
@@ -400,7 +404,14 @@ func validateDesktopNodeChainCandidateStatus(plan desktopCandidateDescription, i
 		return bad
 	}
 	r := status.Results[0]
-	if r.ID != id || r.Role != "candidate" || r.Kind != kind || !r.Ready || r.Failure != "" || r.Idle != nil || r.Response != nil || r.Download != nil || r.Upload != nil || r.Benchmark == nil {
+	if r.ID != id || r.Role != "candidate" || r.Kind != kind || r.Idle != nil || r.Response != nil || r.Download != nil || r.Upload != nil {
+		return bad
+	}
+	if allowServerNoScore && metric == hopmeasure.CandidatePrivateResponseMeasurement && !r.Ready && r.Failure != "" && r.Benchmark == nil &&
+		(r.CandidateDisposition == "" || r.CandidateDisposition == hopmeasure.CandidateNotRegistered && r.Failure == hopmeasure.ErrCandidateNotRegistered.Error()) {
+		return nil
+	}
+	if !r.Ready || r.Failure != "" || r.Benchmark == nil || r.CandidateDisposition != "" {
 		return bad
 	}
 	b := r.Benchmark

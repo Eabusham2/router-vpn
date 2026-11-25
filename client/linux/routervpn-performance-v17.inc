@@ -21,6 +21,8 @@ static gboolean linux_performance_local_source_v17(JsonObject *obj, int count, c
     gboolean selected = json_object_has_member(obj, "ordered_original_source");
     if (selected && json_object_has_member(obj, "ordered_local_source")) return FALSE;
     JsonObject *source = linux_ol_object_v1(obj, selected ? "ordered_original_source" : "ordered_local_source");
+    gboolean external = source && json_object_has_member(source, "external_final_node_id");
+    if (external && (selected || g_strcmp0(linux_ol_string_v1(source, "external_final_node_id"), exit) || !g_strcmp0(entry, exit))) return FALSE;
     const char *winner = linux_ol_string_v1(source, "selected_execution");
     if (selected && ((g_strcmp0(winner, "local") && g_strcmp0(winner, "server")) ||
         g_strcmp0(winner,linux_ol_string_v1(obj,"execution")) || !linux_ol_hex_v1(linux_ol_string_v1(source,"generation_sha256"),64))) return FALSE;
@@ -33,7 +35,7 @@ static gboolean linux_performance_local_source_v17(JsonObject *obj, int count, c
     g_autoptr(JsonNode) role_inventory = mapped ? linux_ol_source_roles_v1(source, count, selected) : NULL;
     if (mapped && (paired || packet_prefixes != 0 || !role_inventory)) return FALSE;
     JsonArray *ids = linux_ol_array_v1(source, "node_ids");
-    if (count < 9 || count > 96 || source == NULL || json_object_get_size(source) != (selected ? (mapped ? 6u : 5u) : paired || packet_prefixes > 0 || mapped ? 4u : 3u) ||
+    if (count < (external ? 3 : 9) || count > 96 || source == NULL || json_object_get_size(source) != (selected ? (mapped ? 6u : 5u) : external || paired || packet_prefixes > 0 || mapped ? 4u : 3u) ||
         !linux_ol_hex_v1(linux_ol_string_v1(source, "source_sha256"), 64) ||
         !linux_ol_hex_v1(linux_ol_string_v1(source, "config_sha256"), 64) ||
         ids == NULL || json_array_get_length(ids) != (guint)count) return FALSE;
@@ -42,8 +44,8 @@ static gboolean linux_performance_local_source_v17(JsonObject *obj, int count, c
     for (int i = 0; i < count && valid; i++) {
         JsonNode *n = json_array_get_element(ids, (guint)i);
         const char *id = n != NULL && JSON_NODE_HOLDS_VALUE(n) && json_node_get_value_type(n) == G_TYPE_STRING ? json_node_get_string(n) : NULL;
-        valid = linux_ol_text_v1(id, selected ? 64 : 128) &&
-            (!selected || strspn(id,"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")==strlen(id)) && (i != 0 || !g_strcmp0(id, entry)) &&
+        valid = linux_ol_text_v1(id, selected || external ? 64 : 128) &&
+            ((!selected && !external) || strspn(id,"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")==strlen(id)) && (i != 0 || !g_strcmp0(id, entry)) &&
             (i != count-1 || !g_strcmp0(id, exit)) && g_hash_table_add(seen, (gpointer)id);
     }
     g_hash_table_unref(seen);
@@ -65,7 +67,9 @@ static gboolean linux_performance_local_result_v17(LinuxPerformanceV17 *p, JsonO
     JsonArray *roles = role_inventory ? json_node_get_array(role_inventory) : NULL;
     if (obj == NULL || json_object_has_member(obj, selected ? "ordered_local_source" : "ordered_original_source")) return FALSE;
     const char *winner = selected ? linux_ol_string_v1(json_node_get_object(p->local_source),"selected_execution") : NULL;
-    if (selected && g_strcmp0(winner, linux_ol_string_v1(obj,"execution"))) return FALSE;
+    gboolean external = json_object_has_member(json_node_get_object(p->local_source),"external_final_node_id");
+    if ((selected && g_strcmp0(winner, linux_ol_string_v1(obj,"execution"))) ||
+        (external && g_strcmp0(linux_ol_string_v1(obj,"execution"),"local"))) return FALSE;
     JsonNode *source = json_object_get_member(obj, selected ? "ordered_original_source" : "ordered_local_source");
     if (source == NULL || !json_node_equal(p->local_source, source) || rows == NULL || json_array_get_length(rows) != count ||
         !linux_ol_bool_v1(obj, "connected", &connected) || !connected || g_strcmp0(linux_ol_string_v1(obj, "mode"), "multihop") ||
@@ -78,7 +82,7 @@ static gboolean linux_performance_local_result_v17(LinuxPerformanceV17 *p, JsonO
         if (n == NULL || !JSON_NODE_HOLDS_OBJECT(n)) return FALSE;
         JsonObject *row = json_node_get_object(n), *speed = linux_ol_object_v1(row, "speed");
         const char *id = json_array_get_string_element(ids, i), *role = i == 0 ? "entry" : i+1 == count ? "exit" : "intermediate";
-        gboolean public_path = mapped ? !g_strcmp0(json_array_get_string_element(roles, i), "public-path") : !paired && i >= (guint)MAX(1, packet_prefixes) && i+1 < count;
+        gboolean public_path = external ? i > 0 : mapped ? !g_strcmp0(json_array_get_string_element(roles, i), "public-path") : !paired && i >= (guint)MAX(1, packet_prefixes) && i+1 < count;
         const char *suffix = public_path ? " to the public benchmark" : "";
         char speed_label[128], latency_label[128];
         g_snprintf(speed_label, sizeof(speed_label), "Cumulative%s%s path through node %u of %u%s transfer", selected ? " " : "", selected ? winner : "", i+1, count, suffix);
@@ -138,7 +142,7 @@ static gboolean linux_performance_poll_v17(gpointer data) {
         gboolean ordered_valid=!ordered||(token&&strlen(token)==64&&strspn(token,"0123456789abcdef")==64&&count&&JSON_NODE_HOLDS_VALUE(count)&&json_node_get_value_type(count)==G_TYPE_INT64&&json_node_get_int(count)>=2&&json_node_get_int(count)<=96);
         if (ordered && ordered_valid) {
             int total = (int)json_node_get_int(count);
-            ordered_valid = total <= 8 ? local_source == NULL && selected_source == NULL :
+            ordered_valid = total <= 8 && local_source == NULL ? selected_source == NULL :
                 linux_performance_local_source_v17(obj, total, in, out);
         }
         if(valid&&ordered_valid&&in[0]&&out[0]&&strcmp(in,out)!=0){

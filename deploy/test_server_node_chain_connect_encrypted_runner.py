@@ -329,7 +329,7 @@ func TestCapturedAWGReceiptRefusal(t *testing.T){for _,row:=range []struct{name,
                    'prefix-hostname-max-five','prefix-hostname-wrong-transport-dns','prefix-hostname-wrong-middle-key',
                    'prefix-hostname-failed-selected-dns','prefix-hostname-joined-active-udp',
                    'prefix-hostname-wrong-first-packet-key','prefix-hostname-wrong-later-packet-key')
-        self.assertEqual(G.BASE.IMPORTED_CASES,original+prefixes+hostnames)
+        self.assertEqual(G.BASE.IMPORTED_CASES,original+prefixes+hostnames+('stream-response',))
         self.assertEqual(len(G.BASE.IMPORTED_CASES),len(set(G.BASE.IMPORTED_CASES)))
 
     def test_inherited_ordinary_inventory_rejects_omission_duplicate_and_foreign_cases(self):

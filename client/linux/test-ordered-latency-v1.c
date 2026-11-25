@@ -229,9 +229,35 @@ static void custom_entry_validation(App *app) {
     json_node_free(terminal); finish_jobs(s); dispose(s);
 }
 
+static void external_final_validation(App *app) {
+    JsonArray *cases = json_object_get_array_member(json_node_get_object(fixture), "external_final");
+    const char *previous = app->selected;
+    for (guint i = 0; i < json_array_get_length(cases); i++) {
+        JsonObject *item = json_array_get_object_element(cases,i);
+        JsonObject *info = linux_ol_object_v1(item,"info");
+        JsonArray *receipts = linux_ol_array_v1(item,"receipts");
+        int count = (int)json_array_get_length(receipts);
+        app->selected = linux_ol_string_v1(linux_ol_object_v1(info,"capture"),"profile_id");
+        LinuxOrderedLatencyV1 *s = panel(app); freeze(s);
+        reply(s->jobs[OL_INFO_V1],200,fixture_copy(json_object_get_member(item,"info")));
+        linux_ol_tick_v1(s);
+        check(s->capture && !s->invalid && json_array_get_length(json_node_get_array(s->history)) == (guint)count,
+              "public exit panel retained all original receipts under its first control");
+        start(s,count-1);
+        JsonNode *terminal = status(s,"complete",TRUE,TRUE,FALSE);
+        JsonNode *saved = fixture_copy(json_array_get_element(receipts,count-1));
+        json_object_set_string_member(json_node_get_object(saved),"request_id",s->request);
+        json_object_set_member(json_node_get_object(terminal),"receipt",saved);
+        check(linux_ol_receive_v1(s,json_node_get_object(terminal),FALSE) && s->complete && s->drained,
+              "public exit retest committed to the captured external row");
+        json_node_free(terminal); finish_jobs(s); dispose(s);
+    }
+    app->selected = previous;
+}
+
 static void selected_validation(App *app) {
     JsonArray *cases = json_object_get_array_member(json_node_get_object(fixture), "selected");
-    check(json_array_get_length(cases) == 26, "all paired and multiple-imported selected GTK paths retained");
+    check(json_array_get_length(cases) == 30, "all paired and multiple-imported selected GTK paths retained");
     for (guint index = 0; index < json_array_get_length(cases); index++) {
         JsonObject *item = json_array_get_object_element(cases, index);
         JsonArray *receipts = json_object_get_array_member(item, "receipts");
@@ -316,7 +342,7 @@ int main(int argc,char **argv) {
     gtk_init(&argc,&argv);curl_global_init(CURL_GLOBAL_DEFAULT);App app={gtk_window_new(GTK_WINDOW_TOPLEVEL),"exit-a"};gtk_widget_show_all(app.window);
 #ifndef ROUTERVPN_ORDERED_LIVE
     check(argc==2,"fixture JSON supplied");char *text=NULL;check(g_file_get_contents(argv[1],&text,NULL,NULL),"read fixture");fixture=parse_json(text);g_free(text);check(fixture!=NULL,"fixture JSON valid");records=g_ptr_array_new();
-    validation(&app);ordinary_validation(&app);connect_validation(&app); independent_validation(&app); custom_entry_validation(&app); selected_validation(&app);cancellation(&app);checked_parent_shutdown=TRUE;gtk_widget_destroy(app.window);pump();
+    validation(&app);ordinary_validation(&app);connect_validation(&app); independent_validation(&app); custom_entry_validation(&app); selected_validation(&app);external_final_validation(&app);cancellation(&app);checked_parent_shutdown=TRUE;gtk_widget_destroy(app.window);pump();
     for(guint i=0;i<records->len;i++){Record*r=g_ptr_array_index(records,i);check(r->freed,"every original HTTP worker released");g_free(r->path);g_free(r->body);g_free(r);}g_ptr_array_free(records,TRUE);json_node_free(fixture);
 #else
     check(argc==2,"live scenario supplied");live(&app,argv[1]);gtk_widget_destroy(app.window);pump();

@@ -25,11 +25,16 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     final boolean strict, homeLANAccess, openVPN, multipleImported;
     private final AndroidNodeStore.ChainCapture original;
 
+    static boolean selectedResponseWinner(String requested, String winner) {
+        return "server".equals(winner) && ("server".equals(requested) || "auto".equals(requested))
+                || "local".equals(winner) && "auto".equals(requested);
+    }
+
     // Source-only chooser preview. Only the original native compiler can
     // authorize this response metric or open a closed prefix preparation.
     static boolean responsePrefix(List<AndroidNodeStore.ChainSource> sources,List<String> modes,int prefix,String execution) {
         if (sources.size()!=modes.size()||prefix<1||prefix>=sources.size()-1) return false;
-        if ("auto".equals(execution)) {
+        if ("auto".equals(execution) || "server".equals(execution)) {
             if (sources.size() >= 4) {
                 try {
                     List<Boolean> imported = new ArrayList<>();
@@ -45,7 +50,8 @@ final class AndroidNodeChainCapture implements AutoCloseable {
                             || sources.size() < AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH);
                 } catch (Exception unavailable) { return false; }
             }
-            if (prefix != 1 || !modes.equals(java.util.Arrays.asList("wg","shadowsocks","shadowsocks"))
+            if (prefix != 1 || modes.size() != 3 || !List.of("wg", "awg2-fast", "awg2-strong").contains(modes.get(0))
+                    || !modes.subList(1, 3).stream().allMatch("shadowsocks"::equals)
                     || sources.get(0).imported || !sources.get(1).imported || sources.get(2).imported) return false;
             try {
                 requireLiteralImportedSS(sources.get(1));
@@ -101,14 +107,14 @@ final class AndroidNodeChainCapture implements AutoCloseable {
                 || position != 0 && plan == null) return false;
         AndroidNodeStore.ChainSource member = source.members.get(position);
         if (member.imported) {
-            return "auto".equals(source.execution) && (multipleImported || source.members.size() == 3)
+            return ("auto".equals(source.execution) || "server".equals(source.execution)) && (multipleImported || source.members.size() == 3)
                     && identityInputs.get(position).isEmpty()
                     && responsePrefix(source.members,source.modes,position,source.execution);
         }
         return !member.imported && member.proofId.matches("[0-9a-f]{64}")
                 && !identityInputs.get(position).isEmpty()
                 && (java.util.Arrays.asList("wg", "awg2-fast", "awg2-strong").contains(source.modes.get(position))
-                    || multipleImported && "auto".equals(source.execution)
+                    || multipleImported && ("auto".equals(source.execution) || "server".equals(source.execution))
                     && responsePrefix(source.members,source.modes,position,source.execution));
     }
 
@@ -253,12 +259,18 @@ final class AndroidNodeChainCapture implements AutoCloseable {
             if (!member.profileId.equals(reference.getString("id")) || !mode.equals(reference.getString("mode"))) {
                 throw new IllegalStateException("The ordered member changed its original position or exact mode.");
             }
-            if((original.selectedCandidateDraft() || original.measurementOnly() && selected.length()>8) && i==selected.length()-1){
+            boolean externalExit = original.members.get(selected.length()-1).imported;
+            if((original.selectedCandidateDraft() || original.measurementOnly() && (selected.length()>8 || externalExit))
+                    && i==(externalExit ? 0 : selected.length()-1)){
                 profile.put("multihop_enabled",true).put("multihop_execution",original.execution).put("multihop_nodes",selected);
                 for(String key:new String[]{"multihop_entry_id","multihop_entry_mode","multihop_exit_id","multihop_exit_mode"})profile.remove(key);
                 AndroidNodeStore.orderedSelection(profile);
             }
             inputs.add(memberInput(member, mode, "local".equals(original.execution) ? profile : executionProfile(profile)));
+        }
+        if (sourceSchema(original.members, original.modes) == 8) {
+            int last = inputs.size() - 1;
+            inputs.set(last, externalFinalInput(inputs.get(0), inputs.get(last)));
         }
         original.requireCurrent();
         return inputs;
@@ -266,6 +278,10 @@ final class AndroidNodeChainCapture implements AutoCloseable {
 
     /** Startup controls schedule a connection; they do not change its native
      * execution source. Full original bundle bytes remain owned by ChainCapture. */
+    static String externalFinalInput(String entry, String imported) throws Exception {
+        return bounded(Libbox.routerNodeChainExternalFinalFromEntry(entry, imported), MAX_INPUT);
+    }
+
     static JSONObject executionProfile(JSONObject profile) throws Exception {
         JSONObject result=new JSONObject(profile.toString());
         result.remove("startup_mode");result.remove("auto_connect");
@@ -400,6 +416,19 @@ final class AndroidNodeChainCapture implements AutoCloseable {
 
     static int sourceSchema(List<AndroidNodeStore.ChainSource> members,List<String> modes) throws Exception {
         if(members.size()!=modes.size())throw new IllegalStateException("The original route lost a member transport.");
+        int count = members.size();
+        if (count > 0 && members.get(count - 1).imported) {
+            if (count < 3 || count > AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || members.get(0).imported
+                    || !"wg".equals(modes.get(0)) || !List.of("", "off").contains(members.get(0).profile().optString("start_layer", "off")))
+                throw new IllegalStateException("An imported final requires its original WireGuard entry and at least one imported intermediate.");
+            members.get(0).requirePairedIdentity();
+            for (int i = 1; i < count; i++) {
+                if (!members.get(i).imported || !"shadowsocks".equals(modes.get(i)))
+                    throw new IllegalStateException("Choose literal imported Shadowsocks 2022 nodes after the WireGuard entry.");
+                requireLiteralImportedSS(members.get(i));
+            }
+            return 8;
+        }
         int imported=0,middle=-1;boolean privateStream=false;
         for(int i=0;i<members.size();i++){
             if(members.get(i).imported){imported++;middle=i;}
@@ -521,11 +550,13 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         int last = modes.size() - 1;
         return last >= 3 && last < AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH && imported.size() == modes.size()
                 && !imported.get(0) && imported.get(1) && !imported.get(last)
-                && "wg".equals(modes.get(0)) && modes.subList(1, modes.size()).stream().allMatch("shadowsocks"::equals);
+                && List.of("wg", "awg2-fast", "awg2-strong").contains(modes.get(0)) && modes.subList(1, modes.size()).stream().allMatch("shadowsocks"::equals);
     }
 
     static void requireCompleteShape(List<AndroidNodeStore.ChainSource> members,List<String> modes,String execution) throws Exception {
         int schema=sourceSchema(members,modes);
+        if (schema == 8 && !"local".equals(execution))
+            throw new IllegalStateException("An ordered imported final requires Local execution.");
         if (members.size()>8 && schema==1) {
             if(!"local".equals(execution)||modes.size()!=members.size())throw new IllegalStateException("An extended paired route requires its complete Local source.");
             for(int i=0;i<modes.size();i++)if(!(i==modes.size()-1?"shadowsocks":"wg").equals(modes.get(i)))throw new IllegalStateException("Extended paired Local requires WireGuard at every prefix and a Shadowsocks final.");
@@ -554,8 +585,8 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static void validateLocalImportedSources(List<AndroidNodeStore.ChainSource> members,List<String> modes) throws Exception {
         requireCompleteShape(members,modes,"local");
         int schema=sourceSchema(members,modes);
-        if(schema!=6 && schema!=7)throw new IllegalStateException("The independent-import preview requires its complete Local imported source.");
-        JSONObject control=members.get(members.size()-1).profile();
+        if(schema!=6 && schema!=7 && schema!=8)throw new IllegalStateException("The independent-import preview requires its complete Local imported source.");
+        JSONObject control=members.get(schema == 8 ? 0 : members.size()-1).profile();
         JSONArray selected=AndroidNodeStore.orderedSelection(control),inputs=new JSONArray(),identities=new JSONArray();
         if(!"local".equals(control.getString("multihop_execution"))||selected.length()!=members.size())
             throw new IllegalStateException("The staged Local path changed its exact complete selection.");
@@ -565,6 +596,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
                 throw new IllegalStateException("The staged Local path reordered or replaced an original member.");
             inputs.put(memberInput(member,modes.get(i),member.profile()));identities.put(identityInput(member));
         }
+        if (schema == 8) inputs.put(inputs.length()-1, externalFinalInput(inputs.getString(0), inputs.getString(inputs.length()-1)));
         String source=bounded(new JSONObject().put("schema",schema).put("execution","local").put("nodes",inputs).put("identity_sources",identities).toString(),MAX_INPUT);
         RouterNodeChain preview=Libbox.newRouterNodeChain(source);
         if(preview==null)throw new IllegalStateException("The native compiler returned no complete imported Local graph.");

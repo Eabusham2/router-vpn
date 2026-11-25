@@ -178,6 +178,7 @@ func TestNodeChainCandidateConnectQuotaAndJoin(t *testing.T) {
 // Controlled native boundaries exercise real Manager ownership, never claim
 // a provider connection or encrypted packet route from these receipts.
 type candidateFixtureOperation struct {
+	prepareError   error
 	capture        NodeChainCandidateCapture
 	prepared       bool
 	admission      *NodeChainCandidateAdmission
@@ -194,6 +195,9 @@ func (p *candidateFixtureOperation) Prepare(ctx context.Context) (NodeChainCandi
 	if p.prepareEntered != nil {
 		close(p.prepareEntered)
 		<-p.prepareRelease
+	}
+	if p.prepareError != nil {
+		return NodeChainCandidateReceipt{}, p.prepareError
 	}
 	p.mu.Lock()
 	p.prepared = ctx.Err() == nil
@@ -231,6 +235,8 @@ func (p *candidateFixtureOperation) Close(ctx context.Context) error {
 }
 
 type candidateFixtureProcess struct {
+	prepareError error
+	failClose    bool
 	*nodeChainFixtureProcess
 	operation                      *candidateFixtureOperation
 	prepareEntered, prepareRelease chan struct{}
@@ -246,7 +252,7 @@ func (p *candidateFixtureProcess) NewCandidateOperation(ctx context.Context, c N
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.creates++
-	p.operation = &candidateFixtureOperation{capture: c.Clone(), admission: a, prepareEntered: p.prepareEntered, prepareRelease: p.prepareRelease}
+	p.operation = &candidateFixtureOperation{prepareError: p.prepareError, failClose: p.failClose, capture: c.Clone(), admission: a, prepareEntered: p.prepareEntered, prepareRelease: p.prepareRelease}
 	return p.operation, nil
 }
 

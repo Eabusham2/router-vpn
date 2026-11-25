@@ -105,7 +105,7 @@ func (p *NodeChainExecutionPreparation) SupportsCompareLocalResponseCandidate(po
 func (c *NodeChain) compareLocalResponsePrefix(position int) bool {
 	return c != nil && position == 1 && len(c.proofs) == 3 && c.importedMiddle != nil && c.importedMiddle.hostname == nil &&
 		c.importedMiddle.policy != nil && c.nodes[0] != nil && c.nodes[1] == nil && c.nodes[2] != nil &&
-		c.proofs[0].Mode == "wg" && c.proofs[0].StartLayer == "off" &&
+		NodeChainPrefixMode(c.proofs[0].Mode) && c.proofs[0].StartLayer == "off" &&
 		c.proofs[1].Mode == "shadowsocks" && c.proofs[1].NodeKind == "external" &&
 		c.proofs[2].Mode == "shadowsocks" && c.proofs[2].StartLayer == "off" &&
 		c.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement

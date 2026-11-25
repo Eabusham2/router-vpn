@@ -111,18 +111,29 @@ func (a *app) orderedLiveResponse(parent context.Context, graph activeMultihopGr
 		endpoints[0].Kind = "public-path"
 	}
 	if frozen[len(frozen)-1].Profile.NodeKind == "external" {
-		return output, errors.New("ordered response requires a private final API")
+		_, meta, _, err := launch.chain.readLaunchPolicy()
+		if err != nil || launch.chain.execution != nil || !desktopNodeChainMetadataMatchesSelection(meta, launch.chain.selection) ||
+			meta.ExternalFinal == nil || launch.chain.selection.Native == nil || launch.chain.selection.Native.chain == nil ||
+			launch.chain.selection.Native.chain.chain == nil || !launch.chain.selection.Native.chain.chain.HasExternalFinal() {
+			return output, errors.Join(err, errors.New("ordered public response lost its original external exit"))
+		}
+		endpoints[1].Kind, endpoints[1].Tag = "public-path", meta.FinalTag
+		endpoints[1].Label = fmt.Sprintf("Cumulative path through custom node %d of %d → Cloudflare edge", len(frozen), len(frozen))
 	}
 	measured, err := hopmeasure.OrderedResponseLatencies(status, nonce, samples, endpoints)
 	if err != nil {
 		return output, err
 	}
 	for i, d := range measured {
-		if endpoints[i].Kind == "public-path" {
+		if i == 0 && endpoints[i].Kind == "public-path" {
 			continue
 		}
+		proof := endpoints[i].Label + " · authenticated private HTTP response"
+		if endpoints[i].Kind == "public-path" {
+			proof = endpoints[i].Label + " · HTTPS response after TLS through the captured external exit"
+		}
 		output[i] = connectionLatencyResult{Connected: true, Mode: "multihop", RouterID: profiles[i].ID, Name: profiles[i].Name, Samples: samples,
-			MinMs: d.Min, MedianMs: d.Median, AverageMs: d.Average, P90Ms: d.P90, MaxMs: d.Max, MeasuredAt: time.UnixMilli(at).UTC(), Proof: endpoints[i].Label + " · authenticated private HTTP response"}
+			MinMs: d.Min, MedianMs: d.Median, AverageMs: d.Average, P90Ms: d.P90, MaxMs: d.Max, MeasuredAt: time.UnixMilli(at).UTC(), Proof: proof}
 	}
 	return output, current(ctx)
 }

@@ -17,6 +17,9 @@ func (q multihopConnectRequest) ordered() bool { return q.nodesPresent || q.Node
 
 func (q multihopConnectRequest) validateOrdered() error {
 	if !q.ordered() {
+		if q.ExternalFinal {
+			return errors.New("external final requires its complete explicit ordered source")
+		}
 		return nil
 	}
 	if !validDesktopOrderedExecution(q.Execution) || q.EntryID != "" || q.ExitID != "" || q.Base != "" || q.EntryMode != "" || q.ExitMode != "" ||
@@ -26,7 +29,11 @@ func (q multihopConnectRequest) validateOrdered() error {
 	if err := desktopOrderedExecutionSelection(q.Nodes, q.Execution); err != nil {
 		return err
 	}
-	if q.Nodes[len(q.Nodes)-1].ID != *q.ExpectedSelectedNodeID {
+	if q.ExternalFinal {
+		if q.Execution != "local" || !desktopExternalFinalReferences(q.Nodes) || q.Nodes[0].ID != *q.ExpectedSelectedNodeID {
+			return errors.New("ordered external final requires its original selected WireGuard entry and Local execution")
+		}
+	} else if q.Nodes[len(q.Nodes)-1].ID != *q.ExpectedSelectedNodeID {
 		return errors.New("ordered Connect must end at its original selected node")
 	}
 	return nil
@@ -47,13 +54,19 @@ func (q *multihopConnectRequest) UnmarshalJSON(data []byte) error {
 		}
 	}
 	rawNodes, ordered := fields["nodes"]
+	if _, present := fields["external_final"]; present && !ordered {
+		return errors.New("external final cannot be detached from its ordered source")
+	}
 	if ordered {
 		for name := range fields {
 			switch name {
-			case "nodes", "execution", "expected_selected_node_id", "expected_profile_tokens":
+			case "nodes", "execution", "expected_selected_node_id", "expected_profile_tokens", "external_final":
 			default:
 				return errors.New("ordered Connect cannot mix another selection or an unknown field")
 			}
+		}
+		if value, present := fields["external_final"]; present && string(value) != "true" {
+			return errors.New("ordered external final requires its explicit canonical true intent")
 		}
 		var rows []json.RawMessage
 		if json.Unmarshal(rawNodes, &rows) != nil || len(rows) < 2 || len(rows) > hopmeasure.PhysicalTraversalDepth {

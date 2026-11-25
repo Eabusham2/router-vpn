@@ -21,6 +21,15 @@ func RouterNodeChainImportedMemberInput(config, capture string) (string, error) 
 	return mobilemultihop.NodeChainImportedMemberInput(config, capture)
 }
 
+// The final captures its actual source and selected resolver independently of each interior.
+func RouterNodeChainExternalFinalInput(config, capture string) (string, error) {
+	return mobilemultihop.NodeChainExternalFinalInput(config, capture)
+}
+
+func RouterNodeChainExternalFinalFromEntry(entry, imported string) (string, error) {
+	return mobilemultihop.NodeChainExternalFinalFromEntry(entry, imported)
+}
+
 func NewRouterNodeChain(source string) (*RouterNodeChain, error) {
 	chain, err := mobilemultihop.NewNodeChain(source)
 	if err != nil {

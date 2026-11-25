@@ -351,12 +351,12 @@ func testOriginalSelectedDraftLifecycle(t *testing.T, a *app, draft *multihopCon
 	})
 
 	observed := func(ctx context.Context) (string, error) { return "original-chain-physical-network", ctx.Err() }
-	view, err := captureOrderedCandidatePreparedSelection(ctx, a, q.Position, q.Scope, draft, observed)
+	view, err := captureOrderedCandidatePreparedSelection(candidateServerIntent(ctx, q.serverResponse), a, q.Position, q.Scope, draft, observed)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var expectedResponseNodes []orderedCandidateResponseSourceNode
-	if strings.HasPrefix(choice[2], "private-") && len(draft.Nodes) > 3 {
+	if strings.HasPrefix(choice[2], "private-") && (len(draft.Nodes) > 3 || q.serverResponse) {
 		for _, node := range draft.Nodes {
 			profile, exists := profileByID(before.Profiles, node.ID)
 			if !exists {
@@ -503,7 +503,7 @@ func testOriginalSelectedDraftLifecycle(t *testing.T, a *app, draft *multihopCon
 	}
 	metadata := desktopSelectedCandidateMetadataFixture(t, r.catalog, req)
 	if responsePrivate {
-		if req.Operation != "selected-local-private-response-50" {
+		if req.Operation != "selected-"+choice[1]+"-private-response-50" {
 			t.Fatal("wrong native child operation", req.Operation)
 		}
 		for _, field := range []string{"execution", "measurement", "selection_epoch", "prefix_position", "prefix_id"} {
@@ -517,7 +517,11 @@ func testOriginalSelectedDraftLifecycle(t *testing.T, a *app, draft *multihopCon
 			}
 			switch field {
 			case "execution":
-				m[field] = "server"
+				if choice[1] == "local" {
+					m[field] = "server"
+				} else {
+					m[field] = "local"
+				}
 			case "measurement":
 				m[field] = "routed-tcp-connect"
 			case "selection_epoch":
@@ -583,6 +587,16 @@ func testOriginalSelectedDraftLifecycle(t *testing.T, a *app, draft *multihopCon
 	if strings.HasPrefix(choice[2], "private-use") {
 		testOriginalSelectedResponseDraftUse(t, ctx, p, view, before, net, owned, choice[2])
 		return
+	}
+	if q.serverResponse {
+		owners := []string{"server"}
+		if choice[0] == "auto" {
+			owners = []string{"local", "server"}
+		}
+		if current["required_selected_execution"] != choice[1] || !reflect.DeepEqual(current["response_executions"], owners) ||
+			!reflect.DeepEqual(current["response_source_nodes"], expectedResponseNodes) {
+			t.Fatal("review lost its original eligible owners, winner or source")
+		}
 	}
 	if choice[2] == "private-measure-only" {
 		for _, offer := range view.candidates {

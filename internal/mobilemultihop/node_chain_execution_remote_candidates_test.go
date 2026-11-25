@@ -57,7 +57,9 @@ func (o *remoteCandidateTestOwner) CandidateInventoryCurrentContext(ctx context.
 }
 
 type remoteCandidateFixture struct {
+	absence            func(http.ResponseWriter, *http.Request, multihoprelay.NodeChainCandidateCapture) bool
 	f                  *nodeChainExecutionRuntimeFixture
+	reply              func(net.Conn, multihoprelay.NodeChainCandidateCapture)
 	plan               *NodeChainExecutionRemoteCandidatePlan
 	measurement        *NodeChainExecutionRemoteCandidateMeasurement
 	owner              *remoteCandidateTestOwner
@@ -87,6 +89,9 @@ func newRemoteCandidateFixtureTTL(t *testing.T, execution string, ttlSeconds int
 }
 
 func remoteCandidateFixtureAtPacket(t *testing.T, f *nodeChainExecutionRuntimeFixture, execution string, position int) *remoteCandidateFixture {
+	return remoteCandidateFixtureAt(t, f, execution, position, "")
+}
+func remoteCandidateFixtureAt(t *testing.T, f *nodeChainExecutionRuntimeFixture, execution string, position int, responseInput string, additional ...string) *remoteCandidateFixture {
 	t.Helper()
 	if execution == "auto" {
 		// Separate both successful real HTTP measurements under race instrumentation.
@@ -145,7 +150,10 @@ func remoteCandidateFixtureAtPacket(t *testing.T, f *nodeChainExecutionRuntimeFi
 		t.Fatal("fixture did not retain selected Server")
 	}
 	input, _ := candidateSourceFixture(t, "external", "2022-blake3-aes-128-gcm")
-	plan, err := f.runtime.NewRemoteCandidatePlanContext(ctx, position, candidateInventoryFixture(t, "remote-original", input))
+	if responseInput != "" {
+		input = responseInput
+	}
+	plan, err := f.runtime.NewSelectedRemoteCandidatePlanContext(ctx, position, candidateInventoryFixture(t, "remote-original", append([]string{input}, additional...)...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,6 +229,9 @@ func (r *remoteCandidateFixture) serveCandidate(w http.ResponseWriter, q *http.R
 		lease := multihoprelay.NodeChainCapture{Schema: 1, Request: a.request.Clone(), Source: a.source.Clone(), RegistrySHA256: a.lease.RegistrySHA256, OwnerID: a.lease.OwnerID, Peer: a.request.Peer, Host: a.lease.Host, BootstrapDeadline: a.lease.BootstrapDeadline}
 		a.mu.Unlock()
 		r.capture, err = multihoprelay.NewNodeChainCandidateCapture(lease, request, time.Now())
+		if err == nil && r.absence != nil && r.absence(w, q, r.capture) {
+			return
+		}
 		if err == nil {
 			r.admission, err = multihoprelay.NewNodeChainCandidateAdmission(context.Background(), r.capture)
 		}
@@ -356,6 +367,12 @@ func (r *remoteCandidateFixture) front(conn net.Conn) {
 		<-timer.C
 	}
 	if _, e := conn.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0}); e != nil {
+		return
+	}
+	if capture.Request.Schema == 2 {
+		if r.reply != nil {
+			r.reply(conn, capture)
+		}
 		return
 	}
 	var payload [1]byte

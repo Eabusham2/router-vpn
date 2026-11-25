@@ -311,6 +311,7 @@ func TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement(t *testi
 			if err := proveDesktopNodeChainContext(f.operation, f.a, f.selection, f.launch.command); err != nil {
 				t.Fatal(err)
 			}
+			assertDesktopOrderedDNSObservation(t, f)
 			if err := validateDesktopNodeChainRestore(f.operation, f.a, f.launch); err != nil {
 				t.Fatal(err)
 			}

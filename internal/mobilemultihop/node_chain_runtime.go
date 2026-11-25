@@ -244,6 +244,8 @@ func (c *NodeChain) provePrefixes(ctx context.Context, publish bool) error {
 				progress.Label = "Cumulative path through custom middle to public HTTPS edge"
 				if position == 0 {
 					progress.Label = "Custom entry response from public HTTPS edge"
+				} else if position == len(c.proofs)-1 {
+					progress.Label = "Cumulative path through custom exit to public HTTPS edge"
 				}
 			}
 			c.runtime.progress.Prefixes = append(c.runtime.progress.Prefixes, progress)
@@ -271,6 +273,13 @@ func (c *NodeChain) proveDNS(parent context.Context) error {
 func (c *NodeChain) provePublic(parent context.Context) error {
 	ctx, cancel := context.WithTimeout(parent, 8*time.Second)
 	defer cancel()
+	if c.HasExternalFinal() {
+		exit := c.importedSSMemberAt(len(c.proofs) - 1)
+		if err := proveExternalPublicIP(ctx, c.dial, c.FinalTag(), exit.selection.ExpectedPublicIP, c.runtime.testTLS); err != nil {
+			return err
+		}
+		return c.currentContext(ctx, true)
+	}
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return errors.New("ordered chain public proof nonce unavailable")

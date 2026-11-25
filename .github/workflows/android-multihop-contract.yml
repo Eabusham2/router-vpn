@@ -630,6 +630,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
+        part: [1, 2, 3]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -643,7 +644,8 @@ jobs:
         # Complete disjoint phases retain their 180-second race deadlines.
         env:
           CORE_SHARD: ${{ matrix.shard }}
-        run: python3 deploy/test_mobile_multihop_groups.py --group core --core-shard "$CORE_SHARD"
+          CORE_PART: ${{ matrix.part }}
+        run: python3 deploy/test_mobile_multihop_groups.py --group core --core-shard "$CORE_SHARD" --core-part "$CORE_PART"
 
   shared_imported_prefix:
     runs-on: ubuntu-latest

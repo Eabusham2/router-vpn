@@ -33,7 +33,7 @@ func desktopExecutionGraphFixture(t *testing.T, winner routechoice.Execution) (*
 func TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority(t *testing.T) {
 	for _, winner := range []routechoice.Execution{routechoice.Local, routechoice.Server} {
 		t.Run(string(winner), func(t *testing.T) {
-			for _, fault := range []string{"original", "omitted", "projection", "identity", "target", "winner", "epoch", "label", "physical", "preparation"} {
+			for _, fault := range []string{"original", "omitted", "projection", "identity", "target", "winner", "epoch", "label", "physical", "preparation", "incomplete", "not-ready", "dns-unproved", "public-unproved", "failed"} {
 				t.Run(fault, func(t *testing.T) {
 					launch, proof, graph := desktopExecutionGraphFixture(t, winner)
 					e := launch.chain.execution
@@ -50,6 +50,16 @@ func TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority(t *testing.T) {
 						e.ready.Progress.Comparison.Winner.ExitID = "replacement"
 					case "epoch":
 						e.ready.SelectionEpoch = 0
+					case "incomplete":
+						e.ready.Progress.Complete = false
+					case "not-ready":
+						e.ready.Progress.Ready = false
+					case "dns-unproved":
+						e.ready.Progress.DNSProven = false
+					case "public-unproved":
+						e.ready.Progress.PublicProven = false
+					case "failed":
+						e.ready.Progress.Failure = "selected route failed"
 					case "label":
 						graph.Execution = "auto"
 					case "physical":

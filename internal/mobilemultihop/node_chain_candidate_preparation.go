@@ -43,7 +43,9 @@ func NewNodeChainCandidatePreparation(originalSource string, position int, inven
 	if err != nil {
 		return nil, err
 	}
-	if original.importedNodes != nil && len(original.nodes) > NodeChainMaximumNodes && original.ExtendedLocalNodeCount() == len(original.nodes) || original.importedNodes != nil && original.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement {
+	if original.importedNodes != nil && (original.HasExternalFinal() ||
+		len(original.nodes) > NodeChainMaximumNodes && original.ExtendedLocalNodeCount() == len(original.nodes) ||
+		original.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement) {
 		owner, err := newNodeChainCandidateMultipleOriginal(original)
 		if err != nil {
 			return nil, err

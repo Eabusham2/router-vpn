@@ -30,6 +30,12 @@ DESKTOP_EXECUTION_BATCH_ROOTS = 16
 CONTROLLER_PHASE = 'controller, proof and remaining ownership'
 CONTROLLER_BATCH_ROOTS = 8
 APPLE_FIXTURE_ROOT = 'TestEmitAppleOpenVPNExecutionFixtures'
+# These complete platform/projection roots took 103s and 35s in the same
+# 180-second hosted race process. Give each its original full process budget.
+AWG_ORIGINAL_ROOTS = (
+    'TestNodeChainExtendedAWGSelectedOriginalPlatforms',
+    'TestNodeChainExtendedAWGSelectedOriginal',
+)
 APPLE_FIXTURE_ENV = 'ROUTER_VPN_APPLE_OPENVPN_FIXTURES'
 APPLE_FIXTURE_COUNT_ENV = 'ROUTER_VPN_APPLE_OPENVPN_PACKET_COUNT'
 APPLE_FIXTURE_KEYS = frozenset(f'{count}/{mode}/{network}/{layer}'
@@ -540,6 +546,24 @@ def core_shard(groups, number):
     return groups[number-1::4]
 
 
+CORE_PARTS = 3
+
+
+def core_part(groups, part):
+    if part not in range(1, CORE_PARTS+1):
+        raise ValueError('Invalid shared core partition')
+    selected = []
+    for index, (label, roots) in enumerate(groups):
+        if label in (DESKTOP_EXECUTION_PHASE, ORIGINAL_GRAPHS_PHASE, CONTROLLER_PHASE):
+            # Preserve each existing whole-root batch, including the six
+            # bounded alternative invocations for the Apple fixture root.
+            batches = complete_phase_batches(label, roots)
+            selected.extend((label, list(batch)) for batch in batches[part-1::CORE_PARTS])
+        elif index % CORE_PARTS == part-1:
+            selected.append((label, roots))
+    return selected
+
+
 def exact_selector(names):
     # Go test does not support Python's noncapturing group syntax. These names
     # are compiler-discovered identifiers, so regex metacharacters cannot enter.
@@ -599,7 +623,7 @@ def complete_phase_batches(label, selected):
     size = CONTROLLER_BATCH_ROOTS if label == CONTROLLER_PHASE else DESKTOP_EXECUTION_BATCH_ROOTS
     batches, pending = [], []
     for root in selected:
-        if root == APPLE_FIXTURE_ROOT:
+        if root == APPLE_FIXTURE_ROOT or (label == ORIGINAL_GRAPHS_PHASE and root in AWG_ORIGINAL_ROOTS):
             if pending:
                 batches.append(tuple(pending))
                 pending = []
@@ -1485,6 +1509,14 @@ class PartitionTests(unittest.TestCase):
             self.assertEqual(args[:6], ['go', 'test', '-race', '-count=1', '-timeout=180s', PACKAGE])
             self.assertEqual([name for name in actual if re.fullmatch(args[-1], name)], selected)
 
+    def test_original_awg_platform_roots_keep_independent_race_budgets(self):
+        groups = partition(sorted(set(self.names) | set(AWG_ORIGINAL_ROOTS)))
+        roots = dict(groups)[ORIGINAL_GRAPHS_PHASE]
+        batches = complete_phase_batches(ORIGINAL_GRAPHS_PHASE,roots)
+        for root in AWG_ORIGINAL_ROOTS:
+            self.assertIn((root,),batches)
+        self.assertEqual([root for batch in batches for root in batch],roots)
+
     def test_ci_groups_retain_complete_disjoint_discovered_inventory(self):
         groups = partition(self.names)
         self.assertEqual(select_ci_group(groups), groups)
@@ -1492,6 +1524,16 @@ class PartitionTests(unittest.TestCase):
         shards = [core_shard(core, n) for n in range(1, 5)]
         self.assertEqual(sorted(sum(shards, [])), sorted(core))
         self.assertTrue(all(shards))
+        for shard in shards:
+            parts = [core_part(shard, i) for i in range(1,CORE_PARTS+1)]
+            self.assertTrue(all(parts))
+            validate_partition([root for _,roots in shard for root in roots], [g for part in parts for g in part])
+            for label,roots in shard:
+                if label in (DESKTOP_EXECUTION_PHASE, ORIGINAL_GRAPHS_PHASE, CONTROLLER_PHASE):
+                    original = complete_phase_batches(label,roots)
+                    distributed = [batch for part in parts for key,members in part if key == label
+                                   for batch in complete_phase_batches(label,members)]
+                    self.assertCountEqual(original,distributed)
         for invalid in (0, 5):
             with self.assertRaises(ValueError):
                 core_shard(core, invalid)
@@ -1802,7 +1844,11 @@ def main():
     parser.add_argument('--self-test', action='store_true')
     parser.add_argument('--group', choices=tuple(CI_GROUPS), help='Run one fully inventoried CI group')
     parser.add_argument('--core-shard', type=int, choices=range(1, 5), help='Select one disjoint quarter of the complete core phase inventory')
+    parser.add_argument('--core-part', type=int, choices=range(1, CORE_PARTS+1),
+                        help='Distribute the selected core shard across its bounded whole phases and complete-root batches')
     args = parser.parse_args()
+    if args.core_part is not None and args.core_shard is None:
+        parser.error('--core-part requires an original core shard')
     if args.core_shard is not None and args.group != 'core':
         parser.error('--core-shard requires --group core')
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(PartitionTests)
@@ -1817,6 +1863,8 @@ def main():
     selected_groups = select_ci_group(groups, args.group)
     if args.core_shard is not None:
         selected_groups = core_shard(selected_groups, args.core_shard)
+        if args.core_part is not None:
+            selected_groups = core_part(selected_groups,args.core_part)
     for label, selected in selected_groups:
         print(f'Shared multihop: {label}; {len(selected)} discovered tests', flush=True)
         run_phase(label, selected)

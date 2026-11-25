@@ -145,7 +145,7 @@ func (p *orderedCandidatePreparation) startFullRuntime(ctx context.Context, r *o
 		return r, err
 	}
 	r.transition = false
-	r.catalog, err = captureDesktopNodeChainCandidateSourcesForScope(ctx, p.app, launch, p.request.Position, p.request.CandidateIDs, p.request.Scope)
+	r.catalog, err = captureDesktopNodeChainCandidateSourcesForScope(candidateServerIntent(ctx, p.request.serverResponse), p.app, launch, p.request.Position, p.request.CandidateIDs, p.request.Scope)
 	if err != nil || !orderedCandidateSameInventory(p.inventory, r.catalog) {
 		return r, errors.Join(err, errors.New("candidate runtime changed its admitted saved inventory"))
 	}
@@ -215,7 +215,7 @@ func (p *orderedCandidatePreparation) startCompleteLocalRuntime(ctx context.Cont
 }
 
 func orderedCandidateSameInventory(a, b *desktopNodeChainCandidateCatalog) bool {
-	if a == nil || b == nil || a.revision != b.revision || a.inventory != b.inventory ||
+	if a == nil || b == nil || a.serverResponse != b.serverResponse || a.revision != b.revision || a.inventory != b.inventory ||
 		(a.prefixPreparation == nil) != (b.prefixPreparation == nil) ||
 		!reflect.DeepEqual(a.assets, b.assets) || !reflect.DeepEqual(a.profiles, b.profiles) || len(a.files) != len(b.files) {
 		return false
@@ -367,6 +367,10 @@ func (p *orderedCandidatePreparation) measureRuntime(ctx context.Context, r *ord
 		completed(id, status, err)
 		if errors.Is(err, errDesktopNodeChainMeasurementPending) {
 			pending = err
+			return err
+		}
+		if err != nil && p.request.serverResponse && r.selectedReady != nil && r.selectedReady.Progress.Execution == "server" && r.catalog.selectedPlan != nil &&
+			r.catalog.selectedPlan.preparation.SupportsServerResponseCandidate(p.request.Position) {
 			return err
 		}
 		if err := r.current(ctx); err != nil {

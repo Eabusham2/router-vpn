@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"router-vpn/internal/mobilemultihop"
-	"sort"
 	"strconv"
 	"time"
 
@@ -49,6 +48,7 @@ func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *ht
 		return
 	}
 	query := request.URL.Query()
+	serverResponse, validIntent := takeCandidateServerIntent(query)
 	positions := query["prefix_position"]
 	text := ""
 	if len(positions) == 1 {
@@ -65,7 +65,7 @@ func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *ht
 	if hasScope {
 		expected = 2
 	}
-	if len(query) != expected || hasScope && (len(scopes) != 1 || scopes[0] == "") || scopeErr != nil || len(positions) != 1 || err != nil || strconv.Itoa(position) != text || position < 0 || position >= mobilemultihop.NodeChainExtendedLocalMaximumNodes {
+	if !validIntent || serverResponse && (!isDraft || scope != orderedCandidateSelectedDraftScope) || len(query) != expected || hasScope && (len(scopes) != 1 || scopes[0] == "") || scopeErr != nil || len(positions) != 1 || err != nil || strconv.Itoa(position) != text || position < 0 || position >= mobilemultihop.NodeChainExtendedLocalMaximumNodes {
 		http.Error(w, "choose an exact saved packet prefix position", http.StatusBadRequest)
 		return
 	}
@@ -82,7 +82,7 @@ func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *ht
 			http.Error(w, "an exact editor draft with matching execution and original public source tokens is required", 400)
 			return
 		}
-		view, err = captureOrderedCandidatePreparedSelection(ctx, a, position, scope, &draft, physicalNetworkIdentityContext)
+		view, err = captureOrderedCandidatePreparedSelection(candidateServerIntent(ctx, serverResponse), a, position, scope, &draft, physicalNetworkIdentityContext)
 	} else {
 		view, err = captureOrderedCandidatePreparedViewScope(ctx, a, position, scope, physicalNetworkIdentityContext)
 	}
@@ -117,7 +117,11 @@ func (a *app) orderedCandidatePreparedCatalog(w http.ResponseWriter, request *ht
 	if isDraft {
 		response["origin"] = "editor-draft"
 		response["requested_execution"] = view.draft.Execution
-		if metric == hopmeasure.CandidatePrivateResponseMeasurement && view.draft.Execution == "auto" {
+		if len(view.responseOwners) > 0 {
+			publishCandidateResponseOwners(response, view.responseOwners, "")
+			response["response_source_nodes"] = view.responseNodes
+			response["note"] = "Test measures 50 authenticated responses through the selected execution. Server requires the paired candidate to be registered on the original server."
+		} else if metric == hopmeasure.CandidatePrivateResponseMeasurement && view.draft.Execution == "auto" {
 			response["required_selected_execution"] = "local"
 			response["note"] = "If Compare selects Local, measure 50 authenticated responses through the captured prefix. Choose a candidate to save a separate final profile."
 			if len(view.responseNodes) != 0 {
@@ -172,7 +176,7 @@ func (a *app) orderedCandidatePreparedRequest(w http.ResponseWriter, request *ht
 	defer stopAdmission()
 	lifetime, stopLifetime := context.WithTimeout(context.Background(), viaEntryRequestTimeout)
 	p, err := beginOrderedCandidatePreparationWithLifetime(admission, lifetime, a,
-		orderedCandidatePreparationRequest{draft: view.draft, Scope: scope, RequestID: q.RequestID, Position: q.PrefixPosition, CandidateIDs: q.CandidateIDs, Samples: q.Samples}, physicalNetworkIdentityContext)
+		orderedCandidatePreparationRequest{draft: view.draft, serverResponse: view.catalog.serverResponse, Scope: scope, RequestID: q.RequestID, Position: q.PrefixPosition, CandidateIDs: q.CandidateIDs, Samples: q.Samples}, physicalNetworkIdentityContext)
 	if err != nil {
 		stopLifetime()
 		http.Error(w, err.Error(), 409)
@@ -259,13 +263,7 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 			}
 		}
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		left, right := rows[i].Results[0].Benchmark.TrimmedMean, rows[j].Results[0].Benchmark.TrimmedMean
-		if left == right {
-			return rows[i].CandidateID < rows[j].CandidateID
-		}
-		return left < right
-	})
+	sortOrderedCandidateResults(rows)
 	cleanupPending := !owner.running && !owner.drained && !reviewing
 	response := map[string]any{"schema": 1, "request_id": owner.id,
 		"view_token": job.view.token, "prefix_position": job.view.position, "running": owner.running,
@@ -276,7 +274,10 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 		"active_path_changed": false, "saved_profile_id": "", "started": true, "admission_cancelled": false}
 	if job.view.draft != nil {
 		response["requested_execution"] = job.view.draft.Execution
-		if job.view.draft.Execution == "auto" && response["measurement"] == hopmeasure.CandidatePrivateResponseMeasurement {
+		if len(job.view.responseOwners) > 0 {
+			publishCandidateResponseOwners(response, job.view.responseOwners, "")
+			response["response_source_nodes"] = job.view.responseNodes
+		} else if job.view.draft.Execution == "auto" && response["measurement"] == hopmeasure.CandidatePrivateResponseMeasurement {
 			response["required_selected_execution"] = "local"
 			if len(job.view.responseNodes) != 0 {
 				response["response_source_nodes"] = job.view.responseNodes
@@ -287,6 +288,7 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 		if !owner.running && job.preparation.runtime != nil && job.preparation.runtime.selectedReady != nil {
 			ready := job.preparation.runtime.selectedReady
 			response["selected_execution"], response["selection_epoch"] = ready.Progress.Execution, ready.SelectionEpoch
+			publishCandidateResponseOwners(response, job.view.responseOwners, ready.Progress.Execution)
 		}
 	}
 	if job.saved != nil {

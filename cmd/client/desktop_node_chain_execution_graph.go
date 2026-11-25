@@ -104,6 +104,7 @@ func (proof *desktopNodeChainExecutionProof) original(launch *desktopNodeLaunch,
 
 func (proof *desktopNodeChainExecutionProof) currentState(e *desktopNodeChainExecutionLaunch, graph activeMultihopGraph) error {
 	if e.projection != proof.projection || e.identity != proof.identity || e.ready == nil || e.ready.Identity != proof.identity ||
+		!e.ready.Progress.Complete || !e.ready.Progress.Ready || !e.ready.Progress.DNSProven || !e.ready.Progress.PublicProven || e.ready.Progress.Failure != "" ||
 		e.ready.SelectionEpoch < proof.epoch || e.ready.Progress.Comparison.Target != proof.target || e.ready.Progress.Comparison.Winner == nil ||
 		*e.ready.Progress.Comparison.Winner != proof.winner || e.ready.Progress.Execution != graph.Execution {
 		return errors.New("ordered execution graph replaced its proved winner, target or identity")

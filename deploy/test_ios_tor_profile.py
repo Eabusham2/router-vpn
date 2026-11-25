@@ -72,6 +72,7 @@ GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile
  case "imported-router","imported-router-metadata","imported-router-source":var a map[string]string;err=json.Unmarshal([]byte(r.Config),&a);if err==nil{var plan *mobilemultihop.Controller;plan,err=mobilemultihop.NewImportedEntry(a["config"],a["capture"],a["mode"],a["files"],a["profile"],a["start"],a["dns"]);if err==nil{value=plan.Config();if r.Op=="imported-router-metadata"{value=plan.Metadata()};if r.Op=="imported-router-source"{value=plan.SourceSHA256()};err=plan.Close()}}
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "external-validate-transport":err=mobilemultihop.ValidateExternalTransport(r.Config,r.Policy);value="checked"
+ case "ordered-external-final":value,err=mobilemultihop.NodeChainExternalFinalFromEntry(r.Config,r.Policy)
  case "ordered-imported-source":value,err=mobilemultihop.NodeChainImportedMemberInput(r.Config,r.Policy)
  case "ordered-imported-openvpn-source":value,err=mobilemultihop.NodeChainImportedOpenVPNMemberInput(r.Config,r.Policy)
  case "external-validate-dns":err=mobilemultihop.ValidateExternalDNS(r.Config,r.Policy);value="checked"
@@ -147,6 +148,12 @@ public func LibboxRouterValidateExternalTransport(_ config:String,_ capture:Stri
 }
 // Match the real generated nonnull NSString / NSErrorPointer ABI. Returning an
 // optional here would conceal invalid conditional binding in shipping Swift.
+public func LibboxRouterNodeChainExternalFinalFromEntry(_ entry:String,_ imported:String,_ error:UnsafeMutablePointer<NSError?>?)->String {
+ var failure:NSError?
+ let value=result(&failure,["Op":"ordered-external-final","Config":entry,"Policy":imported])
+ error?.pointee=failure
+ return value
+}
 public func LibboxRouterNodeChainImportedMemberInput(_ config:String,_ capture:String,_ error:UnsafeMutablePointer<NSError?>?)->String {
  var failure:NSError?
  let value=result(&failure,["Op":"ordered-imported-source","Config":config,"Policy":capture])

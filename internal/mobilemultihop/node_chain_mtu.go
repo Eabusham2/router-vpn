@@ -15,7 +15,7 @@ func (c *NodeChain) MTUProfile() string {
 	if c == nil || c.validateCapture() != nil {
 		return ""
 	}
-	raw, err := json.Marshal(c.nodes[len(c.nodes)-1].profile)
+	raw, err := json.Marshal(c.finalPreferences())
 	if err != nil {
 		return ""
 	}

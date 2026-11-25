@@ -76,9 +76,14 @@ MUTANTS = (
      'test_darwin_owned_pf.py', 'OwnedDarwinPF.test_extended_original_chain_baseline_and_source_bound_input',
      'extended original boundary changed its qualified transport'),
     ('extended original saved Start Layer', 'kill-switch-platform.py',
-     "if len(rows) > 8 and (member.get('start_layer', '') or 'off') != 'off':", 'if False:',
+     "if (len(rows) > 8 or capture['schema'] == 4) and (member.get('start_layer', '') or 'off') != 'off':", 'if False:',
      'test_darwin_owned_pf.py', 'OwnedDarwinPF.test_extended_original_chain_baseline_and_source_bound_input',
      'extended original member borrowed an unsupported Start Layer'),
+    ('external final original saved Start Layer', 'kill-switch-platform.py',
+     "if (len(rows) > 8 or capture['schema'] == 4) and (member.get('start_layer', '') or 'off') != 'off':",
+     "if len(rows) > 8 and (member.get('start_layer', '') or 'off') != 'off':",
+     'test_darwin_owned_pf.py', 'OwnedDarwinPF.test_external_final_layered_saved_member_rejected_without_mutation',
+     'external final member borrowed an unsupported Start Layer'),
     ('ordered OpenVPN original member admission', 'kill-switch-platform.py',
      "'ordered-node-chain-v1': ('shadowsocks', 'openvpn'),", "'ordered-node-chain-v1': ('shadowsocks',),",
      'test_darwin_owned_pf.py', 'OwnedDarwinPF.test_node_chain_openvpn_middle_keeps_original_policy_rows',
@@ -309,7 +314,7 @@ def main():
     for name in ('test_darwin_pf_baseline.py', 'test_darwin_owned_pf.py'):
         path = ROOT/'modes'/name
         # Give each discovered case the same bounded execution as its mutants.
-        # The 116 owned-PF cases share no fixture state between processes.
+        # Every owned-PF case has its own fixture state and process.
         for selected in discover_cases(path):
             result = run(path, selected)
             if result.returncode or '\nRan 1 test in ' not in result.stdout or '\nOK\n' not in result.stdout:

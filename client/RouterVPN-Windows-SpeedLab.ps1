@@ -368,6 +368,11 @@ function global:Assert-RouterVPNOrderedCapture {
         if(@(Get-RouterVPNOrderedKeys $Capture)-ccontains'selected_capture'-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Capture 'extended_local_nodes') 9 96 -Integer)){throw 'Invalid extended Local inventory.'}
     }
     $keys=@(Get-RouterVPNOrderedKeys $Capture)
+    if($keys -ccontains 'external_final_node_id'){
+        $exit=Get-RouterVPNOrderedValue $Capture 'external_final_node_id'
+        if($exit -isnot [string] -or $exit -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or $exit -ceq $Capture.profile_id -or
+           @($keys|Where-Object {$_ -cin @('selected_capture','extended_original_nodes','paired_prefix_nodes','local_roles_json','paired_wireguard')}).Count){throw 'Invalid external exit capture.'}
+    }
     if($keys -ccontains 'local_roles_json'){
         if($keys -cnotcontains 'extended_local_nodes' -or $keys -ccontains 'selected_capture' -or $keys -ccontains 'extended_original_nodes' -or $keys -ccontains 'paired_prefix_nodes' -or $keys -ccontains 'paired_wireguard' -or
            $null -eq (Get-RouterVPNOrderedLocalRoles (Get-RouterVPNOrderedValue $Capture 'local_roles_json') ([int]$Capture.extended_local_nodes))){throw 'Invalid original Local role inventory.'}
@@ -482,6 +487,21 @@ function global:Assert-RouterVPNOrderedNode {
     $Role=if($Position-eq0){'entry'}elseif($Position-eq($Count-1)){'exit'}else{'intermediate'}
     $Extended=Get-RouterVPNOrderedValue $Capture 'extended_local_nodes'
     $PublicMember=[string](Get-RouterVPNOrderedValue $Node 'kind')-ceq'public-path'
+    $externalExit=Get-RouterVPNOrderedValue $Capture 'external_final_node_id'
+    if($null -ne $externalExit){
+        Assert-RouterVPNOrderedCapture $Capture
+        $id=Get-RouterVPNOrderedValue $Node 'node_id'
+        $kind=if($Position -eq 0){'private-node'}else{'public-path'}
+        $method=if($Position -eq 0){'routed-private-response-including-connection'}else{'routed-https-response-after-tls'}
+        if($Count -lt 3 -or $Count -gt 96 -or (($Count -gt 8) -ne ($null -ne $Extended)) -or ($null -ne $Extended -and $Extended -ne $Count) -or
+           $Position -lt 0 -or $Position -ge $Count -or $OriginalNodes -isnot [array] -or $OriginalNodes.Count -ne $Count -or
+           -not [object]::ReferenceEquals($OriginalNodes[$Position],$Node) -or $id -isnot [string] -or $id -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or
+           ($Position -eq 0 -and $id -cne $Capture.profile_id) -or ($Position -eq $Count-1 -and $id -cne $externalExit) -or
+           (Get-RouterVPNOrderedValue $Node 'kind') -cne $kind -or (Get-RouterVPNOrderedValue $Node 'role') -cne $Role -or
+           -not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Node 'position') $Position $Position -Integer) -or
+           (Get-RouterVPNOrderedValue $Node 'measurement') -cne $method -or (Get-RouterVPNOrderedLabelKind $Node $Position $Count) -cne 'ordinary'){throw 'The external-final row changed its original endpoint, position or timing method.'}
+        return
+    }
     $paired=$null -ne $Extended -and $OriginalNodes -is [array] -and $OriginalNodes.Count -eq $Count -and
         $Position -ge 0 -and $Position -lt $Count -and [object]::ReferenceEquals($OriginalNodes[$Position],$Node) -and
         @($OriginalNodes | Where-Object {(Get-RouterVPNOrderedValue $_ 'kind') -cne 'private-node'}).Count -eq 0
@@ -550,6 +570,7 @@ function global:New-RouterVPNOrderedBody {
     if($null-ne(Get-RouterVPNOrderedValue $State.Capture 'selected_capture')){$Capture['selected_capture']=[string](Get-RouterVPNOrderedValue $State.Capture 'selected_capture')}
     if($null-ne(Get-RouterVPNOrderedValue $State.Capture 'extended_original_nodes')){$Capture['extended_original_nodes']=[int](Get-RouterVPNOrderedValue $State.Capture 'extended_original_nodes')}
     if($null-ne(Get-RouterVPNOrderedValue $State.Capture 'paired_prefix_nodes')){$Capture['paired_prefix_nodes']=[int]$State.Capture.paired_prefix_nodes}
+    if($null-ne(Get-RouterVPNOrderedValue $State.Capture 'external_final_node_id')){$Capture['external_final_node_id']=[string]$State.Capture.external_final_node_id}
     if($null-ne(Get-RouterVPNOrderedValue $State.Capture 'local_roles_json')){$Capture['local_roles_json']=[string]$State.Capture.local_roles_json}
     if($null-ne(Get-RouterVPNOrderedValue $State.Capture 'extended_local_nodes')){$Capture['extended_local_nodes']=[int](Get-RouterVPNOrderedValue $State.Capture 'extended_local_nodes')}
     return @{capture=$Capture;node_id=[string](Get-RouterVPNOrderedValue $State.Node 'node_id');position=[int](Get-RouterVPNOrderedValue $State.Node 'position');request_id=$State.Request}
@@ -606,7 +627,7 @@ function global:Receive-RouterVPNOrderedStatus {
         foreach($Record in $History){$Position=Get-RouterVPNOrderedValue $Record 'position';if(-not(Test-RouterVPNOrderedNumber $Position 0 ($Rows.Count-1) -Integer)){throw 'Invalid saved hop.'};Assert-RouterVPNOrderedReceipt $Record $Capture $Rows[[int]$Position] -Count $Rows.Count -OriginalNodes $Rows}
         $State.Capture=$Capture;$State.Nodes=$Rows;$State.History=$History;$State.Status='Choose a hop. Saved results show when that route was measured.';return
     }
-    foreach($Key in @('session_id','profile_id','profile_token','source_sha256','config_sha256','generation_sha256','selected_capture','extended_local_nodes','extended_original_nodes','paired_prefix_nodes','local_roles_json')){if([string](Get-RouterVPNOrderedValue $Capture $Key)-cne[string](Get-RouterVPNOrderedValue $State.Capture $Key)){throw 'The response belongs to another captured route.'}}
+    foreach($Key in @('session_id','profile_id','profile_token','source_sha256','config_sha256','generation_sha256','selected_capture','extended_local_nodes','extended_original_nodes','paired_prefix_nodes','local_roles_json','external_final_node_id')){if([string](Get-RouterVPNOrderedValue $Capture $Key)-cne[string](Get-RouterVPNOrderedValue $State.Capture $Key)){throw 'The response belongs to another captured route.'}}
     if(-not$State.Request-or$Request-cne$State.Request-or[string](Get-RouterVPNOrderedValue $Value 'node_id')-cne[string](Get-RouterVPNOrderedValue $State.Node 'node_id')-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Value 'position') (Get-RouterVPNOrderedValue $State.Node 'position') (Get-RouterVPNOrderedValue $State.Node 'position') -Integer)){throw 'The response belongs to another measurement.'}
     if($State.Drained){return}
     $Finished=$Complete-and$Drained;$Record=Get-RouterVPNOrderedValue $Value 'receipt'

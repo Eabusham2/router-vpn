@@ -465,7 +465,8 @@ private enum IOSConnectionProfileStore {
         guard let nodes = saved.preferences?.multihopNodes, nodes.count == captures.count else {
             throw issue("The saved ordered chain lost one of its captured policies.")
         }
-        let independentImports = IOSMultihopNodeSelection.usesIndependentImports(nodes, execution: saved.preferences?.multihopExecution)
+        let publicExit = IOSMultihopNodeSelection.externalExitReferences(nodes, controlID: saved.nodeID, execution: saved.preferences?.multihopExecution)
+        let independentImports = !publicExit && IOSMultihopNodeSelection.usesIndependentImports(nodes, execution: saved.preferences?.multihopExecution)
         var replacements: [(original: Data, updated: ClientBundle)] = [(original, selected)]
         for (position, capture) in captures.enumerated() {
             guard nodes[position].id == capture.nodeID,
@@ -475,7 +476,7 @@ private enum IOSConnectionProfileStore {
                   let profile = source.routerProfiles.first(where: { $0.id == capture.nodeID }),
                   profile.normalizedNodeKind == capture.nodeKind, profile.nodeProofID == capture.nodeProofID,
                   (profile.external == nil && capture.externalProtocol == nil && capture.externalPublicIP == nil ||
-                   (independentImports ? IOSMultihopNodeSelection.supportsLocalImportedNode(nodes[position].mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) && IOSImportedShadowsocksSource.eligibleIndependent(profile, position: position, hostnamePosition: IOSMultihopNodeSelection.permitsHostnamePosition(nodes, execution: saved.preferences?.multihopExecution, position: position) ? position : nil) : IOSMultihopNodeSelection.supportsImportedMiddle(nodes[position].mode, position: position, count: nodes.count)) && (nodes[position].mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || nodes[position].mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || nodes[position].mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile))) && capture.externalProtocol == profile.external?.protocolName && capture.externalPublicIP == profile.external?.expectedPublicIP) else {
+                   (publicExit ? position > 0 && IOSImportedShadowsocksSource.eligibleLiteral(profile) : independentImports ? IOSMultihopNodeSelection.supportsLocalImportedNode(nodes[position].mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) && IOSImportedShadowsocksSource.eligibleIndependent(profile, position: position, hostnamePosition: IOSMultihopNodeSelection.permitsHostnamePosition(nodes, execution: saved.preferences?.multihopExecution, position: position) ? position : nil) : IOSMultihopNodeSelection.supportsImportedMiddle(nodes[position].mode, position: position, count: nodes.count)) && (nodes[position].mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || nodes[position].mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || nodes[position].mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile))) && capture.externalProtocol == profile.external?.protocolName && capture.externalPublicIP == profile.external?.expectedPublicIP) else {
                 throw issue("A saved chain member is missing or its original paired/external identity changed. Update the saved connection profile.")
             }
             if capture.nodeID == saved.nodeID {
@@ -505,7 +506,7 @@ private enum IOSConnectionProfileStore {
                 replacements[replacementIndex].updated.adGuardIPv6 = restored.adGuardIPv6
             }
         }
-        if independentImports {
+        if independentImports || publicExit {
             // A complete staged graph is compiled before any durable write.
             // Read each member by its captured ID, including several members
             // that share one linked record. The store rechecks originals and
@@ -641,23 +642,24 @@ private enum IOSConnectionProfileStore {
                       var captures = record.chainPolicies, captures.count == nodes.count else {
                     throw issue("Saved ordered chain policies are incomplete or mixed with a separate entry.")
                 }
+                let publicExit = IOSMultihopNodeSelection.externalExitReferences(nodes, controlID: record.nodeID, execution: record.preferences?.multihopExecution)
                 var proofs = Set<String>()
                 for position in captures.indices {
                     var capture = captures[position]
                     if capture.nodeKind == "external" {
-                        guard (IOSMultihopNodeSelection.usesIndependentImports(nodes, execution: record.preferences?.multihopExecution) ? IOSMultihopNodeSelection.supportsLocalImportedNode(nodes[position].mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) : IOSMultihopNodeSelection.supportsImportedMiddle(nodes[position].mode, position: position, count: nodes.count)), capture.nodeID == nodes[position].id,
+                        guard (publicExit ? position > 0 : IOSMultihopNodeSelection.usesIndependentImports(nodes, execution: record.preferences?.multihopExecution) ? IOSMultihopNodeSelection.supportsLocalImportedNode(nodes[position].mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) : IOSMultihopNodeSelection.supportsImportedMiddle(nodes[position].mode, position: position, count: nodes.count)), capture.nodeID == nodes[position].id,
                               capture.nodeProofID == nil || capture.nodeProofID == "", capture.externalProtocol == nodes[position].mode, capture.externalPublicIP?.isEmpty == false,
                               capture.preferences.startLayer == "off" else { throw issue("The saved imported middle lost its original external identity.") }
-                        capture.preferences = try validatePreferences(capture.preferences, external:true)
+                        capture.preferences = try validatePreferences(capture.preferences, external: true, orderedWireGuardEntry: publicExit)
                         captures[position] = capture; continue
                     }
-                    guard !(IOSMultihopNodeSelection.usesLocalImportedEntry(nodes) && position < 2), capture.nodeID == nodes[position].id, capture.nodeKind == "router-vpn",
+                    guard (!publicExit || position == 0), !(IOSMultihopNodeSelection.usesLocalImportedEntry(nodes) && position < 2), capture.nodeID == nodes[position].id, capture.nodeKind == "router-vpn",
                           let proof = capture.nodeProofID, proof.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
                           proofs.insert(proof).inserted, capture.externalProtocol == nil, capture.externalPublicIP == nil else {
                         throw issue("Saved ordered chain member policy has another position or paired identity.")
                     }
                     capture.preferences = try validatePreferences(capture.preferences)
-                    if position == nodes.count - 1, capture.preferences != record.preferences {
+                    if position == (publicExit ? 0 : nodes.count - 1), capture.preferences != record.preferences {
                         throw issue("Saved ordered chain final policy does not match its control profile.")
                     }
                     captures[position] = capture
@@ -695,7 +697,7 @@ private enum IOSConnectionProfileStore {
         return validated
     }
 
-    private static func validatePreferences(_ value: IOSConnectionSafePreferences, external: Bool = false, tor: Bool = false) throws -> IOSConnectionSafePreferences {
+    private static func validatePreferences(_ value: IOSConnectionSafePreferences, external: Bool = false, tor: Bool = false, orderedWireGuardEntry: Bool = false) throws -> IOSConnectionSafePreferences {
         var p = value
         if tor, let rate = p.daitaRateKbps, rate != 0 && !(32...192).contains(rate) {
             throw issue("Connection profile Tor cover rate must be 0 or 32–192 kbps.")
@@ -760,7 +762,7 @@ private enum IOSConnectionProfileStore {
                   p.dnsPath.isEmpty || (p.dnsPath.hasPrefix("/") && !p.dnsPath.unicodeScalars.contains(where: { $0.value < 0x21 || $0.value == 0x7f })) else {
                 throw issue("External connection profile contains an invalid captured DNS transport, port or path.")
             }
-            if p.dnsMode == "home", !p.multihopEnabled, !tor { throw issue("Home AdGuard requires a captured Router VPN entry for an ordinary external exit.") }
+            if p.dnsMode == "home", !p.multihopEnabled, !tor, !orderedWireGuardEntry { throw issue("Home AdGuard requires a captured Router VPN entry for an ordinary external exit.") }
             if ["custom", "dot", "doh", "doh3"].contains(p.dnsMode), p.dnsHost.isEmpty { throw issue("External connection profile requires the selected resolver host.") }
             if p.dnsMode == "custom", p.dnsProtocol.isEmpty { throw issue("External Custom DNS requires its explicit saved transport.") }
             // The shared compiler owns preset defaults and actual DNS proof.

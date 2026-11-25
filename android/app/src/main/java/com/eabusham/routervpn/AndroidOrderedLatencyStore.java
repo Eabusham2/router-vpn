@@ -54,6 +54,16 @@ final class AndroidOrderedLatencyStore {
         }
         private Record(String raw,String selectedExecution,boolean multipleImported,int extendedCount,boolean history,boolean extendedPaired,int pairedPrefixNodes,String originalRoles)throws Exception {
             this.originalRoles=originalRoles;
+            boolean externalExit=false;
+            if (!originalRoles.isEmpty()) {
+                JSONArray roles=new JSONArray(originalRoles);
+                externalExit=roles.length()>=3 && "public-path".equals(roles.opt(roles.length()-1));
+                if (externalExit) {
+                    if (roles.length()>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || extendedPaired || multipleImported || pairedPrefixNodes!=1
+                            || !"".equals(selectedExecution) || !"private-node".equals(roles.get(0)) || !roles.toString().equals(originalRoles)) throw invalid();
+                    for (int i=1;i<roles.length();i++) if (!"public-path".equals(roles.get(i))) throw invalid();
+                }
+            }
             this.pairedPrefixNodes=pairedPrefixNodes;
             if(pairedPrefixNodes<0 || pairedPrefixNodes!=0 && (extendedPaired||!selectedExecution.isEmpty()))throw invalid();
             this.extendedPaired=extendedPaired;
@@ -85,15 +95,19 @@ final class AndroidOrderedLatencyStore {
                 // retained worker still bind the exact source, slot and request.
                 // Selected Server/Compare receipts retain their original middle.
                 boolean entry=position==0 && count==3 && selectedExecution.isEmpty();
-                if(position>=count-1||position==0&&!entry||(!selectedExecution.isEmpty()&&!multipleImported&&position!=count-2)
-                        ||!(entry?"entry":"intermediate").equals(role)||!(prefix+"custom node "+(position+1)+" of "+count+" → Cloudflare edge").equals(label))throw invalid();
+                boolean exit=position==count-1 && externalExit;
+                if(position>=count||position==count-1&&!exit||position==0&&!entry||(!selectedExecution.isEmpty()&&!multipleImported&&position!=count-2)
+                        ||!(exit?"exit":entry?"entry":"intermediate").equals(role)||!(prefix+"custom node "+(position+1)+" of "+count+" → Cloudflare edge").equals(label))throw invalid();
             } else {
                 String expected=prefix+"node "+(position+1)+" of ";
                 if(!label.startsWith(expected))throw invalid();
                 count=parseCount(label.substring(expected.length()));
                 if(position>=count||!role.equals(position==0?"entry":position==count-1?"exit":"intermediate"))throw invalid();
             }
-            if(count>8){
+            if (externalExit) {
+                JSONArray roles=new JSONArray(originalRoles);
+                if (roles.length()!=count || !kind.equals(roles.get(position)) || !history && extendedCount!=(count>8?count:0)) throw invalid();
+            } else if(count>8){
                 boolean endpoint=position==0||position==count-1;
                 if((!selectedExecution.isEmpty()&&!multipleImported)||(!history&&count!=extendedCount)||pairedPrefixNodes>count-2)throw invalid();
                 if(originalRoles.isEmpty()){
@@ -189,7 +203,8 @@ final class AndroidOrderedLatencyStore {
                 ||position<0||position>=(extendedCount==0?8:extendedCount)||node==null||!node.matches("[A-Za-z0-9_-]{1,64}")||!Arrays.asList("private-node","public-path").contains(kind))throw invalid();
         synchronized(AndroidPrivateFileStore.class){
             Record record=read(file(context)).get(source+":"+config+":"+position+":"+node+":"+kind+":"+("public-path".equals(kind)?PUBLIC:PRIVATE));
-            if(record!=null&&(record.count>8||extendedCount!=0)&&(record.count!=extendedCount||record.pairedPrefixNodes!=pairedPrefixNodes||!record.originalRoles.equals(originalRoles)))throw invalid();
+            if (record!=null && (record.count>8 || extendedCount!=0 || !originalRoles.isEmpty() || !record.originalRoles.isEmpty())
+                    && ((record.count>8?record.count:0)!=extendedCount || record.pairedPrefixNodes!=pairedPrefixNodes || !record.originalRoles.equals(originalRoles))) throw invalid();
             return record;
         }
     }

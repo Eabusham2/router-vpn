@@ -11,16 +11,21 @@ import (
 // physical service owns the one permitted lower and its entire lifetime.
 // This factory grants no parent admission and does not report Connected.
 func routerVPNDesktopNodeChainPhysicalTarget(policy *mobilemultihop.DesktopNodeChainPolicy, target string) bool {
-	if policy == nil || policy.Validate() != nil {
+	if policy == nil {
 		return false
 	}
-	meta := policy.Metadata()
-	if meta.TargetOS != target || len(meta.Prefixes) < 2 {
+	_, meta, physical, err := policy.ReadValidated()
+	if err != nil || meta.TargetOS != target || len(meta.Prefixes) < 2 {
 		return false
 	}
-	chain := policy.NodeChain()
-	if chain == nil || len(meta.Prefixes) > mobilemultihop.NodeChainMaximumNodes &&
-		(policy.OriginalChain().ExtendedLocalNodeCount() != len(meta.Prefixes) || chain.ExtendedLocalNodeCount() != len(meta.Prefixes) || policy.OriginalChain().ExtendedMixedLocalPacketCount() != chain.ExtendedMixedLocalPacketCount()) {
+	original, chain := policy.OriginalChain(), policy.NodeChain()
+	if original == nil || chain == nil {
+		return false
+	}
+	externalFinal := chain.HasExternalFinal()
+	if original.HasExternalFinal() != externalFinal || (meta.ExternalFinal != nil) != externalFinal ||
+		len(meta.Prefixes) > mobilemultihop.NodeChainMaximumNodes &&
+			(original.ExtendedLocalNodeCount() != len(meta.Prefixes) || chain.ExtendedLocalNodeCount() != len(meta.Prefixes) || original.ExtendedMixedLocalPacketCount() != chain.ExtendedMixedLocalPacketCount()) {
 		return false
 	}
 	middle, err := chain.OpenVPNMiddleCapture()
@@ -35,9 +40,22 @@ func routerVPNDesktopNodeChainPhysicalTarget(policy *mobilemultihop.DesktopNodeC
 	if len(captured) != len(meta.Prefixes) {
 		return false
 	}
+	last := len(meta.Prefixes) - 1
+	if externalFinal {
+		exit := meta.ExternalFinal
+		dnsTag := chain.FinalTag()
+		if physical.SelectedDNS.Mode == "home" {
+			dnsTag = captured[0].Tag
+		}
+		if physical.SelectedDNS.Physical || physical.SelectedDNS.Detour != dnsTag || meta.NodeID != "" || meta.ProfileID != exit.ProfileID || exit.ProfileID != captured[last].ProfileID ||
+			exit.SourceSHA256 != captured[last].SourceSHA256 || exit.ExpectedPublicIP == "" || chain.FinalTag() != captured[last].Tag ||
+			meta.FinalTag != chain.FinalTag() || len(publicCaptures) != last || middle.Tag != "" {
+			return false
+		}
+	}
 	public := make(map[int]mobilemultihop.NodeChainPublicMeasurementCapture, len(publicCaptures))
 	for _, capture := range publicCaptures {
-		if capture.Position <= 0 || capture.Position >= len(meta.Prefixes)-1 ||
+		if capture.Position <= 0 || capture.Position > last || capture.Position == last && !externalFinal ||
 			public[capture.Position].Tag != "" || capture.Tag == "" || capture.SourceSHA256 == "" {
 			return false
 		}
@@ -49,7 +67,7 @@ func routerVPNDesktopNodeChainPhysicalTarget(policy *mobilemultihop.DesktopNodeC
 				position == len(meta.Prefixes)-2 && len(public) == 1 && prefix.SourceSHA256 == middle.SourceSHA256
 			importedSS := middle.Tag == "" && len(meta.Prefixes) >= 3 && prefix.Mode == "shadowsocks"
 			if (!openVPN && !importedSS) || meta.Prefixes[len(meta.Prefixes)-1].Mode != "shadowsocks" ||
-				prefix.Tag != observation.Tag || prefix.SourceSHA256 != observation.SourceSHA256 || prefix.SourceSHA256 != captured[position].SourceSHA256 || prefix.Position != position ||
+				prefix != captured[position] || prefix.Tag != observation.Tag || prefix.SourceSHA256 != observation.SourceSHA256 || prefix.Position != position ||
 				prefix.StartLayer != "off" || prefix.Kind != "public-path" || prefix.NodeKind != "external" || prefix.NodeID != "" {
 				return false
 			}

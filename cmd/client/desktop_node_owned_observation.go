@@ -86,6 +86,10 @@ func (a *app) desktopOwnedNodeCurrentContext(ctx context.Context, launch *deskto
 		profileID := launch.profileID
 		if owned.candidatePrefix != nil {
 			profileID = launch.policyProfileID
+		} else if owned.chain != nil {
+			// The complete validated chain retains its original paired control;
+			// a schema-8 public final has a separate native runtime identity.
+			profileID = owned.chain.selection.Control.ID
 		}
 		profile, exists := a.profileByIDLocked(profileID)
 		current := exists && !a.closing && owned.slot != nil && a.nodeProtection == owned.slot && a.cmd == launch.command && a.state.RouterID == profileID &&

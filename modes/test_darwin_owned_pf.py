@@ -536,6 +536,108 @@ class OwnedDarwinPF(unittest.TestCase):
                     home_lan_access=False, policy=policy, members_json=raw, members_sha256=digest)
 
 
+    def external_final_chain_capture(self, count=3, policy='off'):
+        capture = self.node_chain_capture(policy)
+        self.selected.update(node_kind='external', external={'protocol': 'shadowsocks'},
+                             start_layer='off', ipv6_mode='on', home_lan_access=False)
+        rows = [['ordered-entry', 'wg', 'router-vpn', policy, 'on', False]]
+        for position in range(1, count-1):
+            identifier = 'original-external-final-middle-'+str(position)
+            member = dict(id=identifier, node_kind='external', external={'protocol': 'shadowsocks'},
+                          start_layer='off', kill_switch_policy=policy, ipv6_mode='on', home_lan_access=False)
+            self.store['profiles'] = [p for p in self.store['profiles'] if p.get('id') != identifier] + [member]
+            rows.append([identifier, 'shadowsocks', 'external', policy, 'on', False])
+        rows.append(['direct-tor', 'shadowsocks', 'external', policy, 'on', False])
+        raw = json.dumps(rows, separators=(',', ':'), ensure_ascii=True)
+        capture.update(schema=4, control_profile_id='ordered-entry', members_json=raw,
+                       members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode()).hexdigest())
+        self.store['selected_id'] = 'ordered-entry'
+        self.private_json(self.root/'routers.json', self.store)
+        return capture, rows
+
+    def test_external_final_keeps_distinct_control_and_exit_during_retirement(self):
+        for count in (3, 9, 96):
+            with self.subTest(count=count):
+                capture, rows = self.external_final_chain_capture(count)
+                self.assertEqual(D._darwin_node_chain_rows(capture), rows)
+                active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+                state = self.saved()
+                self.assertEqual(state['profile_id'], rows[-1][0])
+                self.assertEqual(state['policy_profile_id'], rows[0][0])
+                self.assertTrue(D._linux._darwin_isolated_native_state(state))
+                self.assertEqual(state['endpoint_ips'], [])
+                self.assertNotIn('pass out quick', self.rules[P.OWNED_PF_ANCHOR])
+                self.assertEqual(D.darwin_node_chain('current', dict(capture=capture, expected=active)), active)
+                self.store['selected_id'] = rows[-1][0]
+                self.private_json(self.root/'routers.json', self.store)
+                before = list(self.commands)
+                with self.assertRaises(RuntimeError, msg='external exit was allowed to replace the paired control'):
+                    D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+                self.assertEqual(before, self.commands)
+                self.store['selected_id'] = rows[0][0]
+                self.private_json(self.root/'routers.json', self.store)
+                held = D.darwin_node_chain('retire', dict(capture=capture, expected=active))
+                self.assertFalse(held['baseline']['present'])
+                retired = D.darwin_node_chain('release', dict(capture=capture, expected=held))
+                self.assertFalse(retired['baseline']['present'])
+                self.assertEqual(self.references, {'999'})
+
+    def test_external_final_rehashed_role_and_control_changes_are_rejected(self):
+        import copy
+        capture, rows = self.external_final_chain_capture()
+        for fault in ('control-is-exit', 'foreign-control', 'paired-final', 'private-interior',
+                      'awg-entry', 'wrong-family', 'old-schema', 'missing-control', 'duplicate-id'):
+            changed, modified = copy.deepcopy(capture), copy.deepcopy(rows)
+            if fault == 'control-is-exit': changed['control_profile_id'] = rows[-1][0]
+            elif fault == 'foreign-control': changed['control_profile_id'] = 'foreign'
+            elif fault == 'paired-final': modified[-1][2] = 'router-vpn'
+            elif fault == 'private-interior': modified[1][2] = 'router-vpn'
+            elif fault == 'awg-entry': modified[0][1] = 'awg2-fast'
+            elif fault == 'wrong-family': changed['family'] = 'ordered-node-chain-execution-v1'
+            elif fault == 'old-schema': changed['schema'] = 3; del changed['control_profile_id']
+            elif fault == 'missing-control': del changed['control_profile_id']
+            elif fault == 'duplicate-id': modified[1][0] = modified[-1][0]
+            raw = json.dumps(modified, separators=(',', ':'), ensure_ascii=True)
+            changed.update(members_json=raw,
+                           members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode()).hexdigest())
+            with self.subTest(fault=fault), self.assertRaises(RuntimeError):
+                D._darwin_node_chain_capture(changed)
+        self.assertEqual(self.commands, [])
+
+    def test_external_final_selected_protection_retains_entry_control(self):
+        for policy in ('on-connect', 'always'):
+            with self.subTest(policy=policy):
+                capture, rows = self.external_final_chain_capture(9, policy)
+                active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+                self.assertEqual(self.saved()['profile_id'], rows[-1][0])
+                self.assertEqual(self.saved()['policy_profile_id'], rows[0][0])
+                self.assertFalse(D._linux._darwin_isolated_native_state(self.saved()))
+                self.assertEqual(self.saved()['policy'], policy)
+                self.assertNotIn('pass out quick', self.rules[P.OWNED_PF_ANCHOR])
+                held = D.darwin_node_chain('retire', dict(capture=capture, expected=active))
+                self.assertTrue(held['baseline']['present'])
+                self.assertEqual(held['capture'], capture)
+                retired = D.darwin_node_chain('release', dict(capture=capture, expected=held))
+                self.assertEqual(retired['baseline']['present'], policy == 'always')
+                self.assertEqual(retired['capture']['control_profile_id'], rows[0][0])
+                self.assertEqual(D.darwin_node_chain('release', dict(capture=capture, expected=retired)), retired)
+        self.watcher.assert_not_called()
+        self.resolver.assert_not_called()
+
+    def test_external_final_layered_saved_member_rejected_without_mutation(self):
+        capture, rows = self.external_final_chain_capture(3, 'on-connect')
+        for row in rows:
+            member = next(p for p in self.store['profiles'] if p['id'] == row[0])
+            original = member.get('start_layer', 'off')
+            member['start_layer'] = 'aes-256-gcm'
+            self.private_json(self.root/'routers.json', self.store)
+            before = list(self.commands)
+            with self.subTest(node=row[0]), self.assertRaises(RuntimeError, msg='external final member borrowed an unsupported Start Layer'):
+                D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+            self.assertEqual(self.commands, before)
+            member['start_layer'] = original
+            self.private_json(self.root/'routers.json', self.store)
+
     def test_socks_node_chain_uses_exact_family_through_native_retirement(self):
         for policy in ('on-connect', 'always'):
             with self.subTest(policy=policy):
@@ -941,6 +1043,42 @@ class OwnedDarwinPF(unittest.TestCase):
         capture.update(policy='always', members_json=raw,
                        members_sha256=hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode()).hexdigest())
         return capture, rows
+
+    def test_recursive_private_execution_uses_original_packet_and_stream_policies(self):
+        def bind(capture, rows):
+            raw = json.dumps(rows, separators=(',', ':'), ensure_ascii=True)
+            digest = hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode()).hexdigest()
+            return dict(capture, members_json=raw, members_sha256=digest)
+        for entry in ('wg', 'awg2-fast', 'awg2-strong'):
+            capture, rows = self.execution_imported_capture('shadowsocks', entry, 3)
+            members = list(self.store['profiles'])
+            for index in range(2, 8):
+                paired = index in (2, 4)
+                kind = 'router-vpn' if paired else 'external'
+                member = dict(id=f'recursive-{index}', node_kind=kind, kill_switch_policy='always',
+                              ipv6_mode='on', home_lan_access=False)
+                if not paired:
+                    member['external'] = {'protocol': 'shadowsocks'}
+                members.append(member)
+                rows.insert(-1, [member['id'], 'shadowsocks', kind, 'always', 'on', False])
+            self.store['profiles'] = members
+            self.private_json(self.root/'routers.json', self.store)
+            capture = bind(capture, rows)
+            active = D.darwin_node_chain('apply', dict(capture=capture, expected=None))
+            self.assertEqual(D.darwin_node_chain('current', dict(capture=capture, expected=active)), active)
+            altered = [list(row) for row in rows]
+            altered[0][1] = 'awg2-strong' if entry != 'awg2-strong' else 'wg'
+            with self.assertRaises(RuntimeError):
+                D.darwin_node_chain('current', dict(capture=bind(capture, altered), expected=active))
+            held = D.darwin_node_chain('retire', dict(capture=capture, expected=active))
+            D.darwin_node_chain('release', dict(capture=capture, expected=held))
+            for position, mode in ((0, 'awg2-pq'), (1, 'wg'), (4, 'wg')):
+                altered = [list(row) for row in rows]
+                altered[position][1] = mode
+                before = list(self.commands)
+                with self.subTest(entry=entry, position=position), self.assertRaises(RuntimeError):
+                    D.darwin_node_chain('apply', dict(capture=bind(capture,altered), expected=None))
+                self.assertEqual(self.commands, before)
 
     def test_execution_imported_paths_keep_original_saved_member_baseline(self):
         # Actual capture, saved-profile reconstruction and journal lifecycle;

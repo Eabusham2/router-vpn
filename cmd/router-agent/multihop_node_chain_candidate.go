@@ -57,6 +57,13 @@ func (s *server) multihopNodeChainCandidate(w http.ResponseWriter, r *http.Reque
 			_ = json.NewEncoder(w).Encode(lease)
 			return
 		}
+		var absence *multihoprelay.CandidateRegistryAbsence
+		if errors.As(err, &absence) {
+			if negative, verifyErr := absence.Receipt(request, s.cfg.Token, time.Now()); verifyErr == nil && ctx.Err() == nil {
+				_ = json.NewEncoder(w).Encode(negative)
+				return
+			}
+		}
 	case http.MethodPost:
 		var status multihoprelay.NodeChainCandidateReceipt
 		status, err = s.relay.ChainCandidateStatus(ctx, peer, request)

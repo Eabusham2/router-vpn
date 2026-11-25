@@ -24,7 +24,7 @@ func newDesktopMacOSNodeChainSelection(chain *desktopNodeChainLaunch) (desktopMa
 		return empty, bad
 	}
 	if len(chain.selection.Nodes) > common.MultihopMaximumNodes {
-		if schema, err := desktopNodeChainSourceSchema(chain.selection.Nodes); err != nil || schema != 6 && (schema != 1 || chain.macOSFamily() != macosprocess.NodeChainFamily) {
+		if schema, err := desktopNodeChainSourceSchema(chain.selection.Nodes); err != nil || schema != 6 && (schema != 1 && schema != 8 || chain.macOSFamily() != macosprocess.NodeChainFamily) {
 			return empty, bad
 		}
 	}
@@ -68,6 +68,12 @@ func newDesktopMacOSNodeChainSelection(chain *desktopNodeChainLaunch) (desktopMa
 	capture := desktopMacOSNodeChainSelection{Schema: 3, Family: chain.macOSFamily(), ProfileID: meta.ProfileID,
 		Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy,
 		MembersJSON: string(raw), MembersSHA256: hex.EncodeToString(digest[:])}
+	if meta.ExternalFinal != nil {
+		if !desktopNodeChainMetadataMatchesSelection(meta, chain.selection) || capture.Family != macosprocess.NodeChainFamily {
+			return empty, bad
+		}
+		capture.Schema, capture.ControlProfileID = 4, chain.selection.Control.ID
+	}
 	if !capture.valid() {
 		return empty, bad
 	}

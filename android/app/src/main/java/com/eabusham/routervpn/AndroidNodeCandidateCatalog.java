@@ -64,7 +64,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         nodes=new AndroidNodeStore(context);external=new AndroidStandardExitStore(context);
         signature=currentSignature();
         Set<String> excluded=new HashSet<>(),proofs=new HashSet<>();
-        int lastExcluded = "auto".equals(source.execution) && "routed-candidate-response".equals(measurement) ? source.members.size()-1 : prefix;
+        int lastExcluded = ("auto".equals(source.execution) || "server".equals(source.execution)) && "routed-candidate-response".equals(measurement) ? source.members.size()-1 : prefix;
         for(int i=0;i<=lastExcluded;i++){AndroidNodeStore.ChainSource member=source.members.get(i);excluded.add(member.id);excluded.add(member.profileId);if(!member.proofId.isEmpty())proofs.add(member.proofId);}
         List<Row> captured=new ArrayList<>();List<AndroidNodeStore.Node> available=new ArrayList<>(nodes.list());
         java.util.Map<String,AndroidStandardExitStore.Entry> imported=new java.util.HashMap<>();
@@ -127,9 +127,9 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
                 || session.candidateExecutionOwner() != executionOwner || session.candidateServer() != server
                 || !session.capture.ownsSelectedCandidatePrefix(originalSource, prefix))
             throw new IllegalStateException("This selected route has no retained packet stop at the requested position.");
-        if ("routed-candidate-response".equals(measurement) && (!"auto".equals(originalSource.execution)
-                || !"auto".equals(executionOwner.requestedExecution()) || !"local".equals(executionOwner.execution())))
-            throw new IllegalStateException("Measuring a private response through this hop requires Compare to select Local.");
+        if ("routed-candidate-response".equals(measurement) && (!originalSource.execution.equals(executionOwner.requestedExecution())
+                || !AndroidNodeChainCapture.selectedResponseWinner(originalSource.execution, executionOwner.execution())))
+            throw new IllegalStateException("This response requires the original active Server or Compare selection.");
         return originalSource.members.get(prefix).profileId;
     }
     void requireSourcesCurrent()throws Exception {

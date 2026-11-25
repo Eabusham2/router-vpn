@@ -68,7 +68,7 @@ final class AndroidNodeCandidateProfile {
                     ||!AndroidNodeChainCapture.responsePrefix(original.members,original.modes,catalog.prefix,execution))
                 throw new IllegalStateException("The authenticated response lost its original stream or paired candidate.");
             if (!"local".equals(execution)) {
-                if (!"auto".equals(execution)) throw unavailable("A selected private response needs the original Compare Local winner.");
+                if (!"auto".equals(execution) && !"server".equals(execution)) throw unavailable("A selected private response needs the original Server or Compare selection.");
                 for (AndroidNodeStore.ChainSource member : original.members) {
                     if (candidate.profileId.equals(member.profileId) || candidate.proofId.equals(member.proofId))
                         throw unavailable("Choose a paired node distinct from every original route member.");

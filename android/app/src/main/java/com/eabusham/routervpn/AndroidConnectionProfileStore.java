@@ -55,9 +55,10 @@ final class AndroidConnectionProfileStore {
         if(sources==null||modes==null||sources.size()!=modes.size()||sources.size()<2||sources.size()>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH||!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalStateException("Incomplete candidate path.");
         requireCurrent.run();JSONArray rows=readRows();if(rows.length()>=MAX_PROFILES)throw new IllegalStateException("Connection profile limit reached.");
         JSONArray members=new JSONArray();for(int i=0;i<sources.size();i++)members.put(orderedSavedMember(sources.get(i),modes.get(i)));
-        AndroidNodeStore.ChainSource last=sources.get(sources.size()-1);
+        int controlPosition = AndroidNodeChainCapture.sourceSchema(sources, modes) == 8 ? 0 : sources.size()-1;
+        AndroidNodeStore.ChainSource last=sources.get(controlPosition);
         JSONObject row=new JSONObject().put("id",newId()).put("name",cleanName(name)).put("node_kind","router-vpn")
-                .put("node_id",last.id).put("node_profile_id",last.profileId).put("policy",members.getJSONObject(members.length()-1).getJSONObject("policy"))
+                .put("node_id",last.id).put("node_profile_id",last.profileId).put("policy",members.getJSONObject(controlPosition).getJSONObject("policy"))
                 .put("mode",modes.get(modes.size()-1)).put("custom_layers",new JSONArray()).put("multihop_enabled",true).put("multihop_execution",execution)
                 .put(MULTI_ENTRY_KIND,"router-vpn").put("multihop_entry_id","").put("multihop_entry_mode","").put("multihop_exit_id","").put("multihop_exit_mode","").put(MULTI_NODES,members);
         validateOrderedRow(row,SCHEMA_VERSION);requireCurrent.run();rows.put(row);writeRows(rows);return toRecord(row);
@@ -217,9 +218,12 @@ final class AndroidConnectionProfileStore {
                     if(!java.util.Arrays.equals(source.bytes(),original.bytes()))throw new IllegalStateException("An ordered editor member differs from its original complete source.");
                     members.put(orderedSavedMember(source,modes.get(i)));
                 }
-                AndroidNodeStore.ChainSource control=sources.get(sources.size()-1);
+                int controlPosition = AndroidNodeChainCapture.sourceSchema(sources, modes) == 8 ? 0 : sources.size()-1;
+                AndroidNodeStore.ChainSource control=sources.get(controlPosition);
+                if (controlPosition == 0 && !control.id.equals(catalog.selectedId))
+                    throw new IllegalStateException("The imported exit requires the originally selected WireGuard control.");
                 JSONObject row=new JSONObject().put("id",newId()).put("name","Ordered Router path").put("node_kind","router-vpn")
-                        .put("node_id",control.id).put("node_profile_id",control.profileId).put("policy",members.getJSONObject(members.length()-1).getJSONObject("policy"))
+                        .put("node_id",control.id).put("node_profile_id",control.profileId).put("policy",members.getJSONObject(controlPosition).getJSONObject("policy"))
                         .put("mode","smart-auto").put("custom_layers",new JSONArray()).put("multihop_enabled",true).put("multihop_execution",execution)
                         .put(MULTI_ENTRY_KIND,"router-vpn").put("multihop_entry_id","").put("multihop_entry_mode","")
                         .put("multihop_exit_id","").put("multihop_exit_mode","").put(MULTI_NODES,members);
@@ -388,7 +392,7 @@ final class AndroidConnectionProfileStore {
         if(!"local".equals(execution))AndroidNodeChainCapture.validateExecutionSources(sources,modes,execution);
         else {
             int schema=AndroidNodeChainCapture.sourceSchema(sources,modes);
-            if(schema==6 || schema==7)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);
+            if(schema==6 || schema==7 || schema==8)AndroidNodeChainCapture.validateLocalImportedSources(sources,modes);
         }
     }
 
@@ -413,6 +417,11 @@ final class AndroidConnectionProfileStore {
                 && "external".equals(members.getJSONObject(0).optString("node_kind"));
         boolean independent=importedCount>1||importedCount==1&&importedPosition!=members.length()-2;
         String requested=row.getString("multihop_execution");
+        boolean externalFinal="external".equals(members.getJSONObject(members.length()-1).optString("node_kind"));
+        if (externalFinal && (members.length()<3 || !"local".equals(requested) || importedCount!=members.length()-1
+                || "external".equals(members.getJSONObject(0).optString("node_kind"))
+                || !"wg".equals(members.getJSONObject(0).getString("mode"))))
+            throw new IllegalStateException("A saved imported exit requires its original Local WireGuard control and literal Shadowsocks sources.");
         if (members.length() > 8) {
             int last=members.length()-1;
             boolean localExecution="local".equals(requested),stream=false;
@@ -446,7 +455,7 @@ final class AndroidConnectionProfileStore {
             JSONObject member=members.getJSONObject(i);
             if("external".equals(member.optString("node_kind"))) {
                 boolean variablePrefix=java.util.Arrays.asList("shadowsocks","socks5","http-connect","https-connect","openvpn").contains(member.getString("mode"));
-                if(member.length()!=6||members.length()<3||i==0&&!customEntry||i==members.length()-1||independent&&!"shadowsocks".equals(member.getString("mode"))||!independent&&i!=members.length()-2||!variablePrefix&&members.length()!=3||!java.util.Arrays.asList("shadowsocks","socks5","http-connect","https-connect","openvpn").contains(member.getString("mode"))||!member.getString("id").equals(member.getString("node_id"))
+                if(member.length()!=6||members.length()<3||i==0&&!customEntry||i==members.length()-1&&!externalFinal||independent&&!"shadowsocks".equals(member.getString("mode"))||!independent&&i!=members.length()-2||!variablePrefix&&members.length()!=3||!java.util.Arrays.asList("shadowsocks","socks5","http-connect","https-connect","openvpn").contains(member.getString("mode"))||!member.getString("id").equals(member.getString("node_id"))
                         ||!member.getString("id").matches("[A-Za-z0-9_-]{1,64}")||!local.add(member.getString("node_id"))||!(member.get("expected_public_ip") instanceof String))throw new IllegalStateException("A saved imported node requires its original middle position and external identity.");
                 String mode=member.getString("mode"),protocol="http-connect".equals(mode)?"http":"https-connect".equals(mode)?"https":mode;
                 AndroidConnectionProfilePolicy.external(member.getJSONObject("policy"),protocol);continue;
@@ -461,7 +470,7 @@ final class AndroidConnectionProfileStore {
                 .put(MULTI_NODES,orderedReferences(members));
         for(String key:new String[]{"multihop_entry_id","multihop_entry_mode","multihop_exit_id","multihop_exit_mode"})if(row.has(key))control.put(key,row.get(key));
         AndroidNodeStore.orderedSelection(control);
-        JSONObject last=members.getJSONObject(members.length()-1);
+        JSONObject last=members.getJSONObject(externalFinal ? 0 : members.length()-1);
         if(!row.getString("node_id").equals(last.getString("node_id"))||!sameJSONValue(row.getJSONObject("policy"),last.getJSONObject("policy")))
             throw new IllegalStateException("The saved ordered control differs from its exact final member policy.");
     }

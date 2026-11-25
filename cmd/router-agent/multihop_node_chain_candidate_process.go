@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
+	"router-vpn/internal/mobilemultihop"
 	"sync"
 	"time"
 
@@ -23,6 +25,9 @@ type relayNodeChainCandidateOperation struct {
 	attempted, retired, drained bool
 	prepareDone                 chan struct{}
 	closeGate                   chan struct{}
+	responseFile                string
+	responseFileOwner           os.FileInfo
+	responseCurrent             func() bool
 }
 
 func (p *relayNodeChainProcess) NewCandidateOperation(ctx context.Context, c multihoprelay.NodeChainCandidateCapture) (multihoprelay.NodeChainCandidateOperation, error) {
@@ -66,8 +71,13 @@ func (op *relayNodeChainCandidateOperation) Prepare(ctx context.Context) (multih
 	bounded, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(op.ctx, cancel)
 	defer func() { stop(); cancel() }()
+	if op.capture.Request.Schema == 2 {
+		if err := op.prepareResponseSource(bounded); err != nil {
+			return multihoprelay.NodeChainCandidateReceipt{}, err
+		}
+	}
 	response, err := op.process.candidateRequest(bounded, "candidate-prepare", op.capture)
-	if err != nil || response.Receipt == nil || !op.original() || op.ctx.Err() != nil {
+	if err != nil || response.Receipt == nil || !op.original() || op.ctx.Err() != nil || op.responseCurrent != nil && !op.responseCurrent() {
 		return multihoprelay.NodeChainCandidateReceipt{}, multihoprelay.ErrUnavailable
 	}
 	return *response.Receipt, nil
@@ -91,8 +101,11 @@ func (op *relayNodeChainCandidateOperation) Snapshot(ctx context.Context) (multi
 	bounded, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(op.ctx, cancel)
 	defer func() { stop(); cancel() }()
+	if op.responseCurrent != nil && !op.responseCurrent() {
+		return multihoprelay.NodeChainCandidateReceipt{}, multihoprelay.ErrOwnership
+	}
 	response, err := op.process.candidateRequest(bounded, "candidate-status", op.capture)
-	if err != nil || response.Receipt == nil || !op.original() || op.ctx.Err() != nil {
+	if err != nil || response.Receipt == nil || !op.original() || op.ctx.Err() != nil || op.responseCurrent != nil && !op.responseCurrent() {
 		return multihoprelay.NodeChainCandidateReceipt{}, multihoprelay.ErrUnavailable
 	}
 	return *response.Receipt, nil
@@ -153,6 +166,31 @@ func (op *relayNodeChainCandidateOperation) Close(ctx context.Context) error {
 		if joinErr != nil {
 			return joinErr
 		}
+	}
+	if op.responseFile != "" {
+		if err := op.process.lock(ctx); err != nil {
+			return err
+		}
+		var removal error
+		if root := op.process.root; root != nil {
+			info, e := root.Lstat(op.responseFile)
+			switch {
+			case errors.Is(e, os.ErrNotExist):
+			case e != nil:
+				removal = e
+			case op.responseFileOwner == nil || !os.SameFile(op.responseFileOwner, info):
+				removal = multihoprelay.ErrOwnership
+			default:
+				removal = root.Remove(op.responseFile)
+			}
+		} else if !op.process.cleaned {
+			removal = multihoprelay.ErrOwnership
+		}
+		<-op.process.gate
+		if removal != nil {
+			return removal
+		}
+		op.responseFile = ""
 	}
 	op.process.candidateMu.Lock()
 	defer op.process.candidateMu.Unlock()
@@ -254,4 +292,50 @@ func (p *relayNodeChainProcess) candidateResponse(raw []byte) bool {
 		p.bad.Store(true)
 	}
 	return true
+}
+
+func (op *relayNodeChainCandidateOperation) prepareResponseSource(ctx context.Context) error {
+	p := op.process
+	if p.responseSource == nil || !op.original() {
+		return multihoprelay.ErrUnavailable
+	}
+	input, current, err := p.responseSource(ctx, op.capture)
+	if err == multihoprelay.ErrCandidateNotRegistered && ctx.Err() == nil && op.original() {
+		return multihoprelay.ErrCandidateNotRegistered
+	}
+	if err != nil || current == nil || !current() {
+		return multihoprelay.ErrUnavailable
+	}
+	if _, err = mobilemultihop.NewNodeChainServerCandidateResponder(op.capture, input); err != nil {
+		return multihoprelay.ErrUnavailable
+	}
+	if err := p.lock(ctx); err != nil {
+		return err
+	}
+	defer func() { <-p.gate }()
+	if p.root == nil || !p.Alive() {
+		return multihoprelay.ErrUnavailable
+	}
+	name := op.capture.ResponseSourceFile()
+	file, err := p.root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	op.responseFile = name
+	op.responseFileOwner, err = file.Stat()
+	if err != nil {
+		return errors.Join(err, file.Close())
+	}
+	n, writeErr := io.WriteString(file, input)
+	if n != len(input) {
+		writeErr = errors.Join(writeErr, io.ErrShortWrite)
+	}
+	if err = errors.Join(writeErr, file.Close(), ctx.Err()); err != nil {
+		return err
+	}
+	op.responseCurrent = current
+	if !current() {
+		return multihoprelay.ErrOwnership
+	}
+	return nil
 }

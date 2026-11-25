@@ -62,7 +62,24 @@ enum IOSImportedOpenVPNSource { static func eligible(_ profile: RouterProfile) -
   do { try run(); print("Apple ordered final chooser: \(checks) checks PASS; shipping Swift models/callback, SwiftUI rendering excluded") }
   catch { FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8)); exit(1) }
  }
+ static func imported(_ id:String,_ tail:Int)throws -> RouterProfile {
+  var raw=try JSONSerialization.jsonObject(with:JSONEncoder().encode(profile())) as! [String:Any]
+  raw["id"]=id;raw["node_kind"]="external";raw.removeValue(forKey:"node_proof_id");raw["router_api"]="";raw["api_token"]=""
+  raw["external"]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.\(tail)","shadowsocks":["server":"198.51.100.\(tail)","port":8443,"method":"2022-blake3-aes-128-gcm","password":Data(repeating:UInt8(tail),count:16).base64EncodedString()]]
+  return try JSONDecoder().decode(RouterProfile.self,from:JSONSerialization.data(withJSONObject:raw))
+ }
  static func run() throws {
+  let entry=profile("off"),middle=try imported("literal-middle",41),exit=try imported("literal-exit",42)
+  var draft=IOSNodeChainDraft(finalID:entry.id)
+  let catalog=[entry,middle,exit]
+  try reject("imported final cannot use Server") { try draft.chooseExternalFinal(exit,profiles:catalog,execution:"server") }
+  try draft.chooseExternalFinal(exit,profiles:catalog,execution:"local")
+  try check("picker retains original entry and one SS intermediate",draft.nodes == [.init(id:entry.id,mode:"wg"),.init(id:"",mode:"shadowsocks"),.init(id:exit.id,mode:"shadowsocks")] && !draft.canSave)
+  try check("only unused literal imports remain available for the intermediate",IOSNodeChainEditorVisible.candidates(catalog,nodes:draft.nodes,position:1).map(\.id) == [middle.id])
+  try draft.choose(middle.id,at:1)
+  try check("external final is an eligible complete Local draft",draft.canSave && draft.hasExternalFinal)
+  try draft.append()
+  try check("additional row keeps original imported final and selected control",draft.nodes[2].mode == "shadowsocks" && draft.nodes[0].id == entry.id && draft.nodes.last?.id==exit.id)
   for prefix in IOSMultihopNodeSelection.nativePrefixModes {
    for layer in [nil, "", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"] as [String?] {
     let original = profile(layer), path = nodes(prefix)
@@ -132,10 +149,10 @@ def source(editor, view):
     # Inspect the visible SwiftUI text attached to the same shipping picker.
     help_rows = re.findall(r'Text\("([^"\n]*)"\)', view)
     assert any('Local, Server and Compare both support independently saved Shadowsocks 2022 nodes at any interior position' in row
-               and 'literal IP address and Start Layer Off' in row
+               and 'literal imports throughout the remaining middle positions' in row
                and 'three-node Local route can also start with two literal Shadowsocks' in row for row in help_rows), 'execution picker misstates independent imported node placement'
     assert any('mix paired Shadowsocks 2022 nodes and imported streams' in row
-               and 'every node uses Start Layer Off' in row and 'first stream after the paired packet nodes' in row and 'Custom TCP resolver' in row and 'Later streams use literal addresses' in row and 'penultimate node offers the candidate as the new final' in row
+               and 'every node uses Start Layer Off' in row and 'immediately after the packet nodes' in row and 'Custom TCP resolver' in row and 'follow a literal import when there is one packet entry' in row and 'penultimate node offers the candidate as the new final' in row
                for row in help_rows), 'execution picker lost the paired stream policy or future-profile behavior'
     draft, _ = block(editor, 'struct IOSNodeChainDraft')
     visible, _ = block(editor, 'enum IOSNodeChainEditorVisible')

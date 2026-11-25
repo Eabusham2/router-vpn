@@ -17,7 +17,7 @@ struct NativePlan{func extendedLocalRolesJSON()->String{""};func extendedLocalNo
 struct Member{let id:String;var profile:[String:Any]{["node_kind":(id=="middle" || id.hasPrefix("custom-")) ? "external":"router-vpn"]}}
 struct SOCKSCapture{let plan=NativePlan(),source="captured-source",members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]}
 struct CONNECTCapture{let plan=NativePlan(),source="captured-source",members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]}
-struct OrdinaryCapture{let plan=NativePlan(),selectionExecution="local",launchInput="captured-source",sourceSHA256=String(repeating:"1",count:64),configSHA256=String(repeating:"2",count:64),members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]}
+struct OrdinaryCapture{let sourceSchema=1;let plan=NativePlan(),selectionExecution="local",launchInput="captured-source",sourceSHA256=String(repeating:"1",count:64),configSHA256=String(repeating:"2",count:64),members=[Member(id:"entry"),Member(id:"middle"),Member(id:"final")]}
 struct ExecutionCapture{
  let extendedOriginalNodeCount=0
  let multipleImportedBenchmarkValidator: (([String]) throws -> Void)?

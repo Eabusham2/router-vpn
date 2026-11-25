@@ -108,7 +108,7 @@ import Libbox
         guard !retainFinal || response else { throw IOSNodeCandidateCapture.issue() }
         let insertStream = response && (retainFinal || replacement < selected.count - 1)
         if insertStream {
-            guard execution == "local" || selectedResponse && execution == "auto", selected.count < IOSMultihopNodeSelection.physicalTraversalDepth,
+            guard execution == "local" || selectedResponse && ["server", "auto"].contains(execution), selected.count < IOSMultihopNodeSelection.physicalTraversalDepth,
                   candidate.profile["node_kind"] as? String == "router-vpn", candidate.profile["external"] == nil,
                   original.members[replacement].mode == "shadowsocks" else { throw IOSNodeCandidateCapture.issue() }
             selected.insert((candidateID, candidateMode), at: replacement)

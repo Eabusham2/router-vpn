@@ -82,7 +82,7 @@ def main():
         ('generation', 'owned->generation == generation &&', '(void)generation,', 'late choice applied'),
         ('prefix-mode', 'editor->modes->pdata[target] = mode;', 'editor->modes->pdata[index] = mode;', 'mode did not travel with member'),
         ('capability', 'linux_ordered_flag_v1(json_node_get_object(capabilities), "ordered_nodes_supported")', 'TRUE', 'unavailable native capability connected'),
-        ('final-pin', '!linux_ordered_final_v1(mode) || strcmp(id, control) != 0', '!linux_ordered_final_v1(mode)', 'foreign final accepted'),
+        ('final-pin', '!linux_ordered_final_v1(mode) || (!external_final && strcmp(id, control) != 0)', '!linux_ordered_final_v1(mode) || (external_final && FALSE)', 'foreign final accepted'),
         ('expected-inventory', 'json_object_set_object_member(body, "expected_profile_tokens", json_object_ref(selection->tokens));', 'json_object_set_object_member(body, "expected_profile_tokens", json_object_new());', 'original source inventory missing'),
         ('disk-receipt', 'if (!persisted) { linux_ordered_selection_free_v1(selection);', 'if (FALSE && !persisted) { linux_ordered_selection_free_v1(selection);', 'failed write acquired replacement receipt'),
         ('load-current-graph', 'if (linux_ordered_flag_v1(profile, "multihop_enabled")) {', 'if (FALSE) {', 'Load lost complete current graph'),

@@ -28,13 +28,14 @@ enum IOSNodeChainProviderCapture {
         let capture = try IOSNodeChainCapture.reopen(input, selectedProfile: selected)
         var accepted = false
         defer { if !accepted { try? capture.plan.close() } }
-        guard let final = capture.members.last, final.id == id,
+        let control = capture.controlMember
+        guard let final = capture.members.last, control.id == id,
               configuration["mode"] as? String == final.mode,
               configuration["rawProfileID"] as? String == final.mode,
               configuration["modeCandidates"] as? [String] == [final.mode],
-              let assets = root["profiles"] as? [String: [String: String]], let selectedFiles = assets[final.mode],
-              try final.matchesStartLayer(in: assets),
-              let originalFiles = try JSONSerialization.jsonObject(with: Data(final.filesJSON.utf8)) as? [String: String],
+              let assets = root["profiles"] as? [String: [String: String]], let selectedFiles = assets[control.mode],
+              try control.matchesStartLayer(in: assets),
+              let originalFiles = try JSONSerialization.jsonObject(with: Data(control.filesJSON.utf8)) as? [String: String],
               selectedFiles == originalFiles else {
             throw IOSNodeChainCapture.issue("The ordered provider selection differs from its exact final source.")
         }

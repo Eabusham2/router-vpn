@@ -82,6 +82,20 @@ def validate_partition(roots, phases):
         raise ValueError("Package phase is not one complete compiled root")
 
 
+SOURCE_SHARDS = 6
+
+
+def source_phases(roots, shard):
+    validate_partition(roots, roots)
+    if shard is None:
+        return tuple(roots)
+    if shard not in range(1, SOURCE_SHARDS + 1):
+        raise ValueError("Unknown complete-source matrix partition")
+    # Include every compiler-discovered test, example and fuzz root exactly
+    # once across the fixed matrix, in its original order within each job.
+    return tuple(roots[shard-1::SOURCE_SHARDS])
+
+
 def test2json_tool(directory):
     # Resolve through the same module/toolchain selection used to compile the
     # test image, once. Re-entering the go driver for every root adds minutes.
@@ -247,10 +261,12 @@ def complete(roots, results):
     return counts
 
 
-def other_command(selected, completed):
+def other_command(selected, completed, shard=None):
     # A package can leave the ordinary full command only after its entire
     # compiled root inventory has completed, in original package order.
     validate_package_partition(selected, completed)
+    if shard not in (None, 1):
+        return None
     remaining = [package for package in selected if package not in completed]
     return ["go", "test", "-timeout=" + TIMEOUT, *remaining] if remaining else None
 
@@ -259,6 +275,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scope", choices=tuple(SCOPES), required=True)
     args = parser.parse_args()
+    part = os.environ.get("ROUTERVPN_SOURCE_SHARD")
+    if part is not None and (args.scope != "all" or part not in {str(i) for i in range(1, SOURCE_SHARDS + 1)}):
+        parser.error("invalid complete-source matrix partition")
+    shard = int(part) if part is not None else None
     # Every shipping invocation checks the runner and all seven required
     # workflow edges before it can execute a filtered binary command.
     subprocess.run([sys.executable, str(ROOT / "deploy/test_go_source_groups_runner.py")],
@@ -278,22 +298,25 @@ def main():
             listed = subprocess.check_output([str(binary), "-test.list=."], cwd=ROOT / relative,
                                              text=True, timeout=30)
             roots = inventory(listed)
-            phases = tuple(roots)
-            validate_partition(roots, phases)
+            phases = source_phases(roots, shard)
             print("Complete compiled roots for " + package + ": " + json.dumps(roots), flush=True)
             results = [(root, run_phase(binary, root, ROOT / relative, tool, package)) for root in phases]
-            counts = complete(roots, results)
+            counts = complete(phases, results)
             completed.append(package)
-            print("Package inventory complete: " + package + ", " + str(len(roots)) + " whole roots, " +
+            scope = "complete" if shard is None else f"partition {shard}/{SOURCE_SHARDS}"
+            print(f"Package inventory {scope}: {package}, {len(phases)} of {len(roots)} whole roots, " +
                   str(counts["pass"]) + " PASS and " + str(counts["skip"]) +
                   " explicit SKIP receipts; each root retained the 15m Go alarm", flush=True)
             binary.unlink()
-    command = other_command(selected, completed)
+    command = other_command(selected, completed, shard)
     if command is not None:
+        # The fixed matrix assigns the ordinary, unfiltered package command to
+        # its first job, once. Every other job owns only its compiled root slice.
         # No root/child selector, -short, skip, compile-only mode or ignored
         # status is applied to the rest of the original package inventory.
         subprocess.run(command, cwd=ROOT, check=True)
-    print("Complete original Go package gate passed: " + args.scope, flush=True)
+    label = args.scope if shard is None else f"{args.scope} matrix partition {shard}/{SOURCE_SHARDS}"
+    print("Original Go package gate passed: " + label, flush=True)
     return 0
 
 

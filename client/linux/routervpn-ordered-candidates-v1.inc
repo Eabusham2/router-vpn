@@ -23,9 +23,12 @@ static const char*linux_oc_measurement_kind(const char*measurement){
     if(!strcmp(measurement,"routed-candidate-response"))return "private-agent-response";
     return "";
 }
+static gboolean linux_oc_packet_mode(const char *mode) {
+    return !strcmp(mode,"wg") || !strcmp(mode,"awg2-fast") || !strcmp(mode,"awg2-strong");
+}
 static const char*linux_oc_prefix_measurement(JsonObject*prefix){
     const char*mode=linux_ec_string(prefix,"mode"),*measurement=linux_ec_string(prefix,"measurement");
-    if(!strcmp(mode,"wg")||!strcmp(mode,"awg2-fast")||!strcmp(mode,"awg2-strong"))
+    if(linux_oc_packet_mode(mode))
         return !measurement[0]||!strcmp(measurement,"routed-tcp-connect")?"routed-tcp-connect":"";
     if(!strcmp(mode,"shadowsocks")&&!strcmp(measurement,"routed-candidate-response"))return measurement;
     return "";
@@ -37,13 +40,13 @@ static gboolean linux_oc_response_id(const char *id) {
 static gboolean linux_oc_response_source(JsonObject *view, JsonObject *draft, int position) {
     JsonArray *rows = linux_ec_array(view,"response_source_nodes");
     guint count = rows ? json_array_get_length(rows) : 0;
-    if (linux_ec_number(view,"prefix_position") != position || count < 4 || count > 96 || position < 1 || position > (int)count-2 || (position < (int)count-2 && count == 96)) return FALSE;
+    if (linux_ec_number(view,"prefix_position") != position || count < (linux_ec_member(view,"response_executions") ? 3u : 4u) || count > 96 || position < 1 || position > (int)count-2 || (position < (int)count-2 && count == 96)) return FALSE;
     JsonArray *nodes = linux_ec_array(draft,"nodes");
-    if (draft && (strcmp(linux_ec_string(draft,"execution"),"auto") || !nodes || json_array_get_length(nodes) != count)) return FALSE;
+    if (draft && ((strcmp(linux_ec_string(draft,"execution"),"auto") && (!linux_ec_member(view,"response_executions") || strcmp(linux_ec_string(draft,"execution"),"server"))) || !nodes || json_array_get_length(nodes) != count)) return FALSE;
     g_autoptr(GHashTable) ids = g_hash_table_new(g_str_hash,g_str_equal);
     for (guint i=0; i<count; i++) {
         JsonObject *row = linux_oc_root(json_array_get_element(rows,i));
-        const char *id = linux_ec_string(row,"id"), *mode = i == 0 ? "wg" : "shadowsocks";
+        const char *id = linux_ec_string(row,"id"), *mode = linux_ec_string(row,"mode");
         const char *kind = linux_ec_string(row,"kind");
         if (i == 0 || i == count-1) {
             if (strcmp(kind,"router-vpn")) return FALSE;
@@ -51,7 +54,7 @@ static gboolean linux_oc_response_source(JsonObject *view, JsonObject *draft, in
             if (i < 2) return FALSE;
         } else if (strcmp(kind,"external")) return FALSE;
         if (!row || json_object_get_size(row) != 3 || !linux_oc_response_id(id) || !g_hash_table_add(ids,(gpointer)id) ||
-            strcmp(linux_ec_string(row,"mode"),mode)) return FALSE;
+            (i == 0 ? !linux_oc_packet_mode(mode) : strcmp(mode,"shadowsocks"))) return FALSE;
         if (draft) {
             JsonObject *node = linux_oc_root(json_array_get_element(nodes,i));
             if (!node || json_object_get_size(node)!=2 || strcmp(linux_ec_string(node,"id"),id) || strcmp(linux_ec_string(node,"mode"),mode)) return FALSE;
@@ -81,6 +84,30 @@ static gboolean linux_oc_response_proposal(JsonArray *rows, JsonObject *choice, 
     return TRUE;
 }
 static gboolean linux_oc_response_winner(JsonObject*o,int position){
+    if (linux_ec_member(o,"response_executions")) {
+        JsonArray *owners = linux_ec_array(o,"response_executions");
+        guint count = owners ? json_array_get_length(owners) : 0;
+        if ((count != 1 && count != 2) || !linux_oc_response_source(o,NULL,position)) return FALSE;
+        const char *allowed[2] = {NULL,NULL};
+        for (guint i=0; i<count; i++) {
+            JsonNode *node = json_array_get_element(owners,i);
+            if (!node || !JSON_NODE_HOLDS_VALUE(node) || json_node_get_value_type(node) != G_TYPE_STRING) return FALSE;
+            allowed[i] = json_node_get_string(node);
+        }
+        const char *requested = linux_ec_string(o,"requested_execution");
+        if (!strcmp(requested,"server")) {
+            if (count != 1 || strcmp(allowed[0],"server")) return FALSE;
+        } else if (strcmp(requested,"auto") || strcmp(allowed[0],"local") || (count == 2 && strcmp(allowed[1],"server"))) return FALSE;
+        const char *required = linux_ec_string(o,"required_selected_execution");
+        JsonNode *epoch = linux_ec_member(o,"selection_epoch");
+        if (!linux_ec_member(o,"selected_execution") && !epoch) {
+            return !strcmp(linux_ec_string(o,"scope"),"draft-complete-selected") &&
+                   (count == 1 ? !strcmp(required,allowed[0]) : !linux_ec_member(o,"required_selected_execution"));
+        }
+        const char *winner = linux_ec_string(o,"selected_execution");
+        return !strcmp(required,winner) && (!strcmp(winner,allowed[0]) || (count == 2 && !strcmp(winner,allowed[1]))) &&
+               epoch && JSON_NODE_HOLDS_VALUE(epoch) && json_node_get_value_type(epoch)==G_TYPE_INT64 && json_node_get_int(epoch)>0;
+    }
     if((linux_ec_member(o,"response_source_nodes") ? !linux_oc_response_source(o,NULL,position) : position!=1)||strcmp(linux_ec_string(o,"requested_execution"),"auto")||
        strcmp(linux_ec_string(o,"required_selected_execution"),"local"))return FALSE;
     JsonNode*winner=linux_ec_member(o,"selected_execution"),*epoch=linux_ec_member(o,"selection_epoch");
@@ -93,7 +120,9 @@ static gboolean linux_oc_legacy_connected_response(JsonObject *view) {
     JsonArray *prefixes = linux_ec_array(view,"prefixes"), *choices = linux_ec_array(view,"candidates");
     if (!linux_oc_response_winner(view,1) || !linux_ec_member(view,"selection_epoch") ||
         !prefixes || json_array_get_length(prefixes) != 2 || !choices) return FALSE;
-    const char *ids[2], *modes[] = {"wg", "shadowsocks"};
+    const char *entry_mode = linux_ec_string(linux_oc_root(json_array_get_element(prefixes,0)),"mode");
+    if (!linux_oc_packet_mode(entry_mode)) return FALSE;
+    const char *ids[2], *modes[] = {entry_mode, "shadowsocks"};
     for (guint i = 0; i < 2; i++) {
         JsonObject *prefix = linux_oc_root(json_array_get_element(prefixes,i));
         ids[i] = linux_ec_string(prefix,"id");
@@ -111,7 +140,7 @@ static gboolean linux_oc_legacy_connected_response(JsonObject *view) {
         for (guint j = 0; j < 3; j++) {
             JsonObject *node = linux_oc_root(json_array_get_element(path,j));
             if (!node || json_object_get_size(node) != 2 || strcmp(linux_ec_string(node,"id"),j < 2 ? ids[j] : id) ||
-                strcmp(linux_ec_string(node,"mode"),j ? "shadowsocks" : "wg")) return FALSE;
+                strcmp(linux_ec_string(node,"mode"),j ? "shadowsocks" : entry_mode)) return FALSE;
         }
     }
     return TRUE;
@@ -120,7 +149,7 @@ static gboolean linux_oc_response_draft(JsonObject*draft,int position,JsonObject
     if(linux_ec_member(view,"response_source_nodes"))return draft && linux_oc_response_source(view,draft,position);
     JsonArray*nodes=linux_ec_array(draft,"nodes");
     return position==1&&!strcmp(linux_ec_string(draft,"execution"),"auto")&&nodes&&json_array_get_length(nodes)==3&&
-        !strcmp(linux_ec_string(linux_oc_root(json_array_get_element(nodes,0)),"mode"),"wg")&&
+        linux_oc_packet_mode(linux_ec_string(linux_oc_root(json_array_get_element(nodes,0)),"mode"))&&
         !strcmp(linux_ec_string(linux_oc_root(json_array_get_element(nodes,1)),"mode"),"shadowsocks")&&
         !strcmp(linux_ec_string(linux_oc_root(json_array_get_element(nodes,2)),"mode"),"shadowsocks");
 }
@@ -150,6 +179,7 @@ static double linux_oc_score(JsonObject *o,gint64 now){
     double at=linux_ec_number(o,"measured_at"),expires=linux_ec_number(o,"expires_at");
     if(!kind[0]||strcmp(linux_ec_string(o,"stage"),"complete")||!linux_ec_bool(o,"complete")||!linux_ec_bool(o,"drained")||!isfinite(at)||at<=0||at>now||expires!=at+120000||expires<=now||rows==NULL||json_array_get_length(rows)!=1)return NAN;
     JsonNode*n=json_array_get_element(rows,0);JsonObject*r=n&&JSON_NODE_HOLDS_OBJECT(n)?json_node_get_object(n):NULL;
+    if(!r||json_object_has_member(r,"candidate_disposition"))return NAN;
     JsonObject*b=linux_ec_object(r,"benchmark"),*d=linux_ec_object(b,"distribution");
     if(strcmp(linux_ec_string(r,"node_id"),linux_ec_string(o,"candidate_id"))||strcmp(linux_ec_string(r,"kind"),kind)||strcmp(linux_ec_string(r,"role"),"candidate")||!linux_ec_bool(r,"ready")||strcmp(linux_ec_string(b,"measurement"),measurement)||linux_ec_number(b,"attempts")!=50||linux_ec_number(b,"failed")!=0||linux_ec_number(d,"samples")!=50)return NAN;
     double score=linux_ec_number(b,"trimmed_mean_ms"),min=linux_ec_number(d,"min_ms"),max=linux_ec_number(d,"max_ms");
@@ -178,7 +208,11 @@ static const char*linux_oc_scope(LinuxOrderedCandidates*s){
     const char*requested=linux_ec_string(linux_oc_root(s->draft_source),"execution");
     if(!strcmp(requested,"server")||!strcmp(requested,"auto"))return "draft-complete-selected";
     return s->saved_prefix?"saved-prefix-local":"saved-complete-local";}
-static char*linux_oc_catalog_path(LinuxOrderedCandidates*s){return g_strdup_printf("%s/catalog?prefix_position=%d%s%s",linux_oc_base(s),s->position,s->saved_prefix?"&scope=":"",s->saved_prefix?linux_oc_scope(s):"");}
+static char*linux_oc_catalog_path(LinuxOrderedCandidates*s){
+    gboolean server = !s->saved_path || !strcmp(linux_oc_scope(s),"draft-complete-selected");
+    return g_strdup_printf("%s/catalog?prefix_position=%d%s%s%s",linux_oc_base(s),s->position,
+        s->saved_prefix?"&scope=":"",s->saved_prefix?linux_oc_scope(s):"",server?"&server_response=true":"");
+}
 static gboolean linux_oc_draft_execution(LinuxOrderedCandidates*s,JsonObject*o,gboolean catalog){
     JsonObject*draft=linux_oc_root(s->draft_source);
     const char*requested=linux_ec_string(draft,"execution");
@@ -200,6 +234,7 @@ static gboolean linux_oc_draft_execution(LinuxOrderedCandidates*s,JsonObject*o,g
         }
         return found==1;
     }
+    if(linux_ec_member(o,"response_executions") && !linux_oc_response_winner(o,s->position)) return FALSE;
     if(!selected&&!epoch){
         JsonArray*results=linux_ec_array(o,"results");
         return !s->selected_winner[0]&&!linux_ec_bool(o,"accepted")&&!linux_ec_bool(o,"reviewing")&&!linux_ec_bool(o,"chosen")&&(!results||!json_array_get_length(results));
@@ -393,6 +428,11 @@ static void linux_oc_rows(LinuxOrderedCandidates*s,gboolean measured){
 static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase){
     JsonObject *prior = linux_oc_root(s->view), *draft_source = linux_oc_root(s->draft_source);
     JsonNode *source = linux_ec_member(o,"response_source_nodes"), *expected = linux_ec_member(prior,"response_source_nodes");
+    JsonNode *owners = linux_ec_member(o,"response_executions"), *original_owners = linux_ec_member(prior,"response_executions");
+    if (owners && (!source || !linux_oc_response_winner(o,s->position))) return FALSE;
+    if (phase != 1 && (owners || original_owners) && (!owners || !original_owners || !json_node_equal(owners,original_owners) ||
+        strcmp(linux_ec_string(o,"requested_execution"),linux_ec_string(prior,"requested_execution")) ||
+        (!s->draft && strcmp(linux_ec_string(o,"selected_execution"),linux_ec_string(prior,"selected_execution"))))) return FALSE;
     if (phase == 1 && source) {
         if (!linux_oc_response_source(o,draft_source,s->position) || !linux_oc_response_winner(o,s->position) ||
             (!s->draft && !linux_ec_member(o,"selection_epoch")) ||
@@ -499,7 +539,7 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
                 JsonNode *confirmed=linux_ec_member(o,"proposed_path");
                 if (strcmp(linux_ec_string(o,"draft_action"),"insert-measured-hop") || !confirmed ||
                     linux_ec_member(o,"profile_id") ||
-                    (!strcmp(linux_oc_scope(s),"draft-complete-selected") && (strcmp(s->selected_winner,"local") || s->selected_epoch<=0))) return FALSE;
+                    (!strcmp(linux_oc_scope(s),"draft-complete-selected") && (strcmp(s->selected_winner,linux_ec_member(prior,"response_executions") ? linux_ec_string(o,"selected_execution") : "local") || s->selected_epoch<=0))) return FALSE;
                 const char *fields[]={"accepted","running","reviewing","cleanup_pending","cancelled","saved"};
                 for(guint i=0;i<G_N_ELEMENTS(fields);i++){
                     JsonNode *flag=linux_ec_member(o,fields[i]);

@@ -124,7 +124,7 @@ func nodeChainDigest(domain string, value any) (string, error) {
 // its own identity and has no packet endpoint or positional packet key.
 func (s NodeChainDescriptor) PrivateStreamPosition() int {
 	n := len(s.Members)
-	if s.Schema != 6 || s.EntryMode != "wg" || n < 3 || n > NodeChainExtendedMaximumMembers {
+	if s.Schema != 6 || !nodeChainPacketMode(s.EntryMode) || n < 3 || n > NodeChainExtendedMaximumMembers {
 		return 0
 	}
 	paired := 0

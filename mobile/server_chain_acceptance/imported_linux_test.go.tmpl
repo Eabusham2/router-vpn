@@ -33,7 +33,7 @@ import (
 // This witnesses the real schema2 Server suffix. Entry lease acquisition and
 // desktop Compare selection are separate authorities; this fixture does not
 // synthesize an authenticated Router API request or report either as exercised.
-var serverChainImportedCases = []string{"original", "wrong-middle-key", "wrong-final-key", "wrong-final-identity", "failed-selected-dns", "wrong-public-identity", "joined-active-udp", "admission-restrictions", "prefix-original", "prefix-wrong-middle-key", "prefix-wrong-final-key", "prefix-wrong-final-identity", "prefix-failed-selected-dns", "prefix-wrong-public-identity", "prefix-joined-active-udp", "prefix-admission-restrictions", "prefix-wg-one", "prefix-awg-fast", "prefix-awg-strong", "prefix-max-five", "prefix-wrong-first-packet-key", "prefix-wrong-later-packet-key", "prefix-hostname-wg-one", "prefix-hostname-awg-fast", "prefix-hostname-awg-strong", "prefix-hostname-max-five", "prefix-hostname-wrong-transport-dns", "prefix-hostname-wrong-middle-key", "prefix-hostname-failed-selected-dns", "prefix-hostname-joined-active-udp", "prefix-hostname-wrong-first-packet-key", "prefix-hostname-wrong-later-packet-key"}
+var serverChainImportedCases = []string{"original", "wrong-middle-key", "wrong-final-key", "wrong-final-identity", "failed-selected-dns", "wrong-public-identity", "joined-active-udp", "admission-restrictions", "prefix-original", "prefix-wrong-middle-key", "prefix-wrong-final-key", "prefix-wrong-final-identity", "prefix-failed-selected-dns", "prefix-wrong-public-identity", "prefix-joined-active-udp", "prefix-admission-restrictions", "prefix-wg-one", "prefix-awg-fast", "prefix-awg-strong", "prefix-max-five", "prefix-wrong-first-packet-key", "prefix-wrong-later-packet-key", "prefix-hostname-wg-one", "prefix-hostname-awg-fast", "prefix-hostname-awg-strong", "prefix-hostname-max-five", "prefix-hostname-wrong-transport-dns", "prefix-hostname-wrong-middle-key", "prefix-hostname-failed-selected-dns", "prefix-hostname-joined-active-udp", "prefix-hostname-wrong-first-packet-key", "prefix-hostname-wrong-later-packet-key", "stream-response"}
 
 func serverChainImportedCase(name string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(name, "prefix-"), "hostname-")
@@ -55,14 +55,16 @@ type serverChainImportedReply struct {
 		Middle serverChainImportedMiddleStats `json:"middle"`
 	} `json:"peer"`
 	MiddleAddress       string `json:"middle_address"`
+	CandidateResponses  uint64 `json:"candidate_responses,omitempty"`
 	TransportDNSQueries uint64 `json:"transport_dns_queries"`
 }
 type serverChainImportedPeer struct {
-	original *serverChainEncryptedPeer
-	password string
-	packet   bool
-	hostname bool
-	reply    serverChainImportedReply
+	original                                  *serverChainEncryptedPeer
+	candidateKey, candidateID, candidateToken string
+	password                                  string
+	packet                                    bool
+	hostname                                  bool
+	reply                                     serverChainImportedReply
 }
 
 func (p *serverChainImportedPeer) read(t *testing.T) serverChainImportedReply {
@@ -153,6 +155,11 @@ func serverChainImportedPeerStart(t *testing.T, name string) *serverChainImporte
 		schema = 2
 	}
 	request := map[string]any{"schema": schema, "paired": paired, "middle_method": mobilemultihop.NativeStartLayerMethod, "middle_password": p.password, "hostname_dns": p.hostname}
+	if name == "stream-response" {
+		key, _ := hex.DecodeString(serverChainEncryptedRandom(t, 32))
+		p.candidateKey, p.candidateID, p.candidateToken = base64.StdEncoding.EncodeToString(key), serverChainEncryptedRandom(t, 32), serverChainEncryptedRandom(t, 32)
+		request["candidate"] = map[string]string{"Password": p.candidateKey, "Node": p.candidateID, "Token": p.candidateToken}
+	}
 	if json.NewEncoder(original.process.input).Encode(request) != nil {
 		t.Fatal("original imported Server request failed")
 	}
@@ -298,6 +305,9 @@ func serverChainImportedScenario(t *testing.T, name string) {
 		}
 		worker.health(t, final, targets[finalIndex].API, targets[finalIndex].Token, targets[finalIndex].Proof.NodeID)
 		worker.selectedDNS(t)
+		if name == "stream-response" {
+			worker.streamResponseAcceptance(t, p, capture)
+		}
 		previous := p.control(t, "stats")
 		foreign := final
 		foreign.Password = serverChainEncryptedRandom(t, 24)
@@ -421,7 +431,11 @@ func serverChainImportedScenario(t *testing.T, name string) {
 	}
 	_ = p.original.process.input.Close()
 	p.original.process.join(t)
-	t.Log("IMPORTED_SERVER_RECEIPT " + serverChainEncryptedJSON(t, map[string]any{"case": originalName, "prefix_modes": modes, "prefix_packets": packets, "prefix_proofs": proofs, "capture_sha256": worker.digest, "source_sha256": capture.Source.SourceSHA256, "ready": ready, "selected_dns": ready, "middle_tcp": stats.Peer.Middle.RawTCP, "middle_udp": stats.Peer.Middle.RawUDP, "final_tcp": stats.Peer.Final.FinalRawTCP, "final_udp": stats.Peer.Final.FinalRawUDP, "transport_dns_queries": stats.TransportDNSQueries, "retired": true, "worker_joined": true, "peer_joined": true, "private_udp_refused": name == "admission-restrictions", "private_sink_packets": stats.Peer.Final.CoverPackets, "private_sink_replies": stats.Peer.Final.CoverReplies}))
+	receipt := map[string]any{"case": originalName, "prefix_modes": modes, "prefix_packets": packets, "prefix_proofs": proofs, "capture_sha256": worker.digest, "source_sha256": capture.Source.SourceSHA256, "ready": ready, "selected_dns": ready, "middle_tcp": stats.Peer.Middle.RawTCP, "middle_udp": stats.Peer.Middle.RawUDP, "final_tcp": stats.Peer.Final.FinalRawTCP, "final_udp": stats.Peer.Final.FinalRawUDP, "transport_dns_queries": stats.TransportDNSQueries, "retired": true, "worker_joined": true, "peer_joined": true, "private_udp_refused": name == "admission-restrictions", "private_sink_packets": stats.Peer.Final.CoverPackets, "private_sink_replies": stats.Peer.Final.CoverReplies}
+	if name == "stream-response" {
+		receipt["candidate_responses"] = stats.CandidateResponses
+	}
+	t.Log("IMPORTED_SERVER_RECEIPT " + serverChainEncryptedJSON(t, receipt))
 }
 func TestServerChainImportedEncryptedNative(t *testing.T) {
 	if os.Getenv("ROUTERVPN_SERVER_CHAIN_NATIVE_NS") != "1" || os.Geteuid() != 0 {
@@ -987,5 +1001,94 @@ func TestServerChainMultipleEncryptedNative(t *testing.T) {
 	}
 	for _, name := range serverChainMultipleCases {
 		t.Run(name, func(t *testing.T) { serverChainMultipleScenario(t, name) })
+	}
+}
+
+func (w *serverChainEncryptedWorker) streamResponseAcceptance(t *testing.T, p *serverChainImportedPeer, lease multihoprelay.NodeChainCapture) {
+	t.Helper()
+	profile := map[string]any{"id": "independent-response-candidate", "node_kind": "router-vpn", "node_proof_id": p.candidateID, "endpoint": "198.51.100.249", "router_api": "http://10.97.0.1:8787", "api_token": p.candidateToken, "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "ipv6_mode": "off", "home_lan_access": true, "mtu_policy": "auto", "kill_switch_policy": "on-connect", "start_layer": "off"}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}}, "outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "198.51.100.249", "server_port": 8388, "method": mobilemultihop.NativeStartLayerMethod, "password": p.candidateKey}}, "route": map[string]any{"final": "proxy"}}
+	files := map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(serverChainEncryptedJSON(t, graph)))}
+	node, err := mobilemultihop.NewNodeProfile("shadowsocks", serverChainEncryptedJSON(t, files), serverChainEncryptedJSON(t, profile), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := node.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := lease.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := multihoprelay.NodeChainCandidateRequest{Schema: 2, Lease: lease.Request.Clone(), OwnerID: lease.OwnerID, CaptureSHA256: digest, Operation: serverChainEncryptedRandom(t, 32), ExecutionSHA256: serverChainEncryptedRandom(t, 32), Trial: serverChainEncryptedRandom(t, 16), SelectionEpoch: 1, InventorySHA256: serverChainEncryptedRandom(t, 32), Position: 1, CandidateID: "independent-response-candidate", CandidateSourceSHA256: node.SourceSHA256(), Address: "198.51.100.249:8388", DeadlineAt: time.Now().Add(multihoprelay.NodeChainCandidateLifetime).UnixMilli(), Password: serverChainEncryptedRandom(t, 32)}
+	prepare := func(source string) multihoprelay.NodeChainCandidateCapture {
+		q.Operation = serverChainEncryptedRandom(t, 32)
+		c, err := multihoprelay.NewNodeChainCandidateCapture(lease, q, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if source != "" {
+			if err := os.WriteFile(filepath.Join(w.directory, c.ResponseSourceFile()), []byte(source), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return c
+	}
+	w.candidateCall(t, "candidate-prepare", prepare(""), false)
+	w.candidateCall(t, "candidate-prepare", prepare("{}"), false)
+	c := prepare(input)
+	w.candidateCall(t, "candidate-prepare", c, true)
+	target := M.ParseSocksaddr(q.Address)
+	user := multihoprelay.NodeChainUser{Position: 1, Username: c.Username(), Password: q.Password}
+	run := func(sample int, nonce, mac string, ok bool) {
+		conn, err := w.connection(user, target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		_ = conn.SetDeadline(deadline)
+		if _, err = io.WriteString(conn, nonce+mac); err != nil {
+			t.Fatal(err)
+		}
+		var reply [64]byte
+		_, err = io.ReadFull(conn, reply[:])
+		_ = conn.Close()
+		if ok != (err == nil) || ok && string(reply[:]) != hopmeasure.CandidateChallengeMAC(p.candidateToken, p.candidateID, nonce, true) {
+			t.Fatal("candidate response mismatch", sample)
+		}
+		for {
+			r := w.candidateCall(t, "candidate-status", c, true).Receipt
+			if r.Accepted != sample {
+				t.Fatal("wrong original native sample", sample, r.Accepted)
+			}
+			if !r.InFlight {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("sample failed to join")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	for i := 1; i <= 50; i++ {
+		nonce := serverChainEncryptedRandom(t, 16)
+		run(i, nonce, hopmeasure.CandidateChallengeMAC(p.candidateToken, p.candidateID, nonce, false), true)
+	}
+	w.refuse(t, user, target)
+	w.candidateCall(t, "candidate-close", c, true)
+	w.refuse(t, user, target)
+	if p.control(t, "stats").CandidateResponses != 50 {
+		t.Fatal("independent private API did not see fifty fresh encrypted challenges")
+	}
+	c = prepare(input)
+	w.candidateCall(t, "candidate-prepare", c, true)
+	user.Username = c.Username()
+	nonce := serverChainEncryptedRandom(t, 16)
+	run(1, nonce, strings.Repeat("0", 64), false)
+	run(2, nonce, hopmeasure.CandidateChallengeMAC(p.candidateToken, p.candidateID, nonce, false), false)
+	w.candidateCall(t, "candidate-close", c, true)
+	if p.control(t, "stats").CandidateResponses != 50 {
+		t.Fatal("wrong or replayed MAC reached the private API")
 	}
 }

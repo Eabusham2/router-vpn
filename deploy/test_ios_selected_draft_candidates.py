@@ -46,8 +46,8 @@ struct IOSDeviceMTUPreference: Equatable {
     var isCONNECT: Bool { Draft.schema == 4 }
     // SHIPPING_PACKET_POSITIONS
  func responsePositions(for winner:String)->[Int] {
-  guard Draft.response, requested == "auto", winner == "local" else {return []}
-  return Draft.schema==17 ? Array(1...members.count-2):[members.count-2]
+  guard Draft.response, (requested == "auto" && winner == "local" || ["server","auto"].contains(requested) && winner == "server") else {return []}
+  return Array(1...members.count-2)
  }
  func candidatePositions(for winner:String)->[Int] { candidatePositions + responsePositions(for:winner) }
     // SHIPPING_HEX
@@ -116,6 +116,7 @@ enum IOSNodeChainProviderCapture { static let executionKey = "nodeChainExecution
     static var winner = "server", requested = "server", position = 2, schema = 6
     static var response: Bool { [8,9,16,17].contains(schema) }
     static var starts = 0, removes = 0, candidateStarts = 0, unattendedStarts = 0
+    static var registry = "", target = ""
     static var replacedRule = false
     static var wrongConfig = false, wrongProofs = false, wrongWinner = false, lastAtInfo = false, foreignReadback = false
     static var staged: ClientBundle?
@@ -164,6 +165,7 @@ TEST = r'''
 @MainActor @main struct SelectedDraftFlow {
     static func run(_ requested: String, _ winner: String, _ invalid: String = "", schema: Int = 6, use: String = "") async throws {
         Draft.reset(requested, winner)
+        Draft.registry = invalid.hasPrefix("registry-") ? invalid : ""; Draft.target = ""
         Draft.schema = schema; Draft.position = schema == 17 ? 12 : schema == 16 ? 14 : (schema == 6 || schema == 9 ? 2 : 1)
         let model = RouterVPNModel(), probe = IOSNodeCandidates()
         if use == "relinked" {
@@ -193,7 +195,12 @@ TEST = r'''
             try check(Draft.removes == 0 && IOSMTUMeasurementGate.held && probe.scores.isEmpty, "foreign manager was removed before original DOWN")
             proto.providerConfiguration = source; IOSSpeedLabTunnel.allowRestore = true
             try await until { !probe.scores.isEmpty }; probe.cancel(); try await until { !probe.running }
-        } else if !invalid.isEmpty {
+        } else if !Draft.registry.isEmpty && Draft.registry != "registry-missing" {
+            IOSSpeedLabTunnel.allowStop = true; IOSSpeedLabTunnel.allowRestore = true; Provider.allowClose = true
+            try await until { !probe.running || Draft.candidateStarts > 1 }
+            try check(Draft.candidateStarts == 1 && probe.scores.isEmpty && !IOSMTUMeasurementGate.held,
+                      "invalid Server response continued into the next target or retained cleanup")
+        } else if !invalid.isEmpty && Draft.registry.isEmpty {
             IOSSpeedLabTunnel.allowStop = true; IOSSpeedLabTunnel.allowRestore = true; Provider.allowClose = true
             if invalid == "foreign-rule" {
                 try await until { model.message.contains("cleanup is still pending") || Draft.starts > 0 }
@@ -209,7 +216,7 @@ TEST = r'''
         } else {
             try await until { Provider.closeCalls > 0 || !probe.running || Draft.unattendedStarts > 0 }
             try check(Draft.unattendedStarts == 0, "unsaved selected graph started from On Demand during preference save")
-            try check(Draft.starts == 1 && Draft.candidateStarts == 1 && probe.scores.isEmpty && IOSMTUMeasurementGate.held,
+            try check(Draft.starts == 1 && Draft.candidateStarts == (Draft.registry.isEmpty ? 1:2) && probe.scores.isEmpty && IOSMTUMeasurementGate.held,
                       "selected draft bypassed original candidate close: "+String(schema)+"/"+requested+"/"+winner+" "+probe.text+" "+String(Draft.starts)+"/"+String(Draft.candidateStarts))
             Provider.allowClose = true; try await until { IOSSpeedLabTunnel.stopEntered }
             try check(probe.scores.isEmpty && IOSMTUMeasurementGate.held, "selected results escaped before native DOWN")
@@ -219,6 +226,9 @@ TEST = r'''
             try await until { !probe.scores.isEmpty || !probe.running }
             try check(probe.editorScore(node: "candidate", after: Draft.position) == 2.4 && !probe.canSave,
                       "editor score lost the original stop or saved before explicit preparation")
+            if !Draft.registry.isEmpty {
+                try check(probe.scores.map(\.id) == ["candidate"], "absent registration acquired a score or hid the next registered target")
+            }
             if !use.isEmpty {
                 let row = probe.scores[0]
                 try check(probe.draftInsertion(for: row) != nil && IOSConnectionProfileStore.writes == 0, "draft choice missing after original DOWN")
@@ -258,19 +268,26 @@ TEST = r'''
             let expected = (schema == 3 || schema == 4) ? [0] : (schema == 6 ? [0, 2] : [0, 1])
             try check(actual == expected, "original typed packet position scope changed for schema " + String(schema))
         }
+        for registry in ["registry-missing","registry-invalidated","registry-foreign","registry-malformed"] {
+            try await run("server","server",registry,schema:8,use:"choose")
+        }
         try await run("auto","local",schema:8)
         try await run("auto","local",schema:8,use:"choose")
         try await run("auto","local",schema:17,use:"choose")
         try await run("auto","local",schema:17,use:"stale")
         try await run("auto","local",schema:17,use:"relinked")
-        try await run("auto","server","server-response",schema:8)
+        try await run("auto","server",schema:8)
+        try await run("server","server",schema:8,use:"choose")
         try await run("auto","local",schema:9)
-        try await run("auto","server","server-response",schema:9)
+        try await run("auto","server",schema:9)
+        try await run("server","server",schema:9,use:"choose")
         try await run("auto","local",schema:17)
-        try await run("auto","server","server-response",schema:17)
+        try await run("auto","server",schema:17)
+        try await run("server","server",schema:17,use:"choose")
         try await run("auto","local","proofs",schema:17)
         try await run("auto","local",schema:16)
-        try await run("auto","server","server-response",schema:16)
+        try await run("auto","server",schema:16)
+        try await run("server","server",schema:16,use:"choose")
         for schema in [1, 2, 5] { try await run("auto", "local", schema: schema) }
         try await run("server", "server")
         try await run("auto", "server")
@@ -315,7 +332,7 @@ def fixture():
    if execution.responsePositions(for:Draft.winner).contains($0.offset){value["measurement"]="routed-candidate-response"}
    return value
   }
-  if op=="candidate-start"{Draft.candidateStarts+=1}''')
+  if op=="candidate-start"{Draft.candidateStarts+=1;Draft.target=body["candidate"] ?? ""}''')
     source = replace(source, next(line for line in source.splitlines() if 'if op=="candidate-info"' in line),
                      '''  if op=="candidate-info"{
    if Draft.lastAtInfo{IOSNodeChainExecutionLastStore.data=Data("replaced Last".utf8)}
@@ -328,14 +345,26 @@ def fixture():
   var metadata:[String:Any]=["schema":1,"capture_sha256":hash,"prefix_position":Draft.position,"prefix_id":ExecutionCapture(requested:Draft.requested).members[Draft.position].id,
   "source_sha256":hash,"config_sha256":Draft.projected,"preparation_source_sha256":hash,"preparation_config_sha256":Draft.projected,
   "requested_execution":Draft.requested,"execution":Draft.wrongWinner ? "server" : Draft.winner,"selection_epoch":17,"targets":[["id":"candidate","source_sha256":hash]]]
+  if !Draft.registry.isEmpty{metadata["targets"]=[["id":"absent","source_sha256":String(repeating:"d",count:64)],["id":"candidate","source_sha256":hash]]}
   if Draft.response{metadata["measurement"]="routed-candidate-response"}
   reply["metadata"]=String(decoding:try json(metadata),as:UTF8.self)}''')
     source = replace(source, '"capture_sha256":hash,"prefix_position":0,"prefix_id":"entry","candidate_id":"candidate"',
                      '"capture_sha256":hash,"prefix_position":Draft.position,"prefix_id":ExecutionCapture(requested:Draft.requested).members[Draft.position].id,"candidate_id":"candidate"')
     source = replace(source, 'throw Failure(message:"unexpected Server/Compare handoff in a Local prefix test")',
-                     'guard Draft.response, winner=="local", position==Draft.position, candidateID=="candidate", measuredInput=="measured original" else{throw Failure(message:"foreign selected response proposal")};return Self()')
+                     'guard Draft.response, winner==Draft.winner, position==Draft.position, candidateID=="candidate", measuredInput=="measured original" else{throw Failure(message:"foreign selected response proposal")};return Self()')
     source = source.replace('"measurement":"routed-tcp-connect"', '"measurement":Draft.response ? "routed-candidate-response":"routed-tcp-connect"')
     source = source.replace('"kind":"tcp-connect"', '"kind":Draft.response ? "private-agent-response":"tcp-connect"')
+    source = replace(source, 'rows:[Row(id:"candidate",name:"Original candidate",input:"measured original")]',
+                     'rows:(Draft.registry.isEmpty ? [] : [Row(id:"absent",name:"Separate absent source",input:"absent original")])+[Row(id:"candidate",name:"Original candidate",input:"measured original")]')
+    source = replace(source, '  if op=="candidate-close"{closeCalls+=1;', '''  if !Draft.registry.isEmpty && Draft.target=="absent", let raw=reply["status"] as? String {
+   var status=try JSONSerialization.jsonObject(with:Data(raw.utf8)) as! [String:Any]
+   status["candidate_id"]="absent";status["candidate_source_sha256"]=String(repeating:"d",count:64)
+   status["results"]=[["node_id":"absent","role":"candidate","kind":"private-agent-response","ready":false,"failure":"No registered original.","candidate_disposition":Draft.registry=="registry-malformed" ? "unknown":"not-registered"]]
+   if Draft.registry=="registry-invalidated"{status["stage"]="invalidated";status["failure"]="Lost original lease"}
+   if Draft.registry=="registry-foreign"{status["capture_sha256"]=String(repeating:"e",count:64)}
+   reply["status"]=String(decoding:try json(status),as:UTF8.self)
+  }
+  if op=="candidate-close"{closeCalls+=1;''')
     model = (APP/'RouterVPNModel.swift').read_text()
     connect = member(model, '    func connectCandidatePreparation(_ capture: IOSOrderedRouteCapture')
     execution = (APP/'IOSNodeChainExecutionCapture.swift').read_text()
@@ -383,6 +412,8 @@ def main():
         exercise(command)
         draft = APP/'IOSNodeCandidateDraftExecution.swift'
         changes = (
+            ('unbound Server terminal receipt', host, 'if metadata.execution == "server", metadata.metric == "routed-candidate-response" {',
+             'if false {', 'invalid Server response continued into the next target or retained cleanup'),
             ('skipped detached receipt check', host, 'try preparation.requireSaved(token: score.token)\n        try apply(proposal)', 'try apply(proposal)', 'draft adoption used expired authority or wrote a profile'),
             ('borrowed first eligible response', host, '$0.position == position && $0.metric == "routed-candidate-response"', '$0.metric == "routed-candidate-response"', 'selected draft bypassed original candidate close: 17/auto/local'),
             ('foreign selected winner', draft, 'info.execution == winner,', '["local", "server"].contains(winner),', 'changed selected source started candidate traffic'),

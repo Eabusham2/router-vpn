@@ -161,6 +161,9 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 		}
 		return nil
 	}
+	if capture.Schema == 8 {
+		return validateStartupExternalFinalNodeChain(selection)
+	}
 	if selection.PathKind != startupNodeChainPathKind || (capture.Schema != 1 && capture.Schema != 2 && capture.Schema != 3 && capture.Schema != 4 && capture.Schema != 5 && capture.Schema != 6 && capture.Schema != 7) || !validDesktopOrderedExecution(capture.Execution) || selection.External != nil ||
 		!desktopNodeChainFinalSupported(selection.RuntimeMode, "off") || capture.Schema >= 2 && selection.RuntimeMode != "shadowsocks" || selection.LogicalMode != "multihop" || selection.UpdatedAt.IsZero() ||
 		!savedNodeChainDigest(capture.RootSHA256) || len(capture.Nodes) < 2 || len(capture.Nodes) > common.MultihopPhysicalTraversalDepth {

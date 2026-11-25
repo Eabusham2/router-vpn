@@ -45,7 +45,7 @@ func newDesktopNodeChainLaunch(selection multihopSelection, session, target stri
 		return newDesktopSOCKSNodeChainLaunch(selection, session, target)
 	}
 	if selection.Native == nil || selection.Native.chain == nil || selection.Native.validate(selection) != nil ||
-		selection.Control.ID != selection.Exit.ID || target != "windows" && target != "linux" && target != "darwin" {
+		!desktopNodeChainControlCurrent(selection.Control, selection.Nodes) || target != "windows" && target != "linux" && target != "darwin" {
 		return nil, errors.New("ordered native launch requires its complete captured Local source")
 	}
 	policy, err := mobilemultihop.NewDesktopNodeChainPolicyWithDevicePreference(selection.Native.chain.chain, session, target, selection.restoreMTU, selection.deviceRevision, selection.deviceFixed)
@@ -53,7 +53,7 @@ func newDesktopNodeChainLaunch(selection multihopSelection, session, target stri
 		return nil, err
 	}
 	meta := policy.Metadata()
-	if meta.ProfileID != selection.Control.ID || meta.NodeID != selection.Exit.NodeProofID || meta.Mode != selection.ExitMode ||
+	if !desktopNodeChainMetadataMatchesSelection(meta, selection) ||
 		meta.OriginalSourceSHA256 != selection.Native.source {
 		return nil, errors.New("ordered native projection changed its captured final control or complete source")
 	}
@@ -127,7 +127,7 @@ func readValidatedDesktopNodeChainLaunchState(ctx context.Context, launch *deskt
 		clear(raw)
 	}
 	if err != nil || config != actual || meta.ConfigSHA256 != launch.configSHA256 || meta.SessionID != launch.mtuSession ||
-		meta.ProfileID != launch.profileID || launch.policyProfileID != selection.Control.ID || meta.NodeID != selection.Exit.NodeProofID ||
+		meta.ProfileID != launch.profileID || launch.policyProfileID != selection.Control.ID || !desktopNodeChainMetadataMatchesSelection(meta, selection) ||
 		meta.Mode != launch.mode || meta.OriginalSourceSHA256 != selection.Native.source || launch.root != selection.Native.root ||
 		launch.endpoint != selection.Native.endpoint {
 		return empty, errors.Join(err, errors.New("ordered native launch changed its sealed derived graph or original authority"))

@@ -465,7 +465,9 @@ static void linux_telemetry_receive_route_v9(LinuxTelemetryV9 *t) {
             t->live_generation = t->route_generation;
             char *value = g_strdup_printf("%.1f ms", ms);
             gtk_label_set_text(GTK_LABEL(t->live), value);
-            gtk_widget_set_tooltip_text(t->live, "HTTP RTT through the current private Router-node path.");
+            const char *proof = linux_ec_string(linux_ec_object(reply,"current_path"),"proof");
+            gtk_widget_set_tooltip_text(t->live, g_str_has_suffix(proof," · HTTPS response after TLS through the captured external exit") ?
+                "HTTPS response after TLS through the captured external exit." : "HTTP RTT through the current private Router-node path.");
             g_free(value);
             g_string_append_printf(label, "%sPATH %.1f ms", label->len ? " • " : "", ms);
         }

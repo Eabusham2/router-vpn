@@ -1,0 +1,331 @@
+{
+  "schema": 1,
+  "status": "passed",
+  "scope": "Sixteen complete original controller roots in the full unmodified race-enabled cmd/client package. Native child, Windows controller and kernel boundaries are explicitly modeled. No encrypted/native/platform acceptance or complete package pass is asserted.",
+  "target": "linux/amd64",
+  "race": true,
+  "toolchain": "go version go1.26.3 linux/amd64",
+  "compile": [
+    "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+    "test",
+    "-c",
+    "-race",
+    "-p=1",
+    "-mod=readonly",
+    "-o",
+    "/tmp/routervpn-final-controller/controller.test",
+    "./cmd/client"
+  ],
+  "image_sha256": "515f0e557495c3aa90007e607c2c6c17014f10856a333f7a2fcb992d91af2ff6",
+  "source_sha256": "9c5b1d6772d1a249a462036fbef17ee627ff19f2ac548bd71ebece00ee46c9dd",
+  "source_files": 3149,
+  "source_digest_algorithm": "SHA256 of sorted git-tracked (*.go, go.mod, go.sum), each UTF-8 path plus NUL followed by the raw SHA256 digest of its file bytes.",
+  "records": [
+    {
+      "root": "TestDesktopExternalFinalCompleteSourceAndProjection",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopExternalFinalCompleteSourceAndProjection$"
+      ],
+      "returncode": 0,
+      "seconds": 21.55076433099748,
+      "output_sha256": "1e78773c1ac229aacba954d9e720dd9b8ec1eb304975b06faf6ec6863b1c46a3",
+      "tests": 7
+    },
+    {
+      "root": "TestDesktopExternalFinalExplicitRequestAndRevisions",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopExternalFinalExplicitRequestAndRevisions$"
+      ],
+      "returncode": 0,
+      "seconds": 1.191343954000331,
+      "output_sha256": "145b7bb17e405363e2031a442944764f51a58ba5ca8361854461e7714d0c82ac",
+      "tests": 9
+    },
+    {
+      "root": "TestDesktopExternalFinalSaveLoadAndLast",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopExternalFinalSaveLoadAndLast$"
+      ],
+      "returncode": 0,
+      "seconds": 1.436887497002317,
+      "output_sha256": "dc0bd927035e594da153a729de280af9660a2b5160ad9d88d41436c28b6a667d",
+      "tests": 3
+    },
+    {
+      "root": "TestDesktopExternalFinalLatencyReceiptAndHistory",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopExternalFinalLatencyReceiptAndHistory$"
+      ],
+      "returncode": 0,
+      "seconds": 2.680874676996609,
+      "output_sha256": "8946865bd024c6a8be168d2e1a07931987e1962fde5edeb0e25e73df7ef0c2e3",
+      "tests": 3
+    },
+    {
+      "root": "TestDesktopExternalFinalLatencyController",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopExternalFinalLatencyController$"
+      ],
+      "returncode": 0,
+      "seconds": 27.874774034004076,
+      "output_sha256": "c169b3cffdc0a80257b4f5c5691dde7b56b0bddc62cc9fa897f4a4d38ec7442e",
+      "tests": 17
+    },
+    {
+      "root": "TestDesktopExternalFinalThroughputMeaning",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopExternalFinalThroughputMeaning$"
+      ],
+      "returncode": 0,
+      "seconds": 1.6244105680016219,
+      "output_sha256": "40f0ff757e0db52fdbf323edf561201a69bb3ec1b811564936545d221fa67286",
+      "tests": 1
+    },
+    {
+      "root": "TestDesktopExternalFinalConnectThroughput",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopExternalFinalConnectThroughput$"
+      ],
+      "returncode": 0,
+      "seconds": 3.4418402320006862,
+      "output_sha256": "5f06c8566d810cc30a53b6aac0be1262fad98ea71128cce6370885aa477f3358",
+      "tests": 1
+    },
+    {
+      "root": "TestWholePathRTTLocalConnect",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestWholePathRTTLocalConnect$"
+      ],
+      "returncode": 0,
+      "seconds": 29.50229197600129,
+      "output_sha256": "139a85a5282841da757b866eac52e2973c4cb7c226a0c44b0923a428784363c3",
+      "tests": 6
+    },
+    {
+      "root": "TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopNodeChainOwnedLaunchUsesOriginalStartProofAndRetirement$"
+      ],
+      "returncode": 0,
+      "seconds": 10.678048984998895,
+      "output_sha256": "17a31c90ecb4412b341c89d3efa8103f3e2a18730e44ba7fe5f01ba6bb79f4ea",
+      "tests": 17
+    },
+    {
+      "root": "TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopNodeChainExecutionOwnedStartupProofAndRetirement$"
+      ],
+      "returncode": 0,
+      "seconds": 11.045357852999587,
+      "output_sha256": "c1f895d13255902c16a5e28c125f6e892992268934f0b8a96ed2b4841b0a2bcc",
+      "tests": 17
+    },
+    {
+      "root": "TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopNodeChainExecutionGraphRetainsSelectedAuthority$"
+      ],
+      "returncode": 0,
+      "seconds": 15.35546498700569,
+      "output_sha256": "5adcd1b038dccbe7cba6a51a285d7f2791dd74023b4c78951c16e136d276cc4b",
+      "tests": 33
+    },
+    {
+      "root": "TestDesktopNodeChainExecutionObservationHonorsCallerAndBusyReceipt",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopNodeChainExecutionObservationHonorsCallerAndBusyReceipt$"
+      ],
+      "returncode": 0,
+      "seconds": 1.6204583910002839,
+      "output_sha256": "1bf0bbafb3c1fa9850953368625a024e7f43863eeafdb8d75ba66486273272f9",
+      "tests": 1
+    },
+    {
+      "root": "TestDesktopSelectedServerResponseConnected",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedServerResponseConnected$"
+      ],
+      "returncode": 0,
+      "seconds": 27.970564809998905,
+      "output_sha256": "45d06f3129c7e5b0a09e7c65ca73541b38fa88951915dd1b43c5d0699b1d0683",
+      "tests": 4
+    },
+    {
+      "root": "TestDesktopSelectedServerResponseDraft",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedServerResponseDraft$"
+      ],
+      "returncode": 0,
+      "seconds": 48.382020488003036,
+      "output_sha256": "ffd52caed273584210d1fbae074e0e126d6db24bbfd2480790fbcead9c763f0a",
+      "tests": 4
+    },
+    {
+      "root": "TestDesktopSelectedServerUnregisteredCannotBeSaved",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedServerUnregisteredCannotBeSaved$"
+      ],
+      "returncode": 0,
+      "seconds": 11.622634015002404,
+      "output_sha256": "78edd2b9124c8c775ca83d71bf5a0ac59d7d3e4d9904723f63864b74a1914a2d",
+      "tests": 1
+    },
+    {
+      "root": "TestDesktopSelectedCandidateCancellationJoinsWithoutStart",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-final-controller/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedCandidateCancellationJoinsWithoutStart$"
+      ],
+      "returncode": 0,
+      "seconds": 17.447163008000643,
+      "output_sha256": "5aa751e68b0c6a971cf132365be67b2dc4f8fb7aae1fffe3ada0b494e8b63956",
+      "tests": 4
+    }
+  ],
+  "log_sha256": "fac9438d747e6415fe85873981afe61903728800a0f16761355c263bb93d569d",
+  "total_root_leaf_verdicts": 128
+}

@@ -288,6 +288,32 @@ int main(int argc, char **argv) {
         }
     }
 
+    JsonArray *external = json_object_get_array_member(root, "external_final");
+    for (guint c = 0; c < json_array_get_length(external); c++) {
+        JsonObject *item = json_array_get_object_element(external,c);
+        JsonObject *info = json_object_get_object_member(item, "info");
+        JsonObject *owner = json_object_get_object_member(info, "capture");
+        JsonArray *rows = json_object_get_array_member(info, "nodes");
+        JsonArray *receipts = json_object_get_array_member(item, "receipts");
+        int count = (int)json_array_get_length(rows);
+        check(linux_ol_capture_v1(owner), "external exit keeps its separate control and public identity");
+        for (int i = 0; i < count; i++) {
+            JsonObject *row = json_array_get_object_element(rows,i);
+            JsonObject *saved = json_array_get_object_element(receipts,i);
+            check(linux_ol_bound_node_v1(row,i,count,owner,NULL,rows), "external route retained every original position");
+            check(linux_ol_receipt_v1(saved,owner,row,count,TRUE,rows) && linux_ol_receipt_v1(saved,owner,row,count,FALSE,rows),
+                  "external route current and durable receipts retain each measured endpoint");
+        }
+        JsonNode *changed = fixture_copy(json_object_get_member(info, "capture"));
+        JsonObject *wrong = json_node_get_object(changed);
+        JsonObject *last = json_array_get_object_element(rows,count-1);
+        json_object_set_string_member(wrong,"external_final_node_id","another-exit");
+        check(!linux_ol_same_capture_v1(owner,wrong) && !linux_ol_bound_node_v1(last,count-1,count,wrong,NULL,rows),
+              "external exit substitution cannot own the final row");
+        json_object_remove_member(wrong,"external_final_node_id");
+        check(!linux_ol_bound_node_v1(last,count-1,count,wrong,NULL,rows), "public exit requires its typed capture");
+        json_node_free(changed);
+    }
     g_object_unref(parser);
     printf("Shipping C receipt validators: %d PASS (no GTK widgets/native tunnel)\n", checks);
     return 0;

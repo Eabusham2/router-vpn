@@ -928,6 +928,7 @@ def main():
  case "external-openvpn-probes":err=nativeopenvpn.RouterValidateExternalOpenVPNResponseProbes(r.Config,r.Policy)
  case "external-openvpn-layers":var layers struct{Probes,Layers,Mode string};err=json.Unmarshal([]byte(r.Policy),&layers);if err==nil{err=nativeopenvpn.RouterValidateExternalOpenVPNStartLayers(r.Config,layers.Probes,layers.Layers,layers.Mode)}
  case "external-openvpn-pairing":err=nativeopenvpn.RouterValidateExternalOpenVPNPairing(r.Config,r.Policy)
+ case "chain-external-final":value,err=mobilemultihop.NodeChainExternalFinalFromEntry(r.Config,r.Policy)
  case "chain-imported":value,err=mobilemultihop.NodeChainImportedMemberInput(r.Config,r.Policy)
   case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "external-response":err=mobilemultihop.ValidateExternalResponseProbe(r.Config,r.Policy)
@@ -973,6 +974,7 @@ def main():
  public static String routerCompileTorProfileWithExternalPredecessor(String profile,String session,String predecessor,String entry)throws Exception{return call("tor-external-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);}
  public static String routerCompileServerTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{return call("tor-server-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);}
  public static String routerNodeChainImportedMemberInput(String config,String capture)throws Exception{return call("chain-imported",config,capture);}
+public static String routerNodeChainExternalFinalFromEntry(String entry,String imported)throws Exception{return call("chain-external-final",entry,imported);}
  public static String routerCompileExternalPolicy(String config,String capture)throws Exception{return call("external-policy",config,capture);}
  public static void routerValidatePrivateNodeJSON(String raw)throws Exception{call("private-node-json",raw,"");}
  public static void routerValidateExternalOpenVPNResponseProbes(String profile,String probes)throws Exception{call("external-openvpn-probes",profile,probes);}

@@ -122,20 +122,7 @@ func desktopChainPhysicalImportedSource(t *testing.T, layout desktopPhysicalImpo
 		if position <= 0 || position >= layout.count-1 {
 			t.Fatal("non-interior fixture position")
 		}
-		var graph, capture map[string]any
-		if json.Unmarshal([]byte(member.Config), &graph) != nil || json.Unmarshal([]byte(member.Capture), &capture) != nil {
-			t.Fatal("complete imported member missing")
-		}
-		profile := capture["profile"].(map[string]any)
-		external := profile["external"].(map[string]any)
-		ss := external["shadowsocks"].(map[string]any)
-		out := graph["outbounds"].([]any)[0].(map[string]any)
-		id, host, public := fmt.Sprintf("physical-import-%d", position), fmt.Sprintf("203.0.113.%d", 40+position), fmt.Sprintf("198.51.100.%d", 90+position)
-		key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat(string(rune('a'+position)), 32)))
-		profile["id"], profile["endpoint"], capture["exit_id"] = id, host, id
-		external["expected_public_ip"], capture["expected_public_ip"] = public, public
-		ss["server"], ss["port"], ss["password"] = host, 21000+position, key
-		out["server"], out["server_port"], out["password"] = host, 21000+position, key
+		graph, capture := desktopChainPhysicalSSInput(t, member.Config, member.Capture, position)
 		source.Nodes[position], err = mobilemultihop.NodeChainImportedMemberInput(chainNativeJSON(t, graph), chainNativeJSON(t, capture))
 		if err != nil {
 			t.Fatal("independent imported source invalid", position, err)
@@ -168,6 +155,176 @@ func desktopChainPhysicalImportedSource(t *testing.T, layout desktopPhysicalImpo
 		t.Fatal("complete multiple-import physical source invalid", err)
 	}
 	return chain
+}
+
+func desktopChainPhysicalSSInput(t *testing.T, originalConfig, originalCapture string, position int) (map[string]any, map[string]any) {
+	t.Helper()
+	var graph, capture map[string]any
+	if json.Unmarshal([]byte(originalConfig), &graph) != nil || json.Unmarshal([]byte(originalCapture), &capture) != nil {
+		t.Fatal("complete imported member missing")
+	}
+	profile := capture["profile"].(map[string]any)
+	external := profile["external"].(map[string]any)
+	ss := external["shadowsocks"].(map[string]any)
+	out := graph["outbounds"].([]any)[0].(map[string]any)
+	id, host, public := fmt.Sprintf("physical-import-%d", position), fmt.Sprintf("203.0.113.%d", 40+position), fmt.Sprintf("198.51.100.%d", 90+position)
+	key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat(string(rune('a'+position)), 32)))
+	profile["id"], profile["endpoint"], capture["exit_id"] = id, host, id
+	external["expected_public_ip"], capture["expected_public_ip"] = public, public
+	ss["server"], ss["port"], ss["password"] = host, 21000+position, key
+	out["server"], out["server_port"], out["password"] = host, 21000+position, key
+	return graph, capture
+}
+
+func desktopChainPhysicalExternalFinalSource(t *testing.T, count int, dns string) *mobilemultihop.NodeChain {
+	t.Helper()
+	launch, err := chainNativeImportedSSPrefixSource(t, 1).LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seed mobilemultihop.NodeChainSource
+	if json.Unmarshal([]byte(launch), &seed) != nil || len(seed.Nodes) != 3 || len(seed.IdentitySources) != 3 {
+		t.Fatal("original private entry and standalone imported source missing")
+	}
+	entry, err := mobilemultihop.ParseNodeLaunchInput(seed.Nodes[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entryInput struct {
+		Profile string `json:"profile_json"`
+	}
+	var entryProfile map[string]any
+	if json.Unmarshal([]byte(seed.Nodes[0]), &entryInput) != nil || json.Unmarshal([]byte(entryInput.Profile), &entryProfile) != nil {
+		t.Fatal("original entry profile missing")
+	}
+	var member struct {
+		Config  string `json:"config"`
+		Capture string `json:"capture"`
+	}
+	if json.Unmarshal([]byte(seed.Nodes[1]), &member) != nil {
+		t.Fatal("original imported profile missing")
+	}
+	source := mobilemultihop.NodeChainSource{Schema: 8, Execution: "local", Nodes: make([]string, count), IdentitySources: make([]string, count)}
+	source.Nodes[0], source.IdentitySources[0] = seed.Nodes[0], seed.IdentitySources[0]
+	for position := 1; position < count; position++ {
+		graph, capture := desktopChainPhysicalSSInput(t, member.Config, member.Capture, position)
+		if position == count-1 {
+			profile := capture["profile"].(map[string]any)
+			profile["dns_mode"], profile["multihop_entry_mode"], profile["multihop_entry_id"] = dns, "wg", entryProfile["id"]
+			profile["multihop_exit_id"], profile["multihop_enabled"], profile["multihop_execution"] = profile["id"], true, "local"
+			if dns == "custom" {
+				profile["dns_protocol"], profile["dns_host"], profile["dns_port"] = "udp", "198.51.100.198", 5353
+			}
+			capture["entry"], capture["entry_tag"], capture["predecessor_config"] = entryProfile, "external-entry", entry.Config()
+			source.Nodes[position], err = mobilemultihop.NodeChainExternalFinalInput(chainNativeJSON(t, graph), chainNativeJSON(t, capture))
+		} else {
+			source.Nodes[position], err = mobilemultihop.NodeChainImportedMemberInput(chainNativeJSON(t, graph), chainNativeJSON(t, capture))
+		}
+		if err != nil {
+			t.Fatal("original external member", position, err)
+		}
+	}
+	chain, err := mobilemultihop.NewNodeChain(chainNativeJSON(t, source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return chain
+}
+
+func TestRouterVPNDesktopExternalFinalPhysical(t *testing.T) {
+	for _, layout := range []struct {
+		name   string
+		count  int
+		dns    string
+		target string
+	}{
+		{"linux-home", 3, "home", "linux"},
+		{"windows-custom", 4, "custom", "windows"},
+		{"darwin-home", 9, "home", "darwin"},
+	} {
+		t.Run(layout.name, func(t *testing.T) {
+			original := desktopChainPhysicalExternalFinalSource(t, layout.count, layout.dns)
+			policy, err := mobilemultihop.NewDesktopNodeChainPolicy(original, desktopTorBoxSession, layout.target, 0)
+			if err != nil || !routerVPNDesktopNodeChainPhysicalTarget(policy, layout.target) {
+				t.Fatal("original external-final physical policy refused", err)
+			}
+			copy := *policy
+			if routerVPNDesktopNodeChainPhysicalTarget(&copy, layout.target) || routerVPNDesktopNodeChainPhysicalTarget(policy, "ios") {
+				t.Fatal("external-final policy lent its original physical owner")
+			}
+			_, meta, physical, err := policy.ReadValidated()
+			last := layout.count - 1
+			proofs := original.ProofInventory()
+			wantDNS := proofs[last].Tag
+			if layout.dns == "home" {
+				wantDNS = proofs[0].Tag
+			}
+			if err != nil || len(meta.Roots) != 1 || meta.ExternalFinal == nil || meta.ExternalFinal.ProfileID != proofs[last].ProfileID ||
+				meta.NodeID != "" || meta.ProfileID != meta.ExternalFinal.ProfileID || meta.ExternalFinal.SourceSHA256 != proofs[last].SourceSHA256 ||
+				meta.ExternalFinal.ExpectedPublicIP != fmt.Sprintf("198.51.100.%d", 90+last) || meta.Prefixes[0].NodeID == "" || meta.Prefixes[0].ProfileID == meta.ProfileID ||
+				physical.SelectedDNS.Physical || physical.SelectedDNS.Detour != wantDNS || physical.SelectedDNS.Mode != layout.dns {
+				t.Fatal("physical policy lost selected public exit, private entry or DNS route", err)
+			}
+			captures, _, err := policy.NodeChain().PublicMeasurementCaptures()
+			if err != nil || len(captures) != last {
+				t.Fatal("external-final public measurement inventory", err)
+			}
+			for i, row := range captures {
+				if row.Position != i+1 || row.Tag != proofs[i+1].Tag || row.SourceSHA256 != proofs[i+1].SourceSHA256 || meta.Prefixes[i+1].NodeID != "" {
+					t.Fatal("physical measurement lost original public path", i+1)
+				}
+			}
+		})
+	}
+
+	for _, fault := range []string{"original", "final-key", "final-detour", "home-resolver", "physical-source"} {
+		t.Run(fault, func(t *testing.T) {
+			original := desktopChainPhysicalExternalFinalSource(t, 4, "home")
+			policy, err := mobilemultihop.NewDesktopNodeChainPolicy(original, desktopTorBoxSession, runtime.GOOS, 0)
+			if err != nil || !routerVPNDesktopNodeChainPhysicalTarget(policy, runtime.GOOS) {
+				t.Fatal("original policy refused", err)
+			}
+			mutations := 0
+			instance, tun := desktopChainPhysicalBox(t, policy, func(graph map[string]any) {
+				switch fault {
+				case "final-key", "final-detour":
+					for _, raw := range graph["outbounds"].([]any) {
+						out := raw.(map[string]any)
+						if out["tag"] == original.FinalTag() {
+							if fault == "final-key" {
+								out["password"] = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{42}, 32))
+							} else {
+								out["detour"] = original.ProofInventory()[0].Tag
+							}
+							mutations++
+						}
+					}
+				case "home-resolver":
+					for _, raw := range graph["dns"].(map[string]any)["servers"].([]any) {
+						resolver := raw.(map[string]any)
+						if resolver["tag"] == original.DNSCapture().ResolverTag {
+							resolver["detour"] = original.FinalTag()
+							mutations++
+						}
+					}
+				case "physical-source":
+					graph["services"].([]any)[0].(map[string]any)["source_sha256"] = strings.Repeat("f", 64)
+					mutations++
+				}
+			})
+			_, network, err := instance.routerVPNDesktopNodePhysical(policy)
+			if fault == "original" {
+				if err != nil || network == nil || network.Current() || network.SocketCurrent() {
+					t.Fatal("original Box construction fabricated physical readiness", err)
+				}
+			} else if mutations != 1 || err == nil {
+				t.Fatal("substituted Box borrowed original external-final physical capture", fault, mutations)
+			}
+			if owner, err := instance.routerVPNDesktopNodeActivatePhysical(policy); err == nil || owner != nil || tun.ready || tun.claimed {
+				t.Fatal("unprepared external final acquired a native interface")
+			}
+		})
+	}
 }
 
 func TestRouterVPNDesktopNodeChainPhysicalMultipleImports(t *testing.T) {

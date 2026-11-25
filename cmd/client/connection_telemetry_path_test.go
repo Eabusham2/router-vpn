@@ -397,9 +397,16 @@ func TestWholePathRTTSelectedController(t *testing.T) {
 }
 
 func TestWholePathRTTLocalConnect(t *testing.T) {
-	for _, layout := range []desktopIndependentImportedLayout{{"mixed", 3, []int{0, 1}}, desktopIndependentSelectedLayouts()[3], desktopIndependentSelectedLayouts()[4]} {
+	for _, layout := range []desktopIndependentImportedLayout{{"mixed", 3, []int{0, 1}}, desktopIndependentSelectedLayouts()[3], desktopIndependentSelectedLayouts()[4], {"external-final", 3, nil}, {"external-final-long", 9, nil}} {
 		t.Run(layout.name, func(t *testing.T) {
-			a, selection := desktopOrderedIndependentSelection(t, layout)
+			var a *app
+			var selection multihopSelection
+			if strings.HasPrefix(layout.name, "external-final") {
+				original, nodes := desktopExternalFinalFixture(t, layout.count, "home")
+				a, selection = original, desktopExternalFinalSelection(t, original, nodes)
+			} else {
+				a, selection = desktopOrderedIndependentSelection(t, layout)
+			}
 			f := newDesktopNodeChainOwnedFixtureWith(t, a, selection)
 			f.stagePublish(t)
 			if err := startDesktopOwnedNodeChainLaunch(f.operation, f.operation, a, f.launch); err != nil {
@@ -425,7 +432,7 @@ func TestWholePathRTTLocalConnect(t *testing.T) {
 			}
 			status := hopmeasure.Status{Request: request.Request, Stage: "complete", Complete: true, Drained: true}
 			for _, i := range []int{0, layout.count - 1} {
-				if selection.Nodes[i].Profile.NodeKind == "external" {
+				if i == 0 && selection.Nodes[i].Profile.NodeKind == "external" {
 					continue
 				}
 				role := "entry"
@@ -433,7 +440,11 @@ func TestWholePathRTTLocalConnect(t *testing.T) {
 					role = "exit"
 				}
 				n := float64(i + 1)
-				status.Results = append(status.Results, hopmeasure.Result{ID: selection.Nodes[i].Profile.ID, Role: role, Kind: "private-node", Label: fmt.Sprintf("Cumulative path through node %d of %d", i+1, layout.count), Ready: true, Response: &hopmeasure.PathResponse{Schema: 1, Measurement: "routed-private-response-including-connection", Attempts: 3, Distribution: &hopmeasure.Latency{Samples: 3, Min: n, Median: n, Average: n, P90: n, Max: n}}})
+				kind, label, metric, endpoint := "private-node", fmt.Sprintf("Cumulative path through node %d of %d", i+1, layout.count), "routed-private-response-including-connection", ""
+				if selection.Nodes[i].Profile.NodeKind == "external" {
+					role, kind, label, metric, endpoint = desktopOrderedExternalFinalLatencyMeaning(i, layout.count, "public-path")
+				}
+				status.Results = append(status.Results, hopmeasure.Result{ID: selection.Nodes[i].Profile.ID, Role: role, Kind: kind, Label: label, Ready: true, Response: &hopmeasure.PathResponse{Schema: 1, Measurement: metric, Endpoint: endpoint, Attempts: 3, Distribution: &hopmeasure.Latency{Samples: 3, Min: n, Median: n, Average: n, P90: n, Max: n}}})
 			}
 			raw, err := json.Marshal(desktopNodeChainMeasurementResult{desktopNodeChainMeasurementRequest: request, CompletedAt: time.Now().UnixMilli(), Status: status})
 			if err != nil {
@@ -449,6 +460,9 @@ func TestWholePathRTTLocalConnect(t *testing.T) {
 			var reply connectionLatencyResult
 			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &reply) != nil || reply.RouterID != selection.Exit.ID || reply.Samples != 3 || reply.MedianMs != float64(layout.count) || mtuSuspended(a) {
 				t.Fatal("Connect lost the original local fresh final response", w.Code, w.Body.String())
+			}
+			if desktopNodeChainHasExternalFinal(selection.Nodes) && (!strings.Contains(reply.Proof, "HTTPS response after TLS") || strings.Contains(reply.Proof, "authenticated private HTTP")) {
+				t.Fatal("public exit was mislabeled as a paired API")
 			}
 		})
 	}

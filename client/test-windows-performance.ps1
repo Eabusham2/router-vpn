@@ -163,10 +163,12 @@ $Body=$Requests[1].Body|ConvertFrom-Json
 Check ($Body.ordered_capture-ceq$Capture-and$Body.bytes-eq8388608-and$Body.entry_id-ceq'active-entry'-and$Body.exit_id-ceq'active-exit') 'Ordered hop preflight lost exact capture or payload'
 Finish-Performance '{"hops":[{"role":"entry","router_id":"a"},{"role":"intermediate","router_id":"middle-kept","speed_label":"Cumulative path through node 2 of 3"},{"role":"exit","router_id":"c"}]}'
 Check ($State.Result.Text.Contains('middle-kept')-and$State.Result.Text.Contains('Cumulative path through node 2 of 3')) 'Ordered Performance dropped intermediate result or cumulative label'
-foreach($case in @('9','16','server','duplicate','foreign','reordered','short','borrowed','paired-9','paired-16','paired-absent','paired-changed','paired-mixed','paired-foreign','paired-type','selected-local','selected-server','selected-private-local','selected-private-server','selected-private-lost','selected-private-swap','selected-private-label','selected-private-first','selected-private-second','selected-generation','selected-winner','selected-mixed','mixed-9','mixed-16','mixed-96','mixed-type','mixed-range','mixed-both','mixed-removed','mixed-shift','mixed-label','roles-9','roles-16','roles-96','roles-removed','roles-swapped','roles-reported','roles-label','roles-packets','roles-paired','roles-selected','roles-space','roles-public-interiors')){
- $n=if($case -cin @('mixed-96','roles-96')){96}elseif($case-cin@('16','paired-16','selected-server','mixed-16','roles-16')){16}else{9};$ids=@('active-entry')+@(1..($n-2)|ForEach-Object{"public-$_"})+@('active-exit')
+foreach($case in @('external-3','external-9','external-foreign','external-lost','external-label','9','16','server','duplicate','foreign','reordered','short','borrowed','paired-9','paired-16','paired-absent','paired-changed','paired-mixed','paired-foreign','paired-type','selected-local','selected-server','selected-private-local','selected-private-server','selected-private-lost','selected-private-swap','selected-private-label','selected-private-first','selected-private-second','selected-generation','selected-winner','selected-mixed','mixed-9','mixed-16','mixed-96','mixed-type','mixed-range','mixed-both','mixed-removed','mixed-shift','mixed-label','roles-9','roles-16','roles-96','roles-removed','roles-swapped','roles-reported','roles-label','roles-packets','roles-paired','roles-selected','roles-space','roles-public-interiors')){
+ $n=if($case -ceq 'external-3'){3}elseif($case -cin @('mixed-96','roles-96')){96}elseif($case-cin@('16','paired-16','selected-server','mixed-16','roles-16')){16}else{9};$ids=@('active-entry')+@(1..($n-2)|ForEach-Object{"public-$_"})+@('active-exit')
  $source=@{source_sha256=('b'*64);config_sha256=('c'*64);node_ids=$ids}
  $graph=@{connected=$true;entry_id=$ids[0];exit_id=$ids[-1];ordered_capture=$Capture;ordered_nodes=$n;execution='local';ordered_local_source=$source}
+ $external=$case.StartsWith('external-')
+ if($external){$source.external_final_node_id=if($case -ceq 'external-foreign'){$ids[0]}else{$ids[-1]}}
  $selected=$case.StartsWith('selected-');$winner=if($case -cin @('selected-local','selected-private-local')){'local'}else{'server'}
  $mixed=$case.StartsWith('mixed-');if($mixed){$source.paired_prefix_nodes=2}
  $roleSource=$case.StartsWith('roles-')
@@ -193,12 +195,14 @@ foreach($case in @('9','16','server','duplicate','foreign','reordered','short','
  if($case-ceq'server'){$graph.execution='server'};if($case-ceq'duplicate'){$ids[2]=$ids[1]}
  $view=$graph.Clone();if($case-ceq'borrowed'){$view.ordered_nodes=3;$view.Remove('ordered_local_source')}
  Reset-Performance;$State=New-Panel;& $Hop;Finish-Performance ($view|ConvertTo-Json -Depth 8 -Compress);& $Tick
- if($case-cin@('server','duplicate','selected-mixed','paired-type','mixed-type','mixed-range','mixed-both','roles-packets','roles-paired','roles-space','roles-selected','roles-public-interiors','selected-private-first')){Check ($Requests.Count-eq1) 'Unqualified depth consumed throughput';continue}
+ if($case-cin@('external-foreign','server','duplicate','selected-mixed','paired-type','mixed-type','mixed-range','mixed-both','roles-packets','roles-paired','roles-space','roles-selected','roles-public-interiors','selected-private-first')){Check ($Requests.Count-eq1) 'Unqualified depth consumed throughput';continue}
  $body=$Requests[1].Body|ConvertFrom-Json
  Check ($Requests.Count-eq2-and$body.bytes-eq8388608-and$body.ordered_capture-ceq$Capture) 'Extended original throughput POST omitted'
  $rows=@(for($i=0;$i-lt$n;$i++){
   $role=if($i-eq0){'entry'}elseif($i-eq($n-1)){'exit'}else{'intermediate'}
-  $prefix=if($selected){"Cumulative $winner path"}else{"Cumulative path"};$label="$prefix through node $($i+1) of $n";if($roleSource -or $selectedPrivate){
+  $prefix=if($selected){"Cumulative $winner path"}else{"Cumulative path"};$label="$prefix through node $($i+1) of $n";if($external){
+   if($i -gt 0 -and ($case -cne 'external-label' -or $i -lt ($n-1))){$label+=' to the public benchmark'}
+  }elseif($roleSource -or $selectedPrivate){
    $public=$roles[$i] -ceq 'public-path';if($case -cin @('roles-label','selected-private-label') -and $i -eq $n-2){$public=$true}
    if($public){$label+=' to the public benchmark'}
   }elseif($role-ceq'intermediate' -and (-not $mixed -or $i -ge 2 -or $case -ceq 'mixed-label') -and (-not $paired -or ($case -ceq 'paired-mixed' -and $i -eq ($n-2)))){$label+=' to the public benchmark'}
@@ -218,9 +222,13 @@ foreach($case in @('9','16','server','duplicate','foreign','reordered','short','
  if($case-ceq'foreign'){$source.config_sha256='d'*64};if($case-ceq'reordered'){$rows[2],$rows[3]=$rows[3],$rows[2]};if($case-ceq'short'){$rows=$rows[0..($n-2)]}
  if($case-ceq'selected-generation'){$source.generation_sha256='e'*64}
  if($case-ceq'selected-winner'){$source.selected_execution='local'}
- if(-not$selected){$graph.Remove('execution')};$graph.mode='multihop';$graph.bytes=8388608;$graph.hops=$rows
+ if($case -ceq 'external-lost'){$source.Remove('external_final_node_id')}
+ if(-not$selected -and -not$external){$graph.Remove('execution')};$graph.mode='multihop';$graph.bytes=8388608;$graph.hops=$rows
  Finish-Performance ($graph|ConvertTo-Json -Depth 8 -Compress)
- if($case-cin@('9','16','selected-local','selected-server','mixed-9','mixed-16','mixed-96')){Check ($State.Result.Text.Contains($ids[-2])-and$State.Result.Text.Contains('to the public benchmark transfer')) 'Extended Local original late hop not displayed'}
+ if($case -cin @('external-3','external-9')){
+  $published=$State.Result.Text|ConvertFrom-Json
+  Check ($published.ordered_local_source.external_final_node_id -ceq $ids[-1] -and $published.hops[-1].speed_label -ceq "Cumulative path through node $n of $n to the public benchmark transfer") 'External exit throughput lost its actual measured endpoint'
+ }elseif($case-cin@('9','16','selected-local','selected-server','mixed-9','mixed-16','mixed-96')){Check ($State.Result.Text.Contains($ids[-2])-and$State.Result.Text.Contains('to the public benchmark transfer')) 'Extended Local original late hop not displayed'}
  elseif($case -cin @('selected-private-local','selected-private-server','selected-private-second')){
   $published=$State.Result.Text|ConvertFrom-Json
   Check ($published.ordered_original_source.selected_roles_json -ceq $source.selected_roles_json -and $published.hops[-2].speed_label -ceq "Cumulative $winner path through node $($n-1) of $n transfer") 'Selected private member lost its original transfer label'
