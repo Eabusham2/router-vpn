@@ -25,7 +25,7 @@ struct IOSNodeChainEditorView: View {
     var body: some View {
         Form {
             Section("Nodes in connection order") {
-                Text("A packet prefix measures 50 TCP connections to each saved candidate. A supported Local Shadowsocks 2022 prefix measures 50 authenticated responses from a paired candidate’s private agent.")
+                Text("A packet prefix measures 50 TCP connections to each saved candidate. A supported Local Shadowsocks 2022 prefix measures 50 authenticated responses from a paired candidate’s private agent. Compare can measure a replacement final through one literal Shadowsocks 2022 import after WireGuard when Local wins and all three Start Layers are Off.")
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(Array(draft.nodes.enumerated()), id: \.offset) { position, node in
                     VStack(alignment: .leading, spacing: 8) {

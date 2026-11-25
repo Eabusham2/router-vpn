@@ -544,6 +544,18 @@ function ShowExternalComparison{
  $S.Timer.Interval=[TimeSpan]::FromMilliseconds(200);$S.Timer.Add_Tick({TickExternalComparison $S}.GetNewClosure());$S.Timer.Start();StartExternalComparisonRequest $S 'offer' '/api/speed-lab/external-comparison';$D.Show()
 }
 
+function TestOrderedCandidateLocalResponse($S,$View){
+ if($S.Position -ne 1 -or [string](ExternalComparisonValue $View 'required_selected_execution') -cne 'local' -or
+    [string](ExternalComparisonValue $View 'requested_execution') -cne 'auto'){return $false}
+ $winner=[string](ExternalComparisonValue $View 'selected_execution')
+ $epoch=ExternalComparisonValue $View 'selection_epoch'
+ $draft=ExternalComparisonValue $S 'Draft'
+ if($null -eq $draft){return $winner -ceq 'local' -and $null -ne $epoch -and (OrderedCandidateNumber $View 'selection_epoch') -gt 0}
+ $nodes=@($draft.nodes)
+ return $draft.execution -ceq 'auto' -and $nodes.Count -eq 3 -and $nodes[0].mode -ceq 'wg' -and
+    $nodes[1].mode -ceq 'shadowsocks' -and $nodes[2].mode -ceq 'shadowsocks' -and
+    (($null -eq $epoch -and -not $winner) -or ($winner -ceq 'local' -and (OrderedCandidateNumber $View 'selection_epoch') -gt 0))
+}
 function OrderedCandidateViewMetric($S,$View){
  $metric=ExternalComparisonValue $View 'measurement'
  if($metric -cnotin @('routed-tcp-connect','routed-candidate-response')){return ''}
@@ -553,12 +565,12 @@ function OrderedCandidateViewMetric($S,$View){
  if($metric -ceq 'routed-tcp-connect'){
   if($prefix[0].mode -cin @('wg','awg2-fast','awg2-strong') -and ($null -eq $offer -or $offer -ceq $metric)){return $metric}
  }elseif($S.Position -gt 0 -and $prefix[0].mode -ceq 'shadowsocks' -and $offer -ceq $metric -and
-          (OrderedCandidateScope $S) -cne 'draft-complete-selected' -and
+          (((OrderedCandidateScope $S) -cne 'draft-complete-selected' -and
           [string](ExternalComparisonValue $View 'requested_execution') -cin @('','local') -and
-          [string](ExternalComparisonValue $View 'selected_execution') -cin @('','local')){
+          [string](ExternalComparisonValue $View 'selected_execution') -cin @('','local')) -or (TestOrderedCandidateLocalResponse $S $View))){
   $draft=ExternalComparisonValue $S 'Draft'
   if($null -ne $draft){
-   if($draft.execution -cne 'local' -or $S.Position -ge $draft.nodes.Count-1){return ''}
+   if(($draft.execution -cne 'local' -and -not (TestOrderedCandidateLocalResponse $S $View)) -or $S.Position -ge $draft.nodes.Count-1){return ''}
    $node=$draft.nodes[$S.Position]
    if($node.id -cne $prefix[0].id -or $node.mode -cne $prefix[0].mode){return ''}
   }
@@ -582,7 +594,7 @@ function OrderedCandidateFinalProfileChoice($S,$Choice){
   }
   return $true
  }
- if($null -eq $draft -or $draft.execution -cne 'local' -or (OrderedCandidateViewMetric $S $S.View) -cne 'routed-candidate-response' -or
+ if($null -eq $draft -or ($draft.execution -cne 'local' -and -not (TestOrderedCandidateLocalResponse $S $S.View)) -or (OrderedCandidateViewMetric $S $S.View) -cne 'routed-candidate-response' -or
     (ExternalComparisonValue $Choice 'proposal_action') -cne 'save-final-profile' -or (ExternalComparisonValue $Choice 'kind') -cne 'router-vpn'){return $false}
  $original=@($draft.nodes);$proposal=@(ExternalComparisonValue $Choice 'proposed_path')
  if($original.Count -lt 3 -or $original.Count -ne $proposal.Count -or $S.Position -ne $original.Count-2 -or
@@ -627,11 +639,11 @@ function TestOrderedCandidateDraftExecution($S,$Value,[bool]$Catalog){
  if($Catalog){
   if($null-ne$Winner-or$null-ne$Epoch){return $false}
   $Node=@($S.Draft.nodes)[$S.Position];$Found=@($Value.prefixes|Where-Object{(OrderedCandidateNumber $_ 'position')-eq$S.Position})
-  return $Found.Count-eq1-and[string]$Found[0].id-ceq[string]$Node.id-and[string]$Found[0].mode-ceq[string]$Node.mode-and[string]$Node.mode-cin@('wg','awg2-fast','awg2-strong')
+  return $Found.Count-eq1-and[string]$Found[0].id-ceq[string]$Node.id-and[string]$Found[0].mode-ceq[string]$Node.mode-and([string]$Node.mode-cin@('wg','awg2-fast','awg2-strong')-or((TestOrderedCandidateLocalResponse $S $Value)-and(OrderedCandidateViewMetric $S $Value)-ceq'routed-candidate-response'))
  }
  $Bound=[string](ExternalComparisonValue $S 'SelectedWinner')
  if($null-eq$Winner-and$null-eq$Epoch){return -not$Bound-and-not[bool](ExternalComparisonValue $Value 'accepted')-and-not[bool](ExternalComparisonValue $Value 'reviewing')-and-not[bool](ExternalComparisonValue $Value 'chosen')-and@((ExternalComparisonValue $Value 'results')|Where-Object{$null-ne$_}).Count-eq0}
- if([bool](ExternalComparisonValue $Value 'admission_cancelled')){return $false}
+ if([bool](ExternalComparisonValue $Value 'admission_cancelled') -or ([string](ExternalComparisonValue $Value 'measurement') -ceq 'routed-candidate-response' -and -not (TestOrderedCandidateLocalResponse $S $Value))){return $false}
  if($Winner-isnot[string]-or$Winner-cnotin@('local','server')-or($Requested-ceq'server'-and$Winner-cne'server')-or($Epoch-isnot[int]-and$Epoch-isnot[long])-or$Epoch-le0){return $false}
  return -not$Bound-or($Winner-ceq$Bound-and$Epoch-eq$S.SelectedEpoch)
 }

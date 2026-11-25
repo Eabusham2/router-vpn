@@ -28,7 +28,14 @@ final class AndroidNodeCandidateDialog {
         for(int i=0;i<session.source.modes.size();i++){
             if(session.execution!=null&&!session.capture.ownsSelectedCandidatePrefix(session.source,i))continue;
             String mode=session.source.modes.get(i);
-            if("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)||session.execution==null&&AndroidNodeChainCapture.responsePrefix(session.source.members,session.source.modes,i,session.source.execution)){positions.add(i);names.add("Through node "+(i+1)+" • "+mode);}
+            boolean response=false;
+            if ("shadowsocks".equals(mode) && (session.execution==null || "auto".equals(session.source.execution))) {
+                try {
+                    response=(session.execution==null || "local".equals(session.candidateExecutionOwner().execution()))
+                            && AndroidNodeChainCapture.responsePrefix(session.source.members,session.source.modes,i,session.source.execution);
+                } catch (Exception retired) { return; }
+            }
+            if("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)||response){positions.add(i);names.add("Through node "+(i+1)+" • "+mode);}
         }
         if(positions.isEmpty()){message("This path has no retained prefix with a supported candidate measurement. No score is available.");return;}
         dialog=new AlertDialog.Builder(activity).setTitle("Candidate response times")

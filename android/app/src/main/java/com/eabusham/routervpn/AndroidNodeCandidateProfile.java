@@ -59,6 +59,12 @@ final class AndroidNodeCandidateProfile {
             if(candidate.imported||!"shadowsocks".equals(candidateMode)
                     ||!AndroidNodeChainCapture.responsePrefix(original.members,original.modes,catalog.prefix,execution))
                 throw new IllegalStateException("The authenticated response lost its original stream or paired candidate.");
+            if (!"local".equals(execution)) {
+                AndroidNodeStore.ChainSource originalFinal=original.members.get(original.members.size()-1);
+                if (insert || !"auto".equals(execution) || candidate.profileId.equals(originalFinal.profileId)
+                        || candidate.proofId.equals(originalFinal.proofId))
+                    throw new IllegalStateException("Choose a different paired final for the original Compare route.");
+            }
             if(insert&&original.members.size()>=AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH)
                 throw unavailable("The original path has reached its physical traversal limit.");
         }else if(!"routed-tcp-connect".equals(catalog.measurement)

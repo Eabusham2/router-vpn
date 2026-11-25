@@ -13,10 +13,10 @@ import Libbox
     let chainConfig: String
 
     static func make(request: String, prefixPosition: Int, proofs: [IOSNodeCandidatePrefix],
-                     chainSource: String, chainConfig: String) throws -> Self {
+                     chainSource: String, chainConfig: String, selectedResponse: Bool = false) throws -> Self {
         let snapshot = try IOSNodeBundleStore.shared.candidateSnapshot()
         let compiled = try compile(records: snapshot.records, stamp: snapshot.stamp,
-                                   prefixPosition: prefixPosition, proofs: proofs)
+                                   prefixPosition: prefixPosition, proofs: proofs, selectedResponse: selectedResponse)
         guard IOSCandidateCatalogPublication.isDigest(chainSource), IOSCandidateCatalogPublication.isDigest(chainConfig) else { throw issue() }
         let published = try IOSCandidateCatalogPublication.shared.capture(request: request, inventory: compiled.inventory, expected: snapshot.stamp)
         let result = Self(source: published, records: snapshot.records, rows: compiled.rows,
@@ -30,12 +30,15 @@ import Libbox
               IOSCandidateCatalogPublication.shared.current(source) else { throw Self.issue() }
     }
     static func compile(records: [String: Data], stamp: IOSCandidateCatalogPublication.Stamp,
-                        prefixPosition: Int, proofs: [IOSNodeCandidatePrefix]) throws -> (inventory: Data, rows: [Row]) {
+                        prefixPosition: Int, proofs: [IOSNodeCandidatePrefix], selectedResponse: Bool = false) throws -> (inventory: Data, rows: [Row]) {
         guard stamp.ready, stamp.sources_sha256 == (try IOSCandidateCatalogPublication.sourcesDigest(records)),
               proofs.indices.contains(prefixPosition), proofs[prefixPosition].supported(in: proofs),
               proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }), (2...8).contains(proofs.count) || IOSMultihopNodeSelection.extendedOriginalModes(proofs.map(\.mode), execution: "local") else { throw issue() }
-        let excluded = Set(proofs.prefix(prefixPosition + 1).map(\.profile_id))
-        let paired = Set(proofs.prefix(prefixPosition + 1).map(\.node_id).filter { !$0.isEmpty })
+        guard !selectedResponse || prefixPosition == 1 && proofs.map(\.mode) == ["wg", "shadowsocks", "shadowsocks"] &&
+                proofs[prefixPosition].metric == "routed-candidate-response" else { throw issue() }
+        let excludedMembers = proofs.prefix(selectedResponse ? proofs.count : prefixPosition + 1)
+        let excluded = Set(excludedMembers.map(\.profile_id))
+        let paired = Set(excludedMembers.map(\.node_id).filter { !$0.isEmpty })
         var rows: [Row] = [], seen = Set<String>(), inputs: [String] = []
         for key in records.keys.sorted() {
             guard let data = records[key], data.count <= 32 * 1024 * 1024,

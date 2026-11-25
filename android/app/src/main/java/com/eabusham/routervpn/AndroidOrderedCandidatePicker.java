@@ -40,6 +40,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
     private final AndroidUnifiedConnectionController.Callback permissionOwner;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final Map<String,AndroidNodeCandidateResult> scores=new HashMap<>();
+    private final Map<String,String> unconnectable=new HashMap<>();
     private final List<AndroidNodeStore.Node> choices=new ArrayList<>(),paired=new ArrayList<>();
     private final Map<String,String> profileIds=new HashMap<>();
     private final AndroidOrderedPathSelection draft;
@@ -112,6 +113,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
         for(AndroidOrderedPathSelection.Member member:path){sources.add(member.source);modes.add(member.mode);}
         response=AndroidNodeChainCapture.responsePrefix(sources,modes,prefix,draft.execution());
         eligible=prefix>=0&&List.of("local","server","auto").contains(draft.execution())
+                && (!response || local || finalNode)
                 &&(response||List.of("wg","awg2-fast","awg2-strong").contains(path.get(prefix).mode));
         saved=eligible&&local?draft.matchingSavedPath():null;first=null;
         if(saved==null&&eligible&&local&&prefix==0&&"wg".equals(path.get(0).mode)&&!paired.isEmpty()
@@ -203,9 +205,10 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
             if(error!=null)throw new IllegalStateException(error.getMessage());
             AndroidNodeCandidatePreparation captured=AndroidNodeCandidatePreparation.retained();
             if(captured==null||!captured.observes(this))throw new IllegalStateException("The original candidate batch is unavailable.");
-            requireDraft();scores.clear();owner=captured;
+            requireDraft();scores.clear();unconnectable.clear();owner=captured;
             for(AndroidNodeCandidatePreparation.Choice choice:measured){
                 owner.requireSavedResultCurrent(choice.result);scores.put(choice.result.id,choice.result);
+                if (choice.profile==null) unconnectable.put(choice.result.id,choice.saveReason);
             }
             complete();
         } catch(Exception stale){failure(stale.getMessage());}
@@ -247,6 +250,10 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
             requireDraft();AndroidNodeStore.Node choice=choices.get(index);
             if(singleScores!=null)singleScores.requireCurrent();
             AndroidNodeCandidateResult measured=scores.get(profileIds.get(choice.id));
+            if (response && finalNode && "auto".equals(draft.execution())) {
+                if (measured==null) throw new IllegalStateException("Choose a different paired final with a current authenticated response from the Local winner.");
+                if (unconnectable.containsKey(measured.id)) throw new IllegalStateException(unconnectable.get(measured.id));
+            }
             if(measured!=null)owner.requireSavedResultCurrent(measured);
             close();select.accept(draft,choice.id);
         } catch(Exception stale){android.widget.Toast.makeText(activity,stale.getMessage(),android.widget.Toast.LENGTH_LONG).show();}

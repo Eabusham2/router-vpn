@@ -4,7 +4,7 @@ $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 # witness, then extract this new dialog's shipping functions and callbacks.
 . (Join-Path $Root 'client/test-windows-performance.ps1') -Root $Root
 $Ast=[ScriptBlock]::Create($ProductSource).Ast
-foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','OrderedCandidateViewMetric','OrderedCandidateFinalProfileChoice','OrderedCandidateBase','OrderedCandidateScope','OrderedCandidateCatalogPath','UseExistingOrderedCandidateDialog','OrderedCandidateScopedBody','OrderedCandidateNumber','TestOrderedCandidateDraftExecution','OrderedCandidateSavedEnvelope','OrderedCandidateBeforeStart','OrderedCandidateCancelBody','OrderedCandidateReady','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
+foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','TestOrderedCandidateLocalResponse','OrderedCandidateViewMetric','OrderedCandidateFinalProfileChoice','OrderedCandidateBase','OrderedCandidateScope','OrderedCandidateCatalogPath','UseExistingOrderedCandidateDialog','OrderedCandidateScopedBody','OrderedCandidateNumber','TestOrderedCandidateDraftExecution','OrderedCandidateSavedEnvelope','OrderedCandidateBeforeStart','OrderedCandidateCancelBody','OrderedCandidateReady','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
  $F=@($Ast.FindAll({param($n)$n-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-ceq$Name},$true));if($F.Count-ne1){throw "Missing shipping candidate function $Name"};. ([ScriptBlock]::Create($F[0].Extent.Text))
 }
 $Count=0
@@ -221,6 +221,16 @@ foreach($Combo in @(@('server','server'),@('auto','local'),@('auto','server'))){
 $metric='routed-candidate-response'
 $privatePrefix=@{id='imported';name='Imported B';mode='shadowsocks';position=1;measurement=$metric}
 $paired=@{id='candidate-C';name='Paired C';kind='router-vpn';proposal_action='save-final-profile';proposed_path=@($Path[0],$privatePrefix,@{id='candidate-C';mode='shadowsocks'})}
+$selectedDraft=@{execution='auto';nodes=@($Path[0],$privatePrefix,$Path[-1])}
+$selectedOffer=@{measurement=$metric;requested_execution='auto';required_selected_execution='local';scope='draft-complete-selected';prefixes=@($privatePrefix);candidates=@($paired)}
+$selectedState=@{Position=1;Draft=$selectedDraft;View=$selectedOffer}
+Assert-Candidate ((OrderedCandidateViewMetric $selectedState $selectedOffer) -ceq $metric -and (OrderedCandidateFinalProfileChoice $selectedState $paired) -and (TestOrderedCandidateDraftExecution $selectedState $selectedOffer $true)) 'Compare Local source must offer separately named exact final replacement'
+$selectedReview=@{}+$selectedOffer;$selectedReview.selected_execution='local';$selectedReview.selection_epoch=19L
+Assert-Candidate (TestOrderedCandidateDraftExecution $selectedState $selectedReview $false) 'Compare Local private receipt lost original winner'
+foreach($fault in @(@{key='selected_execution';value='server'},@{key='required_selected_execution';value='server'},@{key='selection_epoch';value=0})){
+ $bad=@{}+$selectedReview;$bad[$fault.key]=$fault.value
+ Assert-Candidate (-not (TestOrderedCandidateDraftExecution $selectedState $bad $false)) ('foreign selected private winner accepted '+$fault.key)
+}
 foreach($purpose in @('connected','saved-complete-local','saved-prefix-local','editor-draft')){
  $S.SavedPath=$purpose -cne 'connected';$S.SavedPrefix=$purpose -cin @('saved-prefix-local','editor-draft')
  $S.Draft=if($purpose -ceq 'editor-draft'){@{execution='local';nodes=@($Path[0],$privatePrefix,$Path[-1])}}else{$null}

@@ -123,6 +123,21 @@ final class IOSNodeChainExecutionCapture {
         }
     }
 
+    // Only the retained Local winner can expose the imported stop. The draft
+    // uses "local" to preview this exact eligible family before starting Compare.
+    func responsePosition(for winner: String) -> Int? {
+        guard requested == "auto", winner == "local", case .ordinary(let capture) = local,
+              capture.sourceSchema == 2, members.map(\.mode) == ["wg", "shadowsocks", "shadowsocks"],
+              let middle = try? JSONDecoder().decode(RouterProfile.self, from: Data(members[1].profileJSON.utf8)),
+              IOSImportedShadowsocksSource.eligibleLiteral(middle),
+              members.allSatisfy({ (try? IOSMultihopStartLayer.selected($0.profile)) == "off" }) else { return nil }
+        return 1
+    }
+
+    func candidatePositions(for winner: String) -> [Int] {
+        candidatePositions + (responsePosition(for: winner).map { [$0] } ?? [])
+    }
+
     var isCONNECT: Bool { local.isCONNECT }
     var isSOCKS: Bool { local.isSOCKS }
 

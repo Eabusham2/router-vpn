@@ -103,7 +103,8 @@ final class AndroidNodeCandidateMeasurement {
         if(catalog.executionOwner!=null){
             var owner=catalog.executionOwner;
             Object epoch=metadata.get("selection_epoch");
-            if(metadata.length()!=12||metadata.getInt("schema")!=1
+            int expectedFields = "routed-candidate-response".equals(catalog.measurement) ? 13 : 12;
+            if(metadata.length()!=expectedFields||metadata.getInt("schema")!=1
                     ||!catalog.selectedPrefixID().equals(metadata.getString("prefix_id"))
                     ||!owner.sourceSHA256().equals(metadata.getString("preparation_source_sha256"))
                     ||!owner.configSHA256().equals(metadata.getString("preparation_config_sha256"))

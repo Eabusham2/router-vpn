@@ -95,7 +95,7 @@ func TestOriginalExtendedSelectedExecution(t *testing.T) {
 		{"16-auto-local", 16, "wg", "auto", "local", "", 0, 0},
 		{"16-auto-server", 16, "wg", "auto", "server", "", 0, 0},
 	}
-	for _, fault := range []string{"original", "wrong-candidate-key", "forged-response", "late-catalog", "late-cancel", "server-winner"} {
+	for _, fault := range []string{"original", "wrong-candidate-key", "forged-response", "wrong-private-id", "late-catalog", "late-cancel", "server-winner"} {
 		winner := "local"
 		if fault == "server-winner" {
 			winner = "server"

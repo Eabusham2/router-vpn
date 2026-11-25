@@ -19,17 +19,19 @@ import Foundation
         defer { try? route.close() }
         guard case .execution(let execution) = route,
               IOSCandidateCatalogPublication.validRequest(request),
-              execution.candidatePositions.contains(position),
+              execution.candidatePositions(for: "local").contains(position),
               execution.launchInput == execution.ordinaryLaunchInput else { throw CancellationError() }
         _ = try IOSRuntimeSelector.selectNodeChain(route)
         launchInput = execution.launchInput; sourceSHA256 = execution.sourceSHA256; configSHA256 = execution.configSHA256
-        prefixes = execution.members.enumerated().map {
-            IOSNodeCandidatePrefix(position: $0.offset, profile_id: $0.element.id,
-                node_id: $0.element.profile["node_proof_id"] as? String ?? "", mode: $0.element.mode)
+        let response = execution.responsePosition(for: "local")
+        prefixes = execution.members.enumerated().map { position, member in
+            IOSNodeCandidatePrefix(position: position, profile_id: member.id,
+                node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode,
+                measurement: position == response ? "routed-candidate-response" : nil)
         }
         draftBundle = try IOSNodeUsage.canonical(bundle)
         self.position = position; self.request = request
-        requested = execution.requested; positions = execution.candidatePositions
+        requested = execution.requested; positions = execution.candidatePositions(for: "local")
         deviceMTU = try .current(); originalLast = try IOSNodeChainExecutionLastStore.snapshot()
     }
 
@@ -55,7 +57,7 @@ import Foundation
         defer { try? route.close() }
         guard case .execution(let execution) = route, execution.launchInput == launchInput,
               execution.requested == requested, execution.sourceSHA256 == sourceSHA256,
-              execution.configSHA256 == configSHA256, execution.candidatePositions == positions else { throw CancellationError() }
+              execution.configSHA256 == configSHA256, execution.candidatePositions(for: "local") == positions else { throw CancellationError() }
         try await model.connectCandidatePreparation(route, bundle: bundle, draft: self, current: current)
         try requireLive(model)
     }
@@ -67,6 +69,7 @@ import Foundation
               let observed = model.orderedExecutionObservation, observed.identity == identity,
               observed.requested == requested, ["local", "server"].contains(observed.selected),
               requested == "auto" || requested == observed.selected,
+              prefixes[position].metric != "routed-candidate-response" || observed.selected == "local",
               session == nil || session == identity, winner == nil || winner == observed.selected else {
             liveInvalidated = true
             throw CancellationError()
@@ -76,7 +79,11 @@ import Foundation
 
     func requireInformation(_ info: IOSNodeCandidates.Info, owner: String, position: Int) throws {
         guard !liveInvalidated, session != nil, let winner, owner == request, position == self.position,
-              info.proofs == prefixes, info.candidate_positions == positions,
+              info.proofs == prefixes.map({ prefix in
+                  var observed = prefix
+                  if winner != "local" { observed.measurement = nil }
+                  return observed
+              }), info.candidate_positions == positions.filter({ winner == "local" || prefixes[$0].metric != "routed-candidate-response" }),
               info.requested_execution == requested, info.execution == winner,
               info.source_sha256 == sourceSHA256, info.proposal_source_sha256 == sourceSHA256,
               info.proposal_config_sha256 == configSHA256,

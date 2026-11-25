@@ -136,7 +136,7 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 		}
 		proposalProfiles := index.members(selection.Nodes, profile.ID)
 		if candidateViewMetric(view.prefixes, position) == hopmeasure.CandidatePrivateResponseMeasurement {
-			_, choice.Proposal, choice.ProposalAction, err = orderedResponseProfile(ctx, selection.Native.root, "local", selection.Nodes, position, profile, proposalProfiles)
+			_, choice.Proposal, choice.ProposalAction, err = orderedResponseProfile(ctx, selection.Native.root, orderedCandidateDraftExecution(draft), selection.Nodes, position, profile, proposalProfiles)
 			if draft == nil {
 				choice.ProposalAction = ""
 			}

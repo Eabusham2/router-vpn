@@ -33,6 +33,14 @@ struct IOSNodeChainDraft {
         let linked = profiles()
         let hasIndependentHostname = IOSMultihopNodeSelection.hasIndependentHostname(nodes, profiles: linked)
         if ["server", "auto"].contains(execution) {
+            if execution == "auto", position == 1, nodes.map(\.mode) == ["wg", "shadowsocks", "shadowsocks"],
+               Set(nodes.map(\.id)).count == 3, nodes.allSatisfy({ !$0.id.isEmpty }),
+               nodes.enumerated().allSatisfy({ index, node in
+                   let matches = linked.filter { $0.id == node.id }
+                   guard matches.count == 1, let profile = matches.first, [nil, "", "off"].contains(profile.startLayer) else { return false }
+                   return index == 1 ? IOSImportedShadowsocksSource.eligibleLiteral(profile) :
+                        profile.normalizedNodeKind == "router-vpn" && profile.external == nil
+               }) { return nodes }
             guard !hasIndependentHostname, prefix.allSatisfy({ !$0.id.isEmpty }),
                   IOSMultihopNodeSelection.pairedStreamPositions(selected, execution: "local", profiles: linked).isEmpty,
                   IOSMultihopNodeSelection.supportsServerExecution(selected),

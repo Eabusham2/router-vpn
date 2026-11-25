@@ -5,6 +5,8 @@ package routervpnamnezia
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -151,7 +153,12 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 	if count == 3 && entryMode == "wg" && strings.HasPrefix(measure, "private-response/") {
 		layout = multipleImportedLayout{"selected-private-response", 3, []int{1}}
 		measured = &selectedResponseNativeCase{fault: strings.TrimPrefix(measure, "private-response/")}
-		input, route, provider := newRoutedPrivateResponsePeer(t, measured.fault, measured.accept)
+		var final *routedPrivateResponseFinal
+		if measured.fault == "original" {
+			measured.createReplacementPeer(t)
+			final = &measured.final
+		}
+		input, route, provider := newRoutedPrivateResponseFinal(t, measured.fault, measured.accept, final)
 		measured.input, measured.provider = input, provider
 		candidateRoute = []multipleImportedCandidateSetup{{1, route, false}}
 	} else if layout.count <= 8 {
@@ -192,10 +199,73 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 		}
 		originalPacketParameters = digest
 	}
+	pem := filepath.Join(t.TempDir(), "original-ca.pem")
+	trust := f.ca
+	if measured != nil && measured.replacement != nil {
+		trust += "\n" + measured.replacement.ca
+	}
+	if err := os.WriteFile(pem, []byte(trust), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", pem)
+	t.Setenv("SSL_CERT_DIR", filepath.Dir(pem))
+	runOriginalSelectedOwner(t, f, api, front, health, mode, winner, measure, first, last, measured, start)
+	if measured != nil && measured.replacement != nil {
+		next := measured.replacement
+		next.ctx = f.ctx
+		next.physical = f.physical
+		copy(next.members[:2], f.members[:2])
+		next.source = f.source
+		next.source.Nodes = append([]string(nil), f.source.Nodes...)
+		next.source.IdentitySources = append([]string(nil), f.source.IdentitySources...)
+		next.source.Nodes[2], next.source.IdentitySources[2] = measured.input, measured.final.identity
+		var err error
+		next.chain, err = mobilemultihop.NewNodeChain(desktopNodeChainJSON(t, next.source))
+		if err != nil {
+			t.Fatal("named replacement must compile the same measured final and original prefix", err)
+		}
+		t.Cleanup(func() {
+			ctx, stop := context.WithTimeout(context.Background(), 3*time.Second)
+			defer stop()
+			if err := next.chain.CloseContext(ctx); err != nil {
+				t.Error(err)
+			}
+		})
+		oldPrivate := f.members[2].private.Load()
+		beforeMiddle := f.members[1].provider.stats().Streams
+		runOriginalSelectedOwner(t, next, api, front, health, mode, winner, "reloaded-private-final", 0, 0, measured, start)
+		if f.members[2].private.Load() != oldPrivate || f.members[1].provider.stats().Streams <= beforeMiddle {
+			t.Fatal("replacement touched the former final or skipped the retained imported member")
+		}
+		t.Log("RELOADED_PRIVATE_FINAL requested=auto winner=local original_prefix=true private=true dns=true application=true joined=true")
+	}
+	samples, transferred, responseSamples := 0, 0, 0
+	if measure == "latency" {
+		samples = (last - first + 1) * 50
+	} else if measure == "throughput" {
+		transferred = count * (16 << 20)
+	} else if measure == "response" {
+		responseSamples = 6
+	}
+	if entryMode == "awg2-fast" {
+		current, err := f.members[0].prefix.readback()
+		if err != nil || current != originalPacketParameters {
+			t.Fatal("selected execution replaced original AWG parameters", err)
+		}
+		t.Logf("QUALIFIED_SELECTED_NATIVE nodes=%d execution=%s winner=%s samples=%d bytes=%d first=%d last=%d response_samples=%d entry_mode=awg2-fast parameters_current=true", count, mode, winner, samples, transferred, first, last, responseSamples)
+	} else {
+		t.Logf("QUALIFIED_SELECTED_NATIVE nodes=%d execution=%s winner=%s samples=%d bytes=%d first=%d last=%d response_samples=%d", count, mode, winner, samples, transferred, first, last, responseSamples)
+	}
+}
+
+// A second named profile receives its own private manager, listener generation,
+// selected Box and lease. All of the preceding owners must join before it starts.
+func runOriginalSelectedOwner(t *testing.T, f *multipleImportedFixture, api, front *extendedWGFront, health, mode, winner, measure string, first, last int, measured *selectedResponseNativeCase, start ExtendedWorkerFactory) {
+	t.Helper()
 	policy := originalServerPolicy(t, f)
 	var prep *mobilemultihop.NodeChainExecutionPreparation
 	var err error
-	if measured != nil {
+	if f.source.Schema == 2 {
 		prep, err = mobilemultihop.NewNodeChainExecutionPreparation(desktopNodeChainJSON(t, f.source), mode)
 	} else {
 		prep, err = mobilemultihop.NewNodeChainMultipleImportedExecutionPreparation(f.chain, mode)
@@ -207,12 +277,6 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 	if err != nil {
 		t.Fatal(err)
 	}
-	pem := filepath.Join(t.TempDir(), "original-ca.pem")
-	if err = os.WriteFile(pem, []byte(f.ca), 0600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("SSL_CERT_FILE", pem)
-	t.Setenv("SSL_CERT_DIR", filepath.Dir(pem))
 	mgr, err := multihoprelay.New(multihoprelay.Config{ListenIP: front.address.Addr().String(), FirstPort: 32000, LastPort: 32007, TTLSeconds: 90, NodeChains: []multihoprelay.NodeChainDescriptor{policy.Descriptor()}}, disc.Entry.NodeID, &extendedRuntimeWorker{start: start, base: originalServerBase(f, policy), source: policy.Source(), listener: front})
 	if err != nil {
 		t.Fatal(err)
@@ -248,7 +312,11 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 	handler.Handle("/", httputil.NewSingleHostReverseProxy(healthTarget))
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 2 * time.Second}
 	joined := make(chan error, 1)
-	go func() { joined <- server.Serve(api) }()
+	var listener net.Listener = api
+	if measured != nil {
+		listener = api.listen()
+	}
+	go func() { joined <- server.Serve(listener) }()
 	defer func() {
 		_ = server.Close()
 		if err := <-joined; !errors.Is(err, http.ErrServerClosed) {
@@ -268,23 +336,32 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 			t.Fatal("native worker stopped without joining its original private listener")
 		}
 	}
-	samples, transferred, responseSamples := 0, 0, 0
-	if measure == "latency" {
-		samples = (last - first + 1) * 50
-	} else if measure == "throughput" {
-		transferred = count * (16 << 20)
-	} else if measure == "response" {
-		responseSamples = 6
+}
+
+// The candidate provider freezes its own listener, independent DNS responder,
+// private identity, public TLS target and application endpoint before either client starts.
+func (c *selectedResponseNativeCase) createReplacementPeer(t *testing.T) {
+	t.Helper()
+	final := &multipleImportedMember{position: 2, publicIP: "203.0.113.198", entered: make(chan struct{}, 1)}
+	next := &multipleImportedFixture{members: []*multipleImportedMember{nil, nil, final}}
+	cert, trust := desktopNodeChainImportedCertificate(t, net.ParseIP("1.0.0.1"))
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(trust)) {
+		t.Fatal("missing replacement TLS trust")
 	}
-	if entryMode == "awg2-fast" {
-		current, err := f.members[0].prefix.readback()
-		if err != nil || current != originalPacketParameters {
-			t.Fatal("selected execution replaced original AWG parameters", err)
+	next.ca, next.tls = trust, &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+	public := next.publicServer(t, final, &cert)
+	app := desktopImportedWGSSHTTP(t, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.Host != selectedPrivateApplication || r.URL.RequestURI() != "/adopted" || r.Header.Get("Authorization") != "" {
+			http.Error(w, "foreign request", 403)
+			return
 		}
-		t.Logf("QUALIFIED_SELECTED_NATIVE nodes=%d execution=%s winner=%s samples=%d bytes=%d first=%d last=%d response_samples=%d entry_mode=awg2-fast parameters_current=true", count, mode, winner, samples, transferred, first, last, responseSamples)
-	} else {
-		t.Logf("QUALIFIED_SELECTED_NATIVE nodes=%d execution=%s winner=%s samples=%d bytes=%d first=%d last=%d response_samples=%d", count, mode, winner, samples, transferred, first, last, responseSamples)
-	}
+		c.app.Add(1)
+		_, _ = w.Write([]byte("independent measured final"))
+	}))
+	c.final.health = func() { final.private.Add(1) }
+	c.final.routes = []desktopNodeLayerRoute{{"tcp", "1.1.1.1:443", public}, {"tcp", "1.0.0.1:443", public}, {"udp", "192.168.50.133:53", next.dnsServer(t)}, {"tcp", selectedPrivateApplication, app}}
+	c.replacement = next
 }
 
 func originalServerPolicy(t *testing.T, f *multipleImportedFixture) *mobilemultihop.NodeChainServerPolicy {

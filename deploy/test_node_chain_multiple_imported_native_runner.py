@@ -29,6 +29,8 @@ def transcript(root, leaf=None, failed=False, witness=''):
             rows.append(row('output',name,Output=RUN.selected_marker(leaf)))
             if leaf in RUN.PRIVATE_RESPONSE_CASES:
                 fault = leaf.removeprefix('3-local-private-')
+                if fault == 'original':
+                    rows.append(row('output',name,Output=RUN.RELOADED_PRIVATE_FINAL))
                 rows.append(row('output',name,Output=f"SELECTED_PRIVATE_RESPONSE fault={fault} samples={50 if fault=='original' else 0} joined=true"))
             if leaf in RUN.FAST_SELECTED_CASES and leaf.endswith('-mtu'):
                 count = leaf.split('-')[0]
@@ -140,7 +142,7 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                             RUN.verdict(output(transcript(RUN.MIXED_ROOT, leaf, witness=altered)), RUN.MIXED_ROOT, leaf)
 
     def test_selected_evidence_requires_every_original_count_winner_and_transfer(self):
-        self.assertEqual(len(RUN.SELECTED_CASES), 39)
+        self.assertEqual(len(RUN.SELECTED_CASES), 40)
         self.assertEqual(len(set(RUN.FAST_SELECTED_CASES)), 15)
         positions = [i for part in RUN.PARTS for first,last in [map(int,part.split('-')[-2:])] for i in range(first,last+1)]
         self.assertEqual(positions, list(range(1,17)))
@@ -164,6 +166,20 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                 bad[rows.index(witness)]['Output'] = changed
                 with self.assertRaises(ValueError):
                     RUN.verdict(output(bad), RUN.SELECTED_ROOT, leaf)
+
+    def test_private_response_reopen_requires_exact_dns_ingress_and_retirement(self):
+        root,leaf=RUN.SELECTED_ROOT,'3-local-private-original'
+        rows=transcript(root,leaf)
+        original=next(r for r in rows if r.get('Output')==RUN.RELOADED_PRIVATE_FINAL)
+        for part in ('requested=auto','winner=local','original_prefix=true','private=true','dns=true','application=true','joined=true'):
+            bad=[dict(r,Output=r['Output'].replace(part,'foreign')) if r is original else r for r in rows]
+            with self.assertRaisesRegex(ValueError,'Missing loaded Compare'):
+                RUN.verdict(output(bad),root,leaf)
+        for leaf in RUN.PRIVATE_RESPONSE_CASES[1:]:
+            bad=transcript(root,leaf)
+            bad.append(dict(original,Test=root+'/'+leaf))
+            with self.assertRaises(ValueError):
+                RUN.verdict(output(bad),root,leaf)
 
     def test_exact_box_inventory(self):
         self.assertEqual(sum(len(cases)+1 for cases in RUN.BOX_CASES.values()), 17)

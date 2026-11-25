@@ -64,7 +64,13 @@ func desktopCandidatePrefixMetric(launch *desktopNodeLaunch, position int) strin
 	if mobilemultihop.NodeChainPrefixMode(launch.chain.selection.Nodes[position].Mode) {
 		return hopmeasure.CandidateTCPMeasurement
 	}
-	if launch.chain.execution != nil || launch.chain.policy == nil {
+	if launch.chain.execution != nil {
+		if launch.chain.execution.preparation.SupportsCompareLocalResponseCandidate(position) {
+			return hopmeasure.CandidatePrivateResponseMeasurement
+		}
+		return ""
+	}
+	if launch.chain.policy == nil {
 		return ""
 	}
 	return launch.chain.policy.OriginalChain().CandidatePrefixMeasurement(position)
@@ -218,7 +224,21 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 	if metric == hopmeasure.CandidatePrivateResponseMeasurement {
 		note = "50 authenticated private agent responses through the selected prefix and paired candidate. Saving creates a profile for the next connection."
 	}
-	viaEntryJSON(w, map[string]any{"schema": 1, "view_token": view.token, "expires_at": view.expires.UnixMilli(), "prefix_position": position, "prefixes": view.prefixes, "candidates": view.candidates, "samples": 50, "measurement": metric, "note": note})
+	reply := map[string]any{"schema": 1, "view_token": view.token, "expires_at": view.expires.UnixMilli(), "prefix_position": position, "prefixes": view.prefixes, "candidates": view.candidates, "samples": 50, "measurement": metric, "note": note}
+	if requested == "auto" && metric == hopmeasure.CandidatePrivateResponseMeasurement {
+		reply["required_selected_execution"] = "local"
+		reply["requested_execution"] = requested
+		launch := identity.Ordered.launch.chain.execution
+		launch.mu.Lock()
+		ready := launch.ready
+		launch.mu.Unlock()
+		if ready == nil || ready.Progress.Execution != "local" || ready.SelectionEpoch == 0 {
+			http.Error(w, "private responses require the original live Compare Local winner", 409)
+			return
+		}
+		reply["selected_execution"], reply["selection_epoch"] = ready.Progress.Execution, ready.SelectionEpoch
+	}
+	viaEntryJSON(w, reply)
 }
 
 // The result belongs to the next hop after the measured prefix. Preserve every
@@ -281,7 +301,7 @@ func orderedCandidateRequestedExecution(launch *desktopNodeLaunch) (string, erro
 
 func orderedCandidateProposalForExecution(members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile, requested string) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var control common.RouterProfile
-	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !common.ExtendedFastSelectedMultihopSelection(nodeChainSelectedReferences(members)) && !(requested == "local" && (common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)) || common.ExtendedMixedLocalPacketCount(nodeChainSelectedReferences(members)) > 0))) || position < 0 || position >= len(members)-1 || !(mobilemultihop.NodeChainPrefixMode(members[position].Mode) || requested == "local" && members[position].Mode == "shadowsocks" && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
+	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !common.ExtendedFastSelectedMultihopSelection(nodeChainSelectedReferences(members)) && !(requested == "local" && (common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)) || common.ExtendedMixedLocalPacketCount(nodeChainSelectedReferences(members)) > 0))) || position < 0 || position >= len(members)-1 || !(mobilemultihop.NodeChainPrefixMode(members[position].Mode) || (requested == "local" || desktopCompareLocalResponseFinal(members, requested, position, candidate)) && members[position].Mode == "shadowsocks" && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
 		return control, nil, errors.New("candidate requires an original packet prefix")
 	}
 	nodes := nodeChainSelectedReferences(members)

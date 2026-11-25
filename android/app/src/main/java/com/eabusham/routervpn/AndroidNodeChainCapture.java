@@ -28,7 +28,20 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     // Source-only chooser preview. Only the original native compiler can
     // authorize this response metric or open a closed prefix preparation.
     static boolean responsePrefix(List<AndroidNodeStore.ChainSource> sources,List<String> modes,int prefix,String execution) {
-        if (!"local".equals(execution)||sources.size()!=modes.size()||prefix<1||prefix>=sources.size()-1) return false;
+        if (sources.size()!=modes.size()||prefix<1||prefix>=sources.size()-1) return false;
+        if ("auto".equals(execution)) {
+            if (prefix != 1 || !modes.equals(java.util.Arrays.asList("wg","shadowsocks","shadowsocks"))
+                    || sources.get(0).imported || !sources.get(1).imported || sources.get(2).imported) return false;
+            try {
+                requireLiteralImportedSS(sources.get(1));
+                for (AndroidNodeStore.ChainSource member : sources) {
+                    if (!java.util.Arrays.asList("", "off").contains(member.profile().optString("start_layer", "off"))) return false;
+                    if (!member.imported && !member.proofId.matches("[0-9a-f]{64}")) return false;
+                }
+                return true;
+            } catch (Exception unavailable) { return false; }
+        }
+        if (!"local".equals(execution)) return false;
         try {
             int last=sources.size()-1;
             if ("shadowsocks".equals(modes.get(prefix))) {
@@ -72,6 +85,12 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         if (!ownsSource(source) || position < 0 || position >= source.members.size() - 1
                 || position != 0 && plan == null) return false;
         AndroidNodeStore.ChainSource member = source.members.get(position);
+        if (member.imported) {
+            return "auto".equals(source.execution) && position == 1
+                    && source.modes.equals(java.util.Arrays.asList("wg","shadowsocks","shadowsocks"))
+                    && identityInputs.get(position).isEmpty()
+                    && responsePrefix(source.members,source.modes,position,source.execution);
+        }
         return !member.imported && member.proofId.matches("[0-9a-f]{64}")
                 && !identityInputs.get(position).isEmpty()
                 && java.util.Arrays.asList("wg", "awg2-fast", "awg2-strong").contains(source.modes.get(position));

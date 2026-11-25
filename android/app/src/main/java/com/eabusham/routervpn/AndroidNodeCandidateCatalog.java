@@ -64,7 +64,8 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         nodes=new AndroidNodeStore(context);external=new AndroidStandardExitStore(context);
         signature=currentSignature();
         Set<String> excluded=new HashSet<>(),proofs=new HashSet<>();
-        for(int i=0;i<=prefix;i++){AndroidNodeStore.ChainSource member=source.members.get(i);excluded.add(member.id);if(!member.proofId.isEmpty())proofs.add(member.proofId);}
+        int lastExcluded = "auto".equals(source.execution) && "routed-candidate-response".equals(measurement) ? source.members.size()-1 : prefix;
+        for(int i=0;i<=lastExcluded;i++){AndroidNodeStore.ChainSource member=source.members.get(i);excluded.add(member.id);excluded.add(member.profileId);if(!member.proofId.isEmpty())proofs.add(member.proofId);}
         List<Row> captured=new ArrayList<>();List<AndroidNodeStore.Node> available=new ArrayList<>(nodes.list());
         java.util.Map<String,AndroidStandardExitStore.Entry> imported=new java.util.HashMap<>();
         for(AndroidStandardExitStore.Entry entry:external.list()){
@@ -77,7 +78,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
             String id=node.id,input="",reason="Unsupported saved transport or Start Layer; no candidate score";
             try {
                 AndroidNodeStore.ChainSource candidate=nodes.candidateSource(node.id,node.file==null?imported.get(node.id):null);id=candidate.profileId;
-                if(!candidate.proofId.isEmpty()&&proofs.contains(candidate.proofId))continue;
+                if(excluded.contains(candidate.profileId)||!candidate.proofId.isEmpty()&&proofs.contains(candidate.proofId))continue;
                 JSONObject profile=candidate.profile();
                 Object rawLayer=profile.opt("start_layer");
                 if(rawLayer!=null&&!(rawLayer instanceof String))throw new IllegalStateException("Candidate Start Layer must be an exact string");
@@ -126,6 +127,9 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
                 || session.candidateExecutionOwner() != executionOwner || session.candidateServer() != server
                 || !session.capture.ownsSelectedCandidatePrefix(originalSource, prefix))
             throw new IllegalStateException("This selected route has no retained packet stop at the requested position.");
+        if ("routed-candidate-response".equals(measurement) && (!"auto".equals(originalSource.execution)
+                || !"auto".equals(executionOwner.requestedExecution()) || !"local".equals(executionOwner.execution())))
+            throw new IllegalStateException("A private response through this imported node requires Compare to select Local.");
         return originalSource.members.get(prefix).profileId;
     }
     void requireSourcesCurrent()throws Exception {

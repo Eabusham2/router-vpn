@@ -92,8 +92,9 @@ FAST_SELECTED_CASES += ('9-awg2-fast-server-latency',) + tuple(
     f'16-awg2-fast-server-latency-{first}-{first+3}' for first in range(1, 17, 4))
 SELECTED_CASES += FAST_SELECTED_CASES
 PRIVATE_RESPONSE_CASES = tuple('3-local-private-' + fault for fault in
-                               ('original', 'wrong-candidate-key', 'forged-response', 'late-catalog', 'late-cancel', 'server-winner'))
+                               ('original', 'wrong-candidate-key', 'forged-response', 'wrong-private-id', 'late-catalog', 'late-cancel', 'server-winner'))
 SELECTED_CASES += PRIVATE_RESPONSE_CASES
+RELOADED_PRIVATE_FINAL = 'RELOADED_PRIVATE_FINAL requested=auto winner=local original_prefix=true private=true dns=true application=true joined=true'
 
 SELECTED_TEMPLATES = (
     'mobile/chain_component/extended_execution_client_test.go.tmpl',
@@ -213,6 +214,9 @@ def verdict(output, root, leaf=None):
                        and 'SELECTED_PRIVATE_RESPONSE' in row.get('Output', '')]
             if len(matches) != 1 or not matches[0].endswith(witness):
                 raise ValueError('Missing original private candidate, exact challenge count, or joined refusal')
+            reloaded = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and 'RELOADED_PRIVATE_FINAL' in row.get('Output','')]
+            if (fault == 'original' and (len(reloaded) != 1 or not reloaded[0].endswith(RELOADED_PRIVATE_FINAL))) or (fault != 'original' and reloaded):
+                raise ValueError('Missing loaded Compare private final, original prefix, DNS, application traffic or joined close')
         if leaf in FAST_SELECTED_CASES and leaf.endswith('-mtu'):
             count = leaf.split('-')[0]
             expected_mtu = f'FAST_SELECTED_MTU nodes={count} configured=1280 ceiling=1500 lease_paused=true missing_reader_refused=true'

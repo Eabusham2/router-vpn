@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"slices"
 
 	"router-vpn/internal/common"
@@ -32,12 +33,37 @@ func (a *app) candidatePreparationNodesLocked(scope string, control common.Route
 	return append([]common.MultihopNodeSelection(nil), draft.Nodes...), nil
 }
 
+// This source-only preview cannot authorize a measurement. A fresh native
+// receipt from the original Compare Local winner is required for adoption.
+func desktopCompareLocalResponseFinal(members []desktopNodeChainMember, execution string, position int, candidate common.RouterProfile) bool {
+	if execution != "auto" || len(members) != 3 || position != 1 || candidate.External != nil ||
+		members[0].Mode != "wg" || members[0].Profile.External != nil ||
+		members[1].Mode != "shadowsocks" || members[1].Profile.External == nil ||
+		members[2].Mode != "shadowsocks" || members[2].Profile.External != nil {
+		return false
+	}
+	middle := members[1].Profile.External
+	if middle.Protocol != "shadowsocks" || middle.Shadowsocks == nil {
+		return false
+	}
+	address, err := netip.ParseAddr(middle.Shadowsocks.Server)
+	if err != nil || address.Zone() != "" || address.IsUnspecified() {
+		return false
+	}
+	for _, m := range members {
+		if m.Profile.ID == candidate.ID || candidate.NodeProofID != "" && m.Profile.NodeProofID == candidate.NodeProofID || m.Profile.StartLayer != "" && m.Profile.StartLayer != "off" {
+			return false
+		}
+	}
+	return candidate.StartLayer == "" || candidate.StartLayer == "off"
+}
+
 // The penultimate response retains the existing final-replacement action.
 // An earlier response can add a private SS relay to a separately named path
 // only when the complete original suffix and all of its sources still compile.
 func orderedResponseProfile(ctx context.Context, root, execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, string, error) {
 	var empty common.RouterProfile
-	if execution != "local" || position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" {
+	if execution != "local" && !desktopCompareLocalResponseFinal(members, execution, position, candidate) || position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" {
 		return empty, nil, "", errors.New("this measurement has no complete Local stream path")
 	}
 	p, rows, err := orderedCandidateProposalForExecution(members, position, candidate, profiles, execution)

@@ -48,6 +48,7 @@ type desktopSelectedCandidateTarget struct {
 }
 
 type desktopSelectedCandidateInventory struct {
+	Measurement string                           `json:"measurement,omitempty"`
 	Position    int                              `json:"prefix_position"`
 	Prefix      string                           `json:"prefix_id"`
 	Targets     []desktopSelectedCandidateTarget `json:"targets"`
@@ -83,6 +84,7 @@ func (d *desktopSelectedCandidateDescriptor) originalInventory() (*desktopSelect
 }
 
 type desktopSelectedCandidateMetadata struct {
+	Measurement       string                           `json:"measurement,omitempty"`
 	TargetTotal       int                              `json:"target_total,omitempty"`
 	TargetOffset      int                              `json:"target_offset,omitempty"`
 	TargetsSHA256     string                           `json:"targets_sha256,omitempty"`
@@ -127,10 +129,15 @@ func desktopSelectedCandidatePosition(launch *desktopNodeLaunch, position int) b
 	if e == nil {
 		return true
 	}
-	if launch == nil || launch.chain == nil || position < 0 || position >= len(launch.chain.selection.Nodes) || !mobilemultihop.NodeChainPrefixMode(launch.chain.selection.Nodes[position].Mode) {
+	if launch == nil || launch.chain == nil || position < 0 || position >= len(launch.chain.selection.Nodes) {
 		return false
 	}
-	return e.socksPhysical == nil && e.connectPhysical == nil || position == 0
+	if e.preparation != nil && e.preparation.SupportsCompareLocalResponseCandidate(position) {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		return e.ready == nil || e.ready.Progress.Execution == "local"
+	}
+	return mobilemultihop.NodeChainPrefixMode(launch.chain.selection.Nodes[position].Mode) && (e.socksPhysical == nil && e.connectPhysical == nil || position == 0)
 }
 
 func captureDesktopSelectedCandidateDescriptor(launch *desktopNodeLaunch, position int, inventory string) (*desktopSelectedCandidateDescriptor, error) {
@@ -220,6 +227,16 @@ func (d *desktopSelectedCandidateDescriptor) validateMetadata(request desktopSel
 	names := []string{"schema", "capture_sha256", "prefix_position", "prefix_id", "source_sha256", "config_sha256", "targets", "preparation_source_sha256", "preparation_config_sha256", "requested_execution", "execution", "selection_epoch"}
 	expected, err := d.originalInventory()
 	if err != nil {
+		return envelope, "", bad
+	}
+	if expected.Measurement != "" {
+		if expected.Measurement != hopmeasure.CandidatePrivateResponseMeasurement || metadata.Measurement != expected.Measurement ||
+			request.Operation != "selected-local-private-response-50" || metadata.Requested != "auto" || metadata.Execution != "local" ||
+			!d.preparation.SupportsCompareLocalResponseCandidate(request.Position) {
+			return envelope, "", bad
+		}
+		names = append(names, "measurement")
+	} else if request.Operation != "selected-packet-candidate-50" {
 		return envelope, "", bad
 	}
 	switch metadata.Schema {
