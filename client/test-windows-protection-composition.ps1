@@ -12,7 +12,8 @@ foreach($Name in @('Test-RouterVPNMutationBusyFromStatus','Test-RouterVPNMutatio
     'SetUnifiedStopRetryPresentation','UnifiedAsyncBusy',
     'RefreshUnifiedOrderedSelection','RefreshUnifiedOrderedControls',
     'ApplyUnifiedRefreshSnapshot','UnifiedRefreshBusy','CompleteUnifiedRefreshAsync','SetUnifiedAsyncUI',
-    'ExternalComparisonValue','UnifiedLiveNumber','UnifiedTelemetryBusy','CompleteUnifiedTelemetryRefresh','ClearUnifiedLiveHTTPS')){
+    'ExternalComparisonValue','ExternalComparisonToken','TestUnifiedForwardingState','SetUnifiedForwardingDisplay',
+    'UnifiedLiveNumber','UnifiedTelemetryBusy','CompleteUnifiedTelemetryRefresh','ClearUnifiedLiveHTTPS')){
     $Functions=@($Ast.FindAll({param($N)$N-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$N.Name-ceq$Name},$true))
     Assert-ProtectionComposition ($Functions.Count-eq1) ('Missing or duplicated composed protection function: '+$Name)
     . ([ScriptBlock]::Create($Functions[0].Extent.Text))
@@ -114,8 +115,8 @@ function Complete-ProtectionSnapshot($Protection,[bool]$Discard=$false){
     Assert-ProtectionComposition ($script:UnifiedRefreshTasks.Count-eq0-and$null-eq$script:UnifiedRefreshCts) 'Composed protection refresh failed to retire its completions'
     Assert-ProtectionComposition ($StateText.Text-cne'Controller unavailable') ('Composed protection refresh failed: '+$LastErrorText.Text)
 }
-function Complete-ProtectionTelemetry{
-    $script:UnifiedTelemetryTasks=@{status=(New-ProtectionCompletion $script:ProtectionStatus);profiles=(New-ProtectionCompletion $null);live=(New-ProtectionCompletion $null);multihop=(New-ProtectionCompletion $null);forward=(New-ProtectionCompletion $null)}
+function Complete-ProtectionTelemetry($Forward=$null){
+    $script:UnifiedTelemetryTasks=@{status=(New-ProtectionCompletion $script:ProtectionStatus);profiles=(New-ProtectionCompletion $null);live=(New-ProtectionCompletion $null);multihop=(New-ProtectionCompletion $null);forward=(New-ProtectionCompletion $Forward)}
     $script:UnifiedTelemetryCts=[Threading.CancellationTokenSource]::new()
     CompleteUnifiedTelemetryRefresh
     Assert-ProtectionComposition ($script:UnifiedTelemetryTasks.Count-eq0-and$null-eq$script:UnifiedTelemetryCts) 'Telemetry did not retire its captured completions'
@@ -159,6 +160,14 @@ foreach($Enabled in @($true,$false)){
 }
 $script:ProtectionStatus.connected=$true;$script:ProtectionStatus.phase='connected'
 Complete-ProtectionSnapshot $Done
+$Forward=@{ok=$true;enabled=$false;router_id='node';path_token=('a'*64);name='Captured node'}
+Complete-ProtectionTelemetry $Forward
+$ForwardButton=Control 'UnifiedForwardButton'
+Assert-ProtectionComposition ($ForwardButton.IsEnabled-and$ForwardButton.Content-ceq'Forward OFF'-and(ExternalComparisonValue $ForwardButton.Tag 'router_id')-ceq'node'-and(ExternalComparisonValue $ForwardButton.Tag 'path_token')-ceq$Forward.path_token) 'Composed telemetry lost the displayed forwarding owner or explicit Off state'
+$Forward.path_token='invalid'
+Complete-ProtectionTelemetry $Forward
+Assert-ProtectionComposition (-not$ForwardButton.IsEnabled-and$null-eq$ForwardButton.Tag-and$ForwardButton.Content-ceq'Forward ?') 'Composed telemetry retained forwarding ownership after an invalid readback'
+Write-Host 'PASS composed forwarding refresh retains the displayed owner and clears an invalid readback'
 Complete-ProtectionTelemetry
 Assert-ProtectionComposition (-not(Control 'UnifiedKillSwitch').IsEnabled-and-not(Control 'UnifiedFastestNode').IsEnabled) 'Connected snapshot lost mutation guards'
 Write-Host 'PASS composed completed Off and connected mutation guards'

@@ -224,3 +224,31 @@ and separately mutates only the Local branch to reach the later refusal.
 The original shipping Swift/loopback scenario and all five negative mutations
 passed. Production label validation is unchanged; genuine hosted Darwin
 execution remains required.
+
+## Hosted fixture integration follow-up
+
+The first hosted checks of `bc1793a22612c18437f526821b1357ab3d65051a`
+exposed two additional fixture integration errors. The
+[Setup Center admin step](https://github.com/Eabusham2/router-vpn/actions/runs/45599937814/job/139155874474)
+built its original dummy source archive while inheriting the real CI source
+revision. The unmodified packager correctly rejected that mismatch. The
+fixture now supplies its own explicit `ROUTER_VPN_SOURCE_SHA`, while retaining
+the genuine hosted `GITHUB_SHA` in the environment. All ten original commands
+from that CI step, including the 19 lifecycle tests, passed with the observed
+GitHub SHA, repository and CI flags. The production provenance check remains
+unchanged.
+
+The Windows controller's
+[first launch](https://github.com/Eabusham2/router-vpn/actions/runs/45599937855/job/139155875438)
+and [installed/Portable session](https://github.com/Eabusham2/router-vpn/actions/runs/45599937855/job/139155875110)
+fixtures both omitted the shipping forwarding-display helper from their
+composed function inventory. The harness now loads that original helper and
+its original state/token validators from the final composed PowerShell AST.
+It also requires a valid Off readback to retain the displayed router ID and
+path token, and an invalid readback to clear ownership and disable the control.
+The full composed launcher passed locally under PowerShell 7, including 19
+Help checks, 197 candidate checks and the existing stale-selection mutation.
+The separate 71 forwarding checks passed, and a corrupted surfaced path token
+failed the new composed assertion. These fixture repairs make no production
+code changes. The next hosted revision must still pass its genuine Windows
+PowerShell 5.1 and native-session jobs.

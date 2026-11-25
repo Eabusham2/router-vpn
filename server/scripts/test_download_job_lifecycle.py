@@ -558,7 +558,8 @@ p._fetch_job_source(*sys.argv[2:])
             return product._cancellable_run_builder(base, name, work, source, progress), "fixture-exact-source"
         manager = self.manager(build)
         manager.require_verified_output = True
-        with patch.dict(os.environ, {"ROUTER_VPN_GITHUB_SHA": sha}):
+        # The child packages this fixture archive, whose provenance belongs to its own source revision.
+        with patch.dict(os.environ, {"ROUTER_VPN_SOURCE_SHA": sha, "ROUTER_VPN_GITHUB_SHA": sha}):
             job = self.ready(manager)
         trees = list(self.work.glob("package-build-*/github/RouterVPN"))
         self.assertEqual(len(trees), 1)

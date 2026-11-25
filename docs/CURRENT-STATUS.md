@@ -20,6 +20,10 @@ depths and all 88 remaining runtime roots passed the full Go package with race
 detection, including all 144 original Apple source fixtures. Both
 recovered native UI source gates passed. The records distinguish these results
 from mandatory final-commit native builds, publication and installed acceptance.
+The first hosted run also identified two fixture integration errors: the Setup
+Center archive's source revision and the Windows composed forwarding helper
+inventory. Their original failing paths now pass locally with the retained
+provenance and displayed-owner checks; the new hosted revision remains required.
 Earlier selected-response gaps described in older entries below are historical
 and are superseded by the qualified route family in the new insertion record.
 
