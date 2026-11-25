@@ -85,8 +85,8 @@ def main() -> int:
             package = ready_work / "router-vpn-test.zip"
             package.write_bytes(b"race")
             seed(manager, "ready-race", status="building", phase="packaging",
-                 cancel_requested=True, work_dir=str(ready_work))
-            assert manager._adopt_ready("ready-race", package, "test", package.stat().st_size) is False
+                 cancel_requested=True, work_dir=str(ready_work), work_identity=m.owned_temp_identity(ready_work))
+            assert manager._adopt_ready("ready-race", package, "test") is False
             with manager.lock:
                 race = dict(manager.jobs["ready-race"])
             assert race["status"] == "building" and race.get("path", "") == ""
@@ -102,7 +102,7 @@ def main() -> int:
             seed(manager, "cleanup-fail", status="building", phase="building",
                  work_dir="/owned/work", path="/owned/work/package.zip")
             original_cleanup = manager._cleanup_dir
-            manager._cleanup_dir = lambda _value: False
+            manager._cleanup_dir = lambda _value, _identity, _fd: False
             try:
                 manager._finish_cleanup("cleanup-fail", "/owned/work", "failed", "failed", "build_failed", "builder failed")
             finally:
@@ -114,7 +114,7 @@ def main() -> int:
             assert pending["cleanup_target_status"] == "failed"
             assert pending["work_dir"] == "/owned/work" and pending["path"] == "/owned/work/package.zip"
 
-            manager._cleanup_dir = lambda _value: True
+            manager._cleanup_dir = lambda _value, _identity, _fd: True
             try:
                 assert manager.reap_expired() >= 1
             finally:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -65,12 +66,14 @@ def main() -> int:
                              "building", "packaging", "ready"):
                 assert expected in ready["phase_history"], (expected, ready["phase_history"])
 
-            path, meta = manager.begin_delivery(job_id)
-            assert path.read_bytes() == b"router-vpn-test-package"
+            stream, meta = manager.begin_delivery(job_id)
+            with stream:
+                assert stream.read() == b"router-vpn-test-package"
+                original = os.fstat(stream.fileno())
             assert meta["content_type"] == "application/zip"
-            work_parent = path.parent
+            work_parent = Path(manager.jobs[job_id]["work_dir"])
             original_deadline = ready["retained_until"]
-            manager.update_delivery(job_id, 8, path.stat().st_size)
+            manager.update_delivery(job_id, 8, original.st_size)
             manager.finish_delivery(job_id, True)
             delivered = manager.status(job_id)
             assert delivered["status"] == "delivered"
@@ -81,7 +84,8 @@ def main() -> int:
             # A completed browser download may be repeated without rebuilding and
             # without extending the original ready-time retention deadline.
             again, _ = manager.begin_delivery(job_id)
-            assert again == path
+            with again:
+                assert os.path.samestat(original, os.fstat(again.fileno()))
             manager.finish_delivery(job_id, False)
             interrupted = manager.status(job_id)
             assert interrupted["status"] == "delivery-interrupted"
@@ -102,10 +106,11 @@ def main() -> int:
             second = manager.create("router-vpn-test.zip")
             second_id = second["id"]
             wait_state(manager, second_id, {"ready"})
-            path2, _ = manager.begin_delivery(second_id)
-            parent2 = path2.parent
+            stream, _ = manager.begin_delivery(second_id)
+            stream.close()
+            parent2 = Path(manager.jobs[second_id]["work_dir"])
             cancel_reply = manager.cancel(second_id)
-            assert cancel_reply["status"] == "delivering", cancel_reply
+            assert cancel_reply["status"] == "cancelled" and not parent2.exists(), cancel_reply
             assert manager.cancel_requested(second_id) is True
             manager.finish_delivery(second_id, False)
             cancelled_stream = manager.status(second_id)

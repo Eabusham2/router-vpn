@@ -3,7 +3,7 @@ function Add-RouterVPNTelemetryWindowsShell {
     Set-StrictMode -Version Latest
 
     $killOld='<StackPanel Name="UnifiedQuickActions" Grid.Column="2" Orientation="Horizontal"/>'
-    $killNew='<StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0"><ComboBox Name="UnifiedFastestNode" Visibility="Collapsed" Width="150" DisplayMemberPath="display" SelectedValuePath="id" ToolTip="Select the fastest measured node or a specific Router VPN node"/><TextBlock Name="UnifiedLiveLatency" Text="-- ms" FontFamily="Consolas" FontWeight="SemiBold" Foreground="#A8B6D5" VerticalAlignment="Center" Margin="8,0"/><Button Name="UnifiedForwardButton" Content="Forward ?" Margin="6,0,0,0" Padding="8,4" ToolTip="Real active-home forwarding master"/></StackPanel>'
+    $killNew='<StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0"><ComboBox Name="UnifiedFastestNode" Visibility="Collapsed" Width="150" DisplayMemberPath="display" SelectedValuePath="id" ToolTip="Select the fastest measured node or a specific Router VPN node"/><TextBlock Name="UnifiedLiveLatency" Text="-- ms" FontFamily="Consolas" FontWeight="SemiBold" Foreground="#A8B6D5" VerticalAlignment="Center" Margin="8,0"/><Button Name="UnifiedForwardButton" IsEnabled="False" Content="Forward ?" Margin="6,0,0,0" Padding="8,4" ToolTip="Real active-home forwarding master"/></StackPanel>'
     if(-not $ProductSource.Contains($killOld)){throw 'Windows telemetry connect-row contract drifted.'}
     $ProductSource=$ProductSource.Replace($killOld,$killNew)
 
@@ -302,7 +302,6 @@ function ClearUnifiedLiveHTTPS{
 function ExpireUnifiedLiveHTTPS{if($null-ne$script:UnifiedLiveHTTPS-and[System.Diagnostics.Stopwatch]::GetTimestamp()-ge$script:UnifiedLiveHTTPS.Deadline){ClearUnifiedLiveHTTPS}}
 function UnifiedLiveHTTPSForID([string]$ID){$R=$script:UnifiedLiveHTTPS;if($null-ne$R-and$R.Binding.profile_id-ceq$ID-and[string]$RouterCombo.SelectedValue-ceq$ID-and[System.Diagnostics.Stopwatch]::GetTimestamp()-lt$R.Deadline-and-not(UnifiedAsyncBusy)){return $R.Median};return 0.0}
 $script:UnifiedTelemetrySync=$false
-$script:UnifiedForwardSync=$false
 function ApplyUnifiedFastestStore($Store){
  $Values=New-Object System.Collections.ArrayList
  $ExternalCount=@($Store.profiles|Where-Object{[string]$_.node_kind-ceq'external'-and(ExternalComparisonValue (ExternalComparisonValue $_ 'external') 'https_comparison_supported')-eq$true}).Count
@@ -436,8 +435,7 @@ function CompleteUnifiedTelemetryRefresh{
     }
     (Control 'UnifiedMultihopLatency').Text=($Bits-join' • ')
    }
-   $forwardEnabled=ExternalComparisonValue $Payload['forward'] 'enabled'
-   if($forwardEnabled -is [bool]){$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content=if($forwardEnabled){'Forward ON'}else{'Forward OFF'};(Control 'UnifiedForwardButton').Tag=$forwardEnabled;(Control 'UnifiedForwardButton').ToolTip='Real server forwarding master on '+[string](ExternalComparisonValue $Payload['forward'] 'name');$script:UnifiedForwardSync=$false}else{$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Content='Forward ?';(Control 'UnifiedForwardButton').Tag=$null;(Control 'UnifiedForwardButton').ToolTip='Connect a Router VPN home-node path to control the real server forwarding master';$script:UnifiedForwardSync=$false}
+   SetUnifiedForwardingDisplay $Payload['forward']
   }
  }finally{
   foreach($Resp in $Responses){try{$Resp.Dispose()}catch{}};foreach($Req in $script:UnifiedTelemetryRequests.Values){try{$Req.Dispose()}catch{}};try{$script:UnifiedTelemetryCts.Dispose()}catch{}
@@ -450,12 +448,46 @@ function CompleteUnifiedTelemetryRefresh{
 $script:UnifiedTelemetryPoller.Add_Tick({CompleteUnifiedTelemetryRefresh})
 function RefreshUnifiedFastestChoices{StartUnifiedTelemetryRefresh}
 function RefreshUnifiedForwardingMaster{StartUnifiedTelemetryRefresh}
+function TestUnifiedForwardingState($Value){
+ $Enabled=ExternalComparisonValue $Value 'enabled'
+ $OK=ExternalComparisonValue $Value 'ok'
+ $Router=ExternalComparisonValue $Value 'router_id'
+ $Path=ExternalComparisonValue $Value 'path_token'
+ return $OK -is [bool] -and $OK -and $Enabled -is [bool] -and $Router -is [string] -and $Router.Length -gt 0 -and (ExternalComparisonToken $Path 64)
+}
+function SetUnifiedForwardingDisplay($Value){
+ $Button=Control 'UnifiedForwardButton'
+ $Button.IsEnabled=(TestUnifiedForwardingState $Value)
+ if($Button.IsEnabled){
+  $Button.Tag=$Value
+  $Button.Content=if($Value.enabled){'Forward ON'}else{'Forward OFF'}
+  $Button.ToolTip='Server forwarding master on '+[string](ExternalComparisonValue $Value 'name')
+ }else{
+  $Button.Tag=$null
+  $Button.Content='Forward ?'
+  $Button.ToolTip='Connect a Router VPN home-node path to verify the forwarding master.'
+ }
+}
 function ToggleUnifiedForwardingMaster{
- if($script:UnifiedForwardSync){return};if(UnifiedAsyncBusy){Log 'Forwarding change refused: another Router VPN action is running.';return}
- $Current=(Control 'UnifiedForwardButton').Tag;if($null-eq$Current){Log 'Forwarding state is not proved yet; refreshing status first.';RefreshUnifiedTelemetry;return}
- $Want=-not[bool]$Current;(Control 'UnifiedForwardButton').Content='Forward …'
- $Success={param($R)if([bool]$R.enabled-ne$Want){Log 'Forwarding master response did not verify requested state.';return};$script:UnifiedForwardSync=$true;(Control 'UnifiedForwardButton').Tag=[bool]$R.enabled;(Control 'UnifiedForwardButton').Content=if([bool]$R.enabled){'Forward ON'}else{'Forward OFF'};$script:UnifiedForwardSync=$false;$StateLabel=if($Want){'ON'}else{'OFF'};Log ('Forwarding master '+$StateLabel+' on '+[string]$R.name)}.GetNewClosure()
- [void](StartUnifiedApiAsync 'Updating forwarding…' '/api/forwarding/master' 'PUT' @{enabled=$Want} 10 $Success {param($E)Log ('Forwarding master failed: '+$E)} {RefreshUnifiedTelemetry})
+ if(UnifiedAsyncBusy){Log 'Forwarding change refused: another Router VPN action is running.';return}
+ $Button=Control 'UnifiedForwardButton'
+ $Original=$Button.Tag
+ if(-not(TestUnifiedForwardingState $Original)){SetUnifiedForwardingDisplay $null;return}
+ $Want=-not $Original.enabled
+ $Button.IsEnabled=$false
+ $Button.Content='Forward …'
+ $Success={
+  param($R)
+  if(-not(TestUnifiedForwardingState $R) -or $R.router_id -cne $Original.router_id -or $R.path_token -cne $Original.path_token -or $R.enabled -ne $Want){
+   SetUnifiedForwardingDisplay $null
+   Log 'The forwarding response did not verify the displayed connection and requested state.'
+   return
+  }
+  SetUnifiedForwardingDisplay $R
+  Log ('Forwarding master '+$(if($Want){'ON'}else{'OFF'})+' on '+[string]$R.name)
+ }.GetNewClosure()
+ $Body=@{enabled=$Want;router_id=$Original.router_id;path_token=$Original.path_token}
+ [void](StartUnifiedApiAsync 'Updating forwarding…' '/api/forwarding/master' 'PUT' $Body 10 $Success {param($E)SetUnifiedForwardingDisplay $null;Log ('Forwarding master failed: '+$E)} {RefreshUnifiedTelemetry})
 }
 function RefreshUnifiedTelemetry{StartUnifiedTelemetryRefresh}
 function ExternalComparisonValue($Object,[string]$Name){
@@ -546,7 +578,7 @@ function ShowExternalComparison{
 
 function TestOrderedCandidateResponseSource($S,$Value,$Expected=$null){
  $rows=ExternalComparisonValue $Value 'response_source_nodes';$position=$S.Position
- if($rows -isnot [array] -or $rows.Count -lt 4 -or $rows.Count -gt 96 -or $position -ne $rows.Count-2){return $false}
+ if((OrderedCandidateNumber $Value 'prefix_position') -ne $position -or $rows -isnot [array] -or $rows.Count -lt 4 -or $rows.Count -gt 96 -or $position -lt 1 -or $position -gt $rows.Count-2 -or ($position -lt $rows.Count-2 -and $rows.Count -ge 96)){return $false}
  $draft=ExternalComparisonValue $S 'Draft'
  if($null -ne $Expected -and ($Expected -isnot [array] -or $Expected.Count -ne $rows.Count)){return $false}
  if($null -ne $draft -and ($draft.execution -cne 'auto' -or $draft.nodes.Count -ne $rows.Count)){return $false}
@@ -558,7 +590,7 @@ function TestOrderedCandidateResponseSource($S,$Value,$Expected=$null){
   $kind=$row.kind
   if($i -eq 0 -or $i -eq $rows.Count-1){if($kind -cne 'router-vpn'){return $false}}
   elseif($kind -ceq 'router-vpn'){
-   if($i -lt 2 -or $privateInterior){return $false}
+   if($i -lt 2 -or $privateInterior -or $position -ne $rows.Count-2){return $false}
    $privateInterior=$true
   }elseif($kind -cne 'external'){return $false}
   $mode=if($i -eq 0){'wg'}else{'shadowsocks'}
@@ -571,14 +603,47 @@ function TestOrderedCandidateResponseSource($S,$Value,$Expected=$null){
  }
  return $true
 }
-function TestOrderedCandidateResponseProposal($Rows,$Choice){
- $proposal=$Choice.proposed_path
+# Connected three-node Compare catalogs predate the original-source map.
+function TestOrderedCandidateLegacyConnectedResponse($S,$Value){
+ if($S.Position -ne 1 -or -not (TestOrderedCandidateLocalResponse $S $Value)){return $false}
+ $prefixes=ExternalComparisonValue $Value 'prefixes'
+ if($prefixes -isnot [array] -or $prefixes.Count -ne 2){return $false}
+ $modes=@('wg','shadowsocks')
+ for($i=0;$i -lt 2;$i++){
+  $prefix=$prefixes[$i]
+  if((OrderedCandidateNumber $prefix 'position') -ne $i -or $prefix.mode -cne $modes[$i] -or -not $prefix.id){return $false}
+ }
+ if($prefixes[0].id -ceq $prefixes[1].id){return $false}
+ foreach($choice in $Value.candidates){
+  $id=ExternalComparisonValue $choice 'id'
+  $fields=if($choice -is [Collections.IDictionary]){$choice.Keys}else{$choice.PSObject.Properties.Name}
+  if(-not $id -or $id -cin @($prefixes[0].id,$prefixes[1].id) -or $choice.kind -cne 'router-vpn' -or 'proposal_action' -cin $fields){return $false}
+  $reason=ExternalComparisonValue $choice 'save_reason'
+  if('proposed_path' -cnotin $fields -and $reason -is [string] -and $reason){continue}
+  $path=ExternalComparisonValue $choice 'proposed_path'
+  if($path -isnot [array] -or $path.Count -ne 3){return $false}
+  for($i=0;$i -lt 3;$i++){
+   $node=$path[$i];$keys=if($node -is [Collections.IDictionary]){$node.Keys}else{$node.PSObject.Properties.Name}
+   $expected=if($i -lt 2){$prefixes[$i].id}else{$id}
+   if(@($keys).Count -ne 2 -or $node.id -cne $expected -or $node.mode -cne $modes[[int]($i -gt 0)]){return $false}
+  }
+ }
+ return $true
+}
+function TestOrderedCandidateResponseProposal($Rows,$Choice,[int]$Position){
+ $proposal=ExternalComparisonValue $Choice 'proposed_path'
+ if($null -eq $proposal){return $false}
+ $insert=$Position -lt $Rows.Count-2
+ $length=$Rows.Count + [int]$insert
+ $action=if($insert){'save-intermediate-profile'}else{'save-final-profile'}
+ if($Choice.proposal_action -cne $action){return $false}
  if($Choice.kind -cne 'router-vpn' -or $Choice.id -isnot [string] -or $Choice.id -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or
-    $Choice.id -cin @($Rows|ForEach-Object{$_.id}) -or $proposal -isnot [array] -or $proposal.Count -ne $Rows.Count){return $false}
- for($i=0;$i -lt $Rows.Count;$i++){
-  $id=if($i -eq $Rows.Count-1){$Choice.id}else{$Rows[$i].id}
+    $Choice.id -cin @($Rows|ForEach-Object{$_.id}) -or $proposal -isnot [array] -or $proposal.Count -ne $length){return $false}
+ for($i=0;$i -lt $length;$i++){
+  $index=if($insert -and $i -gt $Position+1){$i-1}else{$i}
+  $id=if($i -eq $Position+1){$Choice.id}else{$Rows[$index].id}
   $node=$proposal[$i];$keys=if($node -is [Collections.IDictionary]){$node.Keys}else{$node.PSObject.Properties.Name}
-  if(@($keys).Count -ne 2 -or $node.id -cne $id -or $node.mode -cne $Rows[$i].mode){return $false}
+  if(@($keys).Count -ne 2 -or $node.id -cne $id -or $node.mode -cne $Rows[$index].mode){return $false}
  }
  return $true
 }
@@ -618,8 +683,34 @@ function OrderedCandidateViewMetric($S,$View){
  }
  return ''
 }
+function TestOrderedCandidateDraftInsertion($S,$Choice,$Path,$View=$null){
+ $draft=ExternalComparisonValue $S 'Draft'
+ if($null -eq $View){$View=ExternalComparisonValue $S 'View'}
+ if($null -eq $draft -or $null -eq $Choice -or (OrderedCandidateViewMetric $S $view) -cne 'routed-candidate-response' -or
+    (ExternalComparisonValue $Choice 'draft_action') -cne 'insert-measured-hop' -or $Choice.kind -cne 'router-vpn' -or
+    $Choice.id -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or $Path -isnot [array]){return $false}
+ $nodes=@($draft.nodes);$at=$S.Position+1
+ if($nodes.Count -ge 96 -or $at -lt 2 -or $at -ge $nodes.Count -or $Path.Count -ne $nodes.Count+1){return $false}
+ if($draft.execution -ceq 'auto' -and $nodes.Count -gt 3){
+  if(-not (TestOrderedCandidateResponseSource $S $view)){return $false}
+  for($i=1;$i -lt $nodes.Count-1;$i++){if($view.response_source_nodes[$i].kind -cne 'external'){return $false}}
+ }
+ for($i=0;$i -lt $Path.Count;$i++){
+  $row=$Path[$i];$keys=if($row -is [Collections.IDictionary]){$row.Keys}else{$row.PSObject.Properties.Name}
+  if(@($keys).Count -ne 2){return $false}
+  if($i -eq $at){if($row.id -cne $Choice.id -or $row.mode -cne 'shadowsocks'){return $false};continue}
+  $original=if($i -lt $at){$nodes[$i]}else{$nodes[$i-1]}
+  if($original.id -ceq $Choice.id -or $row.id -cne $original.id -or $row.mode -cne $original.mode){return $false}
+ }
+ return $true
+}
 function OrderedCandidateFinalProfileChoice($S,$Choice){
  $draft=ExternalComparisonValue $S 'Draft'
+ $source=ExternalComparisonValue (ExternalComparisonValue $S 'View') 'response_source_nodes'
+ if($null -ne $source){
+  return $null -ne $draft -and (OrderedCandidateViewMetric $S $S.View) -ceq 'routed-candidate-response' -and
+      (TestOrderedCandidateResponseSource $S $S.View) -and (TestOrderedCandidateResponseProposal $source $Choice $S.Position)
+ }
  if((ExternalComparisonValue $Choice 'proposal_action') -ceq 'save-intermediate-profile'){
   $original=@($draft.nodes);$proposal=@(ExternalComparisonValue $Choice 'proposed_path')
   $at=$S.Position+1
@@ -721,6 +812,14 @@ function SetOrderedCandidateControls($S){
  $Idle=$null-eq$S.Task-and-not$S.PendingDrain
  $S.Refresh.IsEnabled=$Idle;$S.Prefix.IsEnabled=$Idle-and$null-eq(ExternalComparisonValue $S 'Draft');$Captured=$null-ne$S.Prefix.SelectedValue-and[int]$S.Prefix.SelectedValue-eq$S.Position;$S.Run.IsEnabled=$Idle-and$Captured-and$null-ne$S.View
  $S.Cancel.IsEnabled=$S.PendingDrain;$S.Save.IsEnabled=$false
+ $useDraft=ExternalComparisonValue $S 'UseDraft'
+ if($null -ne $useDraft){
+  $row=$S.Table.SelectedItem
+  $insert=$null -ne $row -and (TestOrderedCandidateDraftInsertion $S $row.Choice (ExternalComparisonValue $row.Choice 'draft_path'))
+  $useDraft.Visibility=if($insert){'Visible'}else{'Collapsed'}
+  $useDraft.IsEnabled=$insert -and $null -eq $S.Task -and $Captured -and (OrderedCandidateReady $S) -and $null -ne $row.Receipt -and
+     $null -ne (OrderedCandidateScore $row.Receipt ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) 'routed-candidate-response')
+ }
  $draft=ExternalComparisonValue $S 'Draft'
  $finalChoice=$null -ne $draft -and $null -ne $S.Table.SelectedItem -and (OrderedCandidateFinalProfileChoice $S $S.Table.SelectedItem.Choice)
  if($null -ne $draft -and $null -ne (ExternalComparisonValue $S.ProfileName 'Parent')){
@@ -745,8 +844,16 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
   $prefix=@($Value.prefixes|Where-Object {(OrderedCandidateNumber $_ 'position') -eq $S.Position})
   if(-not(TestOrderedCandidateLocalResponse $S $Value) -or $Value.measurement -cne 'routed-candidate-response' -or $prefix.Count -ne 1 -or
      $prefix[0].id -cne $Value.response_source_nodes[$S.Position].id -or $prefix[0].mode -cne 'shadowsocks'){throw 'The private response differs from its captured prefix.'}
-  foreach($choice in $Value.candidates){if(-not(TestOrderedCandidateResponseProposal $Value.response_source_nodes $choice) -or
-    $choice.proposal_action -cne 'save-final-profile'){throw 'The measured proposal changed an original source.'}}
+  foreach($choice in $Value.candidates){
+   $fields=if($choice -is [Collections.IDictionary]){$choice.Keys}else{$choice.PSObject.Properties.Name}
+   if('proposed_path' -cin $fields -or 'proposal_action' -cin $fields){
+    if(-not (TestOrderedCandidateResponseProposal $Value.response_source_nodes $choice $S.Position)){throw 'The measured proposal changed an original source.'}
+   }elseif(-not (TestOrderedCandidateDraftInsertion $S $choice (ExternalComparisonValue $choice 'draft_path') $Value)){throw 'The measured candidate has no complete path.'}
+  }
+ }elseif($Phase -ceq 'catalog' -and -not (ExternalComparisonValue $S 'SavedPath') -and $null -eq (ExternalComparisonValue $S 'Draft') -and
+          (ExternalComparisonValue $Value 'measurement') -ceq 'routed-candidate-response' -and
+          ((ExternalComparisonValue $Value 'requested_execution') -ceq 'auto' -or (ExternalComparisonValue $Value 'required_selected_execution') -ceq 'local')){
+  if(-not (TestOrderedCandidateLegacyConnectedResponse $S $Value)){throw 'The original route is missing from this candidate catalog.'}
  }elseif($Phase -ne 'catalog' -and ($null -ne $source -or $null -ne $expected)){
   if($null -eq $expected -or -not(TestOrderedCandidateResponseSource $S $Value $expected) -or
     $Value.view_token -cne $S.View.view_token){throw 'The private response source changed.'}
@@ -769,9 +876,9 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
    }
   }
   if($Phase -ceq 'save' -and $null -eq $S.Draft){
-   $receipt=@{id=$S.ChoiceID;kind='router-vpn';proposed_path=(ExternalComparisonValue $Value 'proposed_path')}
-   if($Value.request_id -cne $S.RequestID -or $Value.candidate_id -cne $S.ChoiceID -or $Value.proposal_action -cne 'save-final-profile' -or $Value.active_path_changed -isnot [bool] -or
-      $Value.active_path_changed -or -not(TestOrderedCandidateResponseProposal $expected $receipt)){throw 'The saved profile differs from the measured final.'}
+   $receipt=@{id=$S.ChoiceID;kind='router-vpn';proposal_action=$Value.proposal_action;proposed_path=(ExternalComparisonValue $Value 'proposed_path')}
+   if($Value.request_id -cne $S.RequestID -or $Value.candidate_id -cne $S.ChoiceID -or $Value.active_path_changed -isnot [bool] -or
+      $Value.active_path_changed -or -not(TestOrderedCandidateResponseProposal $expected $receipt $S.Position)){throw 'The saved profile differs from the measured final.'}
   }
  }
  $SavedPath=[bool](ExternalComparisonValue $S 'SavedPath')
@@ -784,7 +891,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
   $S.View=$Value;$S.SaveFinalProfile=$false;$S.SelectedWinner='';$S.SelectedEpoch=0;$S.Receipt=$null;$S.Rows=@();foreach($C in @($Value.candidates)){$S.Rows+= [pscustomobject]@{Name=[string]$C.name;ID=[string]$C.id;Timing='Not tested';Choice=$C;Receipt=$null}}
   $S.Table.ItemsSource=$S.Rows;$S.Prefix.ItemsSource=@($Value.prefixes|ForEach-Object{[pscustomobject]@{position=[int]$_.position;display=('After node '+([int]$_.position+1)+' · '+[string]$_.name+' · '+[string]$_.mode)}});$S.Prefix.SelectedValue=$S.Position
   if($null-ne(ExternalComparisonValue $S 'Draft')){
-   foreach($row in $S.Rows){if(@((ExternalComparisonValue $row.Choice 'proposed_path')|Where-Object{$null-ne$_}).Count-ge3){[void]$S.Table.SelectedItems.Add($row)}}
+   foreach($row in $S.Rows){if(@((ExternalComparisonValue $row.Choice 'proposed_path')|Where-Object{$null-ne$_}).Count-ge3 -or (TestOrderedCandidateDraftInsertion $S $row.Choice (ExternalComparisonValue $row.Choice 'draft_path'))){[void]$S.Table.SelectedItems.Add($row)}}
    $S.AutoRun=$S.Table.SelectedItems.Count-gt0
   }
   $S.SavedProfileID='';$S.Status.Text=if((OrderedCandidateScope $S)-ceq'draft-complete-selected'){'Test the complete draft temporarily. Choose a measured hop after the route closes.'}elseif([bool](ExternalComparisonValue $S 'SavedPrefix')){'Test only the selected saved prefix. It must return to Disconnected before future-profile choices appear.'}elseif($SavedPath){'Test the complete saved Local path temporarily. It must return to Disconnected before future-profile choices appear.'}elseif($metric -ceq 'routed-candidate-response'){'Measure 50 authenticated private-agent responses through the captured Shadowsocks prefix and each eligible paired candidate.'}else{'Select candidates, then test 50 TCP handshakes through this connected prefix.'};return
@@ -796,6 +903,26 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
   if((OrderedCandidateBeforeStart $Value)-and[bool](ExternalComparisonValue $S 'SavedAdmitted')){throw 'A previously admitted test still requires its original native shutdown.'}
   if([bool](ExternalComparisonValue $Value 'running')-or[bool](ExternalComparisonValue $Value 'started')-or[bool](ExternalComparisonValue $Value 'native_down')-or[bool](ExternalComparisonValue $Value 'reviewing')){$S.SavedAdmitted=$true}
   $draft=ExternalComparisonValue $S 'Draft'
+  if($Phase -ceq 'choose'){
+   $matches=@($S.View.candidates | Where-Object {$_.id -ceq $S.ChoiceID})
+   if($null -eq $draft -or $S.CancelWanted -or $S.CloseWanted -or $matches.Count -ne 1 -or
+      (ExternalComparisonValue $Value 'candidate_id') -cne $S.ChoiceID -or (ExternalComparisonValue $Value 'draft_action') -cne 'insert-measured-hop' -or
+      (ExternalComparisonValue $Value 'saved_profile_id') -cne '' -or
+      -not (TestOrderedCandidateDraftInsertion $S $matches[0] (ExternalComparisonValue $matches[0] 'draft_path')) -or
+      -not (TestOrderedCandidateDraftInsertion $S $matches[0] (ExternalComparisonValue $Value 'proposed_path')) -or
+      ($draft.execution -ceq 'auto' -and ($S.SelectedWinner -cne 'local' -or $S.SelectedEpoch -le 0))){throw 'The chosen path differs from the measured draft insertion.'}
+   foreach($field in @('chosen','drained','native_down')){
+    $flag=ExternalComparisonValue $Value $field
+    if($flag -isnot [bool] -or -not $flag){throw 'The measured draft choice did not finish cleanup.'}
+   }
+   foreach($field in @('accepted','running','reviewing','cleanup_pending','cancelled')){
+    $flag=ExternalComparisonValue $Value $field
+    if($flag -isnot [bool] -or $flag){throw 'The measured draft choice is still in use.'}
+   }
+   $saved=ExternalComparisonValue $Value 'saved'
+   if($null -ne (ExternalComparisonValue $Value 'profile_id') -or ($null -ne $saved -and ($saved -isnot [bool] -or $saved))){throw 'The draft choice reported a profile write.'}
+   $S.PendingDrain=$false;$S.Receipt=$null;$S.Dialog.Tag=$Value;$S.CloseWanted=$true;return
+  }
   if($null -ne $draft -and [string](ExternalComparisonValue $Value 'saved_profile_id')){
    $savedAction=ExternalComparisonValue $Value 'proposal_action'
    $chosenSource=@($S.View.candidates | Where-Object {$_.id -ceq $S.ChoiceID})
@@ -841,7 +968,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
 function TickOrderedCandidates($S){
  if($S.Closed){return}
  if($null-ne$S.Task-and$S.Task.IsCompleted){$Phase=$S.Phase;$Response=$null
-  try{$Response=$S.Task.GetAwaiter().GetResult();$Text=$Response.Content.ReadAsStringAsync().GetAwaiter().GetResult();if(-not$Response.IsSuccessStatusCode){throw ('HTTP '+[int]$Response.StatusCode+' '+$Text)};$Value=$Text|ConvertFrom-Json;ReceiveOrderedCandidates $S $Value $Phase}catch{$S.Status.Text=$_.Exception.Message;if($Phase-ceq'run'-or$Phase-ceq'cancel'-or([bool](ExternalComparisonValue $S 'SavedPath')-and$Phase-in@('poll','save'))){$S.PendingDrain=$true;$S.CancelWanted=$true};$S.Receipt=$null;if($Phase-ceq'run'-or$Phase-ceq'poll'){$S.Rows=@();$S.Table.ItemsSource=$S.Rows}}
+  try{$Response=$S.Task.GetAwaiter().GetResult();$Text=$Response.Content.ReadAsStringAsync().GetAwaiter().GetResult();if(-not$Response.IsSuccessStatusCode){throw ('HTTP '+[int]$Response.StatusCode+' '+$Text)};$Value=$Text|ConvertFrom-Json;ReceiveOrderedCandidates $S $Value $Phase}catch{$S.Status.Text=$_.Exception.Message;if($Phase-ceq'run'-or$Phase-ceq'cancel'-or([bool](ExternalComparisonValue $S 'SavedPath')-and$Phase-in@('poll','save','choose'))){$S.PendingDrain=$true;$S.CancelWanted=$true};$S.Receipt=$null;if($Phase-ceq'run'-or$Phase-ceq'poll'){$S.Rows=@();$S.Table.ItemsSource=$S.Rows}}
   finally{if($null-ne$Response){$Response.Dispose()};if($null-ne$S.Request){$S.Request.Dispose()};if($null-ne$S.Cts){$S.Cts.Dispose()};$S.Task=$null;$S.Request=$null;$S.Cts=$null;$S.Next=[DateTime]::UtcNow.AddSeconds(1)}
  }
  if((ExternalComparisonValue $S 'AutoRun')-and$null-eq$S.Task){
@@ -875,17 +1002,38 @@ function ShowOrderedCandidates{
  $Existing=Get-Variable RouterVPNOrderedCandidates -Scope Script -ValueOnly -ErrorAction SilentlyContinue
  if(UseExistingOrderedCandidateDialog $Existing $SavedPath $SavedPrefix $Draft){return}
  [xml]$X=@"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Candidates through connected prefix" Width="850" Height="600" MinWidth="700" MinHeight="500" WindowStartupLocation="CenterOwner"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Name="PurposeNote" TextWrapping="Wrap" Text="Measure the next hop through the selected prefix. Packet prefixes time TCP handshakes. Eligible Local Shadowsocks prefixes time authenticated private-agent responses from paired candidates. Save a measured choice for the next connection."/><StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,12"><ComboBox Name="Prefix" Width="520" DisplayMemberPath="display" SelectedValuePath="position"/><Button Name="Refresh" Content="Capture this prefix" Margin="8,0"/></StackPanel><DataGrid Name="Candidates" Grid.Row="2" AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Extended"><DataGrid.Columns><DataGridTextColumn Header="Saved candidate" Binding="{Binding Name}" Width="*"/><DataGridTextColumn Header="Timing" Binding="{Binding Timing}" Width="300"/></DataGrid.Columns></DataGrid><TextBox Name="Preview" Grid.Row="3" Margin="0,10" IsReadOnly="True" TextWrapping="Wrap"/><StackPanel Grid.Row="4" Orientation="Horizontal"><TextBlock Text="Next-connection profile name" VerticalAlignment="Center"/><TextBox Name="ProfileName" Width="320" Margin="10,0" MaxLength="64"/></StackPanel><StackPanel Grid.Row="5"><TextBlock Name="Status" TextWrapping="Wrap" Margin="0,10"/><WrapPanel><Button Name="Run" Content="Test selected candidates" Margin="4" Padding="10,6"/><Button Name="Save" Content="Save next-connection profile" Margin="4" Padding="10,6"/><Button Name="Cancel" Content="Cancel test" Margin="4" Padding="10,6"/><Button Name="Close" Content="Close" Margin="4" Padding="10,6"/></WrapPanel></StackPanel></Grid></Window>
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Candidates through connected prefix" Width="850" Height="600" MinWidth="700" MinHeight="500" WindowStartupLocation="CenterOwner"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Name="PurposeNote" TextWrapping="Wrap" Text="Measure the next hop through the selected prefix. Packet prefixes time TCP handshakes. Eligible Local Shadowsocks prefixes time authenticated private-agent responses from paired candidates. Save a measured choice for the next connection."/><StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,12"><ComboBox Name="Prefix" Width="520" DisplayMemberPath="display" SelectedValuePath="position"/><Button Name="Refresh" Content="Capture this prefix" Margin="8,0"/></StackPanel><DataGrid Name="Candidates" Grid.Row="2" AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Extended"><DataGrid.Columns><DataGridTextColumn Header="Saved candidate" Binding="{Binding Name}" Width="*"/><DataGridTextColumn Header="Timing" Binding="{Binding Timing}" Width="300"/></DataGrid.Columns></DataGrid><TextBox Name="Preview" Grid.Row="3" Margin="0,10" IsReadOnly="True" TextWrapping="Wrap"/><StackPanel Grid.Row="4" Orientation="Horizontal"><TextBlock Text="Next-connection profile name" VerticalAlignment="Center"/><TextBox Name="ProfileName" Width="320" Margin="10,0" MaxLength="64"/></StackPanel><StackPanel Grid.Row="5"><TextBlock Name="Status" TextWrapping="Wrap" Margin="0,10"/><WrapPanel><Button Name="Run" Content="Test selected candidates" Margin="4" Padding="10,6"/><Button Name="UseDraft" Content="Use in draft" Visibility="Collapsed" Margin="4" Padding="10,6"/><Button Name="Save" Content="Save next-connection profile" Margin="4" Padding="10,6"/><Button Name="Cancel" Content="Cancel test" Margin="4" Padding="10,6"/><Button Name="Close" Content="Close" Margin="4" Padding="10,6"/></WrapPanel></StackPanel></Grid></Window>
 "@
  $Reader=New-Object System.Xml.XmlNodeReader $X;$D=[Windows.Markup.XamlReader]::Load($Reader);$D.Owner=$Window
- $S=@{Dialog=$D;Table=$D.FindName('Candidates');Prefix=$D.FindName('Prefix');Refresh=$D.FindName('Refresh');Run=$D.FindName('Run');Save=$D.FindName('Save');Cancel=$D.FindName('Cancel');Status=$D.FindName('Status');Preview=$D.FindName('Preview');ProfileName=$D.FindName('ProfileName');Client=(New-RouterVPNControllerClient -TimeoutMilliseconds 180000 -ResponseLimit 2097152);Task=$null;Request=$null;Cts=$null;Phase='';Position=$Position;Draft=$Draft;AutoRun=$false;ChoiceID='';View=$null;Rows=@();Receipt=$null;RequestID='';SavedPath=$SavedPath;SavedPrefix=$SavedPrefix;SavedProfileID='';SavedAdmitted=$false;PendingDrain=$false;CancelWanted=$false;CloseWanted=$false;AllowClose=$false;Closed=$false;Next=[DateTime]::UtcNow;Timer=(New-Object Windows.Threading.DispatcherTimer)}
+ $S=@{Dialog=$D;Table=$D.FindName('Candidates');Prefix=$D.FindName('Prefix');Refresh=$D.FindName('Refresh');Run=$D.FindName('Run');UseDraft=$D.FindName('UseDraft');Save=$D.FindName('Save');Cancel=$D.FindName('Cancel');Status=$D.FindName('Status');Preview=$D.FindName('Preview');ProfileName=$D.FindName('ProfileName');Client=(New-RouterVPNControllerClient -TimeoutMilliseconds 180000 -ResponseLimit 2097152);Task=$null;Request=$null;Cts=$null;Phase='';Position=$Position;Draft=$Draft;AutoRun=$false;ChoiceID='';View=$null;Rows=@();Receipt=$null;RequestID='';SavedPath=$SavedPath;SavedPrefix=$SavedPrefix;SavedProfileID='';SavedAdmitted=$false;PendingDrain=$false;CancelWanted=$false;CloseWanted=$false;AllowClose=$false;Closed=$false;Next=[DateTime]::UtcNow;Timer=(New-Object Windows.Threading.DispatcherTimer)}
  $S.Client.Timeout=[System.Threading.Timeout]::InfiniteTimeSpan;$script:RouterVPNOrderedCandidates=$S
  if($SavedPrefix){$D.Title='Test saved prefix';$D.FindName('PurposeNote').Text='Temporarily measure each supported candidate through the selected prefix. Packet prefixes time 50 TCP handshakes. Eligible Shadowsocks prefixes time 50 authenticated private-agent responses. The current exit does not need to respond. The VPN returns to Disconnected before choices appear. Choose a measured candidate to save a future profile.'}elseif($SavedPath){$D.Title='Test saved Local path';$D.FindName('PurposeNote').Text='Temporarily prove the complete saved Local path. For each eligible candidate, measure 50 TCP handshakes through a packet prefix or 50 authenticated private-agent responses through a Shadowsocks prefix. The path returns to Disconnected before future-profile choices appear. Choose a measured candidate to save a future profile.'}
  if($null-ne$Draft){$D.Owner=$Editor;$D.Title='Measure the next hop';$S.ProfileName.Parent.Visibility='Collapsed';$S.Save.Content='Add measured hop to draft';$D.FindName('PurposeNote').Text='Measure 50 samples per eligible linked candidate through the selected draft prefix. The captured prefix determines whether each sample times a TCP handshake or an authenticated private-agent response. Add one measured hop after the temporary route closes.'}
  $S.Refresh.Add_Click({if($null-ne$S.Prefix.SelectedValue){$S.Position=[int]$S.Prefix.SelectedValue};$S.View=$null;$S.Receipt=$null;StartOrderedCandidateRequest $S 'catalog' (OrderedCandidateCatalogPath $S) $S.Draft}.GetNewClosure())
  $S.Run.Add_Click({SetOrderedCandidateControls $S;if(-not$S.Run.IsEnabled){$S.Status.Text='Capture the selected prefix before testing.';return};if([long]$S.View.expires_at-le[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()){$S.Status.Text='The catalog expired. Capture this prefix again before testing.';return};$IDs=@($S.Table.SelectedItems|ForEach-Object{[string]$_.ID});if($IDs.Count-lt1){$S.Status.Text='Select at least one candidate row.';return};$S.RequestID=[Guid]::NewGuid().ToString('N');$S.SelectedWinner='';$S.SelectedEpoch=0;$S.Receipt=$null;$S.PendingDrain=$true;$S.CancelWanted=$false;$S.SavedAdmitted=$false;StartOrderedCandidateRequest $S 'run' (OrderedCandidateBase $S) (OrderedCandidateScopedBody $S @{request_id=$S.RequestID;view_token=[string]$S.View.view_token;prefix_position=$S.Position;candidate_ids=$IDs;samples=50})}.GetNewClosure())
  $S.Prefix.Add_SelectionChanged({SetOrderedCandidateControls $S}.GetNewClosure())
- $S.Table.Add_SelectionChanged({$Row=$S.Table.SelectedItem;if($null-ne$Row){$S.Preview.Text=if(@((ExternalComparisonValue $Row.Choice 'proposed_path')|Where-Object{$null-ne$_}).Count-ge2){'Proposed complete path: '+(@((ExternalComparisonValue $Row.Choice 'proposed_path')|ForEach-Object{[string]$_.id+' ('+[string]$_.mode+')'})-join' → ')}else{[string](ExternalComparisonValue $Row.Choice 'save_reason')}};SetOrderedCandidateControls $S}.GetNewClosure())
+ $S.Table.Add_SelectionChanged({
+  $row=$S.Table.SelectedItem
+  if($null -ne $row){
+   $draftPath=ExternalComparisonValue $row.Choice 'draft_path'
+   $path=ExternalComparisonValue $row.Choice 'proposed_path'
+   $named=@($path|Where-Object{$null-ne$_}|ForEach-Object{$_.id+' ('+$_.mode+')'}) -join ' → '
+   if(TestOrderedCandidateDraftInsertion $S $row.Choice $draftPath){
+    $insert=@($draftPath|ForEach-Object{$_.id+' ('+$_.mode+')'}) -join ' → '
+    $S.Preview.Text='Use in draft · '+$insert
+    if($named -and $named -cne $insert){$S.Preview.Text+=[Environment]::NewLine+'Named profile · '+$named}
+   }elseif($named){$S.Preview.Text='Proposed complete path: '+$named}else{$S.Preview.Text=[string](ExternalComparisonValue $row.Choice 'save_reason')}
+  }
+  SetOrderedCandidateControls $S
+ }.GetNewClosure())
+ $S.UseDraft.Add_Click({
+  SetOrderedCandidateControls $S
+  if(-not $S.UseDraft.IsEnabled){return}
+  $row=$S.Table.SelectedItem;$S.ChoiceID=$row.ID;$S.SaveFinalProfile=$false
+  StartOrderedCandidateRequest $S 'choose' ((OrderedCandidateBase $S)+'/choose') (OrderedCandidateScopedBody $S @{
+   request_id=$S.RequestID;view_token=$S.View.view_token;candidate_id=$S.ChoiceID;proposed_path=$row.Choice.draft_path
+  })
+ }.GetNewClosure())
  $S.Save.Add_Click({SetOrderedCandidateControls $S;if(-not$S.Save.IsEnabled){return};$Name=$S.ProfileName.Text.Trim();$Row=$S.Table.SelectedItem;$S.ChoiceID=[string]$Row.ID;if($null-ne(ExternalComparisonValue $S 'Draft')){
    $S.SaveFinalProfile=OrderedCandidateFinalProfileChoice $S $Row.Choice
    if($S.SaveFinalProfile){

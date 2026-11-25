@@ -4,7 +4,7 @@ $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 # witness, then extract this new dialog's shipping functions and callbacks.
 . (Join-Path $Root 'client/test-windows-performance.ps1') -Root $Root
 $Ast=[ScriptBlock]::Create($ProductSource).Ast
-foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','TestOrderedCandidateResponseSource','TestOrderedCandidateResponseProposal','TestOrderedCandidateLocalResponse','OrderedCandidateViewMetric','OrderedCandidateFinalProfileChoice','OrderedCandidateBase','OrderedCandidateScope','OrderedCandidateCatalogPath','UseExistingOrderedCandidateDialog','OrderedCandidateScopedBody','OrderedCandidateNumber','TestOrderedCandidateDraftExecution','OrderedCandidateSavedEnvelope','OrderedCandidateBeforeStart','OrderedCandidateCancelBody','OrderedCandidateReady','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
+foreach($Name in @('ExternalComparisonValue','ExternalComparisonToken','OrderedCandidateScore','TestOrderedCandidateResponseSource','TestOrderedCandidateResponseProposal','TestOrderedCandidateLegacyConnectedResponse','TestOrderedCandidateLocalResponse','OrderedCandidateViewMetric','TestOrderedCandidateDraftInsertion','OrderedCandidateFinalProfileChoice','OrderedCandidateBase','OrderedCandidateScope','OrderedCandidateCatalogPath','UseExistingOrderedCandidateDialog','OrderedCandidateScopedBody','OrderedCandidateNumber','TestOrderedCandidateDraftExecution','OrderedCandidateSavedEnvelope','OrderedCandidateBeforeStart','OrderedCandidateCancelBody','OrderedCandidateReady','SetOrderedCandidateControls','ReceiveOrderedCandidates','TickOrderedCandidates')){
  $F=@($Ast.FindAll({param($n)$n-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-ceq$Name},$true));if($F.Count-ne1){throw "Missing shipping candidate function $Name"};. ([ScriptBlock]::Create($F[0].Extent.Text))
 }
 $Count=0
@@ -76,6 +76,11 @@ $S.PendingDrain=$true;ReceiveOrderedCandidates $S @{request_id=$S.RequestID;drai
 $Dialog=@($Ast.FindAll({param($n)$n-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$n.Name-ceq'ShowOrderedCandidates'},$true));Assert-Candidate ($Dialog.Count-eq1) 'actual shipping native dialog missing'
 $SaveEvent=@($Dialog[0].FindAll({param($n)$n-is[System.Management.Automation.Language.InvokeMemberExpressionAst]-and$n.Expression.Extent.Text-ceq'$S.Save'-and$n.Member.Extent.Text-ceq'Add_Click'},$true));Assert-Candidate ($SaveEvent.Count-eq1) 'actual explicit save callback missing'
 $Click=$SaveEvent[0].Arguments[0].Expression.ScriptBlock.GetScriptBlock()
+$UseEvent=@($Dialog[0].FindAll({param($n)$n-is[System.Management.Automation.Language.InvokeMemberExpressionAst]-and$n.Expression.Extent.Text-ceq'$S.UseDraft'-and$n.Member.Extent.Text-ceq'Add_Click'},$true))
+Assert-Candidate ($UseEvent.Count -eq 1) 'explicit unsaved Use callback missing'
+$UseClick=$UseEvent[0].Arguments[0].Expression.ScriptBlock.GetScriptBlock()
+$PreviewEvent=@($Dialog[0].FindAll({param($n)$n-is[System.Management.Automation.Language.InvokeMemberExpressionAst]-and$n.Expression.Extent.Text-ceq'$S.Table'-and$n.Member.Extent.Text-ceq'Add_SelectionChanged'},$true))
+$PreviewChoice=$PreviewEvent[0].Arguments[0].Expression.ScriptBlock.GetScriptBlock()
 $RunEvent=@($Dialog[0].FindAll({param($n)$n-is[System.Management.Automation.Language.InvokeMemberExpressionAst]-and$n.Expression.Extent.Text-ceq'$S.Run'-and$n.Member.Extent.Text-ceq'Add_Click'},$true));Assert-Candidate ($RunEvent.Count-eq1) 'actual test callback missing'
 $CaptureEvent=@($Dialog[0].FindAll({param($n)$n-is[System.Management.Automation.Language.InvokeMemberExpressionAst]-and$n.Expression.Extent.Text-ceq'$S.Refresh'-and$n.Member.Extent.Text-ceq'Add_Click'},$true))
 Assert-Candidate ($CaptureEvent.Count-eq1) 'candidate capture callback missing'
@@ -309,32 +314,71 @@ foreach($depth in @(9,16,96)){
  $proposal[$position]=@{id='replaced-late-prefix';mode='shadowsocks'}
  Assert-Candidate (-not(OrderedCandidateFinalProfileChoice $S $choice)) 'late replacement borrowed another measured route'
 }
-foreach($depth in @(4,9,16,96)){
- $position=$depth-2
+foreach($layout in @(@(4,2,-1),@(9,7,2),@(16,14,-1),@(96,94,94),@(4,1,-1),@(16,9,-1),@(9,6,-1),@(95,92,-1))){
+ $depth,$position,$privatePosition=$layout
+ $insert=$position -lt $depth-2
+ $action=if($insert){'save-intermediate-profile'}else{'save-final-profile'}
+ $crossedAction=if($insert){'save-final-profile'}else{'save-intermediate-profile'}
  $nodes=@(for($i=0;$i -lt $depth;$i++){@{id=('member-'+$i);mode=$(if($i){'shadowsocks'}else{'wg'})}})
- $privatePosition=if($depth -eq 9){2}elseif($depth -eq 96){$position}else{-1}
  $source=@(for($i=0;$i -lt $depth;$i++){@{}+$nodes[$i]+@{kind=$(if($i -eq 0 -or $i -eq $privatePosition -or $i -eq $depth-1){'router-vpn'}else{'external'})}})
- $proposal=@($nodes|Select-Object -SkipLast 1)+@(@{id='candidate-C';mode='shadowsocks'})
- $choice=@{id='candidate-C';name='Measured final C';kind='router-vpn';proposal_action='save-final-profile';proposed_path=$proposal}
+ $proposal=@($nodes[0..$position])+@(@{id='candidate-C';mode='shadowsocks'})
+ if($insert){$proposal+=@($nodes[($position+1)..($depth-1)])}
+ $choice=@{id='candidate-C';name='Measured candidate C';kind='router-vpn';proposal_action=$action;proposed_path=$proposal}
  $row=@{}+$nodes[$position]+@{position=$position;measurement=$metric;name='Original private hop'}
  foreach($temporary in @($false,$true)){
   $S.Position=$position;$S.SavedPrefix=$temporary;$S.SavedPath=$temporary;$S.Draft=if($temporary){@{execution='auto';nodes=$nodes}}else{$null}
   $S.CancelWanted=$false;$S.CloseWanted=$false;$S.PendingDrain=$false;$S.SavedAdmitted=$false;$S.Dialog.Tag=$null
   $offer=@{schema=1;samples=50;view_token='7'*64;expires_at=$Now+120000;prefix_position=$position;measurement=$metric;requested_execution='auto';required_selected_execution='local';response_source_nodes=$source;prefixes=@($row);candidates=@($choice)}
   if($temporary){$offer.scope='draft-complete-selected';$offer.origin='editor-draft'}else{$offer.selected_execution='local';$offer.selection_epoch=37L}
+  if(-not $temporary -and $position -eq 1){
+   $missing=@{}+$offer;$missing.Remove('response_source_nodes')
+   $entry=@{id=$nodes[0].id;position=0;mode='wg';name='Entry'}
+   $missing.prefixes=@($entry,$row)
+   $refused=$false;try{ReceiveOrderedCandidates $S $missing 'catalog'}catch{$refused=$true}
+   Assert-Candidate $refused 'A connected intermediate at the first import lost its source map'
+   $legacyChoice=@{}+$choice;$legacyChoice.Remove('proposal_action')
+   $missing.candidates=@($legacyChoice)
+   $refused=$false;try{ReceiveOrderedCandidates $S $missing 'catalog'}catch{$refused=$true}
+   Assert-Candidate $refused 'An unmarked long proposal borrowed the three-node connected catalog'
+   $legacyChoice.proposed_path=@($proposal[0..2])
+   ReceiveOrderedCandidates $S $missing 'catalog'
+   Assert-Candidate ($S.View.candidates[0].proposed_path.Count -eq 3) 'The three-node connected Compare response was lost'
+   $legacyChoice.proposal_action=$action
+   $refused=$false;try{ReceiveOrderedCandidates $S $missing 'catalog'}catch{$refused=$true}
+   Assert-Candidate $refused 'A marked Save borrowed a three-node connected catalog'
+   $legacyChoice.Remove('proposal_action')
+   $missing.prefixes+=@(@{id='extra';position=2;mode='shadowsocks'})
+   $refused=$false;try{ReceiveOrderedCandidates $S $missing 'catalog'}catch{$refused=$true}
+   Assert-Candidate $refused 'An additional stop borrowed a three-node connected catalog'
+  }
   if($depth -gt 4){
    $bad=@{}+$offer;$two=@($source.Clone())
    foreach($i in @(2,$position)){$two[$i]=@{}+$two[$i];$two[$i].kind='router-vpn'}
    $bad.response_source_nodes=$two;$refused=$false;try{ReceiveOrderedCandidates $S $bad 'catalog'}catch{$refused=$true}
    Assert-Candidate $refused 'Two private interiors acquired a selected response'
   }
-  $bad=@{}+$offer;$bad.candidates=@(@{}+$choice);$bad.candidates[0].proposal_action='save-intermediate-profile'
+  $bad=@{}+$offer;$bad.candidates=@(@{}+$choice);$bad.candidates[0].proposal_action=$crossedAction
   $refused=$false;try{ReceiveOrderedCandidates $S $bad 'catalog'}catch{$refused=$true}
-  Assert-Candidate $refused 'An intermediate Save action acquired a selected final response'
+  Assert-Candidate $refused 'A different named Save action acquired this selected response'
+  if($insert){
+   $bad=@{}+$offer;$bad.response_source_nodes=@($source.Clone());$bad.response_source_nodes[2]=@{}+$source[2];$bad.response_source_nodes[2].kind='router-vpn'
+   $refused=$false;try{ReceiveOrderedCandidates $S $bad 'catalog'}catch{$refused=$true};Assert-Candidate $refused 'Intermediate Save accepted an existing private stream'
+   $bad=@{}+$offer;$wrong=@{}+$choice;$wrong.proposed_path=@($proposal.Clone());$wrong.proposed_path[-1]=@{id='crossed-final';mode='shadowsocks'};$bad.candidates=@($wrong)
+   $refused=$false;try{ReceiveOrderedCandidates $S $bad 'catalog'}catch{$refused=$true};Assert-Candidate $refused 'Intermediate Save dropped the original final'
+   $bad=@{}+$offer;$reused=@{}+$choice;$reused.id=$nodes[-1].id;$reused.proposed_path=@($proposal.Clone());$reused.proposed_path[$position+1]=@{}+$nodes[-1];$bad.candidates=@($reused)
+   $refused=$false;try{ReceiveOrderedCandidates $S $bad 'catalog'}catch{$refused=$true};Assert-Candidate $refused 'The retained original final was offered as an intermediate candidate'
+  }
   foreach($badIndex in @(0,1,($depth-1))){
    $bad=@{}+$offer;$crossed=@($source.Clone());$crossed[$badIndex]=@{}+$crossed[$badIndex];$crossed[$badIndex].kind=if($crossed[$badIndex].kind -ceq 'external'){'router-vpn'}else{'external'}
    $bad.response_source_nodes=$crossed;$refused=$false;try{ReceiveOrderedCandidates $S $bad 'catalog'}catch{$refused=$true}
    Assert-Candidate $refused 'A changed saved role acquired a selected private response'
+  }
+  if(-not $temporary -and $depth -eq 95){
+   $extra=@{id='extra';mode='shadowsocks'};$bad=@{}+$offer
+   $extraSource=@{}+$extra+@{kind='external'}
+   $bad.response_source_nodes=@($source[0..($depth-2)])+@($extraSource,$source[-1])
+   $larger=@{}+$choice;$larger.proposed_path=@($proposal[0..($depth-1)])+@($extra,$proposal[-1]);$bad.candidates=@($larger)
+   $refused=$false;try{ReceiveOrderedCandidates $S $bad 'catalog'}catch{$refused=$true};Assert-Candidate $refused '96 original nodes offered a 97th measured hop'
   }
   ReceiveOrderedCandidates $S $offer 'catalog'
   $value=@{}+$offer;$value.request_id=$S.RequestID;$value.results=@($private);$value.selected_execution='local';$value.selection_epoch=37L
@@ -352,9 +396,9 @@ foreach($depth in @(4,9,16,96)){
   $S.ProfileName.Text='Measured paired exit';&$Click
   $expectedPath=if($temporary){'/api/multihop/draft-candidates/save-profile'}else{'/api/multihop/prefix-candidates/save-profile'}
   Assert-Candidate ($SavedRequest.Path -ceq $expectedPath -and $SavedRequest.Body.name -ceq 'Measured paired exit' -and ($SavedRequest.Body.proposed_path.id -join ',') -ceq ($proposal.id -join ',')) 'Selected Compare did not save the full named final replacement'
-  $saved=@{}+$value;$saved.saved_profile_id='future-profile';$saved.saved=$true;$saved.ok=$true;$saved.candidate_id='candidate-C';$saved.proposal_action='save-final-profile';$saved.proposed_path=$proposal
+  $saved=@{}+$value;$saved.saved_profile_id='future-profile';$saved.saved=$true;$saved.ok=$true;$saved.candidate_id='candidate-C';$saved.proposal_action=$action;$saved.proposed_path=$proposal
   $saved.profile_name='Measured paired exit';$saved.accepted=$false;$saved.reviewing=$false;$saved.drained=$true
-  foreach($change in @(@{key='candidate_id';v='other'},@{key='proposal_action';v='save-intermediate-profile'},@{key='proposed_path';v=$nodes},@{key='response_source_nodes';v=$crossed},@{key='selection_epoch';v=38L})){
+  foreach($change in @(@{key='candidate_id';v='other'},@{key='proposal_action';v=$crossedAction},@{key='prefix_position';v=0},@{key='proposed_path';v=$nodes},@{key='response_source_nodes';v=$crossed},@{key='selection_epoch';v=38L})){
    $bad=@{}+$saved;$bad[$change.key]=$change.v;$refused=$false;try{ReceiveOrderedCandidates $S $bad 'save'}catch{$refused=$true}
    Assert-Candidate $refused ('Wrong named save confirmed '+$change.key)
   }
@@ -376,6 +420,39 @@ foreach($depth in @(4,9,16,96)){
    ReceiveOrderedCandidates $S $reply 'cancel';Assert-Candidate (-not $S.PendingDrain) 'Connected cancellation retained joined work'
    $S.SavedAdmitted=$false;$S.PendingDrain=$true;$reply.started=$false;$reply.admission_cancelled=$true
    ReceiveOrderedCandidates $S $reply 'cancel';Assert-Candidate (-not $S.PendingDrain) 'Original connected admission tombstone did not retire'
+  }
+  if($temporary){
+   $S.UseDraft=[pscustomobject]@{IsEnabled=$false;Visibility='Collapsed'}
+   $draftPath=@($nodes[0..$position])+@(@{id='candidate-C';mode='shadowsocks'})+@($nodes[($position+1)..($depth-1)])
+   $useChoice=@{}+$choice;$useChoice.draft_path=$draftPath;$useChoice.draft_action='insert-measured-hop'
+   $draftOnly=$depth -eq 9 -and $insert
+   if($draftOnly){$useChoice.Remove('proposed_path');$useChoice.Remove('proposal_action')}
+   $useOffer=@{}+$offer;$useOffer.candidates=@($useChoice)
+   ReceiveOrderedCandidates $S $useOffer 'catalog'
+   ReceiveOrderedCandidates $S $value 'poll';$S.Table.SelectedItem=$S.Rows[0];SetOrderedCandidateControls $S
+   $eligible=$privatePosition -lt 0 -and $depth -lt 96
+   Assert-Candidate ($S.UseDraft.IsEnabled -eq $eligible -and $S.Save.IsEnabled -ne $draftOnly -and (($S.UseDraft.Visibility -ceq 'Visible') -eq $eligible)) 'Use escaped the captured path capacity or private roles'
+   if($eligible){
+    $S.Preview=[pscustomobject]@{Text=''};&$PreviewChoice
+    Assert-Candidate ($S.Preview.Text.Contains('Use in draft') -and $S.Preview.Text.Contains($nodes[-1].id) -and
+       $S.Preview.Text.Contains('Named profile') -eq (-not $insert)) 'The two path previews confused insertion and final replacement'
+    $S.ProfileName.Text='';$script:SavedRequest=$null;&$UseClick
+    Assert-Candidate ($SavedRequest.Path -ceq '/api/multihop/draft-candidates/choose' -and $SavedRequest.Phase -ceq 'choose' -and -not $SavedRequest.Body.ContainsKey('name') -and
+       ($SavedRequest.Body.proposed_path.id -join ',') -ceq ($draftPath.id -join ',')) 'Use posted a named Save or dropped original suffix'
+    $used=@{}+$value;$used.draft_action='insert-measured-hop';$used.proposed_path=$draftPath;$used.candidate_id='candidate-C'
+    $used.chosen=$true;$used.drained=$true;$used.accepted=$false;$used.reviewing=$false;$used.saved_profile_id='';$used.saved=$false;$used.running=$false;$used.cleanup_pending=$false;$used.cancelled=$false
+    foreach($fault in @(@{key='draft_action';v='save-final-profile'},@{key='proposed_path';v=$nodes},@{key='selection_epoch';v=38L},@{key='native_down';v=$false},@{key='saved_profile_id';v='unexpected'},@{key='prefix_position';v=0},@{key='candidate_id';v='other'},@{key='view_token';v='foreign'},@{key='request_id';v='foreign'},@{key='response_source_nodes';v=$crossed})){
+     $bad=@{}+$used;$bad[$fault.key]=$fault.v;$refused=$false;try{ReceiveOrderedCandidates $S $bad 'choose'}catch{$refused=$true}
+     Assert-Candidate ($refused -and $null -eq $S.Dialog.Tag) ('Foreign draft insertion confirmed: '+$fault.key)
+    }
+    foreach($closing in @('CancelWanted','CloseWanted')){
+     $S[$closing]=$true;$refused=$false;try{ReceiveOrderedCandidates $S $used 'choose'}catch{$refused=$true}
+     Assert-Candidate ($refused -and $null -eq $S.Dialog.Tag) ('Late Choose after '+$closing+' changed the draft');$S[$closing]=$false
+    }
+    ReceiveOrderedCandidates $S $used 'choose'
+    Assert-Candidate ($S.CloseWanted -and -not $S.PendingDrain -and $null -ne $S.Dialog.Tag -and -not $S.SavedProfileID) 'Use failed to return the unsaved insertion to its owner'
+    $S.CloseWanted=$false;$S.Dialog.Tag=$null
+   }
   }
   if($temporary -and $depth -eq 16){
    ReceiveOrderedCandidates $S $offer 'catalog'

@@ -109,6 +109,7 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNativeMAXProfile.java'
       - 'internal/mobilepq/**'
       - 'internal/mobilemultihop/**'
+      - 'internal/hopmeasure/ordered.go'
       - 'internal/awgpolicy/**'
       - 'internal/multihoprelay/**'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java'
@@ -228,6 +229,7 @@ on:
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNativeMAXProfile.java'
       - 'internal/mobilepq/**'
       - 'internal/mobilemultihop/**'
+      - 'internal/hopmeasure/ordered.go'
       - 'internal/awgpolicy/**'
       - 'internal/multihoprelay/**'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java'
@@ -672,6 +674,32 @@ jobs:
         # Complete disjoint phases retain their 180-second race deadlines.
         run: python3 deploy/test_mobile_multihop_groups.py --group runtime
 
+  shared_runtime_depth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - name: Verify every selected private stream source depth
+        run: python3 deploy/test_mobile_multihop_groups.py --group runtime_depth
+
+  shared_runtime_remaining:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - name: Verify remaining controller and proof ownership tests
+        run: python3 deploy/test_mobile_multihop_groups.py --group runtime_remaining
+
   shared_fifty:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -712,7 +740,7 @@ jobs:
 
   contract:
     if: ${{ always() }}
-    needs: [android, android_ordered_source, android_execution_source, android_connect_source, android_connect_final_layers, android_connect_final_layers_extended, android_socks_source, android_openvpn_source, android_openvpn_host, android_imported_source, android_multiple_imported, android_candidates, android_layered_candidates, android_typed_connected_candidates, android_hosts, android_latency, shared_core, shared_runtime, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]
+    needs: [android, android_ordered_source, android_execution_source, android_connect_source, android_connect_final_layers, android_connect_final_layers_extended, android_socks_source, android_openvpn_source, android_openvpn_host, android_imported_source, android_multiple_imported, android_candidates, android_layered_candidates, android_typed_connected_candidates, android_hosts, android_latency, shared_core, shared_runtime, shared_runtime_depth, shared_runtime_remaining, shared_fifty, shared_fifty_closed, shared_imported_prefix, relay]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -736,6 +764,8 @@ jobs:
           ANDROID_LATENCY_RESULT: ${{ needs.android_latency.result }}
           SHARED_CORE_RESULT: ${{ needs.shared_core.result }}
           SHARED_RUNTIME_RESULT: ${{ needs.shared_runtime.result }}
+          SHARED_RUNTIME_DEPTH_RESULT: ${{ needs.shared_runtime_depth.result }}
+          SHARED_RUNTIME_REMAINING_RESULT: ${{ needs.shared_runtime_remaining.result }}
           SHARED_FIFTY_RESULT: ${{ needs.shared_fifty.result }}
           SHARED_FIFTY_CLOSED_RESULT: ${{ needs.shared_fifty_closed.result }}
           SHARED_IMPORTED_PREFIX_RESULT: ${{ needs.shared_imported_prefix.result }}
@@ -759,6 +789,8 @@ jobs:
           test "$ANDROID_LATENCY_RESULT" = success
           test "$SHARED_CORE_RESULT" = success
           test "$SHARED_RUNTIME_RESULT" = success
+          test "$SHARED_RUNTIME_DEPTH_RESULT" = success
+          test "$SHARED_RUNTIME_REMAINING_RESULT" = success
           test "$SHARED_FIFTY_RESULT" = success
           test "$SHARED_FIFTY_CLOSED_RESULT" = success
           test "$SHARED_IMPORTED_PREFIX_RESULT" = success

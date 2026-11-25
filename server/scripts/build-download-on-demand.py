@@ -452,7 +452,7 @@ def _require_output_target_unchanged(output: Path, before) -> None:
         raise ValueError(f"package output identity changed before adoption: {output}")
 
 
-def zip_dir(root: Path, output: Path) -> None:
+def zip_dir(root: Path, output: Path):
     output.parent.mkdir(parents=True, exist_ok=True)
     parent_snapshot = parent_chain_snapshot(output)
     before = _output_target_snapshot(output)
@@ -476,8 +476,10 @@ def zip_dir(root: Path, output: Path) -> None:
                         zf.write(path, rel.as_posix())
             stream.flush()
             os.fsync(stream.fileno())
-        if tmp.stat().st_size <= 0:
-            raise RuntimeError("staged package archive is empty")
+            identity = _OWNED_TEMP["package_file_identity"](os.fstat(stream.fileno()))
+            stream.seek(0)
+            digest = _OWNED_TEMP["package_sha256"](stream)
+        _OWNED_TEMP["verify_package_output"](tmp, identity)
         verify_parent_chain(parent_snapshot)
         _require_output_target_unchanged(output, before)
         os.replace(tmp, output)
@@ -497,6 +499,8 @@ def zip_dir(root: Path, output: Path) -> None:
             except OSError:
                 pass
             tmp.unlink(missing_ok=True)
+    _OWNED_TEMP["verify_package_output"](output, identity)
+    return identity, digest
 
 
 def require_dist(src_root: Path, name: str) -> Path:
@@ -750,12 +754,14 @@ def main() -> int:
     ap.add_argument("--name", choices=sorted(PACKAGE_MAP))
     ap.add_argument("--output")
     ap.add_argument("--source-archive")
+    ap.add_argument("--job-workspace", action="store_true",
+                    help="retain the build tree beneath the owning broker job")
     ap.add_argument("--verify-desktop-runtimes", action="store_true",
                     help="verify both same-image Windows runtime inputs without building a package")
     args = ap.parse_args()
 
     if args.verify_desktop_runtimes:
-        if args.name or args.output or args.source_archive:
+        if args.name or args.output or args.source_archive or args.job_workspace:
             ap.error("runtime verification cannot be combined with a package request")
         for arch in ("amd64", "arm64"):
             verify_desktop_runtimes(Path(args.source_root), arch)
@@ -777,7 +783,15 @@ def main() -> int:
         expected_sha = _provenance.resolve_sha(root=Path(__file__).resolve().parents[2])
     expected_family = provenance_family(family, arch)
 
-    work = create_owned_temp("router-vpn-one-package-")
+    if args.job_workspace:
+        requested = Path(args.output).absolute()
+        if (requested != output or output.name != args.name or
+                not output.parent.name.startswith(("router-vpn-job-", "router-vpn-request-"))):
+            raise RuntimeError("package build requires the original parent broker workspace")
+        _OWNED_TEMP["require_parent_workspace"](output.parent)
+        work = Path(tempfile.mkdtemp(prefix="package-build-", dir=output.parent))
+    else:
+        work = create_owned_temp("router-vpn-one-package-")
     try:
         if args.source_archive:
             if family == "bundle":
@@ -788,17 +802,18 @@ def main() -> int:
             root = build_local(work, args.name, src_root, compiled_root, base)
             _provenance.write_manifest(root, expected_sha, expected_family)
         _provenance.verify_manifest(root, expected_sha, expected_family)
-        zip_dir(root, output)
+        identity, digest = zip_dir(root, output)
     finally:
-        try:
-            cleanup_owned_temp(work)
-        except OSError:
-            pass
+        if not args.job_workspace and not cleanup_owned_temp(work):
+            raise RuntimeError("standalone package workspace cleanup failed")
 
+    _OWNED_TEMP["verify_package_output"](output, identity)
     if not output.is_file() or output.is_symlink() or output.stat().st_size == 0:
         raise SystemExit("package creation returned an empty/unsafe file")
     if os.name != "nt" and output.stat().st_mode & 0o777 != 0o600:
         raise SystemExit("package output lost private 0600 mode")
+    if args.job_workspace:
+        print(json.dumps([identity, digest]), flush=True)
     return 0
 
 

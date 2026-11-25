@@ -92,9 +92,11 @@ func (p *NodeChainExecutionPreparation) SupportsCompareLocalResponseCandidate(po
 		return false
 	}
 	if p.multiple != nil {
-		_, eligible := p.local.selectedStreamLayout()
+		private, eligible := p.local.selectedStreamLayout()
+		finalPrefix := len(p.local.proofs) - 2
+		insert := private == 0 && len(p.local.proofs) < NodeChainExtendedLocalMaximumNodes && position > 0 && position < finalPrefix
 		return eligible && p.multiple.local == p.local && p.multiple.owners == p.local.importedNodes &&
-			position == len(p.local.proofs)-2 &&
+			(position == finalPrefix || insert) &&
 			p.local.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement
 	}
 	return p.local.compareLocalResponsePrefix(position)
@@ -150,12 +152,13 @@ func (r *NodeChainExecutionRuntime) newExecutionCandidatePlanContext(ctx context
 		}
 		plan, err = original.NewCandidatePlan(position, inventory)
 		if err == nil {
-			// NewCandidatePlan excludes every original profile and private proof
-			// through the penultimate stop. Also exclude the original final.
-			final := original.proofs[len(original.proofs)-1]
+			// The plan excludes prefix identities. A separately named route
+			// preserves the unmeasured suffix as well, including its final.
 			for _, response := range plan.responses {
-				if response.Target.ID == final.ProfileID || response.NodeID == final.NodeID {
-					return nil, nodeChainExecutionError
+				for _, member := range original.proofs[position+1:] {
+					if response.Target.ID == member.ProfileID || response.NodeID == member.NodeID {
+						return nil, nodeChainExecutionError
+					}
 				}
 			}
 		}

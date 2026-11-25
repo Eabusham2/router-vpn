@@ -778,10 +778,12 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         localStreamLayout(nodes, execution: execution, profiles: profiles)?.paired ?? []
     }
 
-    static func supportsCompareResponseFinal(_ nodes: [Self], profiles: [RouterProfile]) -> Bool {
+    static func compareResponsePositions(_ nodes: [Self], profiles: [RouterProfile]) -> [Int] {
         guard nodes.first?.mode == "wg", nodes.dropFirst().allSatisfy({ $0.mode == "shadowsocks" }),
-              let layout = localStreamLayout(nodes, execution: "local", profiles: profiles) else { return false }
-        return layout.hostname == nil && layout.paired.count <= 1 && !layout.paired.contains(1)
+              let layout = localStreamLayout(nodes, execution: "local", profiles: profiles),
+              layout.hostname == nil, layout.paired.count <= 1, !layout.paired.contains(1) else { return [] }
+        let finalPrefix = nodes.count - 2
+        return layout.paired.isEmpty && nodes.count < physicalTraversalDepth ? Array(1...finalPrefix) : [finalPrefix]
     }
 
     static func transportName(_ mode: String) -> String {

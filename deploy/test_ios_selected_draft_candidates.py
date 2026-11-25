@@ -38,19 +38,23 @@ struct IOSDeviceMTUPreference: Equatable {
     let sourceSHA256 = Provider.hash, configSHA256 = String(repeating: "b", count: 64)
     var ordinaryLaunchInput: String { launchInput }
     var launchInput: String {
-        let source = String(decoding: try! JSONSerialization.data(withJSONObject: ["execution": requested, "schema": [9,16].contains(Draft.schema) ? 6 : Draft.schema], options: [.sortedKeys]), as: UTF8.self)
+        let source = String(decoding: try! JSONSerialization.data(withJSONObject: ["execution": requested, "schema": [9,16,17].contains(Draft.schema) ? 6 : Draft.schema], options: [.sortedKeys]), as: UTF8.self)
         let launch = ["source": source, "source_sha256": sourceSHA256, "config_sha256": configSHA256]
         return String(decoding: try! JSONSerialization.data(withJSONObject: launch, options: [.sortedKeys]), as: UTF8.self)
     }
     var isSOCKS: Bool { Draft.schema == 3 }
     var isCONNECT: Bool { Draft.schema == 4 }
     // SHIPPING_PACKET_POSITIONS
- func responsePosition(for winner:String)->Int? { Draft.response && requested == "auto" && winner == "local" ? members.count-2:nil }
- func candidatePositions(for winner:String)->[Int] { candidatePositions + (responsePosition(for:winner).map {[$0]} ?? []) }
+ func responsePositions(for winner:String)->[Int] {
+  guard Draft.response, requested == "auto", winner == "local" else {return []}
+  return Draft.schema==17 ? Array(1...members.count-2):[members.count-2]
+ }
+ func candidatePositions(for winner:String)->[Int] { candidatePositions + responsePositions(for:winner) }
     // SHIPPING_HEX
     var members: [IOSNodeChainCapture.Member] {
         let graph: [(String, String)]
         switch Draft.schema {
+        case 17: graph = [("entry", "wg")] + (1...14).map { ("import-"+String($0), "shadowsocks") } + [("final","shadowsocks")]
         case 16: graph = [("entry", "wg")] + (1...13).map { ("import-"+String($0), "shadowsocks") } + [("middle", "shadowsocks"), ("final", "shadowsocks")]
         case 9: graph = [("entry", "wg"), ("import", "shadowsocks"), ("middle", "shadowsocks"), ("final", "shadowsocks")]
         case 8: graph = [("entry", "wg"), ("middle", "shadowsocks"), ("final", "shadowsocks")]
@@ -110,7 +114,7 @@ struct NEOnDemandRuleConnect {}
 enum IOSNodeChainProviderCapture { static let executionKey = "nodeChainExecutionSource" }
 @MainActor enum Draft {
     static var winner = "server", requested = "server", position = 2, schema = 6
-    static var response: Bool { [8,9,16].contains(schema) }
+    static var response: Bool { [8,9,16,17].contains(schema) }
     static var starts = 0, removes = 0, candidateStarts = 0, unattendedStarts = 0
     static var replacedRule = false
     static var wrongConfig = false, wrongProofs = false, wrongWinner = false, lastAtInfo = false, foreignReadback = false
@@ -158,10 +162,13 @@ enum IOSNodeChainProviderCapture { static let executionKey = "nodeChainExecution
 
 TEST = r'''
 @MainActor @main struct SelectedDraftFlow {
-    static func run(_ requested: String, _ winner: String, _ invalid: String = "", schema: Int = 6) async throws {
+    static func run(_ requested: String, _ winner: String, _ invalid: String = "", schema: Int = 6, use: String = "") async throws {
         Draft.reset(requested, winner)
-        Draft.schema = schema; Draft.position = schema == 16 ? 14 : (schema == 6 || schema == 9 ? 2 : 1)
+        Draft.schema = schema; Draft.position = schema == 17 ? 12 : schema == 16 ? 14 : (schema == 6 || schema == 9 ? 2 : 1)
         let model = RouterVPNModel(), probe = IOSNodeCandidates()
+        if use == "relinked" {
+            IOSNodeBundleStore.shared.records["import-13"] = try JSONSerialization.data(withJSONObject: ["protocol":"shadowsocks","server":"198.51.100.13"])
+        }
         let saved = try IOSNodeUsage.canonical(model.bundle)
         var draft = model.bundle!
         draft.routerProfiles[0].multihopExecution = requested
@@ -212,7 +219,24 @@ TEST = r'''
             try await until { !probe.scores.isEmpty || !probe.running }
             try check(probe.editorScore(node: "candidate", after: Draft.position) == 2.4 && !probe.canSave,
                       "editor score lost the original stop or saved before explicit preparation")
-            if Draft.response {
+            if !use.isEmpty {
+                let row = probe.scores[0]
+                try check(probe.draftInsertion(for: row) != nil && IOSConnectionProfileStore.writes == 0, "draft choice missing after original DOWN")
+                if use == "stale" { model.iosConnectGeneration = UUID() }
+                if use == "relinked" {
+                    IOSNodeBundleStore.shared.records["import-13"] = try JSONSerialization.data(withJSONObject: ["protocol":"shadowsocks","server":"198.51.100.113"])
+                }
+                var applied = false
+                do { try probe.useInDraft(row) { _ in applied = true } }
+                catch { if use == "choose" { throw error } }
+                try check(applied == (use == "choose") && IOSConnectionProfileStore.writes == 0, "draft adoption used expired authority or wrote a profile")
+                if applied {
+                    var replayed = false
+                    try? probe.useInDraft(row) { _ in replayed = true }
+                    try check(!replayed, "used draft receipt survived adoption")
+                }
+            } else if Draft.response {
+                if schema==17 {try check(probe.editorScore(node:"candidate",after:1)==nil,"another eligible import borrowed this draft score")}
                 try check(probe.canPrepare && IOSConnectionProfileStore.writes == 0, "joined private response lacked an explicit Prepare action")
                 probe.prepare(probe.scores[0]); try await until { !probe.preparing }
                 try check(probe.canSave && IOSConnectionProfileStore.writes == 0, "Choose wrote a profile or failed to retain the original response")
@@ -223,7 +247,7 @@ TEST = r'''
             probe.cancel(); try await until { !probe.running }
         }
         try check(Draft.unattendedStarts == 0, "unsaved selected graph started from On Demand during preference save")
-        try check(try IOSNodeUsage.canonical(model.bundle) == saved && IOSConnectionProfileStore.writes == (Draft.response && invalid.isEmpty ? 1:0) &&
+        try check(try IOSNodeUsage.canonical(model.bundle) == saved && IOSConnectionProfileStore.writes == (Draft.response && invalid.isEmpty && use.isEmpty ? 1:0) &&
                   !model.connected && NETunnelProviderManager.saved == nil && !IOSMTUMeasurementGate.held,
                   "draft trial left a selected graph or saved profile behind")
     }
@@ -235,9 +259,16 @@ TEST = r'''
             try check(actual == expected, "original typed packet position scope changed for schema " + String(schema))
         }
         try await run("auto","local",schema:8)
+        try await run("auto","local",schema:8,use:"choose")
+        try await run("auto","local",schema:17,use:"choose")
+        try await run("auto","local",schema:17,use:"stale")
+        try await run("auto","local",schema:17,use:"relinked")
         try await run("auto","server","server-response",schema:8)
         try await run("auto","local",schema:9)
         try await run("auto","server","server-response",schema:9)
+        try await run("auto","local",schema:17)
+        try await run("auto","server","server-response",schema:17)
+        try await run("auto","local","proofs",schema:17)
         try await run("auto","local",schema:16)
         try await run("auto","server","server-response",schema:16)
         for schema in [1, 2, 5] { try await run("auto", "local", schema: schema) }
@@ -281,7 +312,7 @@ def fixture():
                      '''  let execution=ExecutionCapture(requested:Draft.requested)
   let proofs:[[String:Any]]=execution.members.enumerated().map{
    var value:[String:Any]=["position":$0.offset,"profile_id":$0.element.id,"node_id":$0.element.profile["node_proof_id"] as? String ?? "","mode":$0.element.mode]
-   if $0.offset==execution.responsePosition(for:Draft.winner){value["measurement"]="routed-candidate-response"}
+   if execution.responsePositions(for:Draft.winner).contains($0.offset){value["measurement"]="routed-candidate-response"}
    return value
   }
   if op=="candidate-start"{Draft.candidateStarts+=1}''')
@@ -294,13 +325,13 @@ def fixture():
     source = replace(source, next(line for line in source.splitlines() if 'if op=="candidate-open"' in line),
                      '''  if op=="candidate-open"{
   guard body["prefix"]==String(Draft.position) else{throw Failure(message:"selected draft opened a foreign packet stop")}
-  var metadata:[String:Any]=["schema":1,"capture_sha256":hash,"prefix_position":Draft.position,"prefix_id":"middle",
+  var metadata:[String:Any]=["schema":1,"capture_sha256":hash,"prefix_position":Draft.position,"prefix_id":ExecutionCapture(requested:Draft.requested).members[Draft.position].id,
   "source_sha256":hash,"config_sha256":Draft.projected,"preparation_source_sha256":hash,"preparation_config_sha256":Draft.projected,
   "requested_execution":Draft.requested,"execution":Draft.wrongWinner ? "server" : Draft.winner,"selection_epoch":17,"targets":[["id":"candidate","source_sha256":hash]]]
   if Draft.response{metadata["measurement"]="routed-candidate-response"}
   reply["metadata"]=String(decoding:try json(metadata),as:UTF8.self)}''')
     source = replace(source, '"capture_sha256":hash,"prefix_position":0,"prefix_id":"entry","candidate_id":"candidate"',
-                     '"capture_sha256":hash,"prefix_position":Draft.position,"prefix_id":"middle","candidate_id":"candidate"')
+                     '"capture_sha256":hash,"prefix_position":Draft.position,"prefix_id":ExecutionCapture(requested:Draft.requested).members[Draft.position].id,"candidate_id":"candidate"')
     source = replace(source, 'throw Failure(message:"unexpected Server/Compare handoff in a Local prefix test")',
                      'guard Draft.response, winner=="local", position==Draft.position, candidateID=="candidate", measuredInput=="measured original" else{throw Failure(message:"foreign selected response proposal")};return Self()')
     source = source.replace('"measurement":"routed-tcp-connect"', '"measurement":Draft.response ? "routed-candidate-response":"routed-tcp-connect"')
@@ -322,6 +353,10 @@ def fixture():
 
 
 def main():
+    view = (APP/'IOSNodeChainEditorView.swift').read_text()
+    adoption = member(view, '                        IOSCandidateProfileChoices(probe: candidates, useInDraft:')
+    for call in ('try candidates.useInDraft(score)', 'try draft.insertMeasured(score.id, after: position, compiled: compiled)', 'schedule(after: position + 1)'):
+        assert call in adoption, 'The measured editor action lost '+call
     owner = (APP/'IOSNodeCandidates.swift').read_text()
     controller = owner[owner.index('private final class IOSCandidateReply:'):owner.index('struct IOSNodeCandidatesCard:')]
     controller += '\n'+member(owner, '@MainActor extension IOSNodeCandidates {')
@@ -348,6 +383,8 @@ def main():
         exercise(command)
         draft = APP/'IOSNodeCandidateDraftExecution.swift'
         changes = (
+            ('skipped detached receipt check', host, 'try preparation.requireSaved(token: score.token)\n        try apply(proposal)', 'try apply(proposal)', 'draft adoption used expired authority or wrote a profile'),
+            ('borrowed first eligible response', host, '$0.position == position && $0.metric == "routed-candidate-response"', '$0.metric == "routed-candidate-response"', 'selected draft bypassed original candidate close: 17/auto/local'),
             ('foreign selected winner', draft, 'info.execution == winner,', '["local", "server"].contains(winner),', 'changed selected source started candidate traffic'),
             ('substituted unsaved preference', draft, 'try IOSNodeUsage.canonical(bundle) == draftBundle', 'true', 'changed selected source started candidate traffic'),
             ('autonomous On Demand', test, 'if strict && candidateDraft == nil {', 'if strict {', 'unsaved selected graph started from On Demand during preference save'),

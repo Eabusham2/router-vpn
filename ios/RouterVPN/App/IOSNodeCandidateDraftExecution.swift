@@ -23,11 +23,11 @@ import Foundation
               execution.launchInput == execution.ordinaryLaunchInput else { throw CancellationError() }
         _ = try IOSRuntimeSelector.selectNodeChain(route)
         launchInput = execution.launchInput; sourceSHA256 = execution.sourceSHA256; configSHA256 = execution.configSHA256
-        let response = execution.responsePosition(for: "local")
+        let responses = execution.responsePositions(for: "local")
         prefixes = execution.members.enumerated().map { position, member in
             IOSNodeCandidatePrefix(position: position, profile_id: member.id,
                 node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode,
-                measurement: position == response ? "routed-candidate-response" : nil)
+                measurement: responses.contains(position) ? "routed-candidate-response" : nil)
         }
         draftBundle = try IOSNodeUsage.canonical(bundle)
         self.position = position; self.request = request

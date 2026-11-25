@@ -193,14 +193,19 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 		return
 	}
 	job := owner.prepared
-	namedAction := ""
+	namedAction, draftAction := "", ""
+	privateResponse := candidateViewMetric(job.view.prefixes, job.view.position) == hopmeasure.CandidatePrivateResponseMeasurement
 	for _, choice := range job.view.candidates {
 		if choice.ID == q.CandidateID && choice.SaveReason == "" && reflect.DeepEqual(choice.Proposal, q.ProposedPath) &&
-			(choice.ProposalAction == "save-final-profile" || choice.ProposalAction == "save-intermediate-profile") && candidateViewMetric(job.view.prefixes, job.view.position) == hopmeasure.CandidatePrivateResponseMeasurement {
+			(choice.ProposalAction == "save-final-profile" || choice.ProposalAction == "save-intermediate-profile") && privateResponse {
 			namedAction = choice.ProposalAction
 		}
+		if privateResponse && choice.ID == q.CandidateID && len(choice.DraftProposal) != 0 &&
+			choice.DraftAction == orderedCandidateDraftInsertAction && reflect.DeepEqual(choice.DraftProposal, q.ProposedPath) {
+			draftAction = choice.DraftAction
+		}
 	}
-	if draftSave != (namedAction != "") && (draftSave || draftChoice) {
+	if draftSave && namedAction == "" || draftChoice && privateResponse && draftAction == "" {
 		control.mu.Unlock()
 		http.Error(w, "Action differs from the original measured candidate proposal", 409)
 		return
@@ -257,6 +262,8 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 		if err == nil && action != namedAction {
 			err = errors.New("original named candidate action changed")
 		}
+	} else if draftChoice && privateResponse {
+		profile, nodes, err = orderedResponseDraftProposal(ctx, p.selection.Native.root, p.request.draft.Execution, p.selection.Nodes, p.request.Position, candidate, profiles)
 	} else if draftChoice {
 		profile, nodes, err = orderedDraftProposal(p.request.draft.Execution, p.selection.Nodes, p.request.Position, candidate, profiles)
 	} else {
@@ -290,10 +297,10 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 			return errors.New("original candidate result changed before profile append")
 		}
 		liveCandidate, candidateExists := a.profileByIDLocked(q.CandidateID)
-		if draftSave && (!candidateExists || p.request.draft.ExpectedSelectedNodeID == nil || a.profiles.SelectedID != *p.request.draft.ExpectedSelectedNodeID ||
+		if (draftSave || draftChoice) && (!candidateExists || p.request.draft.ExpectedSelectedNodeID == nil || a.profiles.SelectedID != *p.request.draft.ExpectedSelectedNodeID ||
 			a.validateDesktopProfileExpectationsLocked(p.request.draft.desktopProfileExpectations, nodeChainIDsForDraft(p.request.draft.Nodes), true) != nil ||
 			p.inventory.profiles[q.CandidateID] != publicProfileToken(liveCandidate)) {
-			return errors.New("original candidate or selected draft changed before named profile Save")
+			return errors.New("original candidate or selected draft changed before adoption")
 		}
 		if err := p.reviewBoundaryLocked(); err != nil {
 			return err
@@ -369,7 +376,21 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 			http.Error(w, "draft choice was cancelled, expired, or changed before delivery", 409)
 			return
 		}
+		// The last network observation above can overlap a linked-file
+		// replacement without changing any public profile token. Recheck both
+		// original inventories and the compiled insertion under the delivery
+		// lock before releasing this one consumed choice to its editor.
+		if err := errors.Join(p.savedInventoryFilesCurrent(ctx),
+			p.selection.Native.chain.validate(ctx, p.selection.Control, a.profiles.Profiles),
+			compiled.validate(ctx, profile, profiles)); err != nil {
+			p.invalidate()
+			http.Error(w, "the original linked files changed before draft delivery", 409)
+			return
+		}
 		response["chosen"], response["candidate_id"], response["proposed_path"] = true, q.CandidateID, nodes
+		if draftAction != "" {
+			response["draft_action"] = draftAction
+		}
 		response["requested_execution"] = p.request.draft.Execution
 		response["expected_selected_node_id"], response["expected_profile_tokens"] = profile.ID, tokens
 		viaEntryJSON(w, response)

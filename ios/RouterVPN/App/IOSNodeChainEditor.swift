@@ -20,6 +20,17 @@ struct IOSNodeChainDraft {
             IOSMultihopNodeSelection.nativeFinalModes.contains(nodes.last?.mode ?? "")
     }
 
+    mutating func insertMeasured(_ candidate: String, after position: Int, compiled: [IOSMultihopNodeSelection]) throws {
+        var expected = nodes.filter { !$0.id.isEmpty }
+        guard position > 0, position < expected.count - 1, expected.count < IOSMultihopNodeSelection.physicalTraversalDepth,
+              nodes.prefix(position + 1).allSatisfy({ !$0.id.isEmpty }), !expected.contains(where: { $0.id == candidate }) else {
+            throw IOSMultihopNodeSelection.issue("Measure this draft again.")
+        }
+        expected.insert(.init(id: candidate, mode: "shadowsocks"), at: position + 1)
+        guard compiled == expected, compiled.last?.id == controlID else { throw IOSMultihopNodeSelection.issue("The measured path and the current draft differ.") }
+        nodes = expected
+    }
+
     /// The temporary provider receives a complete compilable Local source.
     /// Keep every chosen suffix node and its policy in the source. The
     /// provider only opens the prefix, and empty editor rows supply no node.
@@ -41,8 +52,8 @@ struct IOSNodeChainDraft {
                    return index == 1 ? IOSImportedShadowsocksSource.eligibleLiteral(profile) :
                         profile.normalizedNodeKind == "router-vpn" && profile.external == nil
                }) { return nodes }
-            if execution == "auto", position == nodes.count - 2, selected == nodes,
-               IOSMultihopNodeSelection.supportsCompareResponseFinal(nodes, profiles: linked) { return nodes }
+            if execution == "auto", selected == nodes,
+               IOSMultihopNodeSelection.compareResponsePositions(nodes, profiles: linked).contains(position) { return nodes }
             let hasPairedStream = selected.dropFirst().dropLast().contains { node in
                 node.mode == "shadowsocks" && linked.contains { $0.id == node.id && $0.normalizedNodeKind == "router-vpn" }
             }

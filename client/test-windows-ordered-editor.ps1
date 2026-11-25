@@ -222,7 +222,9 @@ try{
         $next=$Position+1
         $all=[Collections.Generic.List[object]]::new()
         foreach($original in $Draft.nodes){$all.Add($original)}
-        $all.Insert($next,[pscustomobject]@{id='prefix-2';mode='awg2-strong'})
+        if($script:DraftFault -ceq 'recapture'){return $null}
+        $candidateMode=if($script:DraftFault -ceq 'response'){'shadowsocks'}else{'awg2-strong'}
+        $all.Insert($next,[pscustomobject]@{id='prefix-2';mode=$candidateMode})
         $tokens=@{};foreach($node in $all){$match=@($store.profiles|Where-Object{$_.id-ceq$node.id});$tokens[$node.id]=$match[0].profile_token}
         $choice=[pscustomobject]@{requested_execution=$Draft.execution;candidate_id='prefix-2';expected_selected_node_id=$id;expected_profile_tokens=[pscustomobject]$tokens;proposed_path=$all.ToArray()}
         switch($script:DraftFault){
@@ -266,6 +268,18 @@ try{
         if($rows.Count -gt 2){$rows.RemoveAt(2)}
     }
     if($Group -in @('all','editor')){
+        $import.start_layer='off';$import.external.ordered_execution_middle_supported=$true
+        $import.external.ordered_local_imported_nodes_supported=$true;$import.external.ordered_multiple_imported_execution_supported=$true
+        $script:CurrentStore=$store;$rootControls['UnifiedExecution'].SelectedIndex=2
+        $rows.Clear();$rows.Add([pscustomobject]@{id='prefix-0';mode='wg'});$rows.Add([pscustomobject]@{id=$import.id;mode='shadowsocks'})
+        $RouterCombo.SelectedValue=$id;&$refresh;$list.SelectedIndex=1
+        $capturedHomeSelection=$rootControls['UnifiedNodeChainButton'].Tag
+        $script:DraftFault='response';&$measureNext
+        Check (($rows.id -join ',') -ceq 'prefix-0,import-b,prefix-2' -and $rows[2].mode -ceq 'shadowsocks' -and
+           [object]::ReferenceEquals($capturedHomeSelection,$rootControls['UnifiedNodeChainButton'].Tag)) 'Authenticated Use changed Home or lost the private stream insertion'
+        $script:DraftFault='recapture';$script:MeasuredBody=$null;$list.SelectedIndex=2;&$measureNext
+        Check ($null -ne $MeasuredBody -and ($MeasuredBody.nodes.id -join ',') -ceq ('prefix-0,import-b,prefix-2,'+$id) -and
+           $MeasuredBody.expected_profile_tokens.Count -eq 4 -and $MeasuredBody.execution -ceq 'auto') 'Remeasure lost the token-bound unsaved response path'
         $store.profiles=@($originalProfiles)+@(7..14|ForEach-Object{[pscustomobject]@{id=('prefix-'+$_);name=('Prefix '+$_);node_kind='router-vpn';start_layer='off';profile_token=('{0:x64}' -f ($_+1))}})
         $script:CurrentStore=$store;$rows.Clear();$prefixMode.SelectedIndex=0;$finalMode.Tag='shadowsocks'
         $rootControls['UnifiedExecution'].SelectedIndex=0;&$refresh
@@ -305,7 +319,12 @@ try{
                     $script:MeasuredBody=$null;$list.SelectedIndex=$count-2;&$measureNext
                     Check (($null -ne $MeasuredBody) -eq ($index -eq 2)) ('Compare penultimate source did not control the actual editor launch '+$count)
                     if($index -eq 2){Check ($MeasuredBody.execution -ceq 'auto' -and ($MeasuredBody.nodes.id -join ',') -ceq ($all.id -join ',')) 'Measured Compare changed its original source'}
-                    Check (-not(Test-RouterVPNOrderedCandidatePosition $all 1 'auto' $store.profiles)) 'Compare offered a response from an earlier imported position'
+                    foreach($k in @(1,($count-3))){
+                        $script:MeasuredBody=$null;$list.SelectedIndex=$k;&$measureNext
+                        $allowed=$index -eq 2 -and $privatePosition -eq -1 -and $count -lt 96
+                        Check (($null -ne $MeasuredBody) -eq $allowed) 'Earlier authenticated response did not use every retained original source'
+                        if($allowed){Check (($MeasuredBody.nodes.id -join ',') -ceq ($all.id -join ',')) 'Earlier Measure dropped the original suffix'}
+                    }
                 }
                 $store.profiles[0].start_layer='aes-256-gcm'
                 Check (-not(Test-RouterVPNOrderedCandidatePosition $all ($count-2) 'auto' $store.profiles)) 'Layered Compare acquired private response admission'

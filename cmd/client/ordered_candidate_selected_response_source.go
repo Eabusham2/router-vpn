@@ -1,5 +1,7 @@
 package main
 
+import "router-vpn/internal/mobilemultihop"
+
 // The UI receives only the original public identities and roles. This map is
 // attached to one immutable candidate view; it grants no measurement authority.
 type orderedCandidateResponseSourceNode struct {
@@ -9,7 +11,7 @@ type orderedCandidateResponseSourceNode struct {
 }
 
 func desktopCompareLocalPrivateResponseMembers(members []desktopNodeChainMember, execution string, position int) bool {
-	if execution != "auto" || len(members) < 4 || position != len(members)-2 ||
+	if execution != "auto" || len(members) < 4 || position < 1 || position > len(members)-2 ||
 		members[0].Mode != "wg" || members[0].Profile.External != nil ||
 		members[len(members)-1].Mode != "shadowsocks" || members[len(members)-1].Profile.External != nil {
 		return false
@@ -36,7 +38,8 @@ func desktopCompareLocalPrivateResponseMembers(members []desktopNodeChainMember,
 	}
 	// This source-only map retains all original roles. The original captured
 	// compiler and selected Local trial still grant the actual response plan.
-	return private <= 1 && desktopNodeChainMultipleImportedExecutionShape(members)
+	return private <= 1 && (position == len(members)-2 || private == 0 && len(members) < mobilemultihop.NodeChainExtendedLocalMaximumNodes) &&
+		desktopNodeChainMultipleImportedExecutionShape(members)
 }
 
 func orderedCandidateResponseSourceNodes(selection multihopSelection, execution string, position int) []orderedCandidateResponseSourceNode {

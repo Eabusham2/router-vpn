@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import importlib.util
+import json
 import os
+import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -38,15 +42,58 @@ _update = _load("routervpn_setup_center_update", "setup_center_update.py")
 _exact_release = _load("routervpn_exact_sha_release_download", "exact_sha_release_download.py")
 
 
-def _terminate_builder(proc: subprocess.Popen) -> None:
+def _adopt_orphaned_build_children() -> None:
+    # On Linux, an exiting builder may orphan a compiler before the broker
+    # can join it. Each job reaps only children in its own new process group.
+    if sys.platform.startswith("linux"):
+        libc = ctypes.CDLL(None, use_errno=True)
+        prctl = libc.prctl
+        prctl.argtypes = [ctypes.c_int] + [ctypes.c_ulong] * 4
+        if prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error))
+
+
+def _builder_group_alive(proc: subprocess.Popen) -> bool:
     if proc.poll() is not None:
-        return
-    proc.terminate()
+        try:
+            while os.waitpid(-proc.pid, os.WNOHANG)[0] > 0:
+                pass
+        except ChildProcessError:
+            pass
     try:
-        proc.wait(timeout=3)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=3)
+        os.killpg(proc.pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _terminate_builder(proc: subprocess.Popen) -> None:
+    if os.name != "posix":
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        return
+    if not _builder_group_alive(proc):
+        return
+    sig = signal.SIGTERM
+    while _builder_group_alive(proc):
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            break
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if not _builder_group_alive(proc):
+                return
+            time.sleep(0.025)
+        # The build thread keeps its original workspace until OS retirement.
+        sig = signal.SIGKILL
+    proc.wait()
 
 
 def _cancellable_run_builder(base: Path, name: str, temp: Path, source: Path | None, progress=None) -> Path:
@@ -56,47 +103,145 @@ def _cancellable_run_builder(base: Path, name: str, temp: Path, source: Path | N
     args = [
         "python3", str(broker.BUILDER_PATH), "--base", str(base),
         "--source-root", os.environ.get("ROUTER_VPN_FALLBACK_ROOT", "/src"),
-        "--name", name, "--output", str(output),
+        "--name", name, "--output", str(output), "--job-workspace",
     ]
     if source is not None:
         args += ["--source-archive", str(source)]
     if progress:
         progress("building", 58)
-    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL)
-    deadline = time.monotonic() + broker.PACKAGE_TIMEOUT
-    try:
-        while True:
-            code = proc.poll()
-            if code is not None:
-                if code != 0:
-                    raise subprocess.CalledProcessError(code, args)
-                break
-            if time.monotonic() >= deadline:
-                _terminate_builder(proc)
-                raise subprocess.TimeoutExpired(args, broker.PACKAGE_TIMEOUT)
-            if progress:
-                try:
-                    # DownloadJobManager's progress callback is also the
-                    # cooperative cancellation checkpoint. Rechecking while the
-                    # subprocess is alive makes Cancel terminate a local build
-                    # instead of waiting for the full package timeout.
+    _adopt_orphaned_build_children()
+    # Compilers and their helper processes also create system temporary files.
+    # Their scratch space must retire with the same job after forced shutdown.
+    env = broker._owned_temp.workspace_child_environment(temp, progress)
+    scratch = tempfile.mkdtemp(prefix="builder-tmp-", dir=temp)
+    env.update(dict.fromkeys(("TMPDIR", "TMP", "TEMP", "GOTMPDIR"), scratch))
+    with tempfile.TemporaryFile(dir=scratch) as receipt:
+        proc = subprocess.Popen(args, stdout=receipt, env=env,
+                                start_new_session=(os.name == "posix"))
+        deadline = time.monotonic() + broker.PACKAGE_TIMEOUT
+        try:
+            while True:
+                code = proc.poll()
+                if code is not None:
+                    if code != 0:
+                        raise subprocess.CalledProcessError(code, args)
+                    break
+                if time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired(args, broker.PACKAGE_TIMEOUT)
+                if progress:
                     progress("building", 58)
-                except Exception:
-                    _terminate_builder(proc)
-                    raise
-            time.sleep(0.20)
-    except BaseException:
-        _terminate_builder(proc)
-        raise
+                time.sleep(0.20)
+        finally:
+            # The leader may have exited before a compiler grandchild. The job
+            # cannot publish READY or release its files until the group is gone.
+            _terminate_builder(proc)
+        receipt.seek(0)
+        identity, digest = json.loads(receipt.read(256))
+    broker._owned_temp.verify_package_output(output, identity, progress, digest)
     if progress:
         progress("packaging", 84)
     return output
+
+
+# Use the same verified Release and Actions implementations in a child whose
+# DNS lookup, TLS handshake or response read can be stopped and joined.
+_release_download = _exact_release._download_release_asset
+_actions_download = _ai._core._broker.fetch_artifact_member
+
+
+def _fetch_job_source(mode, workspace, output_name, *source):
+    broker = _ai._core._broker
+    temp = Path(workspace)
+    if (not temp.is_absolute() or temp.resolve() != temp or
+            not temp.name.startswith(("router-vpn-request-", "router-vpn-job-"))):
+        raise ValueError("source download requires its original parent broker workspace")
+    broker._owned_temp.require_parent_workspace(temp)
+    expected = broker._safe_selected_output(temp, output_name)
+    last = None
+    verified = None
+
+    def record(path, identity, digest):
+        nonlocal verified
+        if path != expected:
+            raise RuntimeError("GitHub source produced an unexpected path")
+        verified = (identity, digest)
+
+    def report(phase, value):
+        nonlocal last
+        current = (phase, value)
+        if current != last:
+            print(json.dumps(["progress", phase, value]), flush=True)
+            last = current
+
+    report.verified_output = record
+    if mode == "release" and len(source) == 1:
+        output = _release_download(broker, source[0], temp, output_name, progress=report)
+    elif mode == "actions" and len(source) == 2:
+        output = _actions_download(*source, temp, output_name, progress=report)
+    else:
+        raise ValueError("unknown GitHub source operation")
+    if output != expected or verified is None:
+        raise RuntimeError("GitHub source did not return the original output path")
+    broker._owned_temp.verify_package_output(output, verified[0])
+    print(json.dumps(["ready", *verified]), flush=True)
+
+
+def _cancellable_fetch(mode, temp, output_name, source, progress):
+    phase, value = "locating", 15
+    if progress:
+        progress(phase, value)
+    command = [sys.executable, __file__, "--fetch-job-source", mode, str(temp), output_name, *source]
+    _adopt_orphaned_build_children()
+    env = _ai._core._broker._owned_temp.workspace_child_environment(temp, progress)
+    with subprocess.Popen(command, stdout=subprocess.PIPE, env=env, start_new_session=(os.name == "posix")) as proc:
+        seen = 0
+        record = None
+        try:
+            while True:
+                try:
+                    output, _ = proc.communicate(timeout=0.2)
+                    finished = True
+                except subprocess.TimeoutExpired as timeout:
+                    output, finished = timeout.output or b"", False
+                # The child emits only changed progress values and one final
+                # file identity. Ignore an unfinished write until the next read.
+                lines = output.split(b"\n")[:-1]
+                for line in lines[seen:]:
+                    record = json.loads(line)
+                    if record[0] == "progress":
+                        phase, value = record[1:]
+                        if progress:
+                            progress(phase, value)
+                seen = len(lines)
+                if progress:
+                    progress(phase, value)
+                if finished:
+                    break
+        finally:
+            _terminate_builder(proc)
+        if proc.returncode or not lines:
+            raise RuntimeError(f"exact-SHA {mode} source worker failed ({proc.returncode})")
+    package = temp / output_name
+    if not isinstance(record, list) or len(record) != 3 or record[0] != "ready":
+        raise RuntimeError("GitHub source omitted its verified file identity")
+    _ai._core._broker._owned_temp.verify_package_output(package, record[1], progress, record[2])
+    return package
+
+
+def _job_release_asset(broker, name, temp, output_name, progress=None):
+    return _cancellable_fetch("release", temp, output_name, (name,), progress)
+
+
+def _job_actions_member(artifact, wanted, temp, output_name, progress=None):
+    return _cancellable_fetch("actions", temp, output_name, (artifact, wanted), progress)
 
 
 # Product delivery uses a cancellable local builder and the exact source order:
 # immutable exact-SHA GitHub Release asset, exact-SHA Actions artifact, then one
 # bounded router-local desktop/Portable build. Mobile stays GitHub-only.
 _ai._core._broker._run_builder = _cancellable_run_builder
+_ai._core._broker.fetch_artifact_member = _job_actions_member
+_exact_release._download_release_asset = _job_release_asset
 _exact_release.install(_ai._core._broker)
 
 
@@ -120,50 +265,6 @@ class Handler(_ai.Handler):
         if 'id="rvpn-update-script"' not in enriched:
             enriched = self._before_body(enriched, _update.UPDATE_PANEL)
         return enriched
-
-    def _job_file(self, job_id: str) -> None:
-        """Stream a retained package while honoring authenticated DELETE cancellation."""
-        try:
-            package, meta = self.server.jobs.begin_delivery(job_id)
-        except KeyError:
-            self._json(404, {"ok": False, "error_code": "not_found", "error": "download job not found"})
-            return
-        except RuntimeError as exc:
-            self._json(409, {"ok": False, "error_code": "not_ready", "error": str(exc)})
-            return
-
-        success = False
-        try:
-            size = package.stat().st_size
-            self.send_response(200)
-            self.send_header("Content-Type", str(meta["content_type"]))
-            self.send_header("Content-Disposition", f'attachment; filename="{meta["name"]}"')
-            self.send_header("Content-Length", str(size))
-            self.send_header("X-Router-VPN-Source", str(meta.get("source") or ""))
-            self.send_header("X-Router-VPN-Job", job_id)
-            self.send_header("X-Router-VPN-Retained-Until", str(meta.get("retained_until") or ""))
-            self.end_headers()
-            sent = 0
-            with package.open("rb") as f:
-                while True:
-                    if self.server.jobs.cancel_requested(job_id):
-                        break
-                    chunk = f.read(_ai._core._broker.CHUNK)
-                    if not chunk:
-                        success = not self.server.jobs.cancel_requested(job_id)
-                        break
-                    self.wfile.write(chunk)
-                    sent += len(chunk)
-                    self.server.jobs.update_delivery(job_id, sent, size)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
-        except Exception as exc:
-            print(f"setup center: delivery failed {job_id}: {type(exc).__name__}: {exc}", flush=True)
-        finally:
-            # Success and client disconnect retain the exact generated package
-            # and its owned workspace until the original READY+30m deadline.
-            # Explicit DELETE cancellation still removes it immediately.
-            self.server.jobs.finish_delivery(job_id, success)
 
     def _dynamic(self, name: str) -> None:
         """Route direct package links through the same retained async job."""
@@ -265,7 +366,16 @@ class Handler(_ai.Handler):
 
 
 class Server(_ai.Server):
-    pass
+    require_verified_output = True
+
+    def server_close(self):
+        while True:
+            try:
+                return super().server_close()
+            except _ai._core._broker._jobs.DownloadCleanupPending as exc:
+                # The listener has closed. Keep this broker and its original
+                # process-group and directory owners alive until cleanup joins.
+                print(f"setup center: {exc}", flush=True)
 
 
 def main() -> int:
@@ -282,14 +392,25 @@ def main() -> int:
         f"Router VPN Setup Center on {args.bind}:{args.port}; authenticated admin/downloads + exact-SHA Release-first delivery + one-package local fallback + 30-minute retained package retry + Full Guide + verified onboarding + device UX + Stop/Emergency/Resume server control + exact-SHA Portainer update + forwarding ownership/Protected DMZ + release/recovery status + server-side AI Help",
         flush=True,
     )
+    def terminate(_signum, _frame):
+        raise KeyboardInterrupt
+
+    previous = signal.signal(signal.SIGTERM, terminate)
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
         pass
     finally:
-        server.server_close()
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        try:
+            server.server_close()
+        finally:
+            signal.signal(signal.SIGTERM, previous)
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    if sys.argv[1:2] == ["--fetch-job-source"]:
+        _fetch_job_source(*sys.argv[2:])
+    else:
+        raise SystemExit(main())

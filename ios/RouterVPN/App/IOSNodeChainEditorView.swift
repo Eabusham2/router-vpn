@@ -25,7 +25,7 @@ struct IOSNodeChainEditorView: View {
     var body: some View {
         Form {
             Section("Nodes in connection order") {
-                Text("A packet prefix measures 50 TCP connections to each saved candidate. A supported Local Shadowsocks 2022 prefix measures 50 authenticated responses from a paired candidate’s private agent. Compare can measure a replacement final through one literal Shadowsocks 2022 import after WireGuard when Local wins and all three Start Layers are Off.")
+                Text("A packet prefix measures 50 TCP connections to each saved candidate. A qualified Shadowsocks prefix measures 50 authenticated responses from the paired candidate. Use in draft inserts it after the measured hop and keeps the final node. Save future profile creates a named route that you can Load separately.")
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(Array(draft.nodes.enumerated()), id: \.offset) { position, node in
                     VStack(alignment: .leading, spacing: 8) {
@@ -108,7 +108,18 @@ struct IOSNodeChainEditorView: View {
             if request != nil || candidates.running {
                 Section("Prefix measurement") {
                     if candidates.canPrepare || candidates.preparing || !candidates.proposalDescription.isEmpty {
-                        IOSCandidateProfileChoices(probe: candidates)
+                        IOSCandidateProfileChoices(probe: candidates, useInDraft: { score in
+                            do {
+                                guard let position = request?.position else { throw CancellationError() }
+                                try candidates.useInDraft(score) { proposal in
+                                    guard let compiled = proposal.profiles.last?.multihopNodes else { throw CancellationError() }
+                                    try draft.insertMeasured(score.id, after: position, compiled: compiled)
+                                }
+                                request = nil
+                                detail = "Inserted the measured node into this draft."
+                                schedule(after: position + 1)
+                            } catch { detail = error.localizedDescription }
+                        })
                     }
                     Text(candidates.text).font(.caption)
                     if candidates.running {

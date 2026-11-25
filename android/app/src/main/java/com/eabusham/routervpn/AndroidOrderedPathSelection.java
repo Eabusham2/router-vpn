@@ -206,6 +206,27 @@ final class AndroidOrderedPathSelection {
         addPrefix(id,"wg");
     }
 
+    void insertMeasured(AndroidNodeStore.ChainCapture original,int prefix,AndroidNodeStore.ChainSource candidate,
+            java.util.function.BooleanSupplier fresh) throws Exception {
+        requireCurrent();
+        if (candidate.imported || prefix < 1 || prefix >= members.size()-1 || members.size() >= AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH)
+            throw new IllegalStateException("This measured node cannot be inserted at the original position.");
+        AndroidNodeStore.ChainSource linked = catalog.source(candidate.id);
+        if (!linked.profileId.equals(candidate.profileId) || !linked.proofId.equals(candidate.proofId)
+                || !java.util.Arrays.equals(linked.bytes(),candidate.bytes()))
+            throw new IllegalStateException("The measured candidate has changed. Measure it again.");
+        original.editDraft(catalog,prefix,()->{
+            if (!fresh.getAsBoolean()) throw new IllegalStateException("The measured candidate expired before insertion.");
+            members.add(prefix + 1,new Member(linked,"shadowsocks"));
+            try {
+                requireBound();
+                if (!fresh.getAsBoolean()) throw new IllegalStateException("The measured candidate expired before insertion.");
+            } catch (Exception failure) { members.remove(prefix + 1); throw failure; }
+            revision++;
+            return null;
+        });
+    }
+
     void addPrefix(String id,String mode) throws Exception {
         requireCurrent();
         if(members.isEmpty())throw new IllegalStateException("Choose the final node first.");

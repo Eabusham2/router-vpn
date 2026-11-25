@@ -30,7 +30,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static boolean responsePrefix(List<AndroidNodeStore.ChainSource> sources,List<String> modes,int prefix,String execution) {
         if (sources.size()!=modes.size()||prefix<1||prefix>=sources.size()-1) return false;
         if ("auto".equals(execution)) {
-            if (sources.size() >= 4 && prefix == sources.size()-2) {
+            if (sources.size() >= 4) {
                 try {
                     List<Boolean> imported = new ArrayList<>();
                     java.util.Set<String> profiles = new java.util.HashSet<>(), proofs = new java.util.HashSet<>();
@@ -41,7 +41,9 @@ final class AndroidNodeChainCapture implements AutoCloseable {
                         if (member.imported) requireLiteralImportedSS(member);
                         else if (!member.proofId.matches("[0-9a-f]{64}") || !proofs.add(member.proofId)) return false;
                     }
-                    return selectedPrivateStreamPosition(modes, imported) >= 0;
+                    int privatePosition = selectedPrivateStreamPosition(modes, imported);
+                    return privatePosition >= 0 && (prefix == sources.size()-2
+                            || privatePosition == 0 && sources.size() < AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH);
                 } catch (Exception unavailable) { return false; }
             }
             if (prefix != 1 || !modes.equals(java.util.Arrays.asList("wg","shadowsocks","shadowsocks"))

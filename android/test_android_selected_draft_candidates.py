@@ -132,6 +132,7 @@ def sources(family):
 final class AndroidNodeCandidateProfile {
  static final class ProposalUnavailable extends Exception{ProposalUnavailable(String reason){super(reason);}}
  interface SavedResultAuthority{void requireCurrent(AndroidNodeCandidateResult result)throws Exception;}
+ static AndroidNodeCandidateProfile captureDraftInsertion(AndroidNodeCandidateMeasurement owner,AndroidNodeCandidateResult result,SavedResultAuthority authority,AndroidNodeCandidateProfile named)throws Exception{return null;}
  static AndroidNodeCandidateProfile captureTemporary(AndroidNodeCandidateMeasurement owner,AndroidNodeCandidateResult result,SavedResultAuthority authority)throws Exception{
   owner.requireResult(result);throw new ProposalUnavailable("Save the edited draft separately.");
  }

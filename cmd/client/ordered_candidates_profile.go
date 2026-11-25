@@ -247,7 +247,11 @@ func (a *app) saveOrderedCandidateProfile(w http.ResponseWriter, r *http.Request
 	job.view.addResponseSource(response)
 	if len(job.view.responseNodes) != 0 {
 		response["request_id"], response["candidate_id"] = q.RequestID, q.CandidateID
-		response["proposal_action"] = "save-final-profile"
+		action := "save-final-profile"
+		if job.view.position < len(job.view.responseNodes)-2 {
+			action = "save-intermediate-profile"
+		}
+		response["proposal_action"] = action
 	}
 	viaEntryJSON(w, response)
 }

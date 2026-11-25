@@ -46,11 +46,19 @@ func TestOrderedCandidateDraftNamedIntermediateKeepsSuffix(t *testing.T) {
 	testOrderedCandidateDraftNamed(t, 9, "wg", true, 1)
 }
 
+func TestOrderedCandidateDraftUseKeepsOriginalFinalAndSuffix(t *testing.T) {
+	for _, source := range []struct{ count, position int }{{3, 1}, {4, 1}, {6, 2}, {9, 7}} {
+		t.Run(fmt.Sprintf("%d/%d", source.count, source.position), func(t *testing.T) {
+			testOrderedCandidateDraftNamed(t, source.count, "wg", false, source.position, true)
+		})
+	}
+}
+
 func testOrderedCandidateDraftNamedFinal(t *testing.T, count int, mode string, hostname bool) {
 	t.Helper()
 	testOrderedCandidateDraftNamed(t, count, mode, hostname, count-2)
 }
-func testOrderedCandidateDraftNamed(t *testing.T, count int, mode string, hostname bool, selected int) {
+func testOrderedCandidateDraftNamed(t *testing.T, count int, mode string, hostname bool, selected int, useDraft ...bool) {
 	ctx := t.Context()
 	final := count - 1
 	interior := selected < final-1
@@ -190,9 +198,37 @@ func testOrderedCandidateDraftNamed(t *testing.T, count int, mode string, hostna
 	}
 	review(request, view, candidate)
 	payload := map[string]any{"request_id": request.RequestID, "view_token": view.token, "candidate_id": candidate, "proposed_path": expected, "scope": request.Scope}
+	if len(useDraft) != 0 && useDraft[0] {
+		inserted := slices.Insert(slices.Clone(rows), selected+1, common.MultihopNodeSelection{ID: candidate, Mode: "shadowsocks"})
+		if choice.DraftAction != orderedCandidateDraftInsertAction || !slices.Equal(choice.DraftProposal, inserted) {
+			t.Fatal("Local view lost its separately compiled draft insertion")
+		}
+		payload["proposed_path"] = inserted
+		out := orderedCandidateHTTP(t, a, "/api/multihop/draft-candidates/choose", payload)
+		var response struct {
+			Chosen     bool
+			NativeDown bool `json:"native_down"`
+			Drained    bool
+			Action     string                         `json:"draft_action"`
+			Path       []common.MultihopNodeSelection `json:"proposed_path"`
+			SavedID    string                         `json:"saved_profile_id"`
+			SelectedID string                         `json:"expected_selected_node_id"`
+			Tokens     map[string]string              `json:"expected_profile_tokens"`
+		}
+		store, err := loadConnectionProfileStore(a)
+		if out.Code != 200 || json.Unmarshal(out.Body.Bytes(), &response) != nil || !response.Chosen || !response.NativeDown || !response.Drained ||
+			response.Action != orderedCandidateDraftInsertAction || !slices.Equal(response.Path, inserted) || response.SavedID != "" || response.SelectedID != home ||
+			len(response.Tokens) != len(inserted) || err != nil || len(store.Profiles) != 0 || !reflect.DeepEqual(initial, a.profiles) || a.state.Connected || a.candidatePreparation != nil {
+			t.Fatal("Local Use lost a suffix or changed Home/persistent profiles", out.Code, out.Body.String(), err)
+		}
+		return
+	}
+	if interior {
+		payload["proposed_path"] = rows
+	}
 	choose := orderedCandidateHTTP(t, a, "/api/multihop/draft-candidates/choose", payload)
 	if choose.Code != 409 || !strings.Contains(choose.Body.String(), "Action differs") {
-		t.Fatal("editor chose a named final", choose.Code, choose.Body.String())
+		t.Fatal("editor chose a path other than its compiled insertion", choose.Code, choose.Body.String())
 	}
 	payload["name"] = "Measured new final"
 	payload["proposed_path"] = rows

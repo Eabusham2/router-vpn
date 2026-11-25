@@ -90,7 +90,7 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
         let selectedPosition = Int(positionText)
         let canonicalPosition = query.hasPrefix("prefix_position=") && selectedPosition.map { (0..<96).contains($0) && String($0) == positionText } == true
         let draftCatalog = isDraft && canonicalPosition && parts.count == 2 &&
-            (parts[1] == "scope=saved-prefix-local" || parts[1] == "scope=draft-complete-selected" && (selectedPosition ?? 96) < 8)
+            (parts[1] == "scope=saved-prefix-local" || parts[1] == "scope=draft-complete-selected" && (selectedPosition ?? 96) < 95)
         let prefixCatalog = candidateBase == savedBase && canonicalPosition && parts.count == 2 && parts[1] == "scope=saved-prefix-local"
         let candidateCatalog = url.path == candidateBase + "/catalog" && (draftCatalog || prefixCatalog || !isDraft && canonicalPosition && parts.count == 1)
         let candidateStatus = url.path == candidateBase && url.query?.range(of: "^request_id=[a-f0-9]{32}$", options: .regularExpression) != nil
@@ -221,12 +221,17 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                       nodes.indices.contains(prefix), prefix < nodes.count - 1,
                       let tokens = body["expected_profile_tokens"] as? [String: String] else { throw URLError(.badURL) }
                 let importedLong = nodes.count > 8 && ["wg", "awg2-fast", "awg2-strong"].contains(nodes.first?["mode"] ?? "") && nodes.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" }
-                guard (nodes.count <= 8 || importedLong || execution == "local") && (prefix < 7 || execution == "local") else { throw URLError(.badURL) }
+                guard nodes.count <= 8 || importedLong || execution == "local" else { throw URLError(.badURL) }
                 let packet = ["wg", "awg2-fast", "awg2-strong"].contains(nodes[prefix]["mode"] ?? "")
                 let packets = nodes.prefix(prefix + 1).prefix(while: { ["wg", "awg2-fast", "awg2-strong"].contains($0["mode"] ?? "") }).count
                 let stream = execution == "local" && packets > 0 && packets <= prefix &&
                     nodes.last?["mode"] == "shadowsocks" && nodes[packets...prefix].allSatisfy { $0["mode"] == "shadowsocks" }
-                guard packet || stream else { throw URLError(.badURL) }
+                // This envelope exposes only public references. The controller checks
+                // every original source, the Local winner and its selection epoch.
+                let compareStream = execution == "auto" && nodes.count >= 3 && prefix > 0 &&
+                    nodes.first?["mode"] == "wg" && nodes.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" } &&
+                    (prefix == nodes.count - 2 || nodes.count < 96)
+                guard packet && (prefix < 7 || execution == "local") || stream || compareStream else { throw URLError(.badURL) }
                 let scope = execution == "local" ? "saved-prefix-local" : "draft-complete-selected"
                 performanceValid = ["local", "server", "auto"].contains(execution) && url.query?.hasSuffix("&scope=" + scope) == true &&
                     Set(tokens.keys) == Set(nodes.compactMap { $0["id"] }) && tokens.values.allSatisfy { $0.range(of: #"\A[a-f0-9]{64}\z"#, options: .regularExpression) != nil } &&
@@ -244,8 +249,8 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
             let keys = suppliedKeys.subtracting(["scope"])
             let original = token("request_id",32)
             if url.path == candidateBase + "/cancel" {
-                let saved = candidateBase == savedBase || isDraft
-                performanceValid = original && (!saved || token("view_token",64)) && keys == (saved ? Set(["request_id","view_token"]) : Set(["request_id"])) && bounded(25)
+                let bound = candidateBase == savedBase || isDraft || keys.contains("view_token")
+                performanceValid = original && (!bound || token("view_token",64)) && keys == (bound ? Set(["request_id","view_token"]) : Set(["request_id"])) && bounded(25)
             } else if url.path == candidateBase && body == nil {
                 performanceValid = candidateStatus && bounded(25)
             } else if url.path == candidateBase {
@@ -253,14 +258,21 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                 let position = body?["prefix_position"] as? NSNumber
                 let requestBytes = (try? JSONSerialization.data(withJSONObject: body ?? [:]))?.count ?? Int.max
                 performanceValid = url.query == nil && original && token("view_token",64) && keys == Set(["request_id","view_token","prefix_position","candidate_ids","samples"]) && number("samples",equals:50) && bounded(180) &&
-                    position != nil && CFGetTypeID(position!) != CFBooleanGetTypeID() && position!.doubleValue.rounded() == position!.doubleValue && (0..<(body?["scope"] as? String == "draft-complete-selected" ? 8 : 96)).contains(position!.intValue) &&
+                    position != nil && CFGetTypeID(position!) != CFBooleanGetTypeID() && position!.doubleValue.rounded() == position!.doubleValue && (0..<(body?["scope"] as? String == "draft-complete-selected" ? 95 : 96)).contains(position!.intValue) &&
                     requestBytes <= 16384 && !ids.isEmpty && Set(ids).count == ids.count && ids.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 128 })
             } else {
                 let expected: Set<String> = isDraft && !draftNamedSave ? ["request_id","view_token","candidate_id","proposed_path"] : ["request_id","view_token","candidate_id","name","proposed_path"]
                 let name = identifier("name") ?? ""
+                let proposed = candidatePath(body?["proposed_path"])
+                let selectedSave = draftNamedSave && body?["scope"] as? String == "draft-complete-selected"
+                let selectedPath = proposed.map { nodes in
+                    nodes.count >= 3 && nodes.first?["mode"] == "wg" && nodes.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" } &&
+                        nodes.dropFirst(2).contains { $0["id"] == identifier("candidate_id") }
+                } ?? false
+                let draftChoice = isDraft && !draftNamedSave
+                let includesChosenHop = proposed?.dropFirst().dropLast().contains { $0["id"] == identifier("candidate_id") } == true
                 performanceValid = original && token("view_token",64) && identifier("candidate_id") != nil && keys == expected && bounded(25) &&
-                    (!draftNamedSave || body?["scope"] as? String == "saved-prefix-local") &&
-                    (isDraft && !draftNamedSave || !name.isEmpty && name.utf8.count <= 64) && candidatePath(body?["proposed_path"]) != nil
+                    (!draftChoice || includesChosenHop) && (!selectedSave || selectedPath) && (isDraft && !draftNamedSave || !name.isEmpty && name.utf8.count <= 64) && proposed != nil
             }
         case "/api/profiles", "/api/multihop/status": performanceValid = body == nil && bounded(5)
         case "/api/connection/live-latency": performanceValid = Set(body?.keys.map { $0 } ?? []) == Set(["samples"]) && number("samples", equals: 5) && bounded(12)

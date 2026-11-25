@@ -29,12 +29,19 @@ func appleOpenVPNExecutionFixture(t *testing.T, count int, mode, network, layer 
 // Emit original provider pairs and independently provisioned packet assets for
 // the shipping Swift consumers. Fixture generation supplies no connected proof.
 func TestEmitAppleOpenVPNExecutionFixtures(t *testing.T) {
+	packetCounts := []int{1, 2, 3, 4, 5, 6}
+	if selector, supplied := os.LookupEnv("ROUTER_VPN_APPLE_OPENVPN_PACKET_COUNT"); supplied {
+		if len(selector) != 1 || selector[0] < '1' || selector[0] > '6' {
+			t.Fatal("ROUTER_VPN_APPLE_OPENVPN_PACKET_COUNT must be a single digit from 1 through 6")
+		}
+		packetCounts = []int{int(selector[0] - '0')}
+	}
 	destination := os.Getenv("ROUTER_VPN_APPLE_OPENVPN_FIXTURES")
 	if destination == "" {
 		t.Skip("the required Apple source gate supplies its private fixture output")
 	}
 	fixtures := map[string]any{}
-	for count := 1; count <= 6; count++ {
+	for _, count := range packetCounts {
 		for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "mixed"} {
 			for _, network := range []string{"tcp", "udp"} {
 				for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
@@ -105,7 +112,7 @@ func TestEmitAppleOpenVPNExecutionFixtures(t *testing.T) {
 			}
 		}
 	}
-	if len(fixtures) != 144 {
+	if len(fixtures) != 24*len(packetCounts) {
 		t.Fatal("incomplete original source inventory", len(fixtures))
 	}
 	encoded, err := json.Marshal(fixtures)
@@ -115,5 +122,5 @@ func TestEmitAppleOpenVPNExecutionFixtures(t *testing.T) {
 	if err := os.WriteFile(destination, encoded, 0600); err != nil {
 		t.Fatal(err)
 	}
-	t.Log("emitted 144 original OpenVPN packet/provider/Server source fixtures")
+	t.Logf("emitted %d original OpenVPN packet/provider/Server source fixtures", len(fixtures))
 }

@@ -116,6 +116,7 @@ type multipleImportedMember struct {
 	private, public, benchmark       atomic.Uint64
 	downBytes, upBytes               atomic.Int64
 	wrong, held                      atomic.Bool
+	wrongPrivateID, sentWrongID      atomic.Bool
 	entered                          chan struct{}
 	close                            func()
 }
@@ -287,10 +288,12 @@ func (f *multipleImportedFixture) privateServer(t *testing.T, member *multipleIm
 			member.benchmark.Add(1)
 		}
 		actualID := nodeID
-		if member.wrong.Load() {
+		if member.wrong.Load() || member.wrongPrivateID.Load() {
 			actualID = strings.Repeat("f", 64)
 		}
-		_ = json.NewEncoder(w).Encode(desktopImportedWGSSHealthReply{true, actualID, "router-vpn-private-agent-v1"})
+		if err := json.NewEncoder(w).Encode(desktopImportedWGSSHealthReply{true, actualID, "router-vpn-private-agent-v1"}); err == nil && actualID != nodeID {
+			member.sentWrongID.Store(true)
+		}
 	}))
 }
 
@@ -462,6 +465,14 @@ func newMultipleImportedFixtureWithStreams(t *testing.T, layout multipleImported
 }
 
 func newMultipleImportedHostnameFixture(t *testing.T, layout multipleImportedLayout, mode, finalLayer, fault string, wrap func(tun.Handler) tun.Handler, streams []int, host *multipleImportedHostname, candidate ...multipleImportedCandidateSetup) *multipleImportedFixture {
+	return newMultipleImportedFixtureWithRoutes(t, layout, mode, finalLayer, fault, wrap, streams, host, nil, candidate...)
+}
+
+// Freeze any additional original routes while building peers from exit to entry.
+// The callback sees the already-bound physical successor before clients start.
+type multipleImportedPeerRoutes func(*testing.T, *multipleImportedFixture, int, *tls.Certificate) []desktopNodeLayerRoute
+
+func newMultipleImportedFixtureWithRoutes(t *testing.T, layout multipleImportedLayout, mode, finalLayer, fault string, wrap func(tun.Handler) tun.Handler, streams []int, host *multipleImportedHostname, peerRoutes multipleImportedPeerRoutes, candidate ...multipleImportedCandidateSetup) *multipleImportedFixture {
 	privateStreams := make(map[int]bool, len(streams))
 	for _, i := range streams {
 		privateStreams[i] = true
@@ -546,6 +557,9 @@ func newMultipleImportedHostnameFixture(t *testing.T, layout multipleImportedLay
 			member.virtual = fmt.Sprintf("198.51.100.%d:8388", 150+position)
 		}
 		routes := []desktopNodeLayerRoute{}
+		if peerRoutes != nil {
+			routes = append(routes, peerRoutes(t, f, position, &certificate)...)
+		}
 		if host != nil && position == host.position-1 {
 			address := resolver
 			if host.misplaced {

@@ -165,13 +165,46 @@ PRIVATE_RESPONSE_LAYOUTS = (
     ('9-paired-4-imported-penultimate', 9, 4, ('original',)), ('16-paired-7-imported-penultimate', 16, 7, ('original',)),
 )
 PRIVATE_RESPONSE_SOURCES = {f'{name}-{fault}': (count, paired, fault) for name, count, paired, faults in PRIVATE_RESPONSE_LAYOUTS for fault in faults}
+INTERMEDIATE_POSITIONS = {}
+for count, position in ((3, 1), (4, 1), (9, 6), (16, 8), (16, 13)):
+    faults = PRIVATE_RESPONSE_FAULTS + ('suffix-alias', 'changed-original-suffix') if count == 4 else ('original',)
+    for fault in faults:
+        leaf = f'{count}-imported-stop-{position}-{fault}'
+        INTERMEDIATE_POSITIONS[leaf] = position
+        PRIVATE_RESPONSE_SOURCES[leaf] = (count, 0, fault)
 PRIVATE_RESPONSE_CASES = tuple(PRIVATE_RESPONSE_SOURCES)
+
+
+def response_position(leaf):
+    return INTERMEDIATE_POSITIONS.get(leaf, PRIVATE_RESPONSE_SOURCES[leaf][0] - 2)
+
+
+def reloaded_response_marker(leaf):
+    if leaf not in INTERMEDIATE_POSITIONS:
+        return RELOADED_PRIVATE_FINAL
+    count = PRIVATE_RESPONSE_SOURCES[leaf][0]
+    position = INTERMEDIATE_POSITIONS[leaf]
+    if count == 3:
+        return ('RELOADED_PRIVATE_DRAFT nodes=4 schema=6 inserted=2 suffix=1 saved=false '
+                'requested=auto winner=local original_final=true private=true dns=true application=true joined=true')
+    return (f'RELOADED_PRIVATE_INTERMEDIATE nodes={count+1} inserted={position+1} suffix={count-position-1} '
+            'requested=auto winner=local original_final=true private=true dns=true application=true joined=true')
+
+
+def suffix_refusal_marker(leaf):
+    count, _, fault = PRIVATE_RESPONSE_SOURCES[leaf]
+    position = response_position(leaf)
+    if fault == 'suffix-alias':
+        return f'PRIVATE_RESPONSE_SUFFIX_ALIAS position={position} alias={position+1} distinct_private=true refused=true'
+    if fault == 'changed-original-suffix':
+        return f'PRIVATE_RESPONSE_CHANGED_SUFFIX position={position} final={count-1} accepted=50 ready=false joined=true'
+    return None
 
 
 def private_response_source_marker(leaf):
     count, paired, _ = PRIVATE_RESPONSE_SOURCES[leaf]
     role = 'paired' if paired == count - 2 else 'imported'
-    return f"PRIVATE_RESPONSE_SOURCE nodes={count} schema={2 if count == 3 else 6} position={count-2} role={role} paired={paired or 'none'}"
+    return f"PRIVATE_RESPONSE_SOURCE nodes={count} schema={2 if count == 3 else 6} position={response_position(leaf)} role={role} paired={paired or 'none'}"
 
 
 SELECTED_CASES += PRIVATE_RESPONSE_CASES
@@ -189,7 +222,7 @@ def selected_marker(leaf):
     if leaf in PRIVATE_RESPONSE_CASES:
         winner = 'server' if leaf.endswith('server-winner') else 'local'
         count = leaf.split('-', 1)[0]
-        return f'QUALIFIED_SELECTED_NATIVE nodes={count} execution=auto winner={winner} samples=0 bytes=0 first=0 last=0 response_samples=0'
+        return f'QUALIFIED_SELECTED_NATIVE nodes={count} execution=auto winner={winner} samples=0 bytes=0 first={INTERMEDIATE_POSITIONS.get(leaf, 0)} last=0 response_samples=0'
     if leaf in AWG_SELECTED_CASES:
         entry = 'awg2-fast' if leaf in FAST_SELECTED_CASES else 'awg2-strong'
         count, tail = leaf.split(f'-{entry}-')
@@ -348,12 +381,19 @@ def verdict(output, root, leaf=None, *, worker_digest=None):
                 raise ValueError('Missing original private candidate, exact challenge count, or joined refusal')
             prefix_receipts = [row.get('Output', '').strip() for row in rows if row.get('Test') == name
                                and 'PRIVATE_RESPONSE_PREFIX' in row.get('Output', '')]
-            prefix = f'PRIVATE_RESPONSE_PREFIX nodes={count} position={count-2} prefixes={count-1} authenticated=50'
+            position = response_position(leaf)
+            prefix = f'PRIVATE_RESPONSE_PREFIX nodes={count} position={position} prefixes={position+1} authenticated=50'
             if (samples and (len(prefix_receipts) != 1 or not prefix_receipts[0].endswith(prefix))) or (not samples and prefix_receipts):
                 raise ValueError('Missing original packet and SS2022 prefix response witnesses')
-            reloaded = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and 'RELOADED_PRIVATE_FINAL' in row.get('Output','')]
-            if (fault == 'original' and (len(reloaded) != 1 or not reloaded[0].endswith(RELOADED_PRIVATE_FINAL))) or (fault != 'original' and reloaded):
+            reloaded = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and 'RELOADED_PRIVATE_' in row.get('Output','')]
+            if (fault == 'original' and (len(reloaded) != 1 or not reloaded[0].endswith(reloaded_response_marker(leaf)))) or (fault != 'original' and reloaded):
                 raise ValueError('Missing loaded Compare private final, original prefix, DNS, application traffic or joined close')
+            refusal = suffix_refusal_marker(leaf)
+            suffix_witnesses = [row.get('Output', '').strip() for row in rows if row.get('Test') == name and
+                                any(marker in row.get('Output', '') for marker in ('PRIVATE_RESPONSE_SUFFIX_ALIAS', 'PRIVATE_RESPONSE_CHANGED_SUFFIX'))]
+            if (refusal and (len(suffix_witnesses) != 1 or not suffix_witnesses[0].endswith(refusal))) or (not refusal and suffix_witnesses):
+                raise ValueError('Missing the untouched original suffix refusal')
+
         if leaf in AWG_SELECTED_CASES:
             entry = 'awg2-fast' if leaf in FAST_SELECTED_CASES else 'awg2-strong'
             expected_client = f'QUALIFIED_SELECTED_CLIENT_AWG entry={entry} parameters_current=true other_mode_refused=true'

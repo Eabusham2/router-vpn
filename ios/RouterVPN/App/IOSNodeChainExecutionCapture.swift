@@ -125,26 +125,23 @@ final class IOSNodeChainExecutionCapture {
 
     // Only the retained Local winner can measure the selected response stop. The draft
     // uses "local" to preview this exact eligible family before starting Compare.
-    func responsePosition(for winner: String) -> Int? {
-        guard requested == "auto", winner == "local" else { return nil }
+    func responsePositions(for winner: String) -> [Int] {
+        guard requested == "auto", winner == "local" else { return [] }
         if case .multipleImported(let capture) = local {
-            let position = members.count - 2
-            guard capture.sourceSchema == 6, position >= 2,
-                  let profiles = try? members.map({ try JSONDecoder().decode(RouterProfile.self, from: Data($0.profileJSON.utf8)) }),
-                  IOSMultihopNodeSelection.supportsCompareResponseFinal(members.map { .init(id: $0.id, mode: $0.mode) },
-                    profiles: profiles) else { return nil }
-            return position
+            guard capture.sourceSchema == 6,
+                  let profiles = try? members.map({ try JSONDecoder().decode(RouterProfile.self, from: Data($0.profileJSON.utf8)) }) else { return [] }
+            return IOSMultihopNodeSelection.compareResponsePositions(members.map { .init(id: $0.id, mode: $0.mode) }, profiles: profiles)
         }
         guard case .ordinary(let capture) = local,
               capture.sourceSchema == 2, members.map(\.mode) == ["wg", "shadowsocks", "shadowsocks"],
               let middle = try? JSONDecoder().decode(RouterProfile.self, from: Data(members[1].profileJSON.utf8)),
               IOSImportedShadowsocksSource.eligibleLiteral(middle),
-              members.allSatisfy({ (try? IOSMultihopStartLayer.selected($0.profile)) == "off" }) else { return nil }
-        return 1
+              members.allSatisfy({ (try? IOSMultihopStartLayer.selected($0.profile)) == "off" }) else { return [] }
+        return [1]
     }
 
     func candidatePositions(for winner: String) -> [Int] {
-        candidatePositions + (responsePosition(for: winner).map { [$0] } ?? [])
+        candidatePositions + responsePositions(for: winner)
     }
 
     var isCONNECT: Bool { local.isCONNECT }

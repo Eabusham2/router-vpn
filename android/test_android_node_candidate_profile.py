@@ -219,7 +219,7 @@ public final class NodeCandidateProfileHarness {
   }finally{operation.cancel();AndroidMTUMeasurementGate.release(lease);session.capture.close();}
  }
  static void responseProfile(Path root,String variant)throws Exception{
-  boolean earlier=!variant.equals("final"), draft=variant.equals("draft"), conflict=variant.equals("conflict"),hostname=variant.equals("deep-hostname"),deep=variant.equals("deep")||hostname;
+  boolean use=variant.startsWith("use-"), earlier=!variant.equals("final")&&!variant.equals("use-final"), draft=variant.equals("draft")||use, conflict=variant.equals("conflict"),hostname=variant.equals("deep-hostname"),deep=variant.equals("deep")||hostname;
   var f=new NodeChainCaptureHarness.Fixture(root,"2/awg-fast");
   var bundles=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_ANDROID_CHAIN_FIXTURE"))));
   var independent=bundles.getJSONArray("8/mixed-awg").getJSONObject(7);
@@ -278,6 +278,7 @@ public final class NodeCandidateProfileHarness {
     }else{
      new AndroidNodeCandidateProfile(operation,result);
      proposal.set(AndroidNodeCandidateProfile.captureTemporary(operation,result,authority.get()));
+     if (use) proposal.set(AndroidNodeCandidateProfile.captureDraftInsertion(operation,result,authority.get(),proposal.get()));
     }
    }
    public void finished(Throwable error){failure.set(error);done.countDown();}
@@ -287,6 +288,23 @@ public final class NodeCandidateProfileHarness {
    if(failure.get()!=null)throw new AssertionError("authenticated candidate proposal lost its measured row",failure.get());
    session.current=false;AndroidMTUMeasurementGate.release(lease);
    before.same(f,"private candidate proposal preview");
+   if (use) {
+    var chosen=proposal.get();var sourceEditor=editor;
+    reject(()->chosen.useInDraft(sourceEditor),"private candidate entered the draft before DOWN");
+    authority.get().drained=true;
+    chosen.useInDraft(editor);
+    var expected=new ArrayList<String>();for(var member:original.members)expected.add(member.id);expected.add(2,next.id);
+    var actual=new ArrayList<String>();for(var member:editor.members())actual.add(member.source.id);
+    check(actual.equals(expected),"Local insertion replaced or dropped an existing node");
+    before.same(f,"Local unsaved insertion");
+    var fresh=editor.candidateDraftCapture(2).call();var inventory=AndroidNodeCandidateCatalog.captureSources(f.context,fresh,2);
+    try(var compiled=AndroidNodeChainCapture.compile(fresh,2);var opened=AndroidNodeCandidatePrefixCapture.compile(compiled,2,inventory.inventory)){
+     var info=new JSONObject(opened.metadata);
+     check(info.getString("measurement").equals("routed-candidate-response")&&info.getJSONArray("prefixes").length()==3,"new Local draft could not measure through the inserted node");
+    }
+    reject(()->chosen.useInDraft(sourceEditor),"a previous Local score updated the revised draft");
+    return;
+   }
    if(!conflict){
     authority.get().drained=true;var saved=proposal.get().save(f.context,earlier?"Measured intermediate":"Measured final");
     var members=f.row().getJSONArray("multihop_nodes");
@@ -334,7 +352,7 @@ public final class NodeCandidateProfileHarness {
  public static void main(String[] args)throws Exception{
   try{Path root=Path.of(args[0]);
    if(args.length==2&&args[1].equals("response")){
-    for(String variant:List.of("final","intermediate","draft","conflict","deep","deep-hostname"))responseProfile(root,variant);
+    for(String variant:List.of("final","intermediate","draft","conflict","deep","deep-hostname","use-final","use-earlier"))responseProfile(root,variant);
     System.out.println("Android authenticated candidate profile: "+checks+" source, Save, reopen and refusal checks PASS");return;
    }
    if(args.length==2&&args[1].startsWith("rows-")){

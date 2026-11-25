@@ -99,26 +99,6 @@ static void linux_telemetry_fastest_changed_v9(GtkComboBox *combo, gpointer data
 
 }
 
-static void linux_telemetry_set_forward_label_v9(LinuxTelemetryV9 *t,gboolean known,gboolean enabled){
-    if(t==NULL||t->forward==NULL)return;
-    gtk_button_set_label(GTK_BUTTON(t->forward),known?(enabled?"Forward ON":"Forward OFF"):"Forward ?");
-    gtk_widget_set_tooltip_text(t->forward,known?"Real server forwarding master on the active Router VPN home node.":"Connect a Router VPN home-node path to verify the real forwarding master.");
-}
-
-static gboolean linux_telemetry_read_forward_v9(LinuxTelemetryV9*t,gboolean*enabled){
-    if(t==NULL||enabled==NULL){
-        return FALSE;
-    }
-    Buffer out={0};char*err=NULL;gboolean ok=api_request("/api/forwarding/master","GET",NULL,5000,&out,&err);if(!ok){g_free(err);free(out.data);return FALSE;}
-    JsonNode*root=parse_json(out.data);free(out.data);g_free(err);if(root==NULL||!JSON_NODE_HOLDS_OBJECT(root)){if(root!=NULL)json_node_free(root);return FALSE;}JsonObject*obj=json_node_get_object(root);if(!json_object_has_member(obj,"enabled")){json_node_free(root);return FALSE;}*enabled=json_object_get_boolean_member(obj,"enabled");json_node_free(root);return TRUE;
-}
-
-static void linux_telemetry_forward_v9(GtkButton *button, gpointer data){
-    LinuxTelemetryV9*t=data;if(t==NULL)return;gtk_widget_set_sensitive(GTK_WIDGET(button),FALSE);gtk_button_set_label(button,"Forward …");gboolean current=FALSE;if(!linux_telemetry_read_forward_v9(t,&current)){append_diag(t->app,"Forwarding master unavailable: connect a Router VPN home-node path first.");linux_telemetry_set_forward_label_v9(t,FALSE,FALSE);gtk_widget_set_sensitive(GTK_WIDGET(button),TRUE);return;}
-    gboolean wanted=!current;char*body=g_strdup_printf("{\"enabled\":%s}",wanted?"true":"false");Buffer out={0};char*err=NULL;gboolean ok=api_request("/api/forwarding/master","PUT",body,10000,&out,&err);g_free(body);if(!ok){if(err!=NULL)append_diag(t->app,err);g_free(err);free(out.data);linux_telemetry_set_forward_label_v9(t,FALSE,FALSE);gtk_widget_set_sensitive(GTK_WIDGET(button),TRUE);return;}
-    JsonNode*root=parse_json(out.data);free(out.data);g_free(err);gboolean verified=FALSE,actual=FALSE;if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject*obj=json_node_get_object(root);if(json_object_has_member(obj,"enabled")){actual=json_object_get_boolean_member(obj,"enabled");verified=(actual==wanted);}}if(root!=NULL)json_node_free(root);if(!verified){append_diag(t->app,"Forwarding master response did not verify the requested state.");linux_telemetry_set_forward_label_v9(t,FALSE,FALSE);}else{char*msg=g_strdup_printf("Forwarding master %s on the active Router VPN home node.",actual?"ON":"OFF");append_diag(t->app,msg);g_free(msg);linux_telemetry_set_forward_label_v9(t,TRUE,actual);}gtk_widget_set_sensitive(GTK_WIDGET(button),TRUE);
-}
-
 /* Performance preserves Live path RTT, 50-sample selected node, Real path speed,
  * Routed hop speeds and Throughput + Auto MTU as separate owned requests.
  * /api/connection/speed-test and /api/multihop/speed-test remain real transfers. */
@@ -143,6 +123,53 @@ static const char *linux_ec_string(JsonObject *o,const char *name){JsonNode*n=li
 static gboolean linux_ec_bool(JsonObject *o,const char *name){JsonNode*n=linux_ec_member(o,name);return n!=NULL&&JSON_NODE_HOLDS_VALUE(n)&&json_node_get_value_type(n)==G_TYPE_BOOLEAN&&json_node_get_boolean(n);}
 static double linux_ec_number(JsonObject *o,const char *name){JsonNode*n=linux_ec_member(o,name);return n!=NULL&&JSON_NODE_HOLDS_VALUE(n)&&(json_node_get_value_type(n)==G_TYPE_DOUBLE||json_node_get_value_type(n)==G_TYPE_INT64)?json_node_get_double(n):NAN;}
 static gboolean linux_ec_token(const char *text,size_t length){if(text==NULL||strlen(text)!=length)return FALSE;for(size_t i=0;i<length;i++){if(!((text[i]>='0'&&text[i]<='9')||(text[i]>='a'&&text[i]<='f')))return FALSE;}return TRUE;}
+static gboolean linux_forward_state_valid(JsonObject *state) {
+    JsonNode *enabled = linux_ec_member(state, "enabled");
+    return linux_ec_bool(state, "ok") && enabled && JSON_NODE_HOLDS_VALUE(enabled) &&
+        json_node_get_value_type(enabled) == G_TYPE_BOOLEAN && *linux_ec_string(state, "router_id") &&
+        linux_ec_token(linux_ec_string(state, "path_token"), 64);
+}
+
+static void linux_telemetry_set_forward_label_v9(LinuxTelemetryV9 *t, JsonObject *state) {
+    if (!t || !t->forward) return;
+    gboolean known = linux_forward_state_valid(state);
+    g_object_set_data_full(G_OBJECT(t->forward), "forwarding-state", known ? json_object_ref(state) : NULL,
+                           (GDestroyNotify)json_object_unref);
+    gtk_widget_set_sensitive(t->forward, known);
+    gtk_button_set_label(GTK_BUTTON(t->forward), known ? (linux_ec_bool(state,"enabled") ? "Forward ON" : "Forward OFF") : "Forward ?");
+    gtk_widget_set_tooltip_text(t->forward, known ? "Server forwarding master on the active Router VPN home node." :
+                               "Connect a Router VPN home-node path to verify the forwarding master.");
+}
+
+static void linux_telemetry_forward_v9(GtkButton *button, gpointer data) {
+    LinuxTelemetryV9 *t = data;
+    JsonObject *original = g_object_get_data(G_OBJECT(button), "forwarding-state");
+    if (!t || !linux_forward_state_valid(original)) return;
+    gboolean wanted = !linux_ec_bool(original, "enabled");
+    const char *router = linux_ec_string(original, "router_id"), *path = linux_ec_string(original, "path_token");
+    gtk_widget_set_sensitive(GTK_WIDGET(button), FALSE);
+    gtk_button_set_label(button, "Forward …");
+    if (t->refresh_jobs[1]) rv_http_cancel_v16(t->refresh_jobs[1]);
+    g_autoptr(JsonNode) payload = json_node_new(JSON_NODE_OBJECT);
+    JsonObject *request = json_object_new();
+    json_node_take_object(payload, request);
+    json_object_set_boolean_member(request, "enabled", wanted);
+    json_object_set_string_member(request, "router_id", router);
+    json_object_set_string_member(request, "path_token", path);
+    g_autofree char *body = json_to_string(payload, FALSE);
+    Buffer out = {0};
+    g_autofree char *error = NULL;
+    gboolean sent = api_request("/api/forwarding/master", "PUT", body, 10000, &out, &error);
+    g_autoptr(JsonNode) reply = sent ? parse_json(out.data) : NULL;
+    free(out.data);
+    JsonObject *actual = reply && JSON_NODE_HOLDS_OBJECT(reply) ? json_node_get_object(reply) : NULL;
+    gboolean verified = linux_forward_state_valid(actual) && linux_ec_bool(actual, "enabled") == wanted &&
+        !strcmp(linux_ec_string(actual, "router_id"), router) && !strcmp(linux_ec_string(actual, "path_token"), path);
+    linux_telemetry_set_forward_label_v9(t, verified ? actual : NULL);
+    if (!verified) append_diag(t->app, error ? error : "The forwarding response did not verify the displayed connection and requested state.");
+    t->refresh_after = 0;
+}
+
 static gboolean linux_ec_matches(JsonObject *o,const char *request,const char *cohort){const char*r=linux_ec_string(o,"request_id"),*c=linux_ec_string(o,"cohort_id");return linux_ec_token(r,32)&&linux_ec_token(c,64)&&strcmp(r,request)==0&&strcmp(c,cohort)==0;}
 static double linux_ec_score(JsonObject *o){
     JsonObject*b=linux_ec_object(o,"benchmark"),*d=linux_ec_object(b,"distribution");
@@ -498,11 +525,7 @@ static gboolean linux_telemetry_refresh_v9(gpointer data) {
         JsonNode *root = ok ? parse_json(job->response) : NULL;
         JsonObject *value = root && JSON_NODE_HOLDS_OBJECT(root) ? json_node_get_object(root) : NULL;
         if (current && i == 0) linux_telemetry_apply_fastest_v9(t, value);
-        if (current && i == 1) {
-            JsonNode *enabled = linux_ec_member(value, "enabled");
-            gboolean known = enabled && JSON_NODE_HOLDS_VALUE(enabled) && json_node_get_value_type(enabled) == G_TYPE_BOOLEAN;
-            linux_telemetry_set_forward_label_v9(t, known, known && json_node_get_boolean(enabled));
-        }
+        if (current && i == 1 && !atomic_load(&job->cancelled)) linux_telemetry_set_forward_label_v9(t, value);
         if (i == 2) {
             if (!current || !linux_telemetry_same_route_v9(t->map_status, value)) linux_telemetry_clear_route_v9(t);
             g_clear_pointer(&t->map_status, json_object_unref);
@@ -546,7 +569,7 @@ static void linux_install_telemetry_v9(App *app){
         return;
     }
     LinuxUnifiedV8*base=g_object_get_data(G_OBJECT(app->window),"linux-unified-v8");if(base==NULL)return;LinuxTelemetryV9*t=g_new0(LinuxTelemetryV9,1);t->app=app;t->base=base;
-    GtkWidget*connect_row=gtk_widget_get_parent(base->connect);if(GTK_IS_BOX(connect_row)){t->fastest=gtk_combo_box_text_new();gtk_widget_set_no_show_all(t->fastest,TRUE);gtk_box_reorder_child(GTK_BOX(connect_row),base->kill_switch,0);gtk_widget_set_size_request(t->fastest,155,-1);gtk_widget_set_tooltip_text(t->fastest,"Select the fastest measured Router VPN node or a specific node. Use Connect separately.");gtk_box_pack_start(GTK_BOX(connect_row),t->fastest,FALSE,FALSE,0);gtk_box_reorder_child(GTK_BOX(connect_row),t->fastest,2);t->live=gtk_label_new("-- ms");gtk_box_pack_start(GTK_BOX(connect_row),t->live,FALSE,FALSE,0);gtk_box_reorder_child(GTK_BOX(connect_row),t->live,3);t->forward=linux_telemetry_button_v9("Forward ?",G_CALLBACK(linux_telemetry_forward_v9),t);gtk_widget_set_tooltip_text(t->forward,"Real server forwarding master on the active Router VPN home node.");gtk_box_pack_end(GTK_BOX(connect_row),t->forward,FALSE,FALSE,0);g_signal_connect(t->fastest,"changed",G_CALLBACK(linux_telemetry_fastest_changed_v9),t);}
+    GtkWidget*connect_row=gtk_widget_get_parent(base->connect);if(GTK_IS_BOX(connect_row)){t->fastest=gtk_combo_box_text_new();gtk_widget_set_no_show_all(t->fastest,TRUE);gtk_box_reorder_child(GTK_BOX(connect_row),base->kill_switch,0);gtk_widget_set_size_request(t->fastest,155,-1);gtk_widget_set_tooltip_text(t->fastest,"Select the fastest measured Router VPN node or a specific node. Use Connect separately.");gtk_box_pack_start(GTK_BOX(connect_row),t->fastest,FALSE,FALSE,0);gtk_box_reorder_child(GTK_BOX(connect_row),t->fastest,2);t->live=gtk_label_new("-- ms");gtk_box_pack_start(GTK_BOX(connect_row),t->live,FALSE,FALSE,0);gtk_box_reorder_child(GTK_BOX(connect_row),t->live,3);t->forward=linux_telemetry_button_v9("Forward ?",G_CALLBACK(linux_telemetry_forward_v9),t);gtk_widget_set_sensitive(t->forward,FALSE);gtk_widget_set_tooltip_text(t->forward,"Real server forwarding master on the active Router VPN home node.");gtk_box_pack_end(GTK_BOX(connect_row),t->forward,FALSE,FALSE,0);g_signal_connect(t->fastest,"changed",G_CALLBACK(linux_telemetry_fastest_changed_v9),t);}
     GtkWidget*multi_row=gtk_widget_get_parent(base->multihop);t->hop=gtk_label_new("");if(GTK_IS_BOX(multi_row)){gtk_box_pack_start(GTK_BOX(multi_row),t->hop,FALSE,FALSE,0);}
     GtkWidget*settings=linux_telemetry_find_button_v9(base->stack,"Open settings");if(settings!=NULL&&GTK_IS_BOX(gtk_widget_get_parent(settings))){GtkWidget*performance=linux_telemetry_button_v9("Performance",G_CALLBACK(linux_telemetry_performance_v9),t);gtk_box_pack_start(GTK_BOX(gtk_widget_get_parent(settings)),performance,FALSE,FALSE,0);}
     linux_install_connection_profiles_v11(app);

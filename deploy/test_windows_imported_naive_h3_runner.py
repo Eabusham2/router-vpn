@@ -512,6 +512,67 @@ func TestClosedSnapshotStillRequiresDrainedRetainedBaseline(t *testing.T) {
 
 
 class ProtectedImportedH3Runner(unittest.TestCase):
+    def test_foreground_verifies_lock_and_rules_in_one_fresh_kernel_transaction(self):
+        policy = (ROOT / 'internal/mobiletor/desktop_socket_windows_policy.go').read_text()
+        def method(name):
+            start = policy.index('func (p *DesktopWindowsSocketPolicy) ' + name + '(')
+            return policy[start:policy.index('\n}\n', start) + 3]
+        # Only BFE is substituted. Compile both original foreground and watchdog
+        # readers, and count whole-host enumerations while their shared gate is held.
+        with tempfile.TemporaryDirectory(prefix='windows-foreground-baseline-') as tmp:
+            work = Path(tmp)
+            (work / 'go.mod').write_text('module foreground-check\n\ngo 1.26.3\n')
+            boundary = r'''package baseline
+import ("errors"; "testing")
+type nativeBegin struct{ calls int }
+func (n *nativeBegin) Call(handle, flag uintptr)(uintptr,uintptr,error){
+ if handle!=1 || flag!=1 {return 1,0,nil}; n.calls++;return 0,0,nil
+}
+type engine struct{handle uintptr; transaction bool; api struct{begin nativeBegin}; scans,commits,locks,metadata int; fault string}
+type DesktopWindowsSocketPolicy struct{installed bool;baselineEngine *engine;sublayer,lockKey int;metadata string}
+func desktopWFPError(_ string, status uintptr)error{if status!=0{return errors.New("BFE error")};return nil}
+func (e *engine) Abort()error{e.transaction=false;return nil}
+func (e *engine) Commit()error{if !e.transaction || e.fault=="commit"{return errors.New("commit failed")};e.commits++;e.transaction=false;return nil}
+func (p *DesktopWindowsSocketPolicy) expected()string{return "baseline/tunnel/live-permits"}
+func (p *DesktopWindowsSocketPolicy) assertBaselineLockRecord(e *engine)error{
+ if !e.transaction || e.fault=="lock"{return errors.New("wrong lock")};e.locks++;return nil
+}
+func (e *engine) AssertSublayer(id int, metadata string)error{
+ if id!=6 || metadata!="original" || e.fault=="metadata"{return errors.New("wrong metadata")};e.metadata++;return nil
+}
+func (e *engine) assertCompleteWithEmptySublayer(id int, expected string, lock *int)error{
+ e.scans++;if !e.transaction || id!=6 || expected!="baseline/tunnel/live-permits" || lock==nil || *lock!=7 || e.fault=="inventory"{return errors.New("wrong or incomplete BFE inventory")};return nil
+}
+// The preceding foreground implementation used these two independent enumerations.
+func (p *DesktopWindowsSocketPolicy) assertBaselineLock()error{p.baselineEngine.scans++;return nil}
+func (e *engine) AssertComplete(id int, expected string)error{e.scans++;return nil}
+func TestOriginalForegroundChecks(t *testing.T){
+ e:=&engine{handle:1};p:=&DesktopWindowsSocketPolicy{installed:true,baselineEngine:e,sublayer:6,lockKey:7,metadata:"original"}
+ for i:=1;i<=2;i++{if err:=p.assertBaseline();err!=nil{t.Fatal(err)}
+  if e.scans!=i || e.api.begin.calls!=i || e.locks!=i || e.metadata!=i || e.commits!=i || e.transaction {t.Fatal("foreground lock and live rules did not share one fresh BFE transaction",i,e)}}
+ for _,failure:=range []string{"lock","metadata","inventory","commit"}{
+  e.fault=failure; if err:=p.assertBaseline();err==nil || e.transaction {t.Fatal("foreground accepted failed BFE proof",failure)}
+ }
+}'''
+            full = boundary + '\n' + method('assertBaseline') + method('assertMonitorBaseline')
+            path = work / 'baseline_test.go'
+            path.write_text(full)
+            command = selected_diagnostic_command(shutil.which('go') or 'go')
+            def run():
+                return subprocess.run(command, cwd=work, text=True, stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT, timeout=120)
+            result = run()
+            self.assertEqual(result.returncode, 0, result.stdout)
+            old = '''func (p *DesktopWindowsSocketPolicy) assertBaseline() error {
+ if err:=p.assertBaselineLock();err!=nil{return err}
+ if err:=p.baselineEngine.AssertSublayer(p.sublayer,p.metadata);err!=nil{return err}
+ return p.baselineEngine.AssertComplete(p.sublayer,p.expected())
+}'''
+            path.write_text(full.replace(method('assertBaseline'), old + '\n'))
+            result = run()
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn('foreground lock and live rules did not share one fresh BFE transaction', result.stdout)
+
     def test_kernel_snapshot_releases_watchdog_and_revalidates_each_original_grant(self):
         resources = ROOT / 'deploy/fixtures/windows-node-physical'
         observer = (resources / 'kernel_observer.go').read_text()

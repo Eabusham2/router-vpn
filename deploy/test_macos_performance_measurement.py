@@ -222,10 +222,12 @@ def run_case(directory, mutation, native_originals=None):
         owner = owner.replace('request?.cancel()', '_ = request')
     if mutation == 'missing-generation':
         owner = owner.replace('generation == owner', 'true').replace('self.true', 'true')
-    if mutation == 'wrong-private-label':
+    if mutation in ('wrong-private-label', 'wrong-local-private-label'):
         original = 'localRoles.map { $0[i] == "public-path" } ?? (interior && !pairedWireGuard && i >= (pairedPrefixNodes ?? 1))'
         assert owner.count(original) == 1
-        owner = owner.replace(original, 'interior && !pairedWireGuard && i >= (pairedPrefixNodes ?? 1)')
+        fallback = 'interior && !pairedWireGuard && i >= (pairedPrefixNodes ?? 1)'
+        replacement = fallback if mutation == 'wrong-private-label' else f'selected == nil ? ({fallback}) : ({original})'
+        owner = owner.replace(original, replacement)
     if mutation == 'missing-closed':
         owner = owner.replace('if self.closed { self.running = false; return }', '').replace('guard !closed else { return }', '')
     (fixture / 'Owner.swift').write_text('import Foundation\nimport CoreFoundation\n' + owner)
@@ -382,8 +384,17 @@ print("Shipping macOS Performance: real cancellation, panel close, preflight, 50
             assert len([1 for mode, path, _ in hits if mode == 'preflight' and path != '/api/multihop/status']) == 0, hits
             assert len([1 for mode, _, _ in hits if mode == 'blocked']) == 1, hits
         else:
-            expected = {'missing-cancel': 'cancelled transport did not retire', 'missing-generation': 'stale completion retired or mutated replacement', 'missing-closed': 'closed owner published a late result', 'wrong-private-label': 'private stream positions lost their original measurements'}[mutation]
+            expected = {
+                'missing-cancel': 'cancelled transport did not retire',
+                'missing-generation': 'stale completion retired or mutated replacement',
+                'missing-closed': 'closed owner published a late result',
+                'wrong-private-label': 'the selected original private transfer was mislabeled',
+                'wrong-local-private-label': 'private stream positions lost their original measurements',
+            }[mutation]
             assert result.returncode != 0 and expected in result.stdout, mutation + ': ' + result.stdout
+            if mutation in ('wrong-private-label', 'wrong-local-private-label'):
+                scenario = 'extended-private-local' if mutation == 'wrong-private-label' else 'extended-roles-9'
+                assert hits[-1][:2] == (scenario, '/api/multihop/speed-test'), hits
             print('Negative Performance control ' + mutation + ': rejected', flush=True)
     finally:
         server.shutdown()
@@ -397,7 +408,7 @@ def main():
     parser.add_argument('--native-originals',type=Path)
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='router-vpn-macos-performance-') as temporary:
-        for mutation in (['shipping'] if args.shipping_only else ['shipping', 'missing-cancel', 'missing-generation', 'missing-closed', 'wrong-private-label']):
+        for mutation in (['shipping'] if args.shipping_only else ['shipping', 'missing-cancel', 'missing-generation', 'missing-closed', 'wrong-private-label', 'wrong-local-private-label']):
             run_case(Path(temporary), mutation, args.native_originals)
 
 

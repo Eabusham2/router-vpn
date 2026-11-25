@@ -20,6 +20,10 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
         final AndroidNodeCandidateResult result;
         final AndroidNodeCandidateProfile profile;
         final String saveReason;
+        private AndroidNodeCandidateProfile draftInsertion;
+        private String draftReason = "";
+        AndroidNodeCandidateProfile draftInsertion() { return draftInsertion; }
+        String draftReason() { return draftReason; }
         private Choice(AndroidNodeCandidateResult result,AndroidNodeCandidateProfile profile){this.result=result;this.profile=profile;saveReason="";}
         private Choice(AndroidNodeCandidateResult result,AndroidNodeCandidateProfile.ProposalUnavailable unavailable){this.result=result;profile=null;saveReason=unavailable.getMessage();}
     }
@@ -89,6 +93,7 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
         new Thread(owner::watch,"temporary-ordered-candidate-owner").start();
         return owner;
     }
+    boolean ownsSource(AndroidNodeStore.ChainCapture captured) { return source == captured; }
     static synchronized boolean busy(){return active!=null&&!active.retired;}
     static synchronized AndroidNodeCandidatePreparation retained(){return active;}
     static synchronized boolean testingHome(String home){return active!=null&&!active.retired&&active.homeSession.equals(home);}
@@ -155,6 +160,18 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
                             // row-level Save reason. A stale owner is still fatal.
                             requireCurrent();owner.requireResult(result);
                             choice=new Choice(result,unavailable);
+                        }
+                        try {
+                            choice.draftInsertion=AndroidNodeCandidateProfile.captureDraftInsertion(owner,result,
+                                    AndroidNodeCandidatePreparation.this::requireSavedResultCurrent,choice.profile);
+                        } catch (AndroidNodeCandidateProfile.ProposalUnavailable unavailable) {
+                            choice.draftReason=unavailable.getMessage();
+                        } catch (Exception insertionFailure) {
+                            if (choice.profile == null) throw insertionFailure;
+                            // The longer insertion has its own compiler limits. The
+                            // separately compiled named replacement remains usable
+                            // only while its original result and sources stay live.
+                            choice.draftReason="The complete inserted route could not be compiled from these sources.";
                         }
                         requireCurrent();owner.requireResult(result);captured.add(choice);
                     }

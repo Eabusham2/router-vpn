@@ -44,9 +44,9 @@ need(
     'job.update(status="cleaning", phase="cleanup", progress=100)',
     'status="cleanup-pending"',
     "def _adopt_ready",
-    "if not self._adopt_ready(job_id, package, source, size)",
+    "if not self._adopt_ready(job_id, package, source)",
     'terminal_status = "failed"',
-    "create_owned_temp(\"router-vpn-job-\")",
+    "create_owned_temp(\"router-vpn-job-\", capture_identity=True)",
 )
 forbid(
     "server/scripts/download_jobs.py",
@@ -63,8 +63,6 @@ need(
     "def _dynamic(self, name: str)",
     "job = self.server.jobs.create(name)",
     "self._job_file(job_id)",
-    "self.server.jobs.cancel_requested(job_id)",
-    "X-Router-VPN-Retained-Until",
     "30-minute retained package retry",
 )
 
@@ -79,6 +77,9 @@ need(
 need(
     "server/scripts/download-broker.py",
     "build_github_package",
+    "self.server.jobs.cancel_requested(job_id)",
+    "X-Router-VPN-Retained-Until",
+    "self.connection.shutdown(socket.SHUT_RDWR)",
     "compiling requested generic package locally",
     '"router-local-generic-build"',
     "requires its same-SHA GitHub mobile artifact",
@@ -111,6 +112,7 @@ need(
 
 for test in (
     "server/scripts/test_download_jobs.py",
+    "server/scripts/test_download_job_lifecycle.py",
     "server/scripts/test_download_job_cleanup_transactions.py",
     "server/scripts/test_setup_center_ux_patch.py",
 ):

@@ -147,6 +147,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
     private var proposalAction: ((Score) async throws -> IOSNodeCandidateProposal)?
     private var saveAction: ((Score, IOSNodeCandidateProposal, String) async throws -> String)?
     private var prepared: (score: Score, proposal: IOSNodeCandidateProposal)?
+    private var draftInsertions: [UUID: Result<IOSNodeCandidateProposal, Error>] = [:]
     private var proposalGeneration = UUID(), generation = UUID()
     var canPrepare: Bool { running && !preparing && proposalAction != nil }
     var canSave: Bool { canPrepare && prepared != nil }
@@ -254,7 +255,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         task = Task { @MainActor [self, model] in
             defer {
                 self.running = false; self.transaction = nil; self.task = nil
-                self.proposalAction = nil; self.saveAction = nil; self.prepared = nil
+                self.proposalAction = nil; self.saveAction = nil; self.prepared = nil; self.draftInsertions = [:]
                 self.proposalDescription = ""; self.preparing = false; self.generation = UUID()
                 temporary?.closeResults(); self.preparation = nil
             }
@@ -265,6 +266,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                 await Task { @MainActor in await temporary.retire() }.value
                 return
             }
+            var insertions: [UUID: Result<IOSNodeCandidateProposal, Error>] = [:]
             var detachedScores: [Score] = [], detachedProposals: [UUID: IOSNodeCandidateProposal] = [:], detachedFailures: [UUID: String] = [:]
             do {
                 if let temporary { try await temporary.start() }
@@ -294,7 +296,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                             try capture.requireCurrent()
                             try temporary?.requireLive()
                         }
-                        let response = info.eligiblePrefixes.first { $0.metric == "routed-candidate-response" }
+                        let response = info.eligiblePrefixes.first { $0.position == position && $0.metric == "routed-candidate-response" }
                         let metadata = try await owned.open(prefix: position, inventoryBytes: capture.source.inventory.data.count,
                             family: info.requested_execution == nil ? .ordinary : .selected, selectedResponse: response, current: current)
                         try current()
@@ -329,7 +331,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                                 now: Int64(Date().timeIntervalSince1970 * 1000))
                         }
                         let observedRequest = lastRequest
-                        let compileProposal: (Score) async throws -> IOSNodeCandidateProposal = { score in
+                        let compileProposal: (Score, Bool) async throws -> IOSNodeCandidateProposal = { score, retainFinal in
                             try currentResult(score)
                             try await owned.observe(request: observedRequest, metadata: metadata)
                             try currentResult(score)
@@ -345,13 +347,13 @@ private final class IOSCandidateReply: @unchecked Sendable {
                                 guard let originalSource = info.proposal_source_sha256, let originalConfig = info.proposal_config_sha256 else { throw IOSNodeCandidateCapture.issue() }
                                 proposal = try IOSNodeCandidateProposal.compileConnectedExecution(String(decoding: originalInput, as: UTF8.self), selectedProfile: final,
                                     sourceSHA256: originalSource, configSHA256: originalConfig, records: capture.records,
-                                    position: position, candidateID: score.id, measuredInput: row.input, winner: info.execution ?? "")
+                                    position: position, candidateID: score.id, measuredInput: row.input, winner: info.execution ?? "", retainFinal: retainFinal)
                             } else {
                                 let original = try IOSNodeCandidateOriginalCapture.reopenConnected(String(decoding: originalInput, as: UTF8.self), selectedProfile: final,
                                     sourceSHA256: capture.chainSource, configSHA256: capture.chainConfig)
                                 defer { try? original.close() }
                                 proposal = try IOSNodeCandidateProposal.compile(original: original, records: capture.records,
-                                    position: position, candidateID: score.id, measuredInput: row.input)
+                                    position: position, candidateID: score.id, measuredInput: row.input, retainFinal: retainFinal)
                             }
                             try currentResult(score)
                             return proposal
@@ -361,18 +363,27 @@ private final class IOSCandidateReply: @unchecked Sendable {
                             detachedScores.removeAll { now < $0.receipt.measured_at || now >= $0.receipt.expires_at }
                             for score in detachedScores {
                                 if Int64(Date().timeIntervalSince1970 * 1000) >= score.receipt.expires_at { continue }
-                                if !editor || info.requested_execution == "auto" && metadata.metric == "routed-candidate-response" {
-                                    do { detachedProposals[score.token] = try await compileProposal(score) }
+                                if !editor || metadata.metric == "routed-candidate-response" {
+                                    do { detachedProposals[score.token] = try await compileProposal(score, false) }
                                     catch {
                                         try currentResult(score)
                                         detachedFailures[score.token] = error.localizedDescription
                                     }
                                 }
+                                if editor && metadata.metric == "routed-candidate-response" {
+                                    do {
+                                        if position < info.proofs.count - 2, let named = detachedProposals[score.token] {
+                                            insertions[score.token] = .success(named)
+                                        } else {
+                                            insertions[score.token] = .success(try await compileProposal(score, true))
+                                        }
+                                    } catch { try currentResult(score); insertions[score.token] = .failure(error) }
+                                }
                                 try currentResult(score)
                                 try temporary.seal(token: score.token, measured: score.receipt.measured_at, expires: score.receipt.expires_at)
                             }
                         } else {
-                        self.proposalAction = compileProposal
+                        self.proposalAction = { score in try await compileProposal(score, false) }
                         self.saveAction = { score, proposal, name in
                             try currentResult(score)
                             let selected = self.proposalGeneration
@@ -404,9 +415,10 @@ private final class IOSCandidateReply: @unchecked Sendable {
                     await Task { @MainActor in await temporary.retire() }.value
                     guard !self.cancelled, self.generation == round, !Task.isCancelled else { throw CancellationError() }
                     let proposals = detachedProposals, failures = detachedFailures
+                    self.draftInsertions = insertions
                     self.scores = detachedScores; self.prune()
                     for score in self.scores { try temporary.requireSaved(token: score.token) }
-                    if editor && !self.scores.contains(where: { $0.benchmark.measurement == "routed-candidate-response" && temporary.selectedDraft != nil }) {
+                    if editor && !self.scores.contains(where: { $0.benchmark.measurement == "routed-candidate-response" }) {
                         self.text = "Disconnected. Choose a measured node to update this draft."
                         while !self.scores.isEmpty {
                             self.prune()
@@ -434,7 +446,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                             guard selected == self.proposalGeneration, self.prepared?.score.token == score.token else { throw IOSNodeCandidateResult.issue() }
                         }
                     }
-                    self.text = "Disconnected. Choose an explicitly saved future profile; each original result still expires after 120 seconds."
+                    self.text = editor ? "Disconnected. Use a measured candidate in this draft or prepare a named profile. Results expire after 120 seconds." : "Disconnected. Prepare a named profile while the result is fresh."
                     while !self.scores.isEmpty {
                         self.prune()
                         for score in self.scores { try temporary.requireSaved(token: score.token) }
@@ -484,6 +496,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
             }
         }
         let offersNamedProfile = !editor || metadata.metric == "routed-candidate-response"
+        var insertions: [UUID: Result<IOSNodeCandidateProposal, Error>] = [:]
         var admitted: [Score] = []
         for score in detached {
             let now = Int64(Date().timeIntervalSince1970 * 1000)
@@ -500,6 +513,14 @@ private final class IOSCandidateReply: @unchecked Sendable {
                 do { proposals[score.token] = try IOSNodeCandidateProposal.compile(original: original, records: capture.records,
                     position: position, candidateID: score.id, measuredInput: row.input) }
                 catch { try current(); failures[score.token] = error.localizedDescription }
+                if editor && metadata.metric == "routed-candidate-response" {
+                    if position < temporary.prefixes.count - 2, let named = proposals[score.token] {
+                        insertions[score.token] = .success(named)
+                    } else {
+                        insertions[score.token] = Result { try IOSNodeCandidateProposal.compile(original: original, records: capture.records,
+                            position: position, candidateID: score.id, measuredInput: row.input, retainFinal: true) }
+                    }
+                }
             }
             try current()
             try temporary.seal(token: score.token, measured: score.receipt.measured_at, expires: score.receipt.expires_at)
@@ -508,6 +529,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         text = "Closing the prefix worker and original temporary tunnel before showing choices…"
         await Task { @MainActor in await temporary.retire() }.value
         guard generation == round, !cancelled, !Task.isCancelled else { throw CancellationError() }
+        draftInsertions = insertions
         scores = admitted; prune()
         for score in scores { try temporary.requireSaved(token: score.token) }
         if !offersNamedProfile {
@@ -533,13 +555,27 @@ private final class IOSCandidateReply: @unchecked Sendable {
                     guard selected == self.proposalGeneration, self.prepared?.score.token == score.token else { throw IOSNodeCandidateResult.issue() }
                 }
             }
-            text = "Disconnected. Prefix-only results expire 120 seconds after completion. Save explicitly to create a future profile."
+            text = editor ? "Disconnected. Use a measured candidate in this draft or prepare a named profile." : "Disconnected. Prefix-only results expire 120 seconds after completion. Save explicitly to create a future profile."
         }
         while !scores.isEmpty {
             prune()
             for score in scores { try temporary.requireSaved(token: score.token) }
             try await Task.sleep(for: .seconds(1))
         }
+    }
+
+    func draftInsertion(for score: Score) -> Result<IOSNodeCandidateProposal, Error>? {
+        guard running, !cancelled, !preparing, score.receipt.prefix_position == selectedPrefix,
+              scores.contains(where: { $0.token == score.token }) else { return nil }
+        return draftInsertions[score.token]
+    }
+
+    func useInDraft(_ score: Score, apply: (IOSNodeCandidateProposal) throws -> Void) throws {
+        guard let preparation, let insertion = draftInsertion(for: score) else { throw CancellationError() }
+        let proposal = try insertion.get()
+        try preparation.requireSaved(token: score.token)
+        try apply(proposal)
+        cancel()
     }
 
     func prepare(_ score: Score) {
@@ -627,6 +663,7 @@ struct IOSNodeCandidatesCard: View {
 
 struct IOSCandidateProfileChoices: View {
     @ObservedObject var probe: IOSNodeCandidates
+    var useInDraft: ((IOSNodeCandidates.Score) -> Void)? = nil
     @State private var profileName = ""
 
     var body: some View {
@@ -634,6 +671,12 @@ struct IOSCandidateProfileChoices: View {
             ForEach(probe.scores) { row in
                 VStack(alignment: .leading) {
                     Text(String(format: "%@ — %.2f ms (50 %@)", row.name, row.benchmark.trimmed_mean_ms, IOSNodeCandidateMetadata.label(row.benchmark.measurement))).font(.caption.monospacedDigit())
+                    if let useInDraft, let insertion = probe.draftInsertion(for: row) {
+                        switch insertion {
+                        case .success: Button("Use in draft") { useInDraft(row) }
+                        case .failure(let error): Text("Cannot insert into this draft. " + error.localizedDescription).font(.caption)
+                        }
+                    }
                     Button("Prepare next connection") { probe.prepare(row) }.disabled(!probe.canPrepare)
                 }
             }

@@ -7,6 +7,8 @@ import json
 import sys
 import unittest
 
+from test_native_xray_shared_workflow import declared_groups, shared_plan
+
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('ss_contract_runner', ROOT / 'deploy/test_desktop_node_chain_ss_prefix_contract.py')
 G = importlib.util.module_from_spec(spec)
@@ -27,7 +29,7 @@ def events(package, case):
 
 
 class ImportedSSContracts(unittest.TestCase):
-    def test_shared_partition_matches_required_source_contract_and_all_group_xray(self):
+    def test_shared_partition_matches_required_source_contract_and_xray_shards(self):
         spec = importlib.util.spec_from_file_location('shared_multihop_partition', ROOT / 'deploy/test_mobile_multihop_groups.py')
         shared = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(shared)
@@ -48,9 +50,9 @@ class ImportedSSContracts(unittest.TestCase):
         with self.assertRaises(ValueError):
             workflow.workflow_contract(source, release.replace('desktop-connect-child, ss-prefix-native]', 'desktop-connect-child]'))
         xray = (ROOT / '.github/workflows/native-xray-exits.yml').read_text()
-        self.assertEqual(xray.count('python3 deploy/test_mobile_multihop_groups.py'), 1)
-        self.assertIn('          python3 deploy/test_mobile_multihop_groups.py\n', xray)
-        self.assertNotIn('python3 deploy/test_mobile_multihop_groups.py --', xray)
+        selected = shared_plan(xray, declared_groups())
+        self.assertEqual([roots for label, roots in selected if label == shared.PREFIX_PHASE],
+                         [[shared.PREFIX_ROOT]])
 
     def test_preserved_and_additive_exact_inventories(self):
         phases = G.source_cases()

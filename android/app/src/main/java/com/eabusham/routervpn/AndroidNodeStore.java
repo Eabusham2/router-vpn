@@ -203,6 +203,14 @@ final class AndroidNodeStore {
         JSONArray references(int prefix) throws Exception {
             requirePurpose(prefix);return measurementOnly()?new JSONArray(draftReferences):orderedSelection(control.profile());
         }
+        void editDraft(ChainCatalog catalog, int prefix, ChainPublication<Void> edit) throws Exception {
+            if (draftCatalog != catalog || draftCatalog == null) throw new IllegalStateException("Reopen this measurement in its original draft.");
+            requireCandidatePurpose(prefix);
+            owner.publishChainCatalog(catalog, () -> {
+                requireCurrent();
+                return edit.run();
+            });
+        }
         void requireCurrent() throws Exception { owner.requireChainCapture(this); }
         HistoryReadback historyReadback() throws Exception { requirePurpose(-1);return new HistoryReadback(this); }
     }
@@ -595,7 +603,7 @@ final class AndroidNodeStore {
             originals.add(original);refs.put(new JSONObject().put("id",original.profileId).put("mode",modes.get(i)));
         }
         int schema=AndroidNodeChainCapture.sourceSchema(originals,modes);
-        if (originals.size()>8 && !(schema==6 && "auto".equals(execution) && prefix==originals.size()-2
+        if (originals.size()>8 && !(schema==6 && "auto".equals(execution)
                 && AndroidNodeChainCapture.responsePrefix(originals,modes,prefix,execution)))
             throw new IllegalStateException("This longer selected draft has no qualified private response at this position.");
         if((schema==3||schema==4)&&prefix!=0||schema==7||originals.get(0).imported||originals.get(originals.size()-1).imported

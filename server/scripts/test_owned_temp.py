@@ -6,6 +6,8 @@ from pathlib import Path
 import runpy
 import shutil
 import tempfile
+import sys
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 OWNED = runpy.run_path(str(HERE / "owned-temp.py"))
@@ -53,6 +55,34 @@ def main() -> int:
         remove_manual(foreign)
 
     if os.name != "nt":
+        if shutil.rmtree.avoids_symlink_attacks and sys.version_info >= (3, 11):
+            for fail_root in (False, True):
+                retry = create_owned_temp("router-vpn-job-")
+                try:
+                    marker = retry / MARKER_NAME
+                    before = marker.read_bytes()
+                    child = retry / "compiler-cache"
+                    child.mkdir()
+                    (child / "object").write_bytes(b"object")
+                    rmdir = os.rmdir
+                    def fail_once(name, **kwargs):
+                        if name == (retry if fail_root else child.name):
+                            raise PermissionError("fixture: deletion interrupted")
+                        return rmdir(name, **kwargs)
+                    with patch.object(os, "rmdir", fail_once):
+                        try:
+                            cleanup_owned_temp(retry)
+                        except PermissionError:
+                            pass
+                        else:
+                            raise AssertionError("incomplete deletion claimed success")
+                    assert marker.read_bytes() == before
+                    assert is_owned_temp(retry)
+                    assert cleanup_owned_temp(retry)
+                    assert not retry.exists()
+                finally:
+                    remove_manual(retry)
+
         target = Path(tempfile.mkdtemp(prefix="not-router-vpn-owned-"))
         link = Path(tempfile.gettempdir()) / ("router-vpn-job-link-" + next(tempfile._get_candidate_names()))
         try:

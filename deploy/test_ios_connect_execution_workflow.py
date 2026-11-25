@@ -346,6 +346,8 @@ def check(read):
         'execution': ('local', 'server', 'auto'),
         'private-response': ('selected-response',),
         'imported-final': ('all-imported', 'earlier-private'),
+        'imported-intermediate': ('insert-imported',),
+        'draft-insertion': ('draft-insertion',),
         'selection': ('server-winner', 'typed-packet', 'ordinary-packet', 'packet-metadata'),
         'catalog': ('unsupported-input', 'original-role', 'prefix-frame', 'receipt-expiry'),
         'proposal': ('proposal-prefix', 'proposal-source', 'proposal-capture'),
@@ -602,6 +604,8 @@ class AppleCONNECTWorkflowTests(unittest.TestCase):
         for before, after in (
                 ("'private-response': ('selected-response',),", ''),
                 ("'imported-final': ('all-imported', 'earlier-private'),", ''),
+                ("'imported-intermediate': ('insert-imported',),", ''),
+                ("'draft-insertion': ('draft-insertion',),", ''),
                 ("'server-winner', 'typed-packet'", "'server-winner', 'server-winner'"),
                 ("str(script), '--phase', phase", "str(script), '--phase', 'base'"),
                 ('stderr=subprocess.STDOUT, text=True, timeout=300)', 'stderr=subprocess.STDOUT, text=True, timeout=900)'),

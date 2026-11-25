@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"router-vpn/internal/common"
 )
 
 const desktopForwardingMasterPath = "/api/forwarding/master"
@@ -18,9 +21,32 @@ const desktopForwardingMasterMaxResponse = 64 * 1024
 
 type desktopForwardingMasterReply struct {
 	OK      bool   `json:"ok"`
-	Enabled bool   `json:"enabled"`
+	Enabled *bool  `json:"enabled"`
 	Peer    string `json:"peer,omitempty"`
 	Proof   string `json:"proof,omitempty"`
+}
+
+// Bind a displayed control to the original proved session and its frozen route.
+// A new connection to the same node has a distinct session ID.
+func (a *app) forwardingPathToken(profile common.RouterProfile, st state) (string, error) {
+	sessionID := sessionTrackerFor(a).snapshot(0).ID
+	if err := validateActiveTelemetryPath(a, profile, st, sessionID); err != nil {
+		return "", err
+	}
+	var route string
+	if st.Mode == "multihop" {
+		graph, ok := getActiveMultihopGraph(a)
+		route = graph.mapRouteID()
+		if !ok || route == "" || graph.ExitID != profile.ID {
+			return "", errors.New("forwarding master lost the proved ordered route")
+		}
+	}
+	fields := []string{"routervpn-forwarding-master-v1", sessionID, profile.ID, activeTelemetryPathToken(st), liveMeasurementProfileToken(profile), route}
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(raw)), nil
 }
 
 func registerForwardingMasterRoute(h *http.ServeMux, a *app) {
@@ -61,18 +87,32 @@ func (a *app) forwardingMaster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var displayedRouter, displayedPath string
 	var requested *bool
 	if r.Method == http.MethodPut {
 		var body struct {
-			Enabled *bool `json:"enabled"`
+			Enabled   *bool  `json:"enabled"`
+			RouterID  string `json:"router_id"`
+			PathToken string `json:"path_token"`
 		}
 		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 		dec.DisallowUnknownFields()
-		if err := dec.Decode(&body); err != nil || body.Enabled == nil {
-			http.Error(w, "body must be {\"enabled\":true|false}", http.StatusBadRequest)
+		if err := dec.Decode(&body); err != nil || dec.Decode(&struct{}{}) != io.EOF || body.Enabled == nil || body.RouterID == "" || body.PathToken == "" {
+			http.Error(w, "an explicit state and original displayed router and path are required", http.StatusBadRequest)
 			return
 		}
+		displayedRouter, displayedPath = body.RouterID, body.PathToken
 		requested = body.Enabled
+	}
+
+	pathToken, err := a.forwardingPathToken(profile, st)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if requested != nil && (displayedRouter != profile.ID || displayedPath != pathToken) {
+		http.Error(w, "the displayed forwarding control belongs to a different connection", http.StatusConflict)
+		return
 	}
 
 	method := http.MethodGet
@@ -126,18 +166,18 @@ func (a *app) forwardingMaster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var remote desktopForwardingMasterReply
-	if err := json.Unmarshal(body, &remote); err != nil || !remote.OK {
+	if err := json.Unmarshal(body, &remote); err != nil || !remote.OK || remote.Enabled == nil {
 		http.Error(w, "forwarding-master response could not be verified", http.StatusBadGateway)
 		return
 	}
-	if requested != nil && remote.Enabled != *requested {
+	if requested != nil && *remote.Enabled != *requested {
 		http.Error(w, "forwarding master did not reach the requested state", http.StatusBadGateway)
 		return
 	}
 
 	// Re-check that the active graph did not change while the mutation was in flight.
-	after, afterState, err := activeLatencyTarget(a)
-	if err != nil || !afterState.Connected || after.ID != profile.ID || afterState.Mode != st.Mode || afterState.RuntimeMode != st.RuntimeMode || afterState.Base != st.Base {
+	after, err := a.forwardingPathToken(profile, st)
+	if err != nil || after != pathToken {
 		http.Error(w, "active Router VPN graph changed while forwarding master was being verified", http.StatusConflict)
 		return
 	}
@@ -145,11 +185,12 @@ func (a *app) forwardingMaster(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok":        true,
-		"enabled":   remote.Enabled,
-		"router_id": profile.ID,
-		"name":      profile.Name,
-		"proof":     "active desktop Router VPN graph -> authenticated private router-agent forwarding master; Setup Center admin token remains server-side",
+		"ok":         true,
+		"enabled":    *remote.Enabled,
+		"path_token": pathToken,
+		"router_id":  profile.ID,
+		"name":       profile.Name,
+		"proof":      "active desktop Router VPN graph -> authenticated private router-agent forwarding master; Setup Center admin token remains server-side",
 	})
 }
 

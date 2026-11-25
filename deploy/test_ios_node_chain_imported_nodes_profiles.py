@@ -12,14 +12,17 @@ ROUNDTRIP=r'''
   let choice=CommandLine.arguments.last!, count=Int(choice) ?? (["private-sixteen","all-imported-sixteen"].contains(choice) ? 16:9)
   let cases: [(Bool,Bool,Bool)]
   switch choice {
-  case "private-nine","private-sixteen","all-imported-sixteen": cases=[(false,false,true)]
+  case "private-nine","private-sixteen","all-imported-sixteen","insert-nine": cases=[(false,false,true)]
   case "later-nine": cases=[(false,true,true)]
   default: cases=[(false,false,false),(true,false,false)] + (count==9 ? [(false,true,false)] : [])
   }
   for (joined,hostname,singlePrivate) in cases {
-   let(model,ids)=try setupTyped(count),store=IOSNodeBundleStore.shared
+   let insertion = choice == "insert-nine"
+   let (model, inventory) = try setupTyped(count + (insertion ? 1 : 0)), store = IOSNodeBundleStore.shared
+   var ids = inventory
+   let measuredID = insertion ? ids.remove(at: 4) : nil
    let laterHostname=hostname && singlePrivate
-   let privateStreams:Set<Int> = laterHostname || choice=="all-imported-sixteen" ? [] : count>8 && !singlePrivate ? [2,3,count-3] : [2]
+   let privateStreams:Set<Int> = laterHostname || choice=="all-imported-sixteen" || insertion ? [] : count>8 && !singlePrivate ? [2,3,count-3] : [2]
    let positions:Set<Int> = count>8 ? Set(1..<count-1).subtracting(privateStreams) : count==3 ? (joined ? [0,1]:[1]):[1,count-2]
    for position in positions {
     var value=try stored(ids[position]),profile=value.routerProfiles[0]
@@ -36,8 +39,48 @@ ROUNDTRIP=r'''
     try store.save(grouped)
    }
    var final=try stored(ids[count-1]);final.routerProfiles[0].multihopExecution="local"
+   if let measuredID {
+    final.routerProfiles[0].multihopNodes!.removeAll { $0.id == measuredID }
+    final.routerProfiles[0].multihopExecution = "auto"
+   }
    for position in 0..<count-1{final.routerProfiles[0].multihopNodes![position].mode=positions.contains(position) || count>8 && privateStreams.contains(position) ? "shadowsocks":"wg"}
    try store.save(final);model.bundle=final
+   if let measuredID {
+    let position = 3, original = final.routerProfiles[0].multihopNodes!
+    var proposed = final
+    proposed.routerProfiles[0].multihopNodes!.insert(.init(id: measuredID, mode: "shadowsocks"), at: position + 1)
+    let bundles = try model.iosNodeChainBundles(for: proposed)
+    let profiles = bundles.map { bundle in bundle.routerProfiles.first { $0.id == bundle.selectedRouterID }! }
+    let native = try IOSNodeChainExecutionCapture.compile(bundles: bundles.map { try encoded($0) }, requested: "auto")
+    defer { try? native.close() }
+    let before = store.records, home = try encoded(model.bundle!), expected = proposed.routerProfiles[0].multihopNodes!
+    var editor = IOSNodeChainDraft(saved: original, finalID: final.selectedRouterID)
+    try reject("another prefix cannot adopt this compiled draft") { try editor.insertMeasured(measuredID, after: position - 1, compiled: expected) }
+    try reject("a truncated draft cannot adopt a complete measured insertion") { try editor.insertMeasured(measuredID, after: position, compiled: Array(expected.dropLast())) }
+    try editor.insertMeasured(measuredID, after: position, compiled: expected)
+    try check("Use changes only the draft and retains every original member",try editor.nodes == expected && encoded(model.bundle!) == home && store.records == before)
+    try reject("the previous insertion cannot be replayed") { try editor.insertMeasured(measuredID, after: position, compiled: expected) }
+    var unfilled = original
+    unfilled.insert(.init(id:"",mode:"wg"),at:position+1)
+    var partial = IOSNodeChainDraft(saved: unfilled, finalID: final.selectedRouterID)
+    try partial.insertMeasured(measuredID, after:position, compiled:expected)
+    try check("an empty editor row preserves every measured suffix member",partial.nodes==expected)
+    let record = try IOSConnectionProfileStore.appendCandidate(name: "Measured intermediate after hop four", profiles: profiles, current: {})
+    try check("saving the intermediate preserves Home and all original node records",
+              try encoded(model.bundle!) == home && store.records == before && record.chainPolicies?.map(\.nodeID) == expected.map(\.id))
+    let actions = TypedProfileActions(model)
+    actions.selectedID = record.id
+    actions.load()
+    guard actions.status.hasPrefix("Loaded "), let loaded = model.bundle else { throw failure(actions.status) }
+    let restored = try model.iosNodeChainBundles(for: loaded)
+    let replay = try IOSNodeChainExecutionCapture.compile(bundles: restored.map { try encoded($0) }, requested: "auto")
+    defer { try? replay.close() }
+    try check("Load retains the measured intermediate, each original suffix member and the old final",
+              loaded.routerProfiles[0].multihopNodes == expected && Array(expected.dropFirst(position+2)) == Array(original.dropFirst(position+1)) &&
+              loaded.selectedRouterID == final.selectedRouterID && replay.source == native.source)
+    actions.delete()
+    continue
+   }
    if ["private-sixteen","all-imported-sixteen"].contains(choice) {
     let originalNodes=final.routerProfiles[0].multihopNodes!
     var paths=[originalNodes]
@@ -49,11 +92,13 @@ ROUNDTRIP=r'''
      let draft=IOSNodeChainDraft(saved:nodes,finalID:ids.last!)
      try check("sixteen-member editor retains the original Compare source",try draft.measurementPath(through:count-2,execution:"auto",profiles:profiles)==nodes)
      try reject("Server cannot request a private response at position fourteen"){_=try draft.measurementPath(through:count-2,execution:"server",profiles:profiles)}
-     try reject("earlier import is not a selected final replacement"){_=try draft.measurementPath(through:1,execution:"auto",profiles:profiles)}
+     let expectedStops=choice=="all-imported-sixteen" ? Array(1...count-2):[count-2]
+     if expectedStops.contains(1) {try check("every earlier editor stop retains the original selected graph",try expectedStops.allSatisfy {try draft.measurementPath(through:$0,execution:"auto",profiles:profiles)==nodes})}
+     else {try reject("existing private interior cannot accept another private intermediate"){_=try draft.measurementPath(through:1,execution:"auto",profiles:profiles)}}
      try reject("penultimate chooser requires every original source"){_=try draft.measurementPath(through:count-2,execution:"auto",profiles:Array(profiles.dropFirst()))}
      let original=try IOSNodeChainExecutionCapture.compile(bundles:linked.map {try encoded($0)},requested:"auto")
      defer {try? original.close()}
-     try check("extended editor opens the original selected capture and one measured stop",original.extendedOriginalNodeCount==count && original.responsePosition(for:"local")==count-2 && original.responsePosition(for:"server")==nil)
+     try check("extended editor derives its stops from the original selected capture",original.extendedOriginalNodeCount==count && original.responsePositions(for:"local")==expectedStops && original.responsePositions(for:"server").isEmpty)
     }
     continue
    }
@@ -204,5 +249,5 @@ def main():
     C.P.BOUNDARIES='import CoreFoundation\n'+C.P.BOUNDARIES+'\nenum ProfileProgress {\n'+boolean+'\n'+progress+'\n}\n'
     C.P.BOUNDARIES+='\n'+C.L.S.member((C.P.APP/'IOSNodeChainEditor.swift').read_text(),'struct IOSNodeChainDraft {')+'\n'
     C.TYPED=source
-    C.main(label='independent Local imports',roundtrip='independentRoundtrip',binary_cases=[(str(n),) for n in range(3,10)]+[("private-nine",),("private-sixteen",),("all-imported-sixteen",),("later-nine",)],extra_source_names=("IOSSessionIdentity.swift",))
+    C.main(label='independent Local imports',roundtrip='independentRoundtrip',binary_cases=[(str(n),) for n in range(3,10)]+[("private-nine",),("private-sixteen",),("all-imported-sixteen",),("insert-nine",),("later-nine",)],extra_source_names=("IOSSessionIdentity.swift",))
 if __name__=='__main__':main()

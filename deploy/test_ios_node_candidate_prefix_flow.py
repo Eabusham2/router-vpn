@@ -90,6 +90,58 @@ EDITOR_TEST=r''' static func editorDraft() async throws {
 TEST=TEST.replace(' static func main()async throws{',EDITOR_TEST+'\n static func main()async throws{')
 TEST=TEST.replace('try await droppedView();print(', 'try await droppedView();try await editorDraft();print(')
 
+RESPONSE_TEST = r'''
+@MainActor @main struct LocalResponseDraft {
+ static func main() async throws {
+  Provider.reset(); IOSSpeedLabTunnel.reset()
+  let model = RouterVPNModel(), probe = IOSNodeCandidates()
+  IOSNodeBundleStore.shared.records = ["import": Data("original linked import".utf8)]
+  let home = try IOSNodeUsage.canonical(model.bundle)
+  var draft = model.bundle!
+  draft.routerProfiles[0].multihopNodes = ["entry","import","final"]
+  try probe.startEditorPrefix(model: model, bundle: draft, position: 1)
+  try await until { Provider.closeCalls > 0 || !probe.running }
+  try check(probe.scores.isEmpty && IOSMTUMeasurementGate.held, "Local response escaped before worker join")
+  Provider.allowClose = true
+  try await until { IOSSpeedLabTunnel.stopEntered }
+  try check(probe.scores.isEmpty, "Local draft insertion was offered before native DOWN")
+  IOSSpeedLabTunnel.allowStop = true; IOSSpeedLabTunnel.allowRestore = true
+  try await until { !probe.scores.isEmpty || !probe.running }
+  guard let row = probe.scores.first else { throw Failure(message: "Local response unavailable: " + probe.text) }
+  try check(probe.editorScore(node: "candidate", after: 1) == 2.4 && probe.canPrepare, "Local response lost original result")
+  var applied = false
+  try probe.useInDraft(row) { proposal in
+   try check(proposal.retainedFinal, "Local draft reused the named final replacement")
+   applied = true
+  }
+  try check(applied && !model.connected && IOSConnectionProfileStore.writes == 0, "Local draft insertion wrote a profile")
+  await probe.finishEditorComparison()
+  try check(try IOSNodeUsage.canonical(model.bundle) == home && !IOSMTUMeasurementGate.held, "Local draft insertion changed Home")
+  print("Apple Local authenticated response insertion: \(checks) original owner and editor checks PASS")
+ }
+}'''
+
+def local_response_fixture(boundary):
+    # This fixture supplies one complete Local WG/import/final source and the
+    # matching private-agent provider reply. The proposal/compiler gate runs
+    # the real three-to-four graph separately. Here the compiler reports which
+    # exact proposal the shipping prefix-only controller delivered after DOWN.
+    def change(before, after, occurrences=1):
+        nonlocal boundary
+        assert boundary.count(before) == occurrences, before
+        boundary = boundary.replace(before, after)
+    change('Member(id:"final",mode:"shadowsocks"', 'Member(id:"import",mode:"shadowsocks",profile:[:]),Member(id:"final",mode:"shadowsocks"')
+    change('mode:$0.element.mode)}}', 'mode:$0.element.mode,measurement:$0.offset == 1 ? "routed-candidate-response":nil)}}')
+    change('position==0,inventory=="inventory"', 'position==1,inventory=="inventory"')
+    change('let description="Complete original future graph"', 'var retainedFinal=false; let description="Complete original future graph"')
+    change('  return Self()\n }\n}\n@MainActor enum IOSConnectionProfileStore', '  return Self(retainedFinal:retainFinal)\n }\n}\n@MainActor enum IOSConnectionProfileStore')
+    change('"prefix_position":0,"prefix_id":"entry"', '"prefix_position":1,"prefix_id":"import"', 2)
+    change('"prefixes":[prefix],"application_open"', '"prefixes":[prefix,["position":1,"profile_id":"import","node_id":"","mode":"shadowsocks","start_layer":"off","source_sha256":hash,"tag":"ordered-1"]],"measurement":"routed-candidate-response","application_open"')
+    change('"prefixes":[["position":0,"tag":tag,"ceiling":1400]]', '"prefixes":[["position":0,"tag":tag,"ceiling":1400],["position":1,"tag":"ordered-1","ceiling":1400]]')
+    change('"measurement":"routed-tcp-connect"', '"measurement":"routed-candidate-response"', 2)
+    change('"kind":"tcp-connect"', '"kind":"private-agent-response"')
+    return boundary + RESPONSE_TEST
+
 def main():
     boundary=F.fixture_boundary(BOUNDARY,PREFIX)
     boundary=boundary.replace('while !condition(){guard ProcessInfo','while !condition(){guard !Provider.wrongScope else{throw Failure(message:"prefix used ordinary candidate IPC")};guard ProcessInfo')
@@ -130,4 +182,6 @@ def main():
         fixture.write_text(boundary.replace('var candidateTypedBoundary=false','var candidateTypedBoundary=true')+TEST)
         exercise()
         print('Typed source boundary retained prefix-only purpose, actual 50 receipt and joined Save',flush=True)
+        fixture.write_text(local_response_fixture(boundary))
+        exercise()
 if __name__=='__main__':main()

@@ -127,12 +127,12 @@ for marker in (
 # once, invokes the shared ownership verifier, and reports whether deletion was
 # actually completed.
 for marker in (
-    'create_owned_temp("router-vpn-job-")',
-    "def _cleanup_dir(self, value: str) -> bool:",
+    'create_owned_temp("router-vpn-job-", capture_identity=True)',
+    "def _cleanup_dir(self, value: str, identity, work_fd) -> bool:",
     "path = Path(value)",
-    "cleanup_owned_temp(path)",
-    "return not path.exists()",
-    "removed = self._cleanup_dir(work)",
+    "cleanup_owned_temp(path, expected=identity)",
+    "path.lstat()",
+    "removed = joined and self._cleanup_dir(work, work_identity, work_fd)",
 ):
     assert marker in download_jobs, f"download jobs lost owned/retryable temp cleanup marker: {marker}"
 for marker in (

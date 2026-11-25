@@ -10,6 +10,11 @@ import test_desktop_socks_execution_controller as common
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = common.PACKAGE
+RESPONSE_FINAL_LAYOUTS = ('private-penultimate/4', 'private-penultimate/9', 'private-penultimate/16',
+                          'all-imported/4', 'all-imported/9', 'all-imported/16',
+                          'earlier-private/5', 'earlier-private/9', 'earlier-private/16')
+RESPONSE_DEEP_LAYOUTS = ('private-penultimate/16', 'all-imported/16', 'earlier-private/16')
+RESPONSE_INTERMEDIATE_LAYOUTS = ('4/1', '9/6', '16/8', '16/13')
 CASES = {
     'TestDesktopSelectedThroughputPublicController': ('server-server','auto-local','auto-server'),
     'TestDesktopSelectedThroughputCancellationJoinsOriginal': (),
@@ -29,6 +34,12 @@ CASES = {
                                                    'modified-original-bytes', 'missing-original'),
     'TestDesktopSelectedMeasurementWorkspaceRetirement': ('selected-latency', 'selected-throughput', 'selected-candidate',
                                                          'typed-candidate', 'foreign-lookalikes'),
+    'TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile': RESPONSE_FINAL_LAYOUTS,
+    'TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource': RESPONSE_DEEP_LAYOUTS,
+    'TestDesktopSelectedPrivateResponseConnectedServerWinnerHasNoPrivateOffer': RESPONSE_DEEP_LAYOUTS,
+    'TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad': RESPONSE_INTERMEDIATE_LAYOUTS,
+    'TestDesktopSelectedIntermediateResponseRejectsChangedOriginalSuffixBeforeSave': (),
+    'TestDesktopSelectedIntermediateResponseCancelCannotBorrowAnotherEligibleStop': (),
 }
 DRAFT_CASES = {
     'TestDesktopSelectedDraftCapturesFullUnsavedPacketSource': (
@@ -38,6 +49,18 @@ DRAFT_CASES = {
         'changed-token', 'stream-interior', 'final', 'truncated-suffix'),
     'TestDesktopSelectedDraftRetainsWinnerThroughOriginalDownAndChoose': (
         'server/server', 'auto/local', 'auto/server', 'held-native-down', 'changed-review-network'),
+    'TestSelectedPrivateResponseNamedProfileRetainsCompare': (),
+    'TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare': RESPONSE_FINAL_LAYOUTS,
+    'TestSelectedPrivatePenultimateResponseDraftServerWinnerClosesWithoutScores': ('-1', '2', '14'),
+    'TestSelectedPrivateResponseDraftCancelBeforeStartRetainsSourceWithoutEpoch': RESPONSE_DEEP_LAYOUTS,
+    'TestDesktopSelectedIntermediateResponseDraftRetainsOriginalSuffixThroughDownSaveAndLoad': RESPONSE_INTERMEDIATE_LAYOUTS,
+    'TestDesktopSelectedIntermediateResponseDraftServerWinnerClosesWithoutScores': (),
+    'TestDesktopSelectedIntermediateResponseDraftPrestartCancelRetainsExactStopWithoutEpoch': (),
+    'TestSelectedPrivateResponseDraftUsePreservesUnsavedPath': ('3/1', '4/1', '4/2', '9/6', '16/8', '16/14'),
+    'TestSelectedPrivateResponseDraftUseStartsFreshMeasurement': (),
+    'TestSelectedPrivateResponseDraftUseRejectsChangedOwner': ('source', 'network', 'epoch', 'cancelled', 'expired', 'file-candidate', 'file-final'),
+    'TestSelectedPrivateResponseDraftUseRejectsSecondPrivateAndCapacity': (),
+    'TestOrderedCandidateDraftUseKeepsOriginalFinalAndSuffix': ('3/1', '4/1', '6/2', '9/7'),
 }
 TYPED_ENTRY_OUTCOMES = tuple(family+'/'+outcome for family in ('socks', 'connect')
                             for outcome in ('server', 'compare-local', 'compare-server'))
@@ -58,6 +81,9 @@ REQUIRED_INPUTS = (
     'cmd/client/ordered_candidate_preparation_lifecycle.go', 'cmd/client/ordered_candidate_preparation_profile.go',
     'cmd/client/ordered_candidate_preparation_run.go', 'cmd/client/ordered_candidate_preparation_view.go',
     'cmd/client/ordered_candidate_selected_draft.go', 'cmd/client/ordered_candidate_selected_draft_test.go',
+    'cmd/client/ordered_candidate_selected_response_source.go', 'cmd/client/ordered_candidate_selected_response_draft_use_test.go',
+    'cmd/client/ordered_candidate_draft_final_test.go',
+    'cmd/client/desktop_selected_private_response_http_test.go', 'cmd/client/desktop_selected_intermediate_response_http_test.go',
     'cmd/client/desktop_node_chain_candidate_catalog.go', 'cmd/client/desktop_node_chain_candidates.go',
     'cmd/client/desktop_node_chain_measurement.go', 'cmd/client/desktop_node_chain_typed_candidate_catalog.go',
     'cmd/client/desktop_selected_candidate_catalog.go', 'cmd/client/desktop_selected_candidate_observation.go',

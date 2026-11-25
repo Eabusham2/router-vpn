@@ -359,7 +359,7 @@ func runExtendedSelectedClient(t *testing.T, f *multipleImportedFixture, prep *m
 		export("preparation.json", prep.Source())
 		export("local-source.json", desktopNodeChainJSON(t, f.source))
 	}
-	if measure == "reloaded-private-final" {
+	if measure == "reloaded-private-final" || measure == "reloaded-private-intermediate" {
 		if mode != "auto" || frozen.Execution != "local" || response == nil {
 			t.Fatal("loaded profile lost original requested execution")
 		}
@@ -599,6 +599,9 @@ func checkOriginalOrderedResponse(t *testing.T, ctx context.Context, f *multiple
 type selectedResponseNativeCase struct {
 	fault, input   string
 	pairedPosition int
+	insertAfter    int
+	original       *multipleImportedFixture
+	inserted       *multipleImportedMember
 	final          routedPrivateResponseFinal
 	replacement    *multipleImportedFixture
 	app            atomic.Int32
@@ -613,6 +616,9 @@ const selectedResponseRequestID = "b923fa87fc1252d3f0c520aeb3786fe8"
 func (c *selectedResponseNativeCase) accept() {
 	if c.accepted.Add(1) == 50 {
 		switch c.fault {
+		case "changed-original-suffix":
+			last := c.original.members[len(c.original.members)-1]
+			last.wrongPrivateID.Store(true)
 		case "late-catalog":
 			c.changed.Store(true)
 		case "late-cancel":
@@ -631,6 +637,21 @@ func (o *selectedResponseNativeOwner) CandidateInventoryCurrentContext(ctx conte
 	if o.capture != capture || o.fixture.changed.Load() {
 		return hopmeasure.ErrStale
 	}
+	if o.fixture.fault == "changed-original-suffix" && o.fixture.accepted.Load() == 50 {
+		// Return the genuine challenge within its own probe budget. Hold the
+		// unchanged catalog observation while the retained owner's watchdog
+		// reads the old exit's foreign identity and revokes the selected path.
+		last := o.fixture.original.members[len(o.fixture.original.members)-1]
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
+		for !last.sentWrongID.Load() || o.runtime.Progress().Ready {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-tick.C:
+			}
+		}
+	}
 	return ctx.Err()
 }
 
@@ -639,7 +660,16 @@ const selectedPrivateApplication = "203.0.113.197:8181"
 func (c *selectedResponseNativeCase) proveLoadedApplication(t *testing.T, ctx context.Context, native *box.Box, runtime *mobilemultihop.NodeChainExecutionRuntime, f *multipleImportedFixture) {
 	t.Helper()
 	final := f.members[len(f.members)-1]
-	if f != c.replacement || final.private.Load() == 0 || final.public.Load() == 0 || f.dns.Load() == 0 || f.invalidDNS.Load() || c.app.Load() != 0 || c.accepted.Load() != 50 {
+	dnsOwner := f
+	wantBody := "independent measured final"
+	if c.insertAfter > 0 {
+		dnsOwner = c.original
+		wantBody = "retained original final"
+		if final != dnsOwner.members[len(dnsOwner.members)-1] || c.inserted.private.Load() == 0 {
+			t.Fatal("loaded insertion lost original final or paired hop")
+		}
+	}
+	if f != c.replacement || final.private.Load() == 0 || final.public.Load() == 0 || dnsOwner.dns.Load() == 0 || dnsOwner.invalidDNS.Load() || c.app.Load() != 0 || c.accepted.Load() != 50 {
 		t.Fatal("replacement did not prove its own selected identity, DNS and public path")
 	}
 	gate, found := native.Outbound().Outbound(mobilemultihop.NodeChainExecutionGateTag)
@@ -653,6 +683,12 @@ func (c *selectedResponseNativeCase) proveLoadedApplication(t *testing.T, ctx co
 		return gate.DialContext(ctx, network, M.ParseSocksaddr(address))
 	}}
 	defer transport.CloseIdleConnections()
+	var before []int64
+	var finalStreams int64
+	if c.insertAfter > 0 {
+		before = responsePrefixConnections(f)
+		finalStreams = final.provider.stats().Streams
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+selectedPrivateApplication+"/adopted", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -663,8 +699,18 @@ func (c *selectedResponseNativeCase) proveLoadedApplication(t *testing.T, ctx co
 	}
 	body, err := io.ReadAll(io.LimitReader(reply.Body, 128))
 	err = errors.Join(err, reply.Body.Close())
-	if err != nil || reply.StatusCode != 200 || string(body) != "independent measured final" || c.app.Load() != 1 {
+	if err != nil || reply.StatusCode != 200 || string(body) != wantBody || c.app.Load() != 1 {
 		t.Fatal("application did not traverse the selected replacement final", err)
+	}
+	if c.insertAfter > 0 {
+		for i, after := range responsePrefixConnections(f) {
+			if after <= before[i] {
+				t.Fatal("original application skipped an encrypted prefix, inserted peer or suffix", i)
+			}
+		}
+		if final.provider.stats().Streams <= finalStreams {
+			t.Fatal("original application skipped the retained encrypted final")
+		}
 	}
 	if err = runtime.HealthyContext(ctx); err != nil {
 		t.Fatal("loaded selected path lost original health", err)
@@ -690,6 +736,9 @@ func (c *selectedResponseNativeCase) run(t *testing.T, ctx context.Context, f *m
 	}
 	inventory := desktopNodeChainJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "original-selected-local-private-response", Inputs: []string{c.input}})
 	position := len(f.members) - 2
+	if c.insertAfter > 0 {
+		position = c.insertAfter
+	}
 	paired := "none"
 	proofs := f.chain.ProofInventory()
 	if len(proofs) != len(f.members) || len(f.source.IdentitySources) != len(proofs) || proofs[0].Mode != "wg" || proofs[0].NodeID == "" || proofs[len(proofs)-1].Mode != "shadowsocks" || proofs[len(proofs)-1].NodeID == "" {
@@ -700,7 +749,7 @@ func (c *selectedResponseNativeCase) run(t *testing.T, ctx context.Context, f *m
 			t.Fatal("selected response changed an original position or Start Layer", i)
 		}
 	}
-	for i := 1; i <= position; i++ {
+	for i := 1; i < len(f.members)-1; i++ {
 		member := f.members[i]
 		private := i == c.pairedPosition
 		if proofs[i].Mode != "shadowsocks" || member.imported == private || (f.source.IdentitySources[i] != "") != private {
@@ -722,6 +771,52 @@ func (c *selectedResponseNativeCase) run(t *testing.T, ctx context.Context, f *m
 	t.Logf("PRIVATE_RESPONSE_SOURCE nodes=%d schema=%d position=%d role=%s paired=%s", len(f.members), f.source.Schema, position, role, paired)
 	if grant, err := runtime.NewRemoteCandidatePlanContext(ctx, position, inventory); grant != nil || err == nil {
 		t.Fatal("remote connect-only grant accepted a selected stream")
+	}
+	if c.fault == "suffix-alias" {
+		var launch struct {
+			Mode, Files, Start string
+			Profile            string `json:"profile_json"`
+			DNSBootstrap       string `json:"dns_bootstrap"`
+		}
+		if err := json.Unmarshal([]byte(c.input), &launch); err != nil {
+			t.Fatal(err)
+		}
+		var profile map[string]any
+		if err := json.Unmarshal([]byte(launch.Profile), &profile); err != nil {
+			t.Fatal(err)
+		}
+		suffix := proofs[position+1]
+		privateID, ok := profile["node_proof_id"].(string)
+		if !ok || len(privateID) != 64 || profile["id"] != privateResponsePeerID || suffix.Kind != "public-path" || suffix.ProfileID == "" || suffix.ProfileID == privateResponsePeerID {
+			t.Fatal("missing distinct candidate and original suffix")
+		}
+		for _, proof := range proofs {
+			if proof.NodeID == privateID {
+				t.Fatal("candidate reused an original private identity", proof.Position)
+			}
+		}
+		profile["id"] = suffix.ProfileID
+		alias, err := mobilemultihop.NewNodeProfile(launch.Mode, launch.Files, desktopNodeChainJSON(t, profile), launch.Start, launch.DNSBootstrap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input, err := alias.LaunchInput()
+		if err != nil {
+			t.Fatal(err)
+		}
+		aliased := desktopNodeChainJSON(t, mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "untouched-original-suffix", Inputs: []string{input}})
+		if original.Execution != "local" {
+			t.Fatal("untouched suffix alias lacks real selected Local owner")
+		}
+		if plan, err := runtime.NewLocalCandidatePlanContext(ctx, position, inventory); err != nil || plan == nil {
+			t.Fatal("distinct source candidate failed before suffix alias control", err)
+		}
+		if plan, err := runtime.NewLocalCandidatePlanContext(ctx, position, aliased); err == nil || plan != nil || c.provider.stats().PhysicalTCP != 0 {
+			t.Fatal("unused original suffix ID admitted a private candidate")
+		}
+		t.Logf("PRIVATE_RESPONSE_SUFFIX_ALIAS position=%d alias=%d distinct_private=true refused=true", position, position+1)
+		t.Log("SELECTED_PRIVATE_RESPONSE fault=suffix-alias samples=0 joined=true")
+		return
 	}
 	plan, err := runtime.NewLocalCandidatePlanContext(ctx, position, inventory)
 	if c.fault == "server-winner" {
@@ -747,7 +842,7 @@ func (c *selectedResponseNativeCase) run(t *testing.T, ctx context.Context, f *m
 	}
 	c.service.Store(s)
 	defer s.Close()
-	before := responsePrefixConnections(f)
+	before := responsePrefixConnections(f)[:position+1]
 	if err = s.StartContext(ctx, selectedResponseRequestID, privateResponsePeerID); err != nil {
 		t.Fatal(err)
 	}
@@ -780,7 +875,7 @@ func (c *selectedResponseNativeCase) run(t *testing.T, ctx context.Context, f *m
 		if !row.Ready || row.Kind != "private-agent-response" || row.Benchmark == nil || row.Benchmark.Measurement != hopmeasure.CandidatePrivateResponseMeasurement || row.Benchmark.Attempts != 50 || row.Benchmark.Failed != 0 || row.Benchmark.Distribution == nil || row.Benchmark.Distribution.Samples != 50 || c.accepted.Load() != 50 || c.provider.stats().Streams != 50 {
 			t.Fatal("fresh responses did not traverse both exact ciphers", status, c.accepted.Load())
 		}
-		for i, after := range responsePrefixConnections(f) {
+		for i, after := range responsePrefixConnections(f)[:position+1] {
 			if after-before[i] < 50 {
 				t.Fatal("private responses skipped an original encrypted prefix", i, after-before[i])
 			}
@@ -803,6 +898,11 @@ func (c *selectedResponseNativeCase) run(t *testing.T, ctx context.Context, f *m
 			if c.accepted.Load() == 0 || peer.Streams == 0 {
 				t.Fatal("forged response did not reach the authenticated private peer")
 			}
+		case "changed-original-suffix":
+			if c.accepted.Load() != 50 || !f.members[len(f.members)-1].sentWrongID.Load() || runtime.Progress().Ready || len(status.Results) != 0 {
+				t.Fatal("response survived changed retained suffix", status)
+			}
+			t.Logf("PRIVATE_RESPONSE_CHANGED_SUFFIX position=%d final=%d accepted=50 ready=false joined=true", position, len(f.members)-1)
 		case "late-catalog", "late-cancel":
 			if c.accepted.Load() != 50 || len(status.Results) != 0 {
 				t.Fatal("revoked final sample survived", status, c.accepted.Load())
@@ -812,7 +912,7 @@ func (c *selectedResponseNativeCase) run(t *testing.T, ctx context.Context, f *m
 		}
 	}
 	after, err := engine.SelectionEpochContext(ctx)
-	if err != nil || after != epoch || runtime.Progress().Execution != original.Execution || !reflect.DeepEqual(runtime.Progress().Comparison, original.Comparison) {
+	if c.fault != "changed-original-suffix" && (err != nil || after != epoch || runtime.Progress().Execution != original.Execution || !reflect.DeepEqual(runtime.Progress().Comparison, original.Comparison)) {
 		t.Fatal("original selection changed", err)
 	}
 	if err := s.CloseContext(ctx); err != nil {

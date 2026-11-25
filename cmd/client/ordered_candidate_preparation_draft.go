@@ -35,12 +35,12 @@ func (a *app) candidatePreparationNodesLocked(scope string, control common.Route
 
 // This source-only preview cannot authorize a measurement. A fresh native
 // receipt from the original Compare Local winner is required for adoption.
-func desktopCompareLocalResponseFinal(members []desktopNodeChainMember, execution string, position int, candidate common.RouterProfile) bool {
-	if execution != "auto" || len(members) < 3 || position != len(members)-2 || candidate.External != nil {
+func desktopCompareLocalResponseProposal(members []desktopNodeChainMember, execution string, position int, candidate common.RouterProfile) bool {
+	if execution != "auto" || len(members) < 3 || candidate.External != nil {
 		return false
 	}
 	if len(members) == 3 {
-		if members[0].Mode != "wg" || members[0].Profile.External != nil ||
+		if position != 1 || members[0].Mode != "wg" || members[0].Profile.External != nil ||
 			members[1].Mode != "shadowsocks" || members[1].Profile.External == nil ||
 			members[2].Mode != "shadowsocks" || members[2].Profile.External != nil {
 			return false
@@ -69,7 +69,7 @@ func desktopCompareLocalResponseFinal(members []desktopNodeChainMember, executio
 // only when the complete original suffix and all of its sources still compile.
 func orderedResponseProfile(ctx context.Context, root, execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, string, error) {
 	var empty common.RouterProfile
-	if execution != "local" && !desktopCompareLocalResponseFinal(members, execution, position, candidate) || position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" {
+	if execution != "local" && !desktopCompareLocalResponseProposal(members, execution, position, candidate) || position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" {
 		return empty, nil, "", errors.New("this measurement has no complete Local stream path")
 	}
 	p, rows, err := orderedCandidateProposalForExecution(members, position, candidate, profiles, execution)
@@ -92,19 +92,45 @@ func orderedResponseProfile(ctx context.Context, root, execution string, members
 	return p, rows, action, nil
 }
 
+const orderedCandidateDraftInsertAction = "insert-measured-hop"
+
+// A draft response choice always inserts the measured relay. In particular,
+// the penultimate choice retains the original final even though its separate
+// named Save offer replaces that final. Source compilation is repeated at
+// adoption; this preview cannot confer a selected-trial or measurement grant.
+func orderedResponseDraftProposal(ctx context.Context, root, execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, error) {
+	var empty common.RouterProfile
+	if execution != "local" && !desktopCompareLocalResponseProposal(members, execution, position, candidate) ||
+		position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" {
+		return empty, nil, errors.New("this response has no complete supported draft insertion")
+	}
+	for i, member := range members {
+		if member.Profile.ID == candidate.ID || candidate.NodeProofID != "" && member.Profile.NodeProofID == candidate.NodeProofID {
+			return empty, nil, errors.New("the measured candidate aliases an original draft member")
+		}
+		if execution == "auto" && i > 0 && i < len(members)-1 && member.Profile.External == nil {
+			return empty, nil, errors.New("this Compare source cannot insert a second private intermediate")
+		}
+	}
+	control, rows, err := orderedDraftProposalWithMode(execution, members, position, candidate, profiles, "shadowsocks")
+	if err != nil {
+		return empty, nil, err
+	}
+	proposed := slices.Clone(profiles)
+	for i := range proposed {
+		if proposed[i].ID == control.ID {
+			proposed[i] = control
+		}
+	}
+	if _, err := captureOrderedCandidateProposal(ctx, root, control, proposed, rows); err != nil {
+		return empty, nil, err
+	}
+	return control, rows, nil
+}
+
 // Insert the measured TCP candidate after the chosen prefix, keeping the
 // selected final and every original suffix member/mode in their original order.
 func orderedDraftProposal(execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, error) {
-	var control common.RouterProfile
-	if len(members) < 2 || len(members) >= mobilemultihop.NodeChainExtendedLocalMaximumNodes || position < 0 || position >= len(members)-1 {
-		return control, nil, errors.New("the measured candidate cannot be inserted at this position")
-	}
-	rows := nodeChainSelectedReferences(members)
-	for _, row := range rows {
-		if row.ID == candidate.ID {
-			return control, nil, errors.New("this candidate already belongs to the draft")
-		}
-	}
 	// This is the same editable default as Add hop in all three desktop
 	// editors. The returned measurement remains explicitly routed TCP
 	// establishment to the linked node, not evidence of a WG handshake.
@@ -116,7 +142,21 @@ func orderedDraftProposal(execution string, members []desktopNodeChainMember, po
 		case "shadowsocks":
 			mode = "shadowsocks"
 		default:
-			return control, nil, errors.New("the measured candidate does not expose a supported TCP relay")
+			return common.RouterProfile{}, nil, errors.New("the measured candidate does not expose a supported TCP relay")
+		}
+	}
+	return orderedDraftProposalWithMode(execution, members, position, candidate, profiles, mode)
+}
+
+func orderedDraftProposalWithMode(execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile, mode string) (common.RouterProfile, []common.MultihopNodeSelection, error) {
+	var control common.RouterProfile
+	if len(members) < 2 || len(members) >= mobilemultihop.NodeChainExtendedLocalMaximumNodes || position < 0 || position >= len(members)-1 {
+		return control, nil, errors.New("the measured candidate cannot be inserted at this position")
+	}
+	rows := nodeChainSelectedReferences(members)
+	for _, row := range rows {
+		if row.ID == candidate.ID {
+			return control, nil, errors.New("this candidate already belongs to the draft")
 		}
 	}
 	at := position + 1

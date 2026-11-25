@@ -102,6 +102,10 @@ def swift(directory):
     source = shipping((ROOT/'client/macos/RouterVPNMacTelemetry.swift').read_text())
     policy = block(source, 'private struct RouterVPNLiveHTTPSReceipt {').replace('private struct','struct',1)
     policy += '\n' + block(source, 'struct RouterVPNMacLiveRouteReceipt {')
+    policy += '\n' + block(source, 'private struct RouterVPNMacForwardingState {').replace('private struct','struct',1)
+    forward = '\n'.join(block(source, 'func '+name+'(') for name in
+        ['setUnifiedForwardState','refreshUnifiedForwardingMaster','toggleUnifiedForwardingMaster'])
+
     owner = block(source, 'private final class RouterVPNLiveTelemetryDelivery {').replace('private final','final',1)
     owner += '\n'+block((ROOT/'client/macos/RouterVPNMacViaEntryPolicy.swift').read_text(), 'final class MacViaEntryCandidateReservation:')
     methods = '\n'.join(block(source, 'func '+name+'(') for name in
@@ -132,7 +136,8 @@ final class DispatchQueue {
 }
 enum Color {case labelColor,secondaryLabelColor}
 class NSView {}
-class NSButton:NSView {enum State {case on,off};var state=State.off;var title="Disconnect"}
+class Cell {var representedObject:Any?}
+class NSButton:NSView {enum State {case on,off,mixed};var cell:Cell?=Cell();var isEnabled=true;var toolTip:String?;var state=State.off;var title="Disconnect"}
 final class MacUnifiedConnectButton:NSButton {var stopRetryToken:String?}
 final class Field{var stringValue="-- ms";var toolTip="";var textColor=Color.labelColor}
 final class Popup{var indexOfSelectedItem=0}
@@ -144,11 +149,15 @@ final class RouterVPNMacExternalComparisonController{var window:Window?=Window()
 final class RouterVPNMacOrderedCandidates{var window:Window?=Window()}
 var candidatePresented=false
 var telemetryPerformanceControllerKey:UInt8=0,telemetryExternalComparisonControllerKey:UInt8=0,telemetryOrderedCandidatesKey:UInt8=0
-func objc_getAssociatedObject(_ value:AnyObject,_ key:UnsafeRawPointer)->Any?{candidatePresented ? RouterVPNMacOrderedCandidates():nil}
+var telemetryForwardRequestKey:UInt8=0
+var forwardingRequests:[ObjectIdentifier:NSUUID]=[:]
+enum Association {case OBJC_ASSOCIATION_RETAIN_NONATOMIC}
+func objc_setAssociatedObject(_ value:AnyObject,_ key:UnsafeRawPointer,_ request:NSUUID?,_ policy:Association){forwardingRequests[ObjectIdentifier(value)]=request}
+func objc_getAssociatedObject(_ value:AnyObject,_ key:UnsafeRawPointer)->Any?{if let id=forwardingRequests[ObjectIdentifier(value)]{return id};return candidatePresented ? RouterVPNMacOrderedCandidates():nil}
 final class ProductAPI {
- var calls:[String]=[];var replies:[[String:Any]]=[];var statuses:[[String:Any]]=[];var receipt:[String:Any]=[:]
+ var lastBody:[String:Any]=[:];var calls:[String]=[];var replies:[[String:Any]]=[];var statuses:[[String:Any]]=[];var receipt:[String:Any]=[:]
  func json(_ path:String,timeout:TimeInterval=15)throws->Any{calls.append(path);if path=="/api/multihop/status"{if statuses.isEmpty{return ["connected":false] as [String:Any]};return statuses.removeFirst()};if replies.isEmpty{throw NSError(domain:"no fixture",code:1)};return replies.removeFirst()}
- func request(_ path:String,method:String,body:[String:Any],timeout:TimeInterval)throws->Data{calls.append(path);return try JSONSerialization.data(withJSONObject:receipt)}
+ func request(_ path:String,method:String,body:[String:Any],timeout:TimeInterval)throws->Data{calls.append(path);lastBody=body;return try JSONSerialization.data(withJSONObject:receipt)}
 }
 typealias CLLocationCoordinate2D=Double
 final class Chrome {
@@ -158,6 +167,10 @@ final class Chrome {
 }
 func productStopRetryToken(_ value:[String:Any])throws->String?{nil}
 POLICY
+final class ForwardForm {
+ let telemetryForwardButton:NSButton?=NSButton();let errorLabel=Field();let api=ProductAPI()
+ FORWARD
+}
 OWNER
 final class Form {
  var unifiedLiveProbe:NSLock{liveTelemetryDelivery.probe}
@@ -235,8 +248,22 @@ for fault in ["valid","missing-entry","short-imported","donor-token","late-inter
  DispatchQueue.main.timers=[]
 }
 let r=decode(value())!;check(!r.current(r.deadline),"deadline remained current")
+let forwarding = ForwardForm(), forwardButton = forwarding.telemetryForwardButton!
+let forwardPath = String(repeating:"a",count:64)
+let displayed:[String:Any]=["ok":true,"enabled":false,"router_id":"home","path_token":forwardPath]
+for fault in ["valid","missing","null","numeric","wrong-router","wrong-path"] {
+ forwarding.api.replies=[displayed]
+ forwarding.refreshUnifiedForwardingMaster();DispatchQueue.main.flush()
+ check(forwardButton.isEnabled && forwardButton.title == "Forward OFF", "original forwarding offer lost")
+ var response=displayed;response["enabled"]=true
+ switch fault {case "missing":response.removeValue(forKey:"enabled");case "null":response["enabled"]=NSNull();case "numeric":response["enabled"]=1;case "wrong-router":response["router_id"]="other";case "wrong-path":response["path_token"]=String(repeating:"b",count:64);default:break}
+ forwarding.api.receipt=response
+ forwarding.toggleUnifiedForwardingMaster(forwardButton);DispatchQueue.main.flush()
+ check(forwarding.api.lastBody["enabled"] as? Bool == true && forwarding.api.lastBody["router_id"] as? String == "home" && forwarding.api.lastBody["path_token"] as? String == forwardPath,"forwarding PUT changed original display owner")
+ check(forwardButton.isEnabled == (fault=="valid") && forwardButton.title == (fault=="valid" ? "Forward ON":"Forward ?"),"unverified forwarding readback")
+}
 print("Shipping Swift live HTTPS decoder/delivery: \(checks) checks PASS; native controls/HTTP are fixture boundaries.")
-'''.replace('POLICY',policy).replace('OWNER',owner).replace('METHODS',methods)
+'''.replace('FORWARD',forward).replace('POLICY',policy).replace('OWNER',owner).replace('METHODS',methods)
     path=directory/'live.swift';path.write_text(program)
     binary=directory/'live-swift'
     subprocess.run(['swiftc','-swift-version','5','-module-cache-path',str(directory/'cache'),str(path),'-o',str(binary)],check=True,timeout=120)
@@ -250,6 +277,8 @@ def linux(directory):
         'JsonNode *linux_ec_member(', 'JsonObject *linux_ec_object(',
         'const char *linux_ec_string(', 'gboolean linux_ec_bool(',
         'double linux_ec_number(', 'gboolean linux_ec_token('])
+    forward='\n'.join(block(source,'static '+pattern) for pattern in [
+        'gboolean linux_forward_state_valid(', 'void linux_telemetry_set_forward_label_v9(', 'void linux_telemetry_forward_v9('])
     methods=source[source.index('static gboolean linux_live_paused('):source.index('static void linux_telemetry_free(')]
     methods += source[source.index('static gboolean linux_telemetry_original_path_v9('):source.index('static void linux_install_telemetry_v9(')]
     globe=(ROOT/'client/linux/routervpn-globe-v10.inc').read_text()
@@ -285,7 +314,15 @@ HELPERS
 #define obj_string linux_ec_string
 static JsonArray *linux_ordered_array_v1(JsonObject*o,const char*k){JsonNode*n=linux_ec_member(o,k);return n&&JSON_NODE_HOLDS_ARRAY(n)?json_node_get_array(n):NULL;}
 static void linux_telemetry_apply_fastest_v9(LinuxTelemetryV9*t,JsonObject*o){(void)t;(void)o;profile_applies++;}
-static void linux_telemetry_set_forward_label_v9(LinuxTelemetryV9*t,gboolean known,gboolean enabled){(void)t;(void)known;(void)enabled;forward_applies++;}
+typedef struct {char *data;} Buffer;
+static const char *forward_reply;static JsonNode *forward_request;
+static gboolean api_request(const char*path,const char*method,const char*body,long timeout,Buffer*out,char**err){
+ (void)err;g_assert_cmpstr(path,==,"/api/forwarding/master");g_assert_cmpstr(method,==,"PUT");g_assert_cmpint(timeout,==,10000);
+ g_clear_pointer(&forward_request,json_node_unref);forward_request=parse_json(body);out->data=strdup(forward_reply);return TRUE;
+}
+static void append_diag(App *app,const char*message){(void)app;(void)message;}
+FORWARD
+#define linux_telemetry_set_forward_label_v9(t,v) (++forward_applies,linux_telemetry_set_forward_label_v9(t,v))
 METHODS
 static void check(gboolean value,const char*message){checks++;if(!value)g_error("live HTTPS GTK: %s",message);}
 static JsonNode*value(const char*raw){JsonNode*n=parse_json(raw);json_object_set_int_member(json_node_get_object(n),"measured_at",g_get_real_time()/1000);return n;}
@@ -398,9 +435,22 @@ int main(int argc,char**argv){
  g_clear_pointer(&t.map_status,json_object_unref);g_clear_pointer(&t.map_latency,json_object_unref);g_clear_pointer(&t.controller_status,json_object_unref);g_free(t.refresh_id);g_free(t.route_profile_id);g_free(t.live_selected);g_free(t.live_router_id);g_free(t.live_mode);
  json_node_free(route);json_node_free(receipt);g_free(route_id);g_free(other);gtk_widget_destroy(t.hop);
  check(starts==frees,"HTTP owner leaked");linux_live_clear(&t);gtk_widget_destroy(t.live);gtk_widget_destroy(app.map);gtk_widget_destroy(app.window);g_free(raw);g_free(last_path);
+ t.forward=gtk_button_new();g_autofree char *forward_path=g_strnfill(64,'a'), *different_path=g_strnfill(64,'b');
+ g_autoptr(JsonNode) shown=parse_json("{\"ok\":true,\"enabled\":false,\"router_id\":\"home\"}");JsonObject*fo=json_node_get_object(shown);json_object_set_string_member(fo,"path_token",forward_path);
+ for(guint f=0;f<6;f++){
+  linux_telemetry_set_forward_label_v9(&t,fo);check(gtk_widget_get_sensitive(t.forward),"valid forwarding disabled");
+  JsonObject*fr=json_object_new();json_object_set_boolean_member(fr,"ok",TRUE);
+  if(f==2)json_object_set_null_member(fr,"enabled");else if(f==3)json_object_set_int_member(fr,"enabled",1);else if(f!=1)json_object_set_boolean_member(fr,"enabled",TRUE);
+  json_object_set_string_member(fr,"router_id",f==4?"other":"home");json_object_set_string_member(fr,"path_token",f==5?different_path:forward_path);
+  g_autoptr(JsonNode)rn=json_node_new(JSON_NODE_OBJECT);json_node_take_object(rn,fr);g_autofree char*encoded=json_to_string(rn,FALSE);forward_reply=encoded;
+  linux_telemetry_forward_v9(GTK_BUTTON(t.forward),&t);JsonObject*q=json_node_get_object(forward_request);
+  check(linux_ec_bool(q,"enabled")&&!strcmp(linux_ec_string(q,"router_id"),"home")&&!strcmp(linux_ec_string(q,"path_token"),forward_path),"foreign forwarding request");
+  check(gtk_widget_get_sensitive(t.forward)==(f==0)&&!strcmp(gtk_button_get_label(GTK_BUTTON(t.forward)),f==0?"Forward ON":"Forward ?"),"foreign forwarding readback");
+ }
+ g_clear_pointer(&forward_request,json_node_unref);gtk_widget_destroy(t.forward);
  printf("Shipping GTK live HTTPS decoder/delivery: %u checks PASS; real widgets, controlled HTTP boundary.\n",checks);return 0;
 }
-'''.replace('FIELDS',fields).replace('HELPERS',helpers).replace('METHODS',methods)
+'''.replace('FIELDS',fields).replace('FORWARD',forward).replace('HELPERS',helpers).replace('METHODS',methods)
     path=directory/'live.c';path.write_text(program)
     binary=directory/'live-gtk'
     flags=subprocess.check_output(['pkg-config','--cflags','--libs','gtk+-3.0','json-glib-1.0','libcurl'],text=True).split()
@@ -412,7 +462,7 @@ int main(int argc,char**argv){
 
 def windows(directory):
     source=shipping((ROOT/'client/RouterVPN-Windows-Telemetry.ps1').read_text(encoding='utf-8-sig'))
-    names=['ExternalComparisonValue','ExternalComparisonToken','UnifiedLiveNumber','ReadUnifiedLiveHTTPS','TestUnifiedLiveHTTPSMatch','ClearUnifiedLiveHTTPS','ExpireUnifiedLiveHTTPS','UnifiedLiveHTTPSForID','UnifiedTelemetryBusy','ClearUnifiedGlobeRoute','CancelUnifiedTelemetryRefreshAsync','StartUnifiedTelemetryRefresh','CompleteUnifiedTelemetryRefresh']
+    names=['ExternalComparisonValue','ExternalComparisonToken','TestUnifiedForwardingState','SetUnifiedForwardingDisplay','ToggleUnifiedForwardingMaster','UnifiedLiveNumber','ReadUnifiedLiveHTTPS','TestUnifiedLiveHTTPSMatch','ClearUnifiedLiveHTTPS','ExpireUnifiedLiveHTTPS','UnifiedLiveHTTPSForID','UnifiedTelemetryBusy','ClearUnifiedGlobeRoute','CancelUnifiedTelemetryRefreshAsync','StartUnifiedTelemetryRefresh','CompleteUnifiedTelemetryRefresh']
     methods='\n'.join(block(source,'function '+name) for name in names)
     program=r'''
 param([string]$Output)
@@ -504,6 +554,24 @@ foreach($state in @($null,@{phase='off'},@{connected=$false},@{connected='false'
  Check (-not (Control 'UnifiedFastestNode').IsEnabled -and -not $script:UnifiedTelemetryDisconnected -and $script:Paths.Contains('/api/connection/live-latency') -and -not $script:Paths.Contains('/api/multihop/live-latency') -and (Control 'UnifiedLiveLatency').Text-eq'-- ms') 'incomplete wire status granted a disconnected draft or malformed RTT'
 }
 $script:Busy=$false;$Before=$script:Paths.Count;$Window.OwnedWindows=@([pscustomobject]@{IsVisible=$true});StartUnifiedTelemetryRefresh;Check ($script:Paths.Count-eq$Before) 'manual panel did not pause background polling'
+function Log($Message){}
+function StartUnifiedApiAsync($Label,$Url,$Method,$Body,$Timeout,$Success,$Failure,$Finish){
+ $script:ForwardRequest=$Body
+ Check ($Url -eq '/api/forwarding/master' -and $Method -eq 'PUT') 'wrong forwarding endpoint'
+ & $Success $script:ForwardReply
+ return $true
+}
+$script:Busy=$false;$fp='a'*64
+foreach($f in @('valid','missing','null','numeric','router','path')){
+ $displayed=@{ok=$true;enabled=$false;router_id='home';path_token=$fp;name='Home'}
+ SetUnifiedForwardingDisplay $displayed
+ $button=Control 'UnifiedForwardButton';Check ($button.IsEnabled -and $button.Content -eq 'Forward OFF') 'original forwarding offer lost'
+ $script:ForwardReply=$displayed.Clone();$script:ForwardReply.enabled=$true
+ switch($f){'missing'{$script:ForwardReply.Remove('enabled')};'null'{$script:ForwardReply.enabled=$null};'numeric'{$script:ForwardReply.enabled=1};'router'{$script:ForwardReply.router_id='other'};'path'{$script:ForwardReply.path_token='b'*64}}
+ ToggleUnifiedForwardingMaster
+ Check ($script:ForwardRequest.enabled -eq $true -and $script:ForwardRequest.router_id -ceq 'home' -and $script:ForwardRequest.path_token -ceq $fp) 'foreign forwarded request'
+ Check ($button.IsEnabled -eq ($f -eq 'valid') -and $button.Content -ceq $(if($f -eq 'valid'){'Forward ON'}else{'Forward ?'})) 'foreign forwarding response'
+}
 Write-Output "Shipping PowerShell live HTTPS decoder/delivery: $script:Checks checks PASS; WPF controls and HTTP delivery are fixture boundaries."
 '''.replace('METHODS',methods)
     path=directory/'live.ps1';path.write_text(program, encoding='utf-8-sig')

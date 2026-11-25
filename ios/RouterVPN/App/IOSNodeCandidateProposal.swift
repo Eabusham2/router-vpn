@@ -15,9 +15,9 @@ import Libbox
     }
 
     static func compile(original: IOSNodeCandidateOriginalCapture, records: [String: Data], position: Int,
-                        candidateID: String, measuredInput: String) throws -> Self {
+                        candidateID: String, measuredInput: String, retainFinal: Bool = false) throws -> Self {
         try compileCaptured(original: original, records: records, position: position,
-            candidateID: candidateID, measuredInput: measuredInput, selectedExecution: false)
+            candidateID: candidateID, measuredInput: measuredInput, selectedExecution: false, retainFinal: retainFinal)
     }
 
     static func selectedPositions(input: Data, bundle: Data, proofs: [IOSNodeCandidatePrefix],
@@ -28,10 +28,10 @@ import Libbox
               profiles.filter({ $0["id"] as? String == id }).count == 1 else { throw IOSNodeCandidateCapture.issue() }
         let retained = try IOSNodeChainExecutionCapture.reopen(String(decoding: input, as: UTF8.self), selectedProfile: final)
         defer { try? retained.close() }
-        let response = retained.responsePosition(for: winner)
+        let responses = retained.responsePositions(for: winner)
         let expected = retained.members.enumerated().map { position, member in
             IOSNodeCandidatePrefix(position: position, profile_id: member.id, node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode,
-                measurement: position == response ? "routed-candidate-response" : nil)
+                measurement: responses.contains(position) ? "routed-candidate-response" : nil)
         }
         guard retained.sourceSHA256 == source, retained.configSHA256 == config,
               proofs == expected else { throw IOSNodeCandidateCapture.issue() }
@@ -42,7 +42,7 @@ import Libbox
     /// active Server/Compare controller is never run, restored or reselected.
     static func compileConnectedExecution(_ input: String, selectedProfile: [String: Any],
                         sourceSHA256: String, configSHA256: String, records: [String: Data], position: Int,
-                        candidateID: String, measuredInput: String, winner: String = "") throws -> Self {
+                        candidateID: String, measuredInput: String, winner: String = "", retainFinal: Bool = false) throws -> Self {
         let execution = try IOSNodeChainExecutionCapture.reopen(input, selectedProfile: selectedProfile)
         defer { try? execution.close() }
         guard execution.sourceSHA256 == sourceSHA256, execution.configSHA256 == configSHA256 else { throw IOSNodeCandidateCapture.issue() }
@@ -56,11 +56,11 @@ import Libbox
         }
         return try compileCaptured(original: original, records: records, position: position,
             candidateID: candidateID, measuredInput: measuredInput, selectedExecution: true, multipleImported: execution.isMultipleImported,
-            selectedResponse: execution.responsePosition(for: winner) == position)
+            selectedResponse: execution.responsePositions(for: winner).contains(position), retainFinal: retainFinal)
     }
 
     private static func compileCaptured(original: IOSNodeCandidateOriginalCapture, records: [String: Data], position: Int,
-                        candidateID: String, measuredInput: String, selectedExecution: Bool, multipleImported: Bool = false, selectedResponse: Bool = false) throws -> Self {
+            candidateID: String, measuredInput: String, selectedExecution: Bool, multipleImported: Bool = false, selectedResponse: Bool = false, retainFinal: Bool = false) throws -> Self {
         guard !selectedExecution || ["server", "auto"].contains(original.selectionExecution),
               selectedExecution || !original.requiresIndependentPrefix || original.selectionExecution == "local",
               original.members.indices.contains(position),
@@ -81,9 +81,8 @@ import Libbox
         let candidate = try source(candidateID)
         guard try IOSNodeCandidateCapture.member(profile: candidate.profile, files: candidate.files) == measuredInput else { throw IOSNodeCandidateCapture.issue() }
         if selectedResponse {
-            guard let final = original.members.last, position + 1 == original.members.count - 1,
-                  candidateID != final.id, let proof = candidate.profile["node_proof_id"] as? String,
-                  proof != final.profile["node_proof_id"] as? String else { throw IOSNodeCandidateCapture.issue() }
+            guard let proof = candidate.profile["node_proof_id"] as? String, !proof.isEmpty,
+                  !original.members.contains(where: { $0.id == candidateID || $0.profile["node_proof_id"] as? String == proof }) else { throw IOSNodeCandidateCapture.issue() }
         }
         if selectedResponse || !selectedExecution && original.candidatePrefixes[position].metric == "routed-candidate-response" {
             guard LibboxRouterNodeChainCandidateInputSupportedForMeasurement(measuredInput, "routed-candidate-response") else {
@@ -105,10 +104,15 @@ import Libbox
         // Preserve the rest of the complete saved path; its compiler decides
         // whether the replacement can occupy this exact role.
         var selected = original.members.map { (id: $0.id, mode: $0.mode) }
-        let insertStream = !selectedExecution && original.candidatePrefixes[position].metric == "routed-candidate-response" &&
-            replacement < selected.count - 1
+        let response = selectedResponse || !selectedExecution && original.candidatePrefixes[position].metric == "routed-candidate-response"
+        guard !retainFinal || response else { throw IOSNodeCandidateCapture.issue() }
+        let insertStream = response && (retainFinal || replacement < selected.count - 1)
         if insertStream {
-            guard execution == "local", selected.count < IOSMultihopNodeSelection.physicalTraversalDepth,
+            if selectedResponse && original.members.dropFirst().dropLast().contains(where: { $0.profile["node_kind"] as? String != "external" }) {
+                throw NSError(domain: "RouterVPN.CandidateProposal", code: 2, userInfo: [NSLocalizedDescriptionKey:
+                    "This Compare draft already contains its supported paired Shadowsocks intermediate."])
+            }
+            guard execution == "local" || selectedResponse && execution == "auto", selected.count < IOSMultihopNodeSelection.physicalTraversalDepth,
                   candidate.profile["node_kind"] as? String == "router-vpn", candidate.profile["external"] == nil,
                   original.members[replacement].mode == "shadowsocks" else { throw IOSNodeCandidateCapture.issue() }
             selected.insert((candidateID, candidateMode), at: replacement)

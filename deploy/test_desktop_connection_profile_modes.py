@@ -1122,14 +1122,36 @@ for count in [4, 9, 16, 96] {
         var publicProfiles = profiles
         publicProfiles[position]["node_kind"]="external";publicProfiles[position]["external"]=profiles[1]["external"]
         let allImported = try RouterVPNOrderedNodeDraft(selection: original, generation: UUID(), catalog: publicProfiles)
-        check(allImported.canMeasure(after:count-2) == (execution == "auto") && !allImported.canMeasure(after:1),
+        check(allImported.canMeasure(after:count-2) == (execution == "auto"),
               "the all-imported selected route lost its penultimate Compare prefix")
+        let insert = execution == "auto" && count < 96
+        check(allImported.canMeasure(after:1) == insert && allImported.canMeasure(after:count-3) == insert,
+              "Compare insertion lost an eligible imported prefix or exceeded capacity")
         publicProfiles[0]["start_layer"]="aes-256-gcm"
         let layered = try? RouterVPNOrderedNodeDraft(selection: original, generation: UUID(), catalog: publicProfiles)
         check(layered?.canMeasure(after:count-2) != true,"a layered selected route acquired a private response")
         var base = original
         let removed = base.orderedNodes.remove(at: position)
         base.profileTokens.removeValue(forKey: removed["id"]!)
+        if execution == "auto" && count <= 16 {
+            var catalog = profiles
+            var literal = catalog[1]["external"] as! [String:Any]
+            literal["ordered_execution_middle_supported"] = true; catalog[1]["external"] = literal
+            var applying = try RouterVPNOrderedNodeDraft(selection:base,generation:UUID(),catalog:catalog)
+            check(applying.canMeasure(after:position-1),"unsaved response draft lost original imported prefix")
+            let used:[String:Any]=["draft_action":"insert-measured-hop","candidate_id":removed["id"]!,
+                "expected_selected_node_id":original.selectedNodeID,"expected_profile_tokens":original.profileTokens,
+                "requested_execution":"auto","proposed_path":original.orderedNodes]
+            var stale=used;var tokens=original.profileTokens;tokens[original.selectedNodeID]=String(repeating:"0",count:64);stale["expected_profile_tokens"]=tokens
+            rejects({try applying.insertMeasured(stale,after:position-1)},"unsaved response accepted stale source tokens")
+            check(try applying.selection()==base,"rejected response changed the editor")
+            try applying.insertMeasured(used,after:position-1)
+            let next=try applying.selection()
+            check(next==original && applying.canMeasure(after:count-2),"unsaved response lost original final or next measurable prefix")
+            let request=try RouterVPNOrderedNodes.connectBody(next,current:["selected_id":original.selectedNodeID,"profiles":catalog])
+            check(request["nodes"] as? [[String:String]]==original.orderedNodes && request["expected_profile_tokens"] as? [String:String]==original.profileTokens,
+                  "remeasuring the unsaved response lost its complete token-bound editor request")
+        }
         if count > 4 {
             var edited = try RouterVPNOrderedNodeDraft(selection: base, generation: UUID(), catalog: profiles)
             try edited.add(removed["id"]!)
@@ -1338,7 +1360,7 @@ for count in [9,16] { for requested in ["server","auto"] {
     let measurable=try RouterVPNOrderedNodeDraft(selection:localStream,generation:UUID(),catalog:catalog)
     for last in Set([7,count-2]) {
         check(measurable.canMeasure(after:last),"Longer original Local stream prefix lost response eligibility")
-        check(complete.canMeasure(after:last) == (requested == "auto" && last == count-2),"Longer selected source lost its Compare penultimate position")
+        check(complete.canMeasure(after:last) == (requested == "auto"),"Longer selected source lost its Compare penultimate position")
     }
     var layeredSuffix=catalog;layeredSuffix[count-2]["start_layer"]=NSNull()
     rejects({ _ = try RouterVPNOrderedNodeDraft(selection:localStream,generation:UUID(),catalog:layeredSuffix) },"Malformed later import entered a complete Local source")

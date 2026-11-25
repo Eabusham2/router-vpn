@@ -63,11 +63,11 @@ protocol ObservableObject:AnyObject {}
 }
 @MainActor struct IOSNodeCandidateProposal {
  static func selectedPositions(input:Data,bundle:Data,proofs:[IOSNodeCandidatePrefix],source:String,config:String,winner:String="")throws->[Int]{throw Failure(message:"unexpected selected source inspection in a Local prefix test")}
- static func compileConnectedExecution(_ input:String,selectedProfile:[String:Any],sourceSHA256:String,configSHA256:String,records:[String:Data],position:Int,candidateID:String,measuredInput:String,winner:String="")throws->Self {
+ static func compileConnectedExecution(_ input:String,selectedProfile:[String:Any],sourceSHA256:String,configSHA256:String,records:[String:Data],position:Int,candidateID:String,measuredInput:String,winner:String="",retainFinal:Bool=false)throws->Self {
   throw Failure(message:"unexpected Server/Compare handoff in a Local prefix test")
  }
  let description="Complete original future graph",profiles=["original-first","candidate"]
- static func compile(original:IOSNodeChainCapture,records:[String:Data],position:Int,candidateID:String,measuredInput:String)throws->Self{
+ static func compile(original:IOSNodeChainCapture,records:[String:Data],position:Int,candidateID:String,measuredInput:String,retainFinal:Bool=false)throws->Self{
   guard !Provider.unsupported else{throw NSError(domain:"ExplicitCompilerBoundary",code:1,userInfo:[NSLocalizedDescriptionKey:"The measured source cannot form a supported future route."])}
   return Self()
  }

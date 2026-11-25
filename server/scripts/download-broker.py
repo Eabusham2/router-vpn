@@ -21,6 +21,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import shutil
+import socket
 import stat
 import subprocess
 import tempfile
@@ -105,7 +106,7 @@ MAX_ARTIFACT_MEMBERS = 20_000
 MAX_MEMBER = 512 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 200
 MAX_PAIR_BUNDLE = 64 * 1024 * 1024
-CHUNK = 1024 * 1024
+CHUNK = _jobs.PACKAGE_CHUNK
 REQUEST_SLOTS = threading.BoundedSemaphore(value=8)
 BUILD_SLOTS = threading.BoundedSemaphore(value=1)
 PACKAGE_TIMEOUT = 720
@@ -170,9 +171,10 @@ def _download_limited(url: str, path: Path, progress=None) -> None:
         progress("downloading", 28)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags, 0o600)
+    opened = os.fstat(fd)
     complete = False
     try:
-        with _urlopen(url, timeout=25) as r, os.fdopen(fd, "wb", closefd=True) as w:
+        with os.fdopen(fd, "wb", closefd=True) as w, _urlopen(url, timeout=25) as r:
             try:
                 expected = int(r.headers.get("Content-Length", "0") or 0)
             except ValueError:
@@ -187,8 +189,8 @@ def _download_limited(url: str, path: Path, progress=None) -> None:
                 if total > MAX_GITHUB_ARTIFACT:
                     raise RuntimeError("GitHub artifact exceeds safety limit")
                 w.write(chunk)
-                if progress and expected > 0:
-                    progress("downloading", min(39, 28 + int(11 * total / expected)))
+                if progress:
+                    progress("downloading", min(39, 28 + int(11 * total / expected)) if expected else 28)
             w.flush()
             os.fsync(w.fileno())
         if total == 0:
@@ -201,10 +203,10 @@ def _download_limited(url: str, path: Path, progress=None) -> None:
     finally:
         if not complete:
             try:
-                os.close(fd)
-            except OSError:
+                if os.path.samestat(opened, path.lstat()):
+                    path.unlink()
+            except FileNotFoundError:
                 pass
-            path.unlink(missing_ok=True)
 
 
 def _artifact_sha256(item: dict) -> str:
@@ -411,19 +413,21 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
     if progress:
         progress("validating", 42)
     fd, staged_name = tempfile.mkstemp(prefix=f".{Path(output_name).name}.", suffix=".part", dir=temp)
-    os.close(fd)
     staged = Path(staged_name)
     committed = False
     try:
-        with _verified_artifact_zip(outer, expected_digest) as verified_outer:
+        with os.fdopen(fd, "wb") as w, _verified_artifact_zip(outer, expected_digest) as verified_outer:
             with zipfile.ZipFile(verified_outer) as zf:
                 item = _pick_member(zf, wanted)
-                with zf.open(item) as r, staged.open("wb") as w:
-                    shutil.copyfileobj(r, w, CHUNK)
+                with zf.open(item) as r:
+                    digest = hashlib.sha256()
+                    while chunk := r.read(CHUNK):
+                        w.write(chunk)
+                        digest.update(chunk)
                     w.flush()
                     os.fsync(w.fileno())
-        if staged.stat().st_size == 0:
-            raise RuntimeError("selected GitHub package is empty")
+                    identity = _owned_temp.package_file_identity(os.fstat(w.fileno()))
+        _owned_temp.verify_package_output(staged, identity)
         _require_selected_output_absent(selected)
         os.replace(staged, selected)
         committed = True
@@ -431,8 +435,7 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
         outer.unlink(missing_ok=True)
         if not committed:
             staged.unlink(missing_ok=True)
-    if not selected.is_file() or selected.stat().st_size == 0:
-        raise RuntimeError("selected GitHub package is empty")
+    _owned_temp.verify_package_output(selected, identity, progress, digest.hexdigest())
     return selected
 
 
@@ -441,6 +444,8 @@ def _fetch_first_artifact(sources, temp: Path, output_name: str, progress=None) 
     for artifact_name, wanted in sources:
         try:
             return fetch_artifact_member(str(artifact_name), str(wanted), temp, output_name, progress=progress)
+        except _jobs.DownloadCancelled:
+            raise
         except Exception as exc:
             failures.append(f"{artifact_name}: {type(exc).__name__}: {exc}")
     raise RuntimeError("; ".join(failures) if failures else "no GitHub artifact sources configured")
@@ -482,6 +487,8 @@ def build_github_package(base: Path, name: str, temp: Path, progress=None) -> Pa
             # artifact with wrong embedded source/family is not allowed to
             # suppress the next same-SHA native producer.
             return _run_builder(base, name, temp, candidate, progress=progress)
+        except _jobs.DownloadCancelled:
+            raise
         except Exception as exc:
             failures.append(f"{artifact_name}: {type(exc).__name__}: {exc}")
         finally:
@@ -508,6 +515,8 @@ def fetch_direct_mobile(name: str, temp: Path, progress=None) -> Path:
             # through to the second same-SHA native producer safely.
             _mobile_provenance.verify(name, selected, head_sha, repo)
             return selected
+        except _jobs.DownloadCancelled:
+            raise
         except Exception as exc:
             selected.unlink(missing_ok=True)
             failures.append(f"{artifact_name}: {type(exc).__name__}: {exc}")
@@ -866,40 +875,63 @@ class Handler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def _job_file(self, job_id: str) -> None:
+        """Stream a retained package while honoring authenticated DELETE cancellation."""
         try:
-            package, meta = self.server.jobs.begin_delivery(job_id)
+            f, meta = self.server.jobs.begin_delivery(job_id, lambda: self.connection.shutdown(socket.SHUT_RDWR))
         except KeyError:
             self._json(404, {"ok": False, "error_code": "not_found", "error": "download job not found"})
             return
         except RuntimeError as exc:
             self._json(409, {"ok": False, "error_code": "not_ready", "error": str(exc)})
             return
+
+        attempt = meta["delivery_attempts"]
+        restore_timeout = False
         success = False
         try:
-            size = package.stat().st_size
+            previous_timeout = self.connection.gettimeout()
+            restore_timeout = True
+            timeout = min(30, max(1, meta["expires_in_seconds"]))
+            self.connection.settimeout(timeout if previous_timeout is None else min(previous_timeout, timeout))
+            size = meta["bytes_total"]
             self.send_response(200)
             self.send_header("Content-Type", str(meta["content_type"]))
             self.send_header("Content-Disposition", f'attachment; filename="{meta["name"]}"')
             self.send_header("Content-Length", str(size))
             self.send_header("X-Router-VPN-Source", str(meta.get("source") or ""))
             self.send_header("X-Router-VPN-Job", job_id)
+            self.send_header("X-Router-VPN-Retained-Until", str(meta.get("retained_until") or ""))
             self.end_headers()
             sent = 0
-            with package.open("rb") as f:
-                while True:
-                    chunk = f.read(CHUNK)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-                    sent += len(chunk)
-                    self.server.jobs.update_delivery(job_id, sent, size)
-            success = True
-        except (BrokenPipeError, ConnectionResetError):
+            digest = hashlib.sha256()
+            for expected in meta["chunk_hashes"]:
+                if self.server.jobs.cancel_requested(job_id):
+                    break
+                length = min(CHUNK, size - sent)
+                chunk = f.read(length)
+                if len(chunk) != length or hashlib.sha256(chunk).digest() != expected:
+                    break
+                self.wfile.write(chunk)
+                digest.update(chunk)
+                sent += len(chunk)
+                self.server.jobs.update_delivery(job_id, sent, size, attempt)
+            success = sent == size and digest.hexdigest() == meta["verified_sha256"] and not self.server.jobs.cancel_requested(job_id)
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
             pass
         except Exception as exc:
-            print(f"download broker: delivery failed {job_id}: {type(exc).__name__}: {exc}", flush=True)
+            print(f"setup center: delivery failed {job_id}: {type(exc).__name__}: {exc}", flush=True)
         finally:
-            self.server.jobs.finish_delivery(job_id, success)
+            # Success and client disconnect retain the exact generated package
+            # and its owned workspace until the original READY+30m deadline.
+            # Explicit DELETE cancellation still removes it immediately.
+            try:
+                if not success:
+                    self.close_connection = True
+                f.close()
+                if restore_timeout:
+                    self.connection.settimeout(previous_timeout)
+            finally:
+                self.server.jobs.finish_delivery(job_id, success, attempt)
 
     def _dynamic(self, name: str) -> None:
         if not REQUEST_SLOTS.acquire(timeout=1):
@@ -954,19 +986,23 @@ class Handler(SimpleHTTPRequestHandler):
 class Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    require_verified_output = False
 
     def __init__(self, address, handler, base_dir: Path, static_dir: Path):
         self.base_dir = validate_private_directory(base_dir)
         self.static_dir = validate_private_directory(static_dir)
         token_path = self.base_dir / "config" / "setup-center.token"
         self.setup_token = _setup_token(token_path)
-        self.jobs = _jobs.DownloadJobManager(base_dir, build_package, content_type_for, BUILD_SLOTS, ALLOWED_DOWNLOADS, max_active=8)
+        self.jobs = _jobs.DownloadJobManager(base_dir, build_package, content_type_for, BUILD_SLOTS, ALLOWED_DOWNLOADS, max_active=8,
+                                             require_verified_output=self.require_verified_output)
         self.pairing = _pairing.PairingManager()
         super().__init__(address, handler)
 
     def server_close(self) -> None:
-        self.jobs.close()
-        super().server_close()
+        try:
+            self.jobs.close()
+        finally:
+            super().server_close()
 
 
 def main() -> int:

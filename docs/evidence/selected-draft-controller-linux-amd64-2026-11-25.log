@@ -1,0 +1,226 @@
+
+PHASE forwarding
+=== RUN   TestValidatedPrivateRouterAPI
+--- PASS: TestValidatedPrivateRouterAPI (0.00s)
+=== RUN   TestDesktopForwardingMasterGetAndPut
+--- PASS: TestDesktopForwardingMasterGetAndPut (0.01s)
+=== RUN   TestDesktopForwardingMasterRejectsExternalOrDisconnected
+--- PASS: TestDesktopForwardingMasterRejectsExternalOrDisconnected (0.00s)
+PASS
+
+PHASE draft-use
+=== RUN   TestOrderedCandidateDraftUseKeepsOriginalFinalAndSuffix
+=== RUN   TestOrderedCandidateDraftUseKeepsOriginalFinalAndSuffix/3/1
+=== RUN   TestOrderedCandidateDraftUseKeepsOriginalFinalAndSuffix/4/1
+=== RUN   TestOrderedCandidateDraftUseKeepsOriginalFinalAndSuffix/6/2
+=== RUN   TestOrderedCandidateDraftUseKeepsOriginalFinalAndSuffix/9/7
+--- PASS: TestOrderedCandidateDraftUseKeepsOriginalFinalAndSuffix (1.95s)
+    --- PASS: TestOrderedCandidateDraftUseKeepsOriginalFinalAndSuffix/3/1 (0.36s)
+    --- PASS: TestOrderedCandidateDraftUseKeepsOriginalFinalAndSuffix/4/1 (0.42s)
+    --- PASS: TestOrderedCandidateDraftUseKeepsOriginalFinalAndSuffix/6/2 (0.51s)
+    --- PASS: TestOrderedCandidateDraftUseKeepsOriginalFinalAndSuffix/9/7 (0.66s)
+=== RUN   TestSelectedPrivateResponseDraftUsePreservesUnsavedPath
+=== RUN   TestSelectedPrivateResponseDraftUsePreservesUnsavedPath/3/1
+=== RUN   TestSelectedPrivateResponseDraftUsePreservesUnsavedPath/4/1
+=== RUN   TestSelectedPrivateResponseDraftUsePreservesUnsavedPath/4/2
+=== RUN   TestSelectedPrivateResponseDraftUsePreservesUnsavedPath/9/6
+=== RUN   TestSelectedPrivateResponseDraftUsePreservesUnsavedPath/16/8
+=== RUN   TestSelectedPrivateResponseDraftUsePreservesUnsavedPath/16/14
+--- PASS: TestSelectedPrivateResponseDraftUsePreservesUnsavedPath (10.53s)
+    --- PASS: TestSelectedPrivateResponseDraftUsePreservesUnsavedPath/3/1 (1.55s)
+    --- PASS: TestSelectedPrivateResponseDraftUsePreservesUnsavedPath/4/1 (1.04s)
+    --- PASS: TestSelectedPrivateResponseDraftUsePreservesUnsavedPath/4/2 (1.01s)
+    --- PASS: TestSelectedPrivateResponseDraftUsePreservesUnsavedPath/9/6 (1.61s)
+    --- PASS: TestSelectedPrivateResponseDraftUsePreservesUnsavedPath/16/8 (2.63s)
+    --- PASS: TestSelectedPrivateResponseDraftUsePreservesUnsavedPath/16/14 (2.69s)
+=== RUN   TestSelectedPrivateResponseDraftUseStartsFreshMeasurement
+--- PASS: TestSelectedPrivateResponseDraftUseStartsFreshMeasurement (2.78s)
+=== RUN   TestSelectedPrivateResponseDraftUseRejectsChangedOwner
+=== RUN   TestSelectedPrivateResponseDraftUseRejectsChangedOwner/source
+=== RUN   TestSelectedPrivateResponseDraftUseRejectsChangedOwner/network
+=== RUN   TestSelectedPrivateResponseDraftUseRejectsChangedOwner/epoch
+=== RUN   TestSelectedPrivateResponseDraftUseRejectsChangedOwner/cancelled
+=== RUN   TestSelectedPrivateResponseDraftUseRejectsChangedOwner/expired
+=== RUN   TestSelectedPrivateResponseDraftUseRejectsChangedOwner/file-candidate
+=== RUN   TestSelectedPrivateResponseDraftUseRejectsChangedOwner/file-final
+--- PASS: TestSelectedPrivateResponseDraftUseRejectsChangedOwner (10.93s)
+    --- PASS: TestSelectedPrivateResponseDraftUseRejectsChangedOwner/source (1.53s)
+    --- PASS: TestSelectedPrivateResponseDraftUseRejectsChangedOwner/network (1.47s)
+    --- PASS: TestSelectedPrivateResponseDraftUseRejectsChangedOwner/epoch (1.51s)
+    --- PASS: TestSelectedPrivateResponseDraftUseRejectsChangedOwner/cancelled (1.69s)
+    --- PASS: TestSelectedPrivateResponseDraftUseRejectsChangedOwner/expired (1.49s)
+    --- PASS: TestSelectedPrivateResponseDraftUseRejectsChangedOwner/file-candidate (1.62s)
+    --- PASS: TestSelectedPrivateResponseDraftUseRejectsChangedOwner/file-final (1.61s)
+=== RUN   TestSelectedPrivateResponseDraftUseRejectsSecondPrivateAndCapacity
+--- PASS: TestSelectedPrivateResponseDraftUseRejectsSecondPrivateAndCapacity (0.10s)
+PASS
+
+PHASE connected
+=== RUN   TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner
+=== RUN   TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/server/server
+=== RUN   TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/auto/local
+=== RUN   TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/auto/server
+--- PASS: TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner (4.29s)
+    --- PASS: TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/server/server (1.47s)
+    --- PASS: TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/auto/local (1.41s)
+    --- PASS: TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/auto/server (1.41s)
+=== RUN   TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad
+=== RUN   TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/4/1
+=== RUN   TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/9/6
+=== RUN   TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/16/8
+=== RUN   TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/16/13
+--- PASS: TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad (10.64s)
+    --- PASS: TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/4/1 (1.42s)
+    --- PASS: TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/9/6 (2.25s)
+    --- PASS: TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/16/8 (3.50s)
+    --- PASS: TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/16/13 (3.48s)
+=== RUN   TestDesktopSelectedIntermediateResponseRejectsChangedOriginalSuffixBeforeSave
+--- PASS: TestDesktopSelectedIntermediateResponseRejectsChangedOriginalSuffixBeforeSave (1.75s)
+=== RUN   TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile
+=== RUN   TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/private-penultimate/4
+=== RUN   TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/private-penultimate/9
+=== RUN   TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/private-penultimate/16
+=== RUN   TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/all-imported/4
+=== RUN   TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/all-imported/9
+=== RUN   TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/all-imported/16
+=== RUN   TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/earlier-private/5
+=== RUN   TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/earlier-private/9
+=== RUN   TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/earlier-private/16
+--- PASS: TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile (18.97s)
+    --- PASS: TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/private-penultimate/4 (1.31s)
+    --- PASS: TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/private-penultimate/9 (2.00s)
+    --- PASS: TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/private-penultimate/16 (2.99s)
+    --- PASS: TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/all-imported/4 (1.25s)
+    --- PASS: TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/all-imported/9 (1.89s)
+    --- PASS: TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/all-imported/16 (2.91s)
+    --- PASS: TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/earlier-private/5 (1.43s)
+    --- PASS: TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/earlier-private/9 (2.08s)
+    --- PASS: TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile/earlier-private/16 (3.11s)
+PASS
+
+PHASE named-selected
+=== RUN   TestDesktopSelectedIntermediateResponseDraftRetainsOriginalSuffixThroughDownSaveAndLoad
+=== RUN   TestDesktopSelectedIntermediateResponseDraftRetainsOriginalSuffixThroughDownSaveAndLoad/4/1
+=== RUN   TestDesktopSelectedIntermediateResponseDraftRetainsOriginalSuffixThroughDownSaveAndLoad/9/6
+=== RUN   TestDesktopSelectedIntermediateResponseDraftRetainsOriginalSuffixThroughDownSaveAndLoad/16/8
+=== RUN   TestDesktopSelectedIntermediateResponseDraftRetainsOriginalSuffixThroughDownSaveAndLoad/16/13
+--- PASS: TestDesktopSelectedIntermediateResponseDraftRetainsOriginalSuffixThroughDownSaveAndLoad (8.84s)
+    --- PASS: TestDesktopSelectedIntermediateResponseDraftRetainsOriginalSuffixThroughDownSaveAndLoad/4/1 (1.17s)
+    --- PASS: TestDesktopSelectedIntermediateResponseDraftRetainsOriginalSuffixThroughDownSaveAndLoad/9/6 (1.85s)
+    --- PASS: TestDesktopSelectedIntermediateResponseDraftRetainsOriginalSuffixThroughDownSaveAndLoad/16/8 (2.80s)
+    --- PASS: TestDesktopSelectedIntermediateResponseDraftRetainsOriginalSuffixThroughDownSaveAndLoad/16/13 (3.01s)
+=== RUN   TestDesktopSelectedIntermediateResponseDraftServerWinnerClosesWithoutScores
+--- PASS: TestDesktopSelectedIntermediateResponseDraftServerWinnerClosesWithoutScores (2.14s)
+=== RUN   TestDesktopSelectedDraftRetainsWinnerThroughOriginalDownAndChoose
+=== RUN   TestDesktopSelectedDraftRetainsWinnerThroughOriginalDownAndChoose/server/server
+=== RUN   TestDesktopSelectedDraftRetainsWinnerThroughOriginalDownAndChoose/auto/local
+=== RUN   TestDesktopSelectedDraftRetainsWinnerThroughOriginalDownAndChoose/auto/server
+=== RUN   TestDesktopSelectedDraftRetainsWinnerThroughOriginalDownAndChoose/held-native-down
+=== RUN   TestDesktopSelectedDraftRetainsWinnerThroughOriginalDownAndChoose/changed-review-network
+--- PASS: TestDesktopSelectedDraftRetainsWinnerThroughOriginalDownAndChoose (6.57s)
+    --- PASS: TestDesktopSelectedDraftRetainsWinnerThroughOriginalDownAndChoose/server/server (1.33s)
+    --- PASS: TestDesktopSelectedDraftRetainsWinnerThroughOriginalDownAndChoose/auto/local (1.30s)
+    --- PASS: TestDesktopSelectedDraftRetainsWinnerThroughOriginalDownAndChoose/auto/server (1.39s)
+    --- PASS: TestDesktopSelectedDraftRetainsWinnerThroughOriginalDownAndChoose/held-native-down (1.30s)
+    --- PASS: TestDesktopSelectedDraftRetainsWinnerThroughOriginalDownAndChoose/changed-review-network (1.25s)
+=== RUN   TestSelectedPrivateResponseNamedProfileRetainsCompare
+--- PASS: TestSelectedPrivateResponseNamedProfileRetainsCompare (1.93s)
+=== RUN   TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare
+=== RUN   TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/private-penultimate/4
+=== RUN   TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/private-penultimate/9
+=== RUN   TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/private-penultimate/16
+=== RUN   TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/all-imported/4
+=== RUN   TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/all-imported/9
+=== RUN   TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/all-imported/16
+=== RUN   TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/earlier-private/5
+=== RUN   TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/earlier-private/9
+=== RUN   TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/earlier-private/16
+--- PASS: TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare (15.67s)
+    --- PASS: TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/private-penultimate/4 (1.02s)
+    --- PASS: TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/private-penultimate/9 (1.64s)
+    --- PASS: TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/private-penultimate/16 (2.45s)
+    --- PASS: TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/all-imported/4 (1.00s)
+    --- PASS: TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/all-imported/9 (1.62s)
+    --- PASS: TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/all-imported/16 (2.58s)
+    --- PASS: TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/earlier-private/5 (1.14s)
+    --- PASS: TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/earlier-private/9 (1.65s)
+    --- PASS: TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare/earlier-private/16 (2.57s)
+=== RUN   TestSelectedPrivatePenultimateResponseDraftServerWinnerClosesWithoutScores
+=== RUN   TestSelectedPrivatePenultimateResponseDraftServerWinnerClosesWithoutScores/-1
+=== RUN   TestSelectedPrivatePenultimateResponseDraftServerWinnerClosesWithoutScores/2
+=== RUN   TestSelectedPrivatePenultimateResponseDraftServerWinnerClosesWithoutScores/14
+--- PASS: TestSelectedPrivatePenultimateResponseDraftServerWinnerClosesWithoutScores (4.78s)
+    --- PASS: TestSelectedPrivatePenultimateResponseDraftServerWinnerClosesWithoutScores/-1 (1.64s)
+    --- PASS: TestSelectedPrivatePenultimateResponseDraftServerWinnerClosesWithoutScores/2 (1.56s)
+    --- PASS: TestSelectedPrivatePenultimateResponseDraftServerWinnerClosesWithoutScores/14 (1.59s)
+PASS
+
+PHASE cancel-source
+=== RUN   TestDesktopSelectedCandidateCancellationJoinsWithoutStart
+=== RUN   TestDesktopSelectedCandidateCancellationJoinsWithoutStart/factory-failure
+=== RUN   TestDesktopSelectedCandidateCancellationJoinsWithoutStart/metadata-refusal
+=== RUN   TestDesktopSelectedCandidateCancellationJoinsWithoutStart/cancel-before-metadata
+--- PASS: TestDesktopSelectedCandidateCancellationJoinsWithoutStart (2.03s)
+    --- PASS: TestDesktopSelectedCandidateCancellationJoinsWithoutStart/factory-failure (0.67s)
+    --- PASS: TestDesktopSelectedCandidateCancellationJoinsWithoutStart/metadata-refusal (0.73s)
+    --- PASS: TestDesktopSelectedCandidateCancellationJoinsWithoutStart/cancel-before-metadata (0.62s)
+=== RUN   TestDesktopSelectedIntermediateResponseCancelCannotBorrowAnotherEligibleStop
+--- PASS: TestDesktopSelectedIntermediateResponseCancelCannotBorrowAnotherEligibleStop (1.60s)
+=== RUN   TestDesktopSelectedIntermediateResponseDraftPrestartCancelRetainsExactStopWithoutEpoch
+--- PASS: TestDesktopSelectedIntermediateResponseDraftPrestartCancelRetainsExactStopWithoutEpoch (0.84s)
+=== RUN   TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource
+=== RUN   TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/private-penultimate/16
+=== RUN   TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/all-imported/16
+=== RUN   TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/earlier-private/16
+--- PASS: TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource (4.88s)
+    --- PASS: TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/private-penultimate/16 (1.58s)
+    --- PASS: TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/all-imported/16 (1.69s)
+    --- PASS: TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/earlier-private/16 (1.61s)
+=== RUN   TestDesktopSelectedPrivateResponseConnectedServerWinnerHasNoPrivateOffer
+=== RUN   TestDesktopSelectedPrivateResponseConnectedServerWinnerHasNoPrivateOffer/private-penultimate/16
+=== RUN   TestDesktopSelectedPrivateResponseConnectedServerWinnerHasNoPrivateOffer/all-imported/16
+=== RUN   TestDesktopSelectedPrivateResponseConnectedServerWinnerHasNoPrivateOffer/earlier-private/16
+--- PASS: TestDesktopSelectedPrivateResponseConnectedServerWinnerHasNoPrivateOffer (3.78s)
+    --- PASS: TestDesktopSelectedPrivateResponseConnectedServerWinnerHasNoPrivateOffer/private-penultimate/16 (1.28s)
+    --- PASS: TestDesktopSelectedPrivateResponseConnectedServerWinnerHasNoPrivateOffer/all-imported/16 (1.21s)
+    --- PASS: TestDesktopSelectedPrivateResponseConnectedServerWinnerHasNoPrivateOffer/earlier-private/16 (1.29s)
+=== RUN   TestSelectedPrivateResponseDraftCancelBeforeStartRetainsSourceWithoutEpoch
+=== RUN   TestSelectedPrivateResponseDraftCancelBeforeStartRetainsSourceWithoutEpoch/private-penultimate/16
+=== RUN   TestSelectedPrivateResponseDraftCancelBeforeStartRetainsSourceWithoutEpoch/all-imported/16
+=== RUN   TestSelectedPrivateResponseDraftCancelBeforeStartRetainsSourceWithoutEpoch/earlier-private/16
+--- PASS: TestSelectedPrivateResponseDraftCancelBeforeStartRetainsSourceWithoutEpoch (0.99s)
+    --- PASS: TestSelectedPrivateResponseDraftCancelBeforeStartRetainsSourceWithoutEpoch/private-penultimate/16 (0.30s)
+    --- PASS: TestSelectedPrivateResponseDraftCancelBeforeStartRetainsSourceWithoutEpoch/all-imported/16 (0.40s)
+    --- PASS: TestSelectedPrivateResponseDraftCancelBeforeStartRetainsSourceWithoutEpoch/earlier-private/16 (0.29s)
+PASS
+
+PHASE local-compatibility
+=== RUN   TestOrderedCandidateDraftNamedFinalProfile
+=== RUN   TestOrderedCandidateDraftNamedFinalProfile/3
+=== RUN   TestOrderedCandidateDraftNamedFinalProfile/9
+=== RUN   TestOrderedCandidateDraftNamedFinalProfile/16
+--- PASS: TestOrderedCandidateDraftNamedFinalProfile (2.14s)
+    --- PASS: TestOrderedCandidateDraftNamedFinalProfile/3 (0.37s)
+    --- PASS: TestOrderedCandidateDraftNamedFinalProfile/9 (0.65s)
+    --- PASS: TestOrderedCandidateDraftNamedFinalProfile/16 (1.11s)
+=== RUN   TestOrderedCandidateDraftNamedFinalPacketAndHostname
+=== RUN   TestOrderedCandidateDraftNamedFinalPacketAndHostname/3-awg2-fast-hostname-false
+=== RUN   TestOrderedCandidateDraftNamedFinalPacketAndHostname/4-wg-hostname-false
+=== RUN   TestOrderedCandidateDraftNamedFinalPacketAndHostname/3-wg-hostname-true
+=== RUN   TestOrderedCandidateDraftNamedFinalPacketAndHostname/4-awg2-strong-hostname-true
+--- PASS: TestOrderedCandidateDraftNamedFinalPacketAndHostname (1.43s)
+    --- PASS: TestOrderedCandidateDraftNamedFinalPacketAndHostname/3-awg2-fast-hostname-false (0.35s)
+    --- PASS: TestOrderedCandidateDraftNamedFinalPacketAndHostname/4-wg-hostname-false (0.37s)
+    --- PASS: TestOrderedCandidateDraftNamedFinalPacketAndHostname/3-wg-hostname-true (0.28s)
+    --- PASS: TestOrderedCandidateDraftNamedFinalPacketAndHostname/4-awg2-strong-hostname-true (0.42s)
+=== RUN   TestOrderedCandidateDraftNamedIntermediateKeepsSuffix
+--- PASS: TestOrderedCandidateDraftNamedIntermediateKeepsSuffix (6.05s)
+=== RUN   TestDraftCandidateViewAndAdmissionKeepSavedPathUntouched
+--- PASS: TestDraftCandidateViewAndAdmissionKeepSavedPathUntouched (0.10s)
+=== RUN   TestDraftCandidateCatalogRejectsArbitraryEndpoints
+--- PASS: TestDraftCandidateCatalogRejectsArbitraryEndpoints (0.00s)
+=== RUN   TestDraftCandidateChooseRequiresOriginalDownReview
+--- PASS: TestDraftCandidateChooseRequiresOriginalDownReview (0.00s)
+=== RUN   TestDraftCandidateDeliveryRetainsIdleReservationAndDetectsAwayBack
+--- PASS: TestDraftCandidateDeliveryRetainsIdleReservationAndDetectsAwayBack (0.07s)
+PASS

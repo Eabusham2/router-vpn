@@ -520,13 +520,17 @@ function global:Test-RouterVPNOrderedStreamEdit {
 
 function global:Test-RouterVPNOrderedResponsePrefix {
     param($Nodes,[int]$Position,[string]$Execution,$Profiles)
-    if($Execution -ceq 'auto' -and $Position -eq $Nodes.Count-2 -and $Position -ge 1 -and $Nodes[0].mode -ceq 'wg' -and
+    if($Execution -ceq 'auto' -and $Position -le $Nodes.Count-2 -and $Position -ge 1 -and $Nodes[0].mode -ceq 'wg' -and
         $Nodes[$Position].mode -ceq 'shadowsocks' -and $Nodes[-1].mode -ceq 'shadowsocks'){
         $index=Get-RouterVPNOrderedProfileIndex $Profiles
         if($Nodes.Count -ge 4){
+            $insert=$Position -lt $Nodes.Count-2
+            if($insert -and $Nodes.Count -ge 96){return $false}
             if(-not(Test-RouterVPNOrderedLocalImportedPath $Nodes $Profiles -SelectedExecution -ProfileIndex $index)){return $false}
             for($i=0;$i -lt $Nodes.Count;$i++){
-                $layer=Get-RouterVPNOrderedValue $index[$Nodes[$i].id] 'start_layer' ''
+                $profile=$index[$Nodes[$i].id]
+                if($insert -and $i -gt 0 -and $i -lt $Nodes.Count-1 -and (Get-RouterVPNOrderedValue $profile 'node_kind') -cne 'external'){return $false}
+                $layer=Get-RouterVPNOrderedValue $profile 'start_layer' ''
                 if(($i -gt 0 -and $Nodes[$i].mode -cne 'shadowsocks') -or $layer -isnot [string] -or $layer -cnotin @('','off')){return $false}
             }
             return $true

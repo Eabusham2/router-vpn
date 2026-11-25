@@ -26,6 +26,10 @@ final class AndroidNodeCandidatePreparationDialog {
     private AndroidNodeCandidatePreparation owner;
     private AlertDialog dialog,proposalDialog;
     private TextView output;
+    private AndroidOrderedPathSelection editor;
+    private final java.util.function.Consumer<AndroidOrderedPathSelection> reviewDraft;
+    private static WeakReference<AndroidNodeStore.ChainCapture> editorSource = new WeakReference<>(null);
+    private static WeakReference<AndroidOrderedPathSelection> sourceEditor = new WeakReference<>(null);
     private List<AndroidNodeCandidatePreparation.Choice> choices=Collections.emptyList();
 
     private static final class Notice implements AndroidNodeCandidatePreparation.Callback {
@@ -35,16 +39,23 @@ final class AndroidNodeCandidatePreparationDialog {
         public void progress(String detail){AndroidNodeCandidatePreparationDialog value=attached();if(value!=null)value.update(detail);}
         public void finished(List<AndroidNodeCandidatePreparation.Choice> choices,Throwable failure){AndroidNodeCandidatePreparationDialog value=attached();if(value!=null)value.completed(choices,failure);}
     }
-    AndroidNodeCandidatePreparationDialog(Activity activity,AndroidNodeStore nodes,AndroidUnifiedConnectionController connection,Runnable changed){
-        this.activity=activity;this.nodes=nodes;this.connection=connection;this.changed=changed;notice=new Notice(this);
+    AndroidNodeCandidatePreparationDialog(Activity activity,AndroidNodeStore nodes,AndroidUnifiedConnectionController connection,Runnable changed,java.util.function.Consumer<AndroidOrderedPathSelection> reviewDraft){
+        this.reviewDraft=reviewDraft;this.activity=activity;this.nodes=nodes;this.connection=connection;this.changed=changed;notice=new Notice(this);
         permission=new AndroidUnifiedConnectionController.Callback(){public void progress(String detail){update(detail);}public void finished(boolean ok,String detail){update(detail);}};
     }
     void show(){show(null,-1);}
+    void showDraft(java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> capture,int prefix,
+            AndroidOrderedPathSelection editor) {
+        this.editor=editor;
+        show(capture,prefix);
+    }
     void show(java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> draft,int prefix){
         AndroidNodeCandidatePreparation existing=AndroidNodeCandidatePreparation.retained();
         if(existing!=null){
             if(draft!=null){showMessage("Finish the current candidate test before measuring this draft.");return;}
-            owner=existing;showProgress();owner.attach(notice);return;
+            owner=existing;
+            if (existing.ownsSource(editorSource.get())) editor=sourceEditor.get();
+            showProgress();owner.attach(notice);return;
         }
         final AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(activity);final String selected;
         try{if(connection.isActiveOrTransitioning()||home.connected)throw new IllegalStateException("Stop the current VPN before testing the saved ordered path.");selected=AndroidConnectionSelection.digest(activity,nodes);}
@@ -55,11 +66,14 @@ final class AndroidNodeCandidatePreparationDialog {
                 AndroidNodeStore.ChainCapture source=draft==null?new AndroidConnectionProfileStore(activity,nodes,new AndroidStandardExitStore(activity)).currentOrderedPath():draft.call();
                 source.requireCurrent();
                 if(draft!=null){
-                    source.requirePurpose(prefix);
+                    source.requireCandidatePurpose(prefix);
                     if(!source.measurementOnly()||!AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,source.execution))
                         throw new IllegalStateException("The draft lost its selected Shadowsocks response prefix.");
                     activity.runOnUiThread(()->{
-                        if(visible())connection.testOrderedCandidates(source,home,selected,prefix,notice,permission);
+                        if(visible()){
+                            editorSource=new WeakReference<>(source);sourceEditor=new WeakReference<>(editor);
+                            connection.testOrderedCandidates(source,home,selected,prefix,notice,permission);
+                        }
                     });
                     return;
                 }
@@ -81,6 +95,9 @@ final class AndroidNodeCandidatePreparationDialog {
     private void showProgress(){
         output=new TextView(activity);output.setPadding(32,24,32,24);output.setTextIsSelectable(true);output.setText("Testing saved path…");
         LinearLayout body=new LinearLayout(activity);body.setOrientation(LinearLayout.VERTICAL);body.addView(output);
+        if (editor != null) {
+            Button use=new Button(activity);use.setText("Use in draft");use.setOnClickListener(v->chooseDraftInsertion());body.addView(use);
+        }
         Button save=new Button(activity);save.setText("Save as profile");save.setOnClickListener(v->chooseProfile());body.addView(save);
         ScrollView scroll=new ScrollView(activity);scroll.addView(body);
         dialog=new AlertDialog.Builder(activity).setTitle("Test candidates").setView(scroll).setNegativeButton("Cancel / Close",(d,w)->cancel()).create();
@@ -99,7 +116,30 @@ final class AndroidNodeCandidatePreparationDialog {
         for(var choice:rows){
             text.append(String.format(Locale.US,"\n%s • %.2f ms (50/50, trimmed mean)",choice.result.name,choice.result.score));
             if(!choice.saveReason.isEmpty())text.append("\nSave unavailable: ").append(choice.saveReason);
+            if(!choice.draftReason().isEmpty())text.append("\nCannot insert into this draft. ").append(choice.draftReason());
         }
+    }
+    private void chooseDraftInsertion() {
+        if (!visible() || editor == null) return;
+        List<AndroidNodeCandidatePreparation.Choice> available=new ArrayList<>();
+        List<String> labels=new ArrayList<>();
+        for (var choice : choices) {
+            if (choice.draftInsertion() == null || !choice.result.current(System.currentTimeMillis())) continue;
+            available.add(choice);
+            labels.add(String.format(Locale.US,"%s • %.2f ms",choice.result.name,choice.result.score));
+        }
+        if (available.isEmpty()) {
+            StringBuilder detail=new StringBuilder("A fresh, complete insertion is required to update this draft.");
+            appendMeasuredRows(detail,choices);output.setText(detail.toString());return;
+        }
+        proposalDialog=new AlertDialog.Builder(activity).setTitle("Insert after measured hop").setItems(labels.toArray(new CharSequence[0]),(d,w)->{
+            if (!visible()) return;
+            try {
+                available.get(w).draftInsertion().useInDraft(editor);
+                cancel();
+                reviewDraft.accept(editor);
+            } catch (Exception stale) { update("Cannot insert into this draft. "+stale.getMessage()); }
+        }).setNegativeButton("Back",null).show();
     }
     private void chooseProfile(){
         if(!visible())return;

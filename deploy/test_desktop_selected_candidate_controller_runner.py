@@ -45,10 +45,28 @@ class SelectedCandidateControllerGateTests(unittest.TestCase):
                   'TestDesktopSelectedThroughputCancellationJoinsOriginal': 0,
                   'TestDesktopSelectedThroughputTerminalOwnership': 4,
                   'TestDesktopSelectedThroughputRejectsForeignRows': 8,
-                  'TestDesktopSelectedMeasurementWorkspaceRetirement': 5}
+                  'TestDesktopSelectedMeasurementWorkspaceRetirement': 5,
+                  'TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile': 9,
+                  'TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource': 3,
+                  'TestDesktopSelectedPrivateResponseConnectedServerWinnerHasNoPrivateOffer': 3,
+                  'TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad': 4,
+                  'TestDesktopSelectedIntermediateResponseRejectsChangedOriginalSuffixBeforeSave': 0,
+                  'TestDesktopSelectedIntermediateResponseCancelCannotBorrowAnotherEligibleStop': 0,
+                  'TestSelectedPrivateResponseNamedProfileRetainsCompare': 0,
+                  'TestSelectedPrivatePenultimateResponseNamedProfileRetainsCompare': 9,
+                  'TestSelectedPrivatePenultimateResponseDraftServerWinnerClosesWithoutScores': 3,
+                  'TestSelectedPrivateResponseDraftCancelBeforeStartRetainsSourceWithoutEpoch': 3,
+                  'TestDesktopSelectedIntermediateResponseDraftRetainsOriginalSuffixThroughDownSaveAndLoad': 4,
+                  'TestDesktopSelectedIntermediateResponseDraftServerWinnerClosesWithoutScores': 0,
+                  'TestDesktopSelectedIntermediateResponseDraftPrestartCancelRetainsExactStopWithoutEpoch': 0,
+                  'TestSelectedPrivateResponseDraftUsePreservesUnsavedPath': 6,
+                  'TestSelectedPrivateResponseDraftUseStartsFreshMeasurement': 0,
+                  'TestSelectedPrivateResponseDraftUseRejectsChangedOwner': 7,
+                  'TestSelectedPrivateResponseDraftUseRejectsSecondPrivateAndCapacity': 0,
+                  'TestOrderedCandidateDraftUseKeepsOriginalFinalAndSuffix': 4}
         self.assertEqual(set(gate.CASES).intersection(gate.DRAFT_CASES), set())
-        self.assertEqual(len(gate.common.expected(gate.CASES)), 61)
-        self.assertEqual(len(gate.common.expected(gate.DRAFT_CASES)), 21)
+        self.assertEqual(len(gate.common.expected(gate.CASES)), 86)
+        self.assertEqual(len(gate.common.expected(gate.DRAFT_CASES)), 69)
         self.assertEqual(len(gate.common.expected(gate.TYPED_ENTRY_CASES)), 14)
         cases = gate.CASES | gate.DRAFT_CASES | gate.TYPED_ENTRY_CASES
         self.assertEqual({root: len(children) for root, children in cases.items()}, counts)

@@ -130,8 +130,8 @@ struct IOSNodeChainExecutionCapture {
  var isSOCKS:Bool{kind=="SOCKS"}
  var isCONNECT:Bool{kind=="CONNECT"}
  // SHIPPING_POSITIONS
- func responsePosition(for winner:String)->Int? { nil }
- func candidatePositions(for winner:String)->[Int] { candidatePositions + (responsePosition(for:winner).map {[$0]} ?? []) }
+ func responsePositions(for winner:String)->[Int] { [] }
+ func candidatePositions(for winner:String)->[Int] { candidatePositions + responsePositions(for:winner) }
  // SHIPPING_HEX
  init(_ count:Int,_ requested:String,_ selected:String,_ kind:String){
   self.requested=requested;self.selected=selected;self.kind=kind

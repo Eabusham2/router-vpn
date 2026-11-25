@@ -36,8 +36,11 @@ def transcript(root, leaf=None, failed=False, witness=''):
                 count, _, fault = RUN.PRIVATE_RESPONSE_SOURCES[leaf]
                 rows.append(row('output', name, Output=RUN.private_response_source_marker(leaf)))
                 if fault == 'original':
-                    rows.append(row('output', name, Output=f'PRIVATE_RESPONSE_PREFIX nodes={count} position={count-2} prefixes={count-1} authenticated=50'))
-                    rows.append(row('output',name,Output=RUN.RELOADED_PRIVATE_FINAL))
+                    position = RUN.response_position(leaf)
+                    rows.append(row('output', name, Output=f'PRIVATE_RESPONSE_PREFIX nodes={count} position={position} prefixes={position+1} authenticated=50'))
+                    rows.append(row('output',name,Output=RUN.reloaded_response_marker(leaf)))
+                if RUN.suffix_refusal_marker(leaf):
+                    rows.append(row('output', name, Output=RUN.suffix_refusal_marker(leaf)))
                 rows.append(row('output',name,Output=f"SELECTED_PRIVATE_RESPONSE fault={fault} samples={50 if fault=='original' else 0} joined=true"))
             if leaf in RUN.AWG_SELECTED_CASES:
                 entry = 'awg2-fast' if leaf in RUN.FAST_SELECTED_CASES else 'awg2-strong'
@@ -249,7 +252,7 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                             RUN.verdict(output(transcript(RUN.MIXED_ROOT, leaf, witness=altered)), RUN.MIXED_ROOT, leaf)
 
     def test_selected_evidence_requires_every_original_count_winner_and_transfer(self):
-        self.assertEqual(len(RUN.SELECTED_CASES), 76)
+        self.assertEqual(len(RUN.SELECTED_CASES), 89)
         self.assertEqual(len(set(RUN.FAST_SELECTED_CASES)), 15)
         self.assertEqual(len(set(RUN.STRONG_SELECTED_CASES)), 15)
         positions = [i for part in RUN.PARTS for first,last in [map(int,part.split('-')[-2:])] for i in range(first,last+1)]
@@ -283,6 +286,14 @@ class MultipleImportedNativeRunner(unittest.TestCase):
         }
         required = {name+'-'+fault: (count, paired, fault) for name,(count, paired) in expected.items()
                     for fault in (RUN.PRIVATE_RESPONSE_FAULTS if name in ('3-local-private', '4-local-private', '4-imported-penultimate') else ('original',))}
+        earlier = {}
+        for n,k in ((3,1),(4,1),(9,6),(16,8),(16,13)):
+            for fault in (('original', 'wrong-candidate-key', 'forged-response', 'wrong-private-id', 'late-catalog', 'late-cancel',
+                           'server-winner', 'suffix-alias', 'changed-original-suffix') if n == 4 else ('original',)):
+                leaf = f'{n}-imported-stop-{k}-{fault}'
+                earlier[leaf] = k
+                required[leaf] = (n, 0, fault)
+        self.assertEqual(RUN.INTERMEDIATE_POSITIONS, earlier)
         self.assertEqual(RUN.PRIVATE_RESPONSE_SOURCES, required)
         for leaf in required:
             rows = transcript(RUN.SELECTED_ROOT, leaf)
@@ -303,13 +314,14 @@ class MultipleImportedNativeRunner(unittest.TestCase):
             bad=[dict(r,Output=r['Output'].replace(part,'foreign')) if r is original else r for r in rows]
             with self.assertRaisesRegex(ValueError,'Missing loaded Compare'):
                 RUN.verdict(output(bad),root,leaf)
-        self.assertEqual(len(set(RUN.PRIVATE_RESPONSE_CASES)), 28)
+        self.assertEqual(len(set(RUN.PRIVATE_RESPONSE_CASES)), 41)
         for leaf,(count, _, fault) in RUN.PRIVATE_RESPONSE_SOURCES.items():
             if fault != 'original':
                 continue
             rows = transcript(root, leaf)
             prefix = next(row for row in rows if row.get('Output', '').startswith('PRIVATE_RESPONSE_PREFIX'))
-            for field in (f'nodes={count}', f'position={count-2}', f'prefixes={count-1}', 'authenticated=50'):
+            position = RUN.response_position(leaf)
+            for field in (f'nodes={count}', f'position={position}', f'prefixes={position+1}', 'authenticated=50'):
                 corrupted = [dict(row, Output=row['Output'].replace(field, 'foreign')) if row is prefix else row for row in rows]
                 with self.assertRaisesRegex(ValueError, 'prefix response witnesses'):
                     RUN.verdict(output(corrupted), root, leaf)
@@ -318,6 +330,33 @@ class MultipleImportedNativeRunner(unittest.TestCase):
             bad.append(dict(original,Test=root+'/'+leaf))
             with self.assertRaises(ValueError):
                 RUN.verdict(output(bad),root,leaf)
+
+    def test_earlier_response_requires_its_original_suffix_and_loaded_intermediate(self):
+        for leaf in RUN.INTERMEDIATE_POSITIONS:
+            root = RUN.SELECTED_ROOT
+            rows = transcript(root, leaf)
+            marker = RUN.reloaded_response_marker(leaf) if leaf.endswith('-original') else RUN.suffix_refusal_marker(leaf)
+            if not marker:
+                continue
+            witness = next(row for row in rows if row.get('Output') == marker)
+            for forged in ('', RUN.RELOADED_PRIVATE_FINAL, *(marker.replace(field, 'foreign') for field in marker.split()[1:])):
+                changed = [dict(row, Output=forged) if row is witness else row for row in rows]
+                with self.assertRaises(ValueError):
+                    RUN.verdict(output(changed), root, leaf)
+
+    def test_three_node_draft_requires_its_schema_transition_without_a_named_save(self):
+        root, leaf = RUN.SELECTED_ROOT, '3-imported-stop-1-original'
+        rows = transcript(root, leaf)
+        source = RUN.private_response_source_marker(leaf)
+        self.assertEqual(source, 'PRIVATE_RESPONSE_SOURCE nodes=3 schema=2 position=1 role=imported paired=none')
+        marker = RUN.reloaded_response_marker(leaf)
+        witness = next(row for row in rows if row.get('Output') == marker)
+        self.assertIn('nodes=4 schema=6 inserted=2 suffix=1 saved=false', marker)
+        for changed in (marker.replace('saved=false', 'saved=true'), marker.replace('schema=6', 'schema=2'),
+                        RUN.reloaded_response_marker('4-imported-stop-1-original'), RUN.RELOADED_PRIVATE_FINAL):
+            bad = [dict(row, Output=changed) if row is witness else row for row in rows]
+            with self.assertRaisesRegex(ValueError, 'Missing loaded Compare'):
+                RUN.verdict(output(bad), root, leaf)
 
     def test_exact_box_inventory(self):
         self.assertEqual(sum(len(cases)+1 for cases in RUN.BOX_CASES.values()), 17)

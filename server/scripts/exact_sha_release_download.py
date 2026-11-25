@@ -94,10 +94,9 @@ def _download_release_asset(broker, request_name: str, temp: Path, output_name: 
     complete = False
     digest = hashlib.sha256()
     total = 0
-    opened = None
+    opened = os.fstat(fd)
     try:
-        with broker._GITHUB_OPENER.open(request, timeout=25) as response, os.fdopen(fd, "wb", closefd=True) as output:
-            opened = os.fstat(output.fileno())
+        with os.fdopen(fd, "wb", closefd=True) as output, broker._GITHUB_OPENER.open(request, timeout=25) as response:
             try:
                 content_length = int(response.headers.get("Content-Length", "0") or 0)
             except ValueError:
@@ -113,10 +112,11 @@ def _download_release_asset(broker, request_name: str, temp: Path, output_name: 
                     raise RuntimeError("exact-SHA release asset exceeds safety limit")
                 output.write(chunk)
                 digest.update(chunk)
-                if progress and content_length > 0:
-                    progress("downloading", min(40, 22 + int(18 * total / content_length)))
+                if progress:
+                    progress("downloading", min(40, 22 + int(18 * total / content_length)) if content_length else 22)
             output.flush()
             os.fsync(output.fileno())
+            written = os.fstat(output.fileno())
         if total <= 0:
             raise RuntimeError("GitHub Release returned an empty asset")
         if metadata_size != total:
@@ -129,8 +129,7 @@ def _download_release_asset(broker, request_name: str, temp: Path, output_name: 
             raise RuntimeError("exact-SHA release asset SHA-256 digest mismatch")
         current = selected.lstat()
         if (
-            opened is None
-            or stat.S_ISLNK(current.st_mode)
+            stat.S_ISLNK(current.st_mode)
             or not stat.S_ISREG(current.st_mode)
             or not os.path.samestat(opened, current)
             or current.st_size != total
@@ -140,12 +139,13 @@ def _download_release_asset(broker, request_name: str, temp: Path, output_name: 
     finally:
         if not complete:
             try:
-                os.close(fd)
-            except OSError:
+                if os.path.samestat(opened, selected.lstat()):
+                    selected.unlink()
+            except FileNotFoundError:
                 pass
-            selected.unlink(missing_ok=True)
     if progress:
         progress("validating", 46)
+    broker._owned_temp.verify_package_output(selected, broker._owned_temp.package_file_identity(written), progress, expected_digest)
     return selected
 
 
@@ -185,6 +185,8 @@ def install(broker) -> None:
         if name in broker.DIRECT_ARTIFACTS:
             try:
                 return _release_mobile_package(broker, name, temp, progress=progress), "github-release"
+            except broker._jobs.DownloadCancelled:
+                raise
             except Exception as release_error:
                 print(
                     f"download broker: exact-SHA GitHub Release asset failed for {name}: "
@@ -200,6 +202,8 @@ def install(broker) -> None:
 
         try:
             return _release_desktop_package(broker, base, name, temp, progress=progress), "github-release"
+        except broker._jobs.DownloadCancelled:
+            raise
         except Exception as release_error:
             print(
                 f"download broker: exact-SHA GitHub Release asset failed for {name}: "
@@ -208,6 +212,8 @@ def install(broker) -> None:
             )
         try:
             return original_build_github_package(base, name, temp, progress=progress), "github-actions"
+        except broker._jobs.DownloadCancelled:
+            raise
         except Exception as actions_error:
             print(
                 f"download broker: exact-SHA Actions artifacts failed for {name}: "

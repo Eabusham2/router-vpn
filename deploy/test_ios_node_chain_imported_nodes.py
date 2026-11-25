@@ -94,7 +94,16 @@ CASES=r'''
    for at in paired..<count-1 {
     try check("retained private intermediate and subsequent import preserve complete measured route",try editor.measurementPath(through:at,profiles:profiles)==nodes)
     try check("native original authorizes private responses after retained intermediate",LibboxRouterNodeChainCandidatePrefixMeasurement(retained.plan,Int32(at))=="routed-candidate-response")
-    for execution in ["server","auto"] {try reject("retained intermediate is Local only"){_ = try editor.measurementPath(through:at,execution:execution,profiles:profiles)}}
+    try reject("Server cannot measure an authenticated response through a retained stream"){_ = try editor.measurementPath(through:at,execution:"server",profiles:profiles)}
+    if count == 5 && at == count-2 {
+     try check("Compare can stage the original WG/import/paired/import/final through its penultimate import",
+               try editor.measurementPath(through:at,execution:"auto",profiles:profiles)==nodes)
+     try reject("Compare needs the independently saved original paired stream"){_ = try editor.measurementPath(through:at,execution:"auto",profiles:profiles.filter{$0.id != nodes[paired].id})}
+     var changed=profiles;changed[count-1].startLayer="aes-256-gcm"
+     try reject("Compare needs the original Off final"){_ = try editor.measurementPath(through:at,execution:"auto",profiles:changed)}
+    } else {
+     try reject("Compare cannot borrow another retained private stream or prefix"){_ = try editor.measurementPath(through:at,execution:"auto",profiles:profiles)}
+    }
     for changed in [paired,count-2,count-1] {
      var layered=profiles;layered[changed].startLayer="aes-256-gcm"
      try reject("recursive measurement requires all original roles and policies"){_ = try editor.measurementPath(through:at,profiles:layered)}

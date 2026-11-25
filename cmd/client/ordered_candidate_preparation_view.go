@@ -141,6 +141,12 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 			_, choice.Proposal, choice.ProposalAction, err = orderedResponseProfile(ctx, selection.Native.root, orderedCandidateDraftExecution(draft), selection.Nodes, position, profile, proposalProfiles)
 			if draft == nil {
 				choice.ProposalAction = ""
+			} else {
+				var draftErr error
+				_, choice.DraftProposal, draftErr = orderedResponseDraftProposal(ctx, selection.Native.root, draft.Execution, selection.Nodes, position, profile, proposalProfiles)
+				if draftErr == nil {
+					choice.DraftAction = orderedCandidateDraftInsertAction
+				}
 			}
 		} else if draft == nil {
 			_, choice.Proposal, err = orderedCandidateProposal(selection.Nodes, position, profile, proposalProfiles)
@@ -148,7 +154,7 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 			_, choice.Proposal, err = orderedDraftProposal(draft.Execution, selection.Nodes, position, profile, proposalProfiles)
 		}
 		if err != nil {
-			if len(view.responseNodes) != 0 {
+			if len(view.responseNodes) != 0 && len(choice.DraftProposal) == 0 {
 				continue
 			}
 			choice.SaveReason = err.Error()

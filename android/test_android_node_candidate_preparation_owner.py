@@ -72,6 +72,13 @@ final class AndroidNodeCandidateProfile {
  interface SavedResultAuthority{void requireCurrent(AndroidNodeCandidateResult result)throws Exception;}
  final AndroidNodeCandidateResult result;final SavedResultAuthority authority;
  private AndroidNodeCandidateProfile(AndroidNodeCandidateResult result,SavedResultAuthority authority){this.result=result;this.authority=authority;}
+ static AndroidNodeCandidateProfile captureDraftInsertion(AndroidNodeCandidateMeasurement owner,AndroidNodeCandidateResult result,SavedResultAuthority authority,AndroidNodeCandidateProfile named)throws Exception{
+  if(fault.equals("draft-compile")||fault.equals("draft-stale")){
+   if(fault.equals("draft-stale"))AndroidNodeCandidateCatalog.sourcesValid=false;
+   throw new IllegalStateException("Complete inserted path exceeded compiler limit");
+  }
+  return null;
+ }
  static AndroidNodeCandidateProfile captureTemporary(AndroidNodeCandidateMeasurement owner,AndroidNodeCandidateResult result,SavedResultAuthority authority)throws Exception{
   owner.requireResult(result);
   if(fault.equals("fatal")&&result.id.equals("two"))throw new IllegalStateException("Unexpected native proposal read failure");
@@ -156,9 +163,16 @@ CASES = r'''
   }
  }
  static void proposalRows()throws Exception {
-  for(String fault:List.of("mixed","all","fatal","stale","cancel"))try(Fixture f=new Fixture(3,"wg","wg")){
+  for(String fault:List.of("mixed","all","fatal","stale","cancel","draft-compile","draft-stale"))try(Fixture f=new Fixture(3,"wg","wg")){
    Completion callback=new Completion();var operation=prepare(f,callback);AndroidNodeCandidateProfile.fault=fault;operation.start();callback.awaitDone();f.drain();
-   if(fault.equals("mixed")||fault.equals("all")){
+   if(fault.equals("draft-compile")){
+    check(callback.failure==null&&callback.choices.size()==2,"optional draft compile failure discarded a valid named replacement");
+    for(var row:callback.choices){
+     check(row.profile!=null&&row.draftInsertion()==null&&!row.draftReason().isEmpty(),"failed optional insertion gained a draft or lost named Save");
+     row.profile.save();
+    }
+    retire(operation);
+   }else if(fault.equals("mixed")||fault.equals("all")){
     check(callback.failure==null&&callback.choices.size()==2,"incompatible proposal discarded complete measured rows");
     var first=callback.choices.get(0);check(first.profile==null&&!first.saveReason.isEmpty(),"incompatible proposal acquired a Save authority or lost its reason");
     var second=callback.choices.get(1);
@@ -208,6 +222,7 @@ def main():
         subprocess.run(['java', '-cp', os.pathsep.join((str(classes), str(jar))), 'com.eabusham.routervpn.OrderedRuntimeTest'], check=True, timeout=90)
         original = (base.JAVA / 'AndroidNodeCandidatePreparation.java').read_text()
         controls = (
+            ('if (choice.profile == null) throw insertionFailure;', 'if (true) throw insertionFailure;', 'proposal-rows', 'optional draft compile failure discarded a valid named replacement'),
             ('if(terminalCompletionReady&&callback!=null)', 'if(false&&callback!=null)', 'permission', 'late Activity attachment lost terminal failed or empty completion'),
             ('if(observer==callback){observer=null;observerVersion++;}', 'if(true){observer=null;observerVersion++;}', 'complete', 'old Activity detached its replacement observer'),
             ('boolean joined=false;', 'AndroidMTUMeasurementGate.release(lease);boolean joined=false;', 'graph-join', 'inner candidate join released outer hold before failed graph close'),

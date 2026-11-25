@@ -68,6 +68,7 @@ final class AndroidNodeChainSession {
  io.nekohasekai.libbox.CommandServer server=new io.nekohasekai.libbox.CommandServer();boolean current=true;
  AndroidNodeChainSession(AndroidNodeStore.ChainCapture source)throws Exception{this(source,-1);}
  AndroidNodeChainSession(AndroidNodeStore.ChainCapture source,int purpose)throws Exception{this.source=source;capture=AndroidNodeChainCapture.compile(source,purpose);retained=this;}
+ AndroidNodeChainSession(AndroidNodeStore.ChainCapture source,Object owner)throws Exception{this.source=source;source.bindSelectedCandidatePurpose(owner,()->current);capture=AndroidNodeChainCapture.compileSelectedCandidateDraft(source,owner);retained=this;}
  void requireCurrent()throws Exception{source.requireCurrent();if(!current)throw new IllegalStateException("Retired native session/network");}
  io.nekohasekai.libbox.CommandServer candidateServer()throws Exception{requireCurrent();return server;}
 }'''
@@ -365,9 +366,11 @@ public final class NodeCandidateHarness {
  }
  static void selectedResponse(Path root,String shape)throws Exception{
   for(int count:shape.equals("earlier-private")?List.of(5,9,16):List.of(3,4,9,16)){
-   int prefix=count-2;
-   if (shape.equals("all-imported") && count==3) continue;
-   int paired=shape.equals("all-imported") || count==3 ? -1 : shape.equals("earlier-private") ? 2 : prefix;
+   boolean use=shape.startsWith("use-"),drift=shape.equals("use-drift"),insert=shape.equals("insert-imported")||shape.equals("use-earlier")||drift;
+   if ((shape.equals("use-private")||drift) && count!=4) continue;
+   int lastPrefix=count-2, prefix=insert ? (count==4 ? 1:count==9 ? 3:12) : lastPrefix;
+   if ((insert || shape.equals("all-imported")) && count==3) continue;
+   int paired=insert || shape.equals("all-imported") || shape.equals("use-final") || count==3 ? -1 : shape.equals("earlier-private") ? 2 : lastPrefix;
    var originals=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_ANDROID_CHAIN_FIXTURE"))));
    JSONArray members=originals.getJSONArray("3/");
    if(count==16){
@@ -383,8 +386,14 @@ public final class NodeCandidateHarness {
    new AndroidStandardExitStore(f.context).save(middle);
    JSONArray extra=originals.getJSONArray("8/mixed-awg");
    var alternate=f.nodes.importBundle(extra.getJSONObject(7).toString().getBytes(StandardCharsets.UTF_8));
+   String recursiveID="";
+   if (use&&count==3) {
+    var second=originals.getJSONArray("7/mixed-awg").getJSONObject(6);
+    var linked=f.nodes.importBundle(second.toString().getBytes(StandardCharsets.UTF_8));
+    recursiveID=f.nodes.candidateSource(linked.id).profileId;
+   }
    var additional=new java.util.HashMap<Integer,String>();
-   for(int i=2;i<=prefix;i++){
+   for(int i=2;i<=lastPrefix;i++){
     if(i==paired)continue;
     var node=custom("2022-blake3-aes-256-gcm");node.id=String.format("%032x",i);node.server="198.51.100."+(76+i);
     node.expectedPublicIp="203.0.113."+(76+i);byte[] key=new byte[32];Arrays.fill(key,(byte)i);node.secret=Base64.getEncoder().encodeToString(key);
@@ -394,15 +403,16 @@ public final class NodeCandidateHarness {
    var draft=new AndroidOrderedPathSelection(f.nodes,f.profiles);
    String privateID=draft.members().get(1).source.id;
    draft.removePrefix(1);draft.setPrefixMode(0,"wg");draft.addPrefix(middle.id,"shadowsocks");draft.setExecution("auto");
-   for(int i=2;i<=prefix;i++)draft.addPrefix(i==paired?privateID:additional.get(i),"shadowsocks");
+   for(int i=2;i<=lastPrefix;i++)draft.addPrefix(i==paired?privateID:additional.get(i),"shadowsocks");
    var staged=draft.candidateDraftCapture(prefix).call();
    check(staged.selectedCandidateDraft()&&staged.members.size()==count,"complete private candidate draft lost its suffix");
-   draft.save();
-   var source=f.profiles.currentOrderedPath();var capture=new AndroidNodeChainSession(source);
+   if (!use) draft.save();
+   var source=use ? staged : f.profiles.currentOrderedPath();
+   var capture=use ? new AndroidNodeChainSession(source,new Object()) : new AndroidNodeChainSession(source);
    check(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,"auto")&&capture.capture.ownsSelectedCandidatePrefix(source,prefix),"Compare import lacked original measurable capture");
    var crossedModes=new ArrayList<>(source.modes);crossedModes.set(0,"awg2-fast");
    check(!AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,"server")&&!AndroidNodeChainCapture.responsePrefix(source.members,crossedModes,prefix,"auto"),"Server or AWG acquired private response");
-   for(int i=1;i<prefix;i++)check(!AndroidNodeChainCapture.responsePrefix(source.members,source.modes,i,"auto"),"an earlier literal import borrowed the penultimate stop");
+   for(int i=1;i<lastPrefix;i++)check(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,i,"auto")== (paired<0),"an earlier import gained the wrong response scope");
    var potential=AndroidNodeCandidateCatalog.captureSources(f.context,source,prefix);
    var alternateSource=f.nodes.candidateSource(alternate.id);
    check(potential.rows.stream().anyMatch(r->r.id.equals(alternateSource.profileId)&&!r.input.isEmpty())&&
@@ -423,19 +433,86 @@ public final class NodeCandidateHarness {
    try {
     check(published.await(8,TimeUnit.SECONDS),"no original Compare Local response score survived the selected receipt checks");
     var proposal=new AndroidNodeCandidateProfile(operation,scored.get());
+    if (use) {
+     var scoredRow=scored.get();
+     var changeAfterObservation=new java.util.concurrent.atomic.AtomicBoolean();
+     AndroidNodeCandidateProfile.SavedResultAuthority authority=row->{
+      if (!operation.joined() || row!=scoredRow) throw new IllegalStateException("original measurement has not joined");
+      source.requireCurrent();catalog.requireSavedSourcesCurrent();
+      if (changeAfterObservation.compareAndSet(true,false)) {
+       var suffix=source.members.get(prefix+1).external();suffix.server="198.51.100.230";
+       new AndroidStandardExitStore(f.context).save(suffix);
+      }
+     };
+     var named=AndroidNodeCandidateProfile.captureTemporary(operation,scoredRow,authority);
+     if (paired>0) {
+      reject(()->AndroidNodeCandidateProfile.captureDraftInsertion(operation,scoredRow,authority,named),"second private interior entered a Compare draft");
+      check(named.description.endsWith(alternateSource.profileId+" (shadowsocks)"),"refused insertion removed the available named replacement");
+      continue;
+     }
+     var insertion=AndroidNodeCandidateProfile.captureDraftInsertion(operation,scoredRow,authority,named);
+     reject(()->insertion.useInDraft(draft),"unjoined measurement changed the draft");
+     operation.cancel();check(finished.await(10,TimeUnit.SECONDS),"original insertion measurement did not join");
+     if (drift) {
+      changeAfterObservation.set(true);
+      reject(()->insertion.useInDraft(draft),"a changed suffix endpoint entered the completed draft");
+      check(draft.members().size()==count&&draft.members().get(count-1).source.id.equals(source.control.id)
+        &&before.preferences.equals(new NodeChainCaptureHarness.State(f).preferences)&&!Files.exists(f.rows),"source refusal changed the draft, Home, or saved profiles");
+      continue;
+     }
+     var other=new AndroidOrderedPathSelection(f.nodes,f.profiles);
+     other.removePrefix(1);other.setPrefixMode(0,"wg");other.addPrefix(middle.id,"shadowsocks");other.setExecution("auto");
+     for(int i=2;i<=lastPrefix;i++)other.addPrefix(additional.get(i),"shadowsocks");
+     var copy=other.candidateDraftCapture(prefix).call();
+     check(copy.modes.equals(source.modes)&&copy.members.size()==source.members.size(),"foreign editor did not reproduce the original selection");
+     reject(()->insertion.useInDraft(other),"a different editor adopted the measured result");
+     var expected=new ArrayList<String>();for(var member:source.members)expected.add(member.id);
+     expected.add(prefix+1,alternate.id);
+     insertion.useInDraft(draft);
+     var actual=new ArrayList<String>();for(var member:draft.members())actual.add(member.source.id);
+     check(actual.equals(expected)&&draft.members().get(prefix+1).mode.equals("shadowsocks"),"draft insertion lost an original suffix or final node");
+     before.same(f,"explicit Use in draft");
+     reject(()->insertion.useInDraft(draft),"the previous receipt updated the revised draft a second time");
+     int next=actual.size()-2;var recaptured=draft.candidateDraftCapture(next).call();
+     check(recaptured!=source&&recaptured.members.size()==count+1&&draft.canMeasureResponseThrough(next),"the revised draft did not require a fresh complete source");
+     var fresh=new AndroidNodeChainSession(recaptured,new Object());
+     try(var compiled=fresh.capture){
+      check(compiled.ownsSelectedCandidatePrefix(recaptured,next),"newly inserted private source failed to reopen at its own position");
+      if (count==3) {
+       fresh.execution=Libbox.routerNodeChainMultipleImportedExecutionFromLaunch(compiled.launchInput,"auto");
+       fresh.execution.testSource=compiled.plan;fresh.execution.testWinner="local";
+       var live=new AndroidNodeCandidateCatalog(f.context,fresh,next);
+       var observed=new CountDownLatch(1);var joined=new CountDownLatch(1);String wanted=recursiveID;
+       var repeat=AndroidNodeCandidateMeasurement.start(live,new AndroidNodeCandidateMeasurement.Callback(){
+        public void changed(List<AndroidNodeCandidateResult> rows,String detail){if(rows.stream().anyMatch(row->row.id.equals(wanted)))observed.countDown();}
+        public void finished(Throwable error){joined.countDown();}
+       });
+       try {check(observed.await(10,TimeUnit.SECONDS)&&live.selectedPrefixID().equals(alternateSource.profileId),"fresh Compare trial did not measure after the inserted draft hop");}
+       finally {repeat.cancel();check(joined.await(10,TimeUnit.SECONDS),"repeat candidate trial did not join");}
+       before.same(f,"recursive comparison in the unsaved draft");
+      }
+     }
+     continue;
+    }
     var saved=proposal.save(f.context,"Compare private response final");
     var after=new NodeChainCaptureHarness.State(f);check(before.preferences.equals(after.preferences),"future selected final changed Home settings");
     for(Path path:before.files.keySet())if(!path.equals(f.rows))check(Arrays.equals(before.files.get(path),after.files.get(path)),"future selected final changed original source");
     check(capture.candidateExecutionOwner()==catalog.executionOwner&&"local".equals(catalog.executionOwner.execution()),"future profile reselected or retired the original execution");
     operation.cancel();check(finished.await(10,TimeUnit.SECONDS),"selected response callbacks did not drain");
     f.profiles.load(saved.id);var loaded=f.profiles.currentOrderedPath();
-    check(loaded.execution.equals("auto")&&loaded.modes.equals(source.modes)&&loaded.members.get(1).id.equals(middle.id)&&loaded.members.get(count-1).id.equals(alternate.id),"named profile Load changed the measured successor, imported prefix, or requested Compare");
-    for(int i=0;i<=prefix;i++)check(loaded.members.get(i).id.equals(source.members.get(i).id),"named Load substituted a preceding private or external identity");
+    var expectedModes=new ArrayList<>(source.modes);
+    if(insert)expectedModes.add(prefix+1,"shadowsocks");
+    check(loaded.execution.equals("auto")&&loaded.modes.equals(expectedModes)&&loaded.members.get(prefix+1).id.equals(alternate.id),"named profile Load changed the measured successor or requested Compare");
+    for(int i=0;i<count;i++){
+     if(!insert&&i==count-1)continue;
+     var member=loaded.members.get(insert&&i>prefix ? i+1:i);
+     check(member.id.equals(source.members.get(i).id)&&member.proofId.equals(source.members.get(i).proofId),"named Load substituted an original prefix, suffix or final identity");
+    }
     try(var reopened=AndroidNodeChainCapture.compile(loaded)){check(reopened.plan!=null,"reloaded selected response did not compile");}
    } finally {operation.cancel();finished.await(10,TimeUnit.SECONDS);}
   }
  }
- public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);if(args.length==2&&List.of("selected-response","all-imported","earlier-private").contains(args[1])){selectedResponse(root,args[1]);System.out.println("Android selected Compare private response: "+checks+" original store/Go compiler/selected callback checks PASS");return;}if(args.length==2&&args[1].equals("capacity")){largeCatalog(root);System.out.println("Android complete candidate inventory: "+checks+" original store, Go metadata and receipt checks PASS");return;}openVPNTCPCandidates(root);capturedSources(root);sources(root);overlappingSavedSources(root);receipts(root);reservationOwnership(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
+ public static void main(String[] args)throws Exception{try{Path root=Path.of(args[0]);if(args.length==2&&List.of("selected-response","all-imported","earlier-private","insert-imported","use-earlier","use-final","use-private","use-drift").contains(args[1])){selectedResponse(root,args[1]);System.out.println("Android selected Compare private response: "+checks+" original store/Go compiler/selected callback checks PASS");return;}if(args.length==2&&args[1].equals("capacity")){largeCatalog(root);System.out.println("Android complete candidate inventory: "+checks+" original store, Go metadata and receipt checks PASS");return;}openVPNTCPCandidates(root);capturedSources(root);sources(root);overlappingSavedSources(root);receipts(root);reservationOwnership(root);lifetime(root,false);lifetime(root,true);borrowedLifetime(root,false);borrowedLifetime(root,true);adoption(root);presentation(root);System.out.println("Android retained-prefix candidates: "+checks+" shipping source, receipt and drain checks PASS");}finally{AndroidVpnMutationGuard.busy=false;RouterNodeChainCandidateMeasurement.holdClose=false;AndroidNodeCandidateMeasurement.cancelActive();}}
 }'''
 
 
@@ -520,9 +597,22 @@ def run(root, work, app, classes, jar, env, imported_only=False):
     subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidateHarness',str(data)],env=env,check=True,timeout=120)
     response=work/'selected-response';response.mkdir()
     subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidateHarness',str(response),'selected-response'],env=env,check=True,timeout=120)
-    for shape in ('all-imported','earlier-private'):
+    for shape in ('all-imported','earlier-private','insert-imported','use-earlier','use-final','use-private','use-drift'):
         target=work/shape;target.mkdir()
         subprocess.run(['java','-cp',str(classes)+os.pathsep+str(jar),'com.eabusham.routervpn.NodeCandidateHarness',str(target),shape],env=env,check=True,timeout=120)
+    for name, before, after, witness in (
+        ('AndroidNodeStore', 'if (draftCatalog != catalog || draftCatalog == null)', 'if (draftCatalog == null)', 'a different editor adopted the measured result'),
+        ('AndroidNodeCandidateProfile', 'requireSavedCurrent();\n            draft.insertMeasured', 'draft.insertMeasured', 'unjoined measurement changed the draft'),
+    ):
+        target=work/('draft-control-'+name);target.mkdir()
+        code=(JAVA/(name+'.java')).read_text();assert code.count(before)==1
+        changed=target/(name+'.java');changed.write_text(code.replace(before,after))
+        cp=os.pathsep.join(map(str,[target,classes,jar]))
+        subprocess.run(['javac','--release','17','-cp',cp,'-d',str(target),str(changed)],check=True,timeout=60)
+        data=target/'data';data.mkdir()
+        failed=subprocess.run(['java','-cp',cp,'com.eabusham.routervpn.NodeCandidateHarness',str(data),'use-final'],env=env,capture_output=True,text=True,timeout=120)
+        assert failed.returncode!=0 and witness in failed.stderr,failed.stdout+failed.stderr
+        print('Android draft insertion causal control rejected:',witness,flush=True)
     original=(JAVA/'AndroidNodeCandidateMeasurement.java').read_text()
     old='int expectedFields = "routed-candidate-response".equals(catalog.measurement) ? 13 : 12;'
     assert original.count(old)==1

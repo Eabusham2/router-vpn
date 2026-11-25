@@ -1,3 +1,28 @@
+# 2026-11-25: Unsaved selected-hop insertion and system lifecycle repairs
+
+The [selected draft insertion record](IMPLEMENTATION-2026-11-25-SELECTED-DRAFT-INSERTION.md)
+implements eligible earlier imported-hop response measurements and a separate
+Use action that inserts the measured hop into the original unsaved draft while
+preserving its suffix and final. Desktop, Android and iOS retain the original
+source and native shutdown boundary; named Save remains an independent action.
+Forty-one encrypted Linux/amd64 cases passed, including the prior 28 cases.
+The focused controller verification passed 31 roots and 73 subcases, with
+original source and declaration hashes recorded and its local memory limits
+stated explicitly.
+
+The [system repair record](IMPLEMENTATION-2026-11-25-SYSTEM-LIFECYCLE-REPAIRS.md)
+covers retained package expiry, active transfer and compiler cleanup, original
+upstream cancellation, forwarding updates bound to the displayed router
+session, and the Windows firewall snapshot and mobile CI corrections. The
+Windows Stop Retry and macOS Performance harness repairs retain their actual
+shipping dependencies and independent refusal checks. All 93 selected source
+depths and all 88 remaining runtime roots passed the full Go package with race
+detection, including all 144 original Apple source fixtures. Both
+recovered native UI source gates passed. The records distinguish these results
+from mandatory final-commit native builds, publication and installed acceptance.
+Earlier selected-response gaps described in older entries below are historical
+and are superseded by the qualified route family in the new insertion record.
+
 # 2026-11-25: Selected candidates through imported penultimate hops
 
 The [imported penultimate candidate record](IMPLEMENTATION-2026-11-25-IMPORTED-PENULTIMATE-CANDIDATES.md)

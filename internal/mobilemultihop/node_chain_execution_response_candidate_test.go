@@ -83,7 +83,8 @@ func TestCompareLocalPrivatePenultimateCandidate(t *testing.T) {
 				f := multipleImportedExecutionRuntimeFixture(t, selectedPrivateStreamLayout(n, shape.private), requested)
 				prep := f.runtime.projection.preparation
 				for i := 0; i < n; i++ {
-					if prep.SupportsCompareLocalResponseCandidate(i) != (requested == "auto" && i == position) {
+					eligible := i == position || shape.private == 0 && i > 0 && i < position
+					if prep.SupportsCompareLocalResponseCandidate(i) != (requested == "auto" && eligible) {
 						t.Fatal("source advertised another metric or stop", i)
 					}
 				}
@@ -158,5 +159,89 @@ func TestCompareLocalPrivatePenultimateCandidate(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestCompareLocalImportedIntermediateCandidate(t *testing.T) {
+	input, err := nodeChainFixtureNodes(t, 17, "")[16].LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory := candidateInventoryFixture(t, "separate-paired-intermediate", input)
+	for _, spec := range []struct{ count, stop int }{{4, 1}, {9, 3}, {16, 12}} {
+		for _, outcome := range []string{"compare-local", "compare-server", "server"} {
+			t.Run(fmt.Sprintf("%d/%d/%s", spec.count, spec.stop, outcome), func(t *testing.T) {
+				requested := "auto"
+				if outcome == "server" {
+					requested = "server"
+				}
+				f := multipleImportedExecutionRuntimeFixture(t, selectedPrivateStreamLayout(spec.count, 0), requested)
+				entryRun(t, f, outcome)
+				t.Cleanup(func() {
+					if err := closeRemoteCandidateRuntime(f.runtime); err != nil {
+						t.Error(err)
+					}
+				})
+				plan, err := f.runtime.NewLocalCandidatePlanContext(t.Context(), spec.stop, inventory)
+				if outcome != "compare-local" {
+					if plan != nil || err == nil {
+						t.Fatal("unselected trial received intermediate response grant")
+					}
+					return
+				}
+				if err != nil || plan == nil {
+					t.Fatal(err)
+				}
+				original := f.runtime.projection.preparation.local
+				if plan.plan.prefix != original.proofs[spec.stop] || plan.trial != f.runtime.active || plan.plan.multiple.registry != original.importedNodes || plan.plan.measurement != hopmeasure.CandidatePrivateResponseMeasurement {
+					t.Fatal("intermediate plan lost captured stop or owner")
+				}
+				other, err := f.runtime.NewLocalCandidatePlanContext(t.Context(), spec.stop+1, inventory)
+				if err != nil || other.CaptureSHA256() == plan.CaptureSHA256() {
+					t.Fatal("two eligible stops shared measurement authority", err)
+				}
+				target, err := ParseNodeLaunchInput(input)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, member := range original.proofs[spec.stop+1:] {
+					for field, value := range map[string]string{"id": member.ProfileID, "node_proof_id": member.NodeID} {
+						if value == "" {
+							continue
+						}
+						old := target.profile[field]
+						target.profile[field] = value
+						alias, err := NewNodeProfile(target.mode, target.inputs.Files, startJSON(t, target.profile), target.inputs.Start, target.inputs.DNSBootstrap)
+						if err != nil {
+							t.Fatal(err)
+						}
+						source, err := alias.LaunchInput()
+						if err != nil {
+							t.Fatal(err)
+						}
+						if p, err := f.runtime.NewLocalCandidatePlanContext(t.Context(), spec.stop, candidateInventoryFixture(t, "suffix-alias", source)); p != nil || err == nil {
+							t.Fatalf("accepted unmeasured suffix %s at %d", field, member.Position)
+						}
+						target.profile[field] = old
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestCompareLocalImportedInsertionCapacity(t *testing.T) {
+	for _, n := range []int{95, 96} {
+		t.Run(fmt.Sprint(n), func(t *testing.T) {
+			_, preparation, _ := multipleImportedExecutionFixture(t, selectedPrivateStreamLayout(n, 0), "wg", "", "auto", "")
+			for _, k := range []int{1, n - 3} {
+				if preparation.SupportsCompareLocalResponseCandidate(k) != (n == 95) {
+					t.Fatal("insertion exceeds retained source capacity", n, k)
+				}
+			}
+			if !preparation.SupportsCompareLocalResponseCandidate(n - 2) {
+				t.Fatal("a full route lost its final replacement")
+			}
+		})
 	}
 }

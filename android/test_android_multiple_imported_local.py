@@ -99,7 +99,9 @@ public final class MultipleImportedLocalHarness {
   if(count>=7)try(var live=AndroidNodeChainCapture.compile(source)){
    int selected=source.modes.size()-2;
    check(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,selected,"local")&&"routed-candidate-response".equals(io.nekohasekai.libbox.Libbox.routerIndependentCandidateMetric(live.launchInput,selected)),"late imported UI disagreed with sealed native response capability");
-   check(!AndroidNodeChainCapture.responsePrefix(source.members,source.modes,selected,"server")&&!AndroidNodeChainCapture.responsePrefix(source.members,source.modes,selected,"auto"),"late imported UI granted selected execution a Local owner");
+   check(!AndroidNodeChainCapture.responsePrefix(source.members,source.modes,selected,"server"),"Server offered a late imported response");
+   check(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,selected,"auto"),"Compare omitted the eligible late imported response");
+   check(!live.ownsSelectedCandidatePrefix(source,selected),"Local capture acquired selected candidate ownership");
    var mixed=new ArrayList<>(source.modes);mixed.set(selected,"wg");check(!AndroidNodeChainCapture.responsePrefix(source.members,mixed,selected,"local"),"late imported UI admitted a mixed original suffix");
   }
   var saved=f.paired.profiles.add("Every independent original import");String row=Files.readString(f.paired.rows);
@@ -258,6 +260,9 @@ public final class MultipleImportedLocalHarness {
     check(original.multipleImported&&prep.getInt("schema")==6&&prep.length()==4,"selected source lost its typed registry");
     check(prep.getString("multiple_imported_local_launch").equals(original.launchInput),"selected preparation substituted the original sealed launch");
     check(original.sourceSHA256.equals(chosen.plan.localSourceSHA256())&&chosen.requested.equals(requested),"selected preparation changed the requested execution");
+    if(total>0 && fixture.equals("2/")){
+     check(original.ownsSelectedCandidatePrefix(source,total-2)==requested.equals("auto"),"late imported candidate ownership disagreed with the captured execution");
+    }
     try(var reopened=AndroidNodeChainExecutionCapture.reopen(original,chosen.launchInput)){
      check(reopened.source.equals(chosen.source)&&reopened.config.equals(chosen.config),"selected execution replay changed original source");
     }

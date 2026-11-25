@@ -126,9 +126,13 @@ func TestDesktopSocketWindowsWFPActualBaseline(t *testing.T) {
 	originalLock := p.lockKey
 	p.lockKey = desktopWindowsManagedKey("absent-monitor-fixture", p.fixtureScope)
 	missing := p.assertMonitorBaseline()
+	missingForeground := p.assertBaseline()
 	p.lockKey = originalLock
 	if missing == nil {
 		t.Fatal("monitor accepted a missing captured session lock")
+	}
+	if missingForeground == nil {
+		t.Fatal("foreground accepted a missing captured session lock")
 	}
 	if err := p.assertMonitorBaseline(); err != nil {
 		t.Fatal("monitor retained a failed snapshot after restoring the original lock", err)
@@ -672,6 +676,9 @@ func TestDesktopSocketWindowsWFPPreparedRejectsAdditionalLockFilter(t *testing.T
 	}
 	if err := p.assertMonitorBaseline(); err == nil {
 		t.Fatal("monitor accepted a foreign filter on the captured lock")
+	}
+	if err := p.assertBaseline(); err == nil {
+		t.Fatal("foreground accepted a foreign filter on the captured lock")
 	}
 	if err := p.leaseEngine.Assert(extra); err != nil {
 		t.Fatal("rejected prepared read changed the original lock filter", err)

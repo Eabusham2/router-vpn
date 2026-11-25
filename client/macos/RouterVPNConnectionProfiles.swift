@@ -480,12 +480,13 @@ struct RouterVPNOrderedNodeDraft {
     }
     func canMeasure(after index: Int) -> Bool {
         guard modes.indices.contains(index) else { return false }
-        if execution == "auto", index == nodes.count - 2, modes[index] == "shadowsocks", modes.first == "wg", finalMode == "shadowsocks" {
+        if execution == "auto", index >= 1, modes[index] == "shadowsocks", modes.first == "wg", finalMode == "shadowsocks" {
             if nodes.count == 3 {
                 let sourceIDs = Set(prefixes + [control])
                 return RouterVPNOrderedNodes.importedExecutionPrefixes(nodes, profiles: capturedCatalog) &&
                     capturedCatalog.filter { ($0["id"] as? String).map(sourceIDs.contains) == true }.allSatisfy(RouterVPNOrderedNodes.startLayerOff)
             }
+            if index < nodes.count - 2 && (nodes.count >= 96 || !prefixes.dropFirst().allSatisfy(importedIDs.contains)) { return false }
             let sourceIDs = Set(prefixes + [control])
             return modes.dropFirst().allSatisfy { $0 == "shadowsocks" } &&
                 RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog, selectedExecution: true) &&

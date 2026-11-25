@@ -462,16 +462,10 @@ func (p *DesktopWindowsSocketPolicy) expected() []desktopWFPRule {
 	return rules
 }
 func (p *DesktopWindowsSocketPolicy) assertBaseline() error {
-	if !p.installed || p.baselineEngine == nil {
-		return errors.New("Windows physical drop baseline is not installed")
-	}
-	if err := p.assertBaselineLock(); err != nil {
-		return err
-	}
-	if err := p.baselineEngine.AssertSublayer(p.sublayer, p.metadata); err != nil {
-		return err
-	}
-	return p.baselineEngine.AssertComplete(p.sublayer, p.expected())
+	// Bind, grant and tunnel operations hold the same gate as the watchdog.
+	// Take a new complete snapshot for each foreground check without making
+	// the watchdog wait for two consecutive enumerations of all host filters.
+	return p.assertMonitorBaseline()
 }
 func (p *DesktopWindowsSocketPolicy) Owner() (DesktopSocketKernelOwner, error) {
 	if p == nil {
@@ -810,13 +804,13 @@ func (p *DesktopWindowsSocketPolicy) Cancel() {
 	}
 }
 
-// The monitor holds the policy gate while reading both sublayers. One fresh
+// The caller holds the policy gate while reading both sublayers. One fresh
 // BFE snapshot covers their metadata and ACLs, the empty session lock, and
 // every expected baseline, tunnel and live socket filter.
 func (p *DesktopWindowsSocketPolicy) assertMonitorBaseline() (result error) {
 	engine := p.baselineEngine
 	if !p.installed || engine == nil || engine.handle == 0 || engine.transaction {
-		return errors.New("Windows monitor has no idle installed baseline owner")
+		return errors.New("Windows policy has no idle installed baseline owner")
 	}
 	status, _, _ := engine.api.begin.Call(uintptr(engine.handle), 1) // FWPM_TXN_READ_ONLY
 	if err := desktopWFPError("begin monitor read transaction", status); err != nil {

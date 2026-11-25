@@ -38,6 +38,8 @@ type orderedCandidateChoice struct {
 	Proposal       []common.MultihopNodeSelection `json:"proposed_path,omitempty"`
 	SaveReason     string                         `json:"save_reason,omitempty"`
 	ProposalAction string                         `json:"proposal_action,omitempty"`
+	DraftProposal  []common.MultihopNodeSelection `json:"draft_path,omitempty"`
+	DraftAction    string                         `json:"draft_action,omitempty"`
 }
 type orderedCandidatePrefix struct {
 	Position    int    `json:"position"`
@@ -325,7 +327,7 @@ func orderedCandidateRequestedExecution(launch *desktopNodeLaunch) (string, erro
 
 func orderedCandidateProposalForExecution(members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile, requested string) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var control common.RouterProfile
-	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !common.ExtendedAWGSelectedMultihopSelection(nodeChainSelectedReferences(members)) && !(requested == "local" && (common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)) || common.ExtendedMixedLocalPacketCount(nodeChainSelectedReferences(members)) > 0))) || position < 0 || position >= len(members)-1 || !(mobilemultihop.NodeChainPrefixMode(members[position].Mode) || (requested == "local" || desktopCompareLocalResponseFinal(members, requested, position, candidate)) && members[position].Mode == "shadowsocks" && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
+	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !common.ExtendedAWGSelectedMultihopSelection(nodeChainSelectedReferences(members)) && !(requested == "local" && (common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)) || common.ExtendedMixedLocalPacketCount(nodeChainSelectedReferences(members)) > 0))) || position < 0 || position >= len(members)-1 || !(mobilemultihop.NodeChainPrefixMode(members[position].Mode) || (requested == "local" || desktopCompareLocalResponseProposal(members, requested, position, candidate)) && members[position].Mode == "shadowsocks" && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
 		return control, nil, errors.New("candidate requires an original packet prefix")
 	}
 	nodes := nodeChainSelectedReferences(members)
@@ -338,7 +340,8 @@ func orderedCandidateProposalForExecution(members []desktopNodeChainMember, posi
 	}
 	replacement := position + 1
 	selected := common.MultihopNodeSelection{ID: candidate.ID, Mode: mode}
-	if requested == "local" && members[position].Mode == "shadowsocks" && replacement < len(nodes)-1 {
+	if members[position].Mode == "shadowsocks" && replacement < len(nodes)-1 &&
+		(requested == "local" || desktopCompareLocalResponseProposal(members, requested, position, candidate)) {
 		if len(nodes) >= common.MultihopPhysicalTraversalDepth || nodes[replacement].Mode != "shadowsocks" {
 			return control, nil, errors.New("saving this measured intermediate requires the original Local stream suffix and room for another member")
 		}

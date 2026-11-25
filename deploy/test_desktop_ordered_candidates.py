@@ -128,7 +128,7 @@ def swift_form(directory):
     policy+='\nprivate final class HomeForm {\n'+block(summary,'func formatHomeSummary(')+'\n}'
     owner=block(source,'private final class RouterVPNMacOrderedCandidates:')
     fields=owner[owner.index('{')+1:owner.index('    init(savedPath:')].replace('fileprivate private(set) ','').replace('private ','')
-    methods='\n'.join(block(owner,'func '+n+'(').replace('@objc ','') for n in ['matchesPurpose','closeForPurposeChange','controls','capture','measure','saveProfile','cancelTest','windowShouldClose','windowWillClose','tick','savedStatus','issue','send','receive','receiveSaved'])
+    methods='\n'.join(block(owner,'func '+n+'(').replace('@objc ','') for n in ['matchesPurpose','closeForPurposeChange','tableViewSelectionDidChange','controls','capture','measure','useInDraft','saveProfile','cancelTest','windowShouldClose','windowWillClose','tick','savedStatus','issue','send','receive','receiveSaved'])
     # Extracted methods keep actual HTTP construction/start/cancel and delivery.
     # The transport and AppKit views are small explicit doubles here; the real
     # transport is separately compiled and constructor-tested below.
@@ -140,7 +140,7 @@ final class NSPopUpButton {var isEnabled=true;var items:[NSMenuItem]=[];var sele
 extension Int {static var zero:Int{0}}
 final class NSTableView {var selectedRow=0;var selectedRowIndexes=IndexSet(integer:0);func selectRowIndexes(_ indexes:IndexSet,byExtendingSelection:Bool){selectedRowIndexes=indexes;selectedRow=indexes.first ?? -1};func reloadData(){}}
 final class NSTextField {var isHidden=false;var stringValue="";init(){};init(wrappingLabelWithString:String){stringValue=wrappingLabelWithString}}
-final class NSButton {var title="";var isEnabled=false;init(title:String,target:Any?,action:Any?) {}}
+final class NSButton {var title="";var isEnabled=false;var isHidden=false;init(title:String,target:Any?,action:Any?) {}}
 final class NSWindow {var closed=false;var onClose:(()->Void)?;func close(){closed=true;onClose?()};func performClose(_ sender:Any?){close()}}
 let routerVPNProductBaseURL=URL(string:"http://127.0.0.1:8080")!
 final class RouterVPNMacSpeedLabTransport {
@@ -434,14 +434,15 @@ namedResults["saved_profile_id"]="named-result";namedResults["profile_id"]="name
 var rejected=namedResults;rejected["chosen"]=true;do{try named.receive(rejected,action:"save");fatalError("named save adopted a draft change")}catch{checks+=1}
 namedPost.finish(namedResults);settle()
 check(named.savedProfileID=="named-result" && !named.pendingDrain && !named.save.isEnabled,"named final did not retain its separate saved-profile identity")
-for depth in [4,9,16,96] {
-    let pos = depth-2
-    // The original captured role is independently varied across complete UI runs.
-    let privatePosition = depth == 4 || depth == 16 ? -1 : depth == 9 ? 2 : pos
+for (depth,pos,privatePosition) in [(4,2,-1),(9,7,2),(16,14,-1),(96,94,94),(4,1,-1),(16,9,-1),(9,6,-1),(95,92,-1)] {
+    let insert = pos < depth-2
+    let action = insert ? "save-intermediate-profile" : "save-final-profile"
+    let crossedAction = insert ? "save-final-profile" : "save-intermediate-profile"
     let source = (0..<depth).map { ["id":"member-\($0)","mode":$0 == 0 ? "wg":"shadowsocks","kind":$0 == 0 || $0 == privatePosition || $0 == depth-1 ? "router-vpn":"external"] }
     let nodes = source.map { ["id":$0["id"]!, "mode":$0["mode"]!] }
-    let proposal = Array(nodes.dropLast()) + [["id":"custom","mode":"shadowsocks"]]
-    var choice = finalChoice; choice["proposed_path"] = proposal
+    var proposal = Array(nodes[...pos]) + [["id":"custom","mode":"shadowsocks"]]
+    if insert { proposal += nodes[(pos+1)...] }
+    var choice = finalChoice; choice["proposed_path"] = proposal;choice["proposal_action"]=action
     for temporary in [false,true] {
         let draft:[String:Any]? = temporary ? ["execution":"auto","nodes":nodes] : nil
         let form = Form(savedPrefix:temporary,draft:draft,position:pos){_ in fatalError("selected final changed editor")}
@@ -450,6 +451,23 @@ for depth in [4,9,16,96] {
         offer["scope"] = temporary ? "draft-complete-selected":"";offer["prefix_position"]=pos;offer["candidates"]=[choice]
         offer["prefixes"]=[["position":pos,"id":nodes[pos]["id"]!,"mode":"shadowsocks","measurement":responseMetric]]
         if !temporary { offer["selected_execution"]="local";offer["selection_epoch"]=37 }
+        if !temporary && pos == 1 {
+            var missing = offer; missing.removeValue(forKey:"response_source_nodes")
+            let twoPrefixes:[[String:Any]] = [["id":nodes[0]["id"]!,"mode":"wg","position":0],
+                                              ["id":nodes[1]["id"]!,"mode":"shadowsocks","position":1,"measurement":responseMetric]]
+            missing["prefixes"] = twoPrefixes
+            do { try form.receive(missing,action:"catalog"); fatalError("connected first import lost its source map") } catch { checks += 1 }
+            var legacyChoice = choice; legacyChoice.removeValue(forKey:"proposal_action"); missing["candidates"] = [legacyChoice]
+            do { try form.receive(missing,action:"catalog"); fatalError("long proposal borrowed the three-node catalog") } catch { checks += 1 }
+            legacyChoice["proposed_path"] = Array(proposal.prefix(3)); missing["candidates"] = [legacyChoice]
+            try! form.receive(missing,action:"catalog")
+            check(form.choices.count == 1 && form.view?["response_source_nodes"] == nil, "three-node connected Compare catalog lost")
+            legacyChoice["proposal_action"] = action; missing["candidates"] = [legacyChoice]
+            do { try form.receive(missing,action:"catalog"); fatalError("marked Save borrowed a three-node catalog") } catch { checks += 1 }
+            legacyChoice.removeValue(forKey:"proposal_action"); missing["candidates"] = [legacyChoice]
+            missing["prefixes"] = twoPrefixes + [["id":"extra","mode":"shadowsocks","position":2]]
+            do { try form.receive(missing,action:"catalog"); fatalError("additional stop borrowed a three-node catalog") } catch { checks += 1 }
+        }
         for badIndex in [0,1,depth-1] {
             var crossed=source;crossed[badIndex]["kind"] = source[badIndex]["kind"] == "external" ? "router-vpn":"external"
             var bad=offer;bad["response_source_nodes"]=crossed
@@ -460,7 +478,26 @@ for depth in [4,9,16,96] {
             var bad=offer;bad["response_source_nodes"]=twoPrivate
             do {try form.receive(bad,action:"catalog");fatalError("two private response interiors admitted")} catch {checks+=1}
         }
-        var duplicated=source;duplicated[pos]["id"]=source[1]["id"]
+        if insert {
+            var privateSource=source;privateSource[2]["kind"]="router-vpn"
+            var invalid=offer;invalid["response_source_nodes"]=privateSource
+            do {try form.receive(invalid,action:"catalog");fatalError("intermediate response admitted an existing private stream")} catch {checks+=1}
+            var reused=choice;reused["id"]=nodes.last!["id"]!;var duplicatePath=proposal;duplicatePath[pos+1]=nodes.last!;reused["proposed_path"]=duplicatePath;invalid=offer;invalid["candidates"]=[reused]
+            do {try form.receive(invalid,action:"catalog");fatalError("retained original final offered as an intermediate candidate")} catch {checks+=1}
+            var wrongPath=proposal;wrongPath[depth]["id"]="foreign-final"
+            var badChoice=choice;badChoice["proposed_path"]=wrongPath;invalid=offer;invalid["candidates"]=[badChoice]
+            do {try form.receive(invalid,action:"catalog");fatalError("intermediate response lost the original final")} catch {checks+=1}
+        }
+        if !temporary && depth == 95 {
+            var larger=source;larger.insert(["id":"extra","mode":"shadowsocks","kind":"external"],at:depth-1)
+            var largerPath=proposal;largerPath.insert(["id":"extra","mode":"shadowsocks"],at:depth)
+            var tooLong=offer;tooLong["response_source_nodes"]=larger
+            var largerChoice=choice;largerChoice["proposed_path"]=largerPath;tooLong["candidates"]=[largerChoice]
+            do {try form.receive(tooLong,action:"catalog");fatalError("96 original nodes offered a 97th hop")} catch {checks+=1}
+        }
+        var badChoice=choice;badChoice["proposal_action"]=crossedAction;var crossedOffer=offer;crossedOffer["candidates"]=[badChoice]
+        do {try form.receive(crossedOffer,action:"catalog");fatalError("crossed proposal action admitted")} catch {checks+=1}
+        var duplicated=source;duplicated[pos]["id"]=source[0]["id"]
         var bad=offer;bad["response_source_nodes"]=duplicated
         do {try form.receive(bad,action:"catalog");fatalError("duplicate selected identity admitted")} catch {checks+=1}
         try! form.receive(offer,action:"catalog")
@@ -487,8 +524,8 @@ for depth in [4,9,16,96] {
         check(write.body?["proposed_path"] as? [[String:String]] == proposal && write.body?["name"] as? String == "Measured paired exit" &&
               write.url.path == (temporary ? "/api/multihop/draft-candidates/save-profile":"/api/multihop/prefix-candidates/save-profile"),"selected measured final lost its explicit named full path")
         result["accepted"]=false;result["reviewing"]=false;result["drained"]=true;result["saved"]=true;result["ok"]=true
-        result["profile_name"]="Measured paired exit";result["saved_profile_id"]="future-profile";result["profile_id"]="future-profile";result["proposed_path"]=proposal;result["candidate_id"]="custom";result["results"]=[]
-        for (key,wrong) in [("proposed_path",nodes as Any),("candidate_id","other-final"),("proposal_action","save-intermediate-profile"),("response_source_nodes",crossed)] {
+        result["proposal_action"]=action;result["profile_name"]="Measured paired exit";result["saved_profile_id"]="future-profile";result["profile_id"]="future-profile";result["proposed_path"]=proposal;result["candidate_id"]="custom";result["results"]=[]
+        for (key,wrong) in [("proposed_path",nodes as Any),("candidate_id","other-final"),("proposal_action",crossedAction),("prefix_position",0),("response_source_nodes",crossed)] {
             var bad=result;bad[key]=wrong
             do {try form.receive(bad,action:"save");fatalError("crossed selected profile write acknowledged: "+key)} catch {checks+=1}
         }
@@ -518,6 +555,49 @@ for depth in [4,9,16,96] {
                 post.finish(reply);settle();check(!cancelled.pendingDrain && !cancelled.save.isEnabled,"connected Cancel did not release original work")
             }
         }
+        if temporary {
+            let insertion = Array(nodes[...pos]) + [["id":"custom","mode":"shadowsocks"]] + Array(nodes[(pos+1)...])
+            var useChoice=choice;useChoice["draft_path"]=insertion;useChoice["draft_action"]="insert-measured-hop"
+            let draftOnly = insert && depth == 9
+            if draftOnly { useChoice.removeValue(forKey:"proposed_path");useChoice.removeValue(forKey:"proposal_action") }
+            var useOffer=offer;useOffer["candidates"]=[useChoice]
+            var deliveries=0
+            let applying=Form(savedPrefix:true,draft:draft,position:pos) { delivery in
+                check(delivery["proposed_path"] as? [[String:String]] == insertion,"draft handoff lost its final or suffix")
+                deliveries+=1
+            }
+            try! applying.receive(useOffer,action:"catalog")
+            var review=result;review["request_id"]=applying.requestID;review["saved"]=false;review["saved_profile_id"]="";review.removeValue(forKey:"profile_id")
+            review["accepted"]=true;review["reviewing"]=true;review["drained"]=false;review["results"]=[streamRow]
+            RouterVPNMacSpeedLabTransport.calls.last!.finish(review);settle();applying.controls()
+            let eligible = privatePosition < 0 && depth < 96
+            check(applying.useDraft.isEnabled == eligible && applying.useDraft.isHidden != eligible && applying.save.isEnabled != draftOnly,"draft insertion escaped the original path's capacity or private roles")
+            if eligible {
+                applying.tableViewSelectionDidChange(Notification(name:Notification.Name("selection")))
+                check(applying.preview.stringValue.contains("Use in draft") && applying.preview.stringValue.contains(nodes.last!["id"]!) &&
+                      applying.preview.stringValue.contains("Named profile") == !insert,"draft preview hid the difference between inserting and replacing the final")
+                applying.profileName.stringValue="";applying.useInDraft()
+                let sending=RouterVPNMacSpeedLabTransport.calls.last!
+                check(sending.url.path=="/api/multihop/draft-candidates/choose" && sending.body?["name"]==nil && sending.body?["proposed_path"] as? [[String:String]]==insertion && sending.body?["scope"] as? String=="draft-complete-selected","Use substituted named Save or dropped the original final")
+                var used=review;used["chosen"]=true;used["accepted"]=false;used["reviewing"]=false;used["drained"]=true;used["draft_action"]="insert-measured-hop";used["proposed_path"]=insertion;used["candidate_id"]="custom";used["results"]=[]
+                for (field,wrong) in [("draft_action","save-final-profile" as Any),("proposed_path",nodes),("selection_epoch",38),("native_down",false),("saved_profile_id","unexpected"),("prefix_position",0),("candidate_id","other"),("view_token","foreign"),("request_id","foreign"),("response_source_nodes",crossed)] {
+                    var bad=used;bad[field]=wrong
+                    do {try applying.receive(bad,action:"choose");fatalError("foreign response became a draft insertion: "+field)} catch {checks+=1}
+                }
+                applying.closeWanted=true
+                do {try applying.receive(used,action:"choose");fatalError("late Choose after Close changed the draft")} catch {checks+=1}
+                applying.closeWanted=false;applying.cancelWanted=true
+                do {try applying.receive(used,action:"choose");fatalError("late Choose after Cancel changed the draft")} catch {checks+=1}
+                applying.cancelWanted=false
+                sending.finish(used);settle()
+                check(deliveries==1 && applying.closeWanted && applying.savedProfileID.isEmpty,"Use did not deliver exactly one unsaved insertion")
+            } else {
+                applying.cancelTest();applying.nextRetry = .distantPast;applying.tick()
+                var retired=review;retired["accepted"]=false;retired["reviewing"]=false;retired["drained"]=true;retired["cancelled"]=true;retired["results"]=[]
+                RouterVPNMacSpeedLabTransport.calls.last!.finish(retired);settle()
+                check(deliveries==0 && !applying.pendingDrain,"unavailable insertion changed the draft or retained an observer")
+            }
+        }
         if temporary && depth == 16 {
             let failed=Form(savedPrefix:true,draft:draft,position:pos){_ in fatalError("failed Server trial changed the draft")}
             try! failed.receive(offer,action:"catalog")
@@ -539,6 +619,8 @@ print("Swift shipping ordered-candidate controls: \(checks) checks PASS")
     subprocess.run([str(directory/'controls')],check=True,timeout=30)
     controls=[
         ('connected-cancel-tombstone','(!savedAdmitted && RouterVPNOrderedCandidateDisplay.falseFlag(value,"started")','(RouterVPNOrderedCandidateDisplay.falseFlag(value,"started")','late connected tombstone retired admitted work'),
+        ('intermediate-suffix','return proposal == expected','return position < source.count-2 ? proposal.prefix(position+2) == expected.prefix(position+2) : proposal == expected','intermediate response lost the original final'),
+        ('intermediate-private','!privateInterior, position == rows.count - 2','!privateInterior','intermediate response admitted an existing private stream'),
         ('selected-private-source','RouterVPNOrderedCandidateDisplay.responseSource(value, position:position, draft:draft) == original','RouterVPNOrderedCandidateDisplay.responseSource(value, position:position, draft:draft) != nil','a different valid source map was adopted'),
         ('native-down','flag(value, "native_down") && ','','saved choice escaped original DOWN: native_down'),
         ('cleanup',' && falseFlag(value, "cleanup_pending")','','saved choice escaped original DOWN: cleanup_pending'),
@@ -594,7 +676,7 @@ print("Actual Swift ordered-candidate bounded transport: \(checks) checks PASS")
     marker='print("Actual Swift ordered-candidate bounded transport:'
     saved=harness[harness.index('let id='):harness.index(marker)].replace('/api/multihop/prefix-candidates','/api/multihop/saved-candidates')
     saved=saved.replace('admit("/api/multihop/saved-candidates/cancel",["request_id":id],25,true)','admit("/api/multihop/saved-candidates/cancel",["request_id":id,"view_token":view],25,true)')
-    extra='''
+    extra=r'''
 admit("/api/multihop/saved-candidates-extra",run,180,false)
 admit("/api/multihop/saved-candidates/unknown",nil,25,false)
 admit("/api/multihop/saved-candidates?prefix_position=0",nil,25,false)
@@ -603,7 +685,7 @@ admit("/api/multihop/saved-candidates/cancel",["request_id":id],26,false)
 admit("/api/multihop/saved-candidates/cancel",["request_id":id],25,false)
 admit("/api/multihop/saved-candidates/cancel",["request_id":id,"view_token":"foreign"],25,false)
 admit("/api/multihop/saved-candidates/cancel",["request_id":id,"view_token":view,"native_down":true],25,false)
-admit("/api/multihop/prefix-candidates/cancel",["request_id":id,"view_token":view],25,false)
+admit("/api/multihop/prefix-candidates/cancel",["request_id":id,"view_token":view],25,true)
 admit("/api/multihop/saved-candidates/catalog?prefix_position=0&scope=saved-prefix-local",nil,25,true)
 admit("/api/multihop/prefix-candidates/catalog?prefix_position=0&scope=saved-prefix-local",nil,25,false)
 admit("/api/multihop/saved-candidates/catalog?scope=saved-prefix-local&prefix_position=0",nil,25,false)
@@ -656,12 +738,44 @@ for packet in ["awg2-fast","awg2-strong"] { for requested in ["server","auto"] {
  admit("/api/multihop/draft-candidates/catalog?prefix_position=0&scope=draft-complete-selected",selected,25,false)
 } }
 var selectedDeepSS=deepSS;selectedDeepSS["execution"]="auto"
-admit("/api/multihop/draft-candidates/catalog?prefix_position=8&scope=draft-complete-selected",selectedDeepSS,25,false)
+admit("/api/multihop/draft-candidates/catalog?prefix_position=8&scope=draft-complete-selected",selectedDeepSS,25,true)
 var deepRun=run;deepRun["prefix_position"]=8;deepRun["scope"]="saved-prefix-local";admit("/api/multihop/draft-candidates",deepRun,180,true)
-deepRun["scope"]="draft-complete-selected";admit("/api/multihop/draft-candidates",deepRun,180,false)
+deepRun["scope"]="draft-complete-selected";admit("/api/multihop/draft-candidates",deepRun,180,true)
 let namedFinalBody:[String:Any]=["request_id":id,"view_token":view,"scope":"saved-prefix-local","candidate_id":"original","name":"Explicit future final","proposed_path":[["id":"entry","mode":"wg"],["id":"imported","mode":"shadowsocks"],["id":"original","mode":"shadowsocks"]]]
 admit("/api/multihop/draft-candidates/save-profile",namedFinalBody,25,true)
-var crossScope=namedFinalBody;crossScope["scope"]="draft-complete-selected";admit("/api/multihop/draft-candidates/save-profile",crossScope,25,false)
+var crossScope=namedFinalBody;crossScope["scope"]="draft-complete-selected";admit("/api/multihop/draft-candidates/save-profile",crossScope,25,true)
+for (depth,k,allowed) in [(3,1,true),(4,1,true),(4,2,true),(9,6,true),(16,9,true),(95,92,true),(95,93,true),(96,1,false),(96,94,true),(96,95,false)] {
+    let rows=(0..<depth).map { ["id":"member-\($0)","mode":$0 == 0 ? "wg":"shadowsocks"] }
+    let tokens=Dictionary(uniqueKeysWithValues:rows.map{($0["id"]!,view)})
+    let catalog:[String:Any]=["nodes":rows,"execution":"auto","expected_selected_node_id":rows.last!["id"]!,"expected_profile_tokens":tokens]
+    let target="/api/multihop/draft-candidates/catalog?prefix_position="+String(k)+"&scope=draft-complete-selected"
+    admit(target,catalog,25,allowed)
+    var invalid=catalog;invalid["expected_selected_node_id"]="foreign";admit(target,invalid,25,false)
+    invalid=catalog;invalid["execution"]="server";admit(target,invalid,25,false)
+    invalid=catalog;invalid["expected_profile_tokens"]=["member-0":view];admit(target,invalid,25,false)
+    if allowed {
+        var test=deepRun;test["prefix_position"]=k;admit("/api/multihop/draft-candidates",test,180,true)
+        var next=rows
+        if k == depth-2 {next.removeLast()}
+        next.insert(["id":"candidate","mode":"shadowsocks"],at:k+1)
+        var named=crossScope;named["candidate_id"]="candidate";named["proposed_path"]=next
+        admit("/api/multihop/draft-candidates/save-profile",named,25,true)
+        named["candidate_id"]="foreign";admit("/api/multihop/draft-candidates/save-profile",named,25,false)
+        if depth<96 {
+            var inserted=rows;inserted.insert(["id":"candidate","mode":"shadowsocks"],at:k+1)
+            named.removeValue(forKey:"name");named["proposed_path"]=inserted;named["candidate_id"]="candidate"
+            admit("/api/multihop/draft-candidates/choose",named,25,true)
+            named["candidate_id"]="foreign";admit("/api/multihop/draft-candidates/choose",named,25,false)
+            named["candidate_id"]=inserted.last!["id"]!;admit("/api/multihop/draft-candidates/choose",named,25,false)
+        }
+    }
+}
+var outside=deepRun;outside["prefix_position"]=95;admit("/api/multihop/draft-candidates",outside,180,false)
+var wrongScope=crossScope;wrongScope["scope"]="saved-complete-local";admit("/api/multihop/draft-candidates/save-profile",wrongScope,25,false)
+var invalidNamed=crossScope;invalidNamed["candidate_id"]="imported";admit("/api/multihop/draft-candidates/save-profile",invalidNamed,25,false)
+invalidNamed=crossScope;invalidNamed["proposed_path"]=[["id":"a","mode":"awg2-fast"],["id":"b","mode":"shadowsocks"],["id":"original","mode":"shadowsocks"]];admit("/api/multihop/draft-candidates/save-profile",invalidNamed,25,false)
+admit("/api/multihop/prefix-candidates/cancel",["request_id":id,"view_token":"foreign"],25,false)
+admit("/api/multihop/prefix-candidates/cancel",["request_id":id,"view_token":view,"native_down":true],25,false)
 var emptyName=namedFinalBody;emptyName["name"]="";admit("/api/multihop/draft-candidates/save-profile",emptyName,25,false)
 admit("/api/multihop/draft-candidates/choose",namedFinalBody,25,false)
 admit("/api/multihop/saved-candidates/save-profile",["request_id":id,"view_token":view,"scope":"saved-prefix-local","candidate_id":"original","name":"Explicit prefix next","proposed_path":[["id":"entry","mode":"wg"],["id":"original","mode":"shadowsocks"]]],25,true)
@@ -682,7 +796,7 @@ def linux_policy(directory):
     candidates=(ROOT/'client/linux/routervpn-ordered-candidates-v1.inc').read_text()
     helpers=(ROOT/'client/linux/routervpn-telemetry-v9.inc').read_text()
     declarations=candidates[candidates.index('typedef struct {'):candidates.index('} LinuxOrderedCandidates;')+len('} LinuxOrderedCandidates;')]
-    guards+='\n'+declarations+'\n'+'\n'.join(block(helpers,marker) for marker in ['static JsonNode *linux_ec_member(', 'static const char *linux_ec_string(', 'static gboolean linux_ec_bool(', 'static double linux_ec_number(', 'static JsonArray *linux_ec_array(', 'static JsonObject *linux_ec_object('])+'\n'+'\n'.join(block(candidates,marker) for marker in ['static const char*linux_oc_measurement_kind(', 'static const char*linux_oc_prefix_measurement(', 'static JsonObject*linux_oc_root(', 'static gboolean linux_oc_response_id(', 'static gboolean linux_oc_response_source(', 'static gboolean linux_oc_response_winner(', 'static gboolean linux_oc_response_draft(', 'static gboolean linux_oc_catalog_measurement(', 'static double linux_oc_score(', 'static gboolean linux_oc_same_measurement(', 'static double linux_oc_current_score(', 'static const char*linux_oc_scope(', 'static gboolean linux_oc_draft_execution(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_final_choice(', 'static gboolean linux_oc_final_saved(', 'static gboolean linux_oc_view_fresh('])
+    guards+='\n'+declarations+'\n'+'\n'.join(block(helpers,marker) for marker in ['static JsonNode *linux_ec_member(', 'static const char *linux_ec_string(', 'static gboolean linux_ec_bool(', 'static double linux_ec_number(', 'static JsonArray *linux_ec_array(', 'static JsonObject *linux_ec_object('])+'\n'+'\n'.join(block(candidates,marker) for marker in ['static const char*linux_oc_measurement_kind(', 'static const char*linux_oc_prefix_measurement(', 'static JsonObject*linux_oc_root(', 'static gboolean linux_oc_response_id(', 'static gboolean linux_oc_response_source(', 'static gboolean linux_oc_response_proposal(', 'static gboolean linux_oc_response_winner(', 'static gboolean linux_oc_response_draft(', 'static gboolean linux_oc_catalog_measurement(', 'static double linux_oc_score(', 'static gboolean linux_oc_same_measurement(', 'static double linux_oc_current_score(', 'static const char*linux_oc_scope(', 'static gboolean linux_oc_draft_execution(', 'static gboolean linux_oc_saved_envelope(', 'static gboolean linux_oc_before_start(', 'static gboolean linux_oc_ready(', 'static gboolean linux_oc_final_choice(', 'static gboolean linux_oc_final_saved(', 'static gboolean linux_oc_view_fresh('])
     program=r"""
 #include <gtk/gtk.h>
 #include <glib-object.h>
@@ -954,15 +1068,18 @@ def linux_form(directory):
     packet_draft={'execution':'local','expected_selected_node_id':'final','nodes':[{'id':'entry','mode':'awg2-strong'},{'id':'packet','mode':'wg'},{'id':'middle','mode':'shadowsocks'},{'id':'final','mode':'shadowsocks'}]}
     packet_catalog=json.loads(json.dumps(response_catalog));packet_catalog['prefix_position']=2;packet_catalog['prefixes'][0].update(position=2,id='middle')
     packet_catalog['candidates'][0]['proposed_path']=json.loads(json.dumps(packet_draft['nodes']));packet_catalog['candidates'][0]['proposed_path'][-1]['id']='paired'
-    for depth in (4,9,16,96):
+    for depth,position,private_position in [(4,2,-1),(9,7,2),(16,14,-1),(96,94,94),(4,1,-1),(16,9,-1),(9,6,-1),(95,92,-1)]:
+        early=position<depth-2
         nodes=[{'id': 'entry' if i==0 else 'final' if i==depth-1 else f'source-{i}', 'mode':'wg' if i==0 else 'shadowsocks'} for i in range(depth)]
         draft={'execution':'auto','expected_selected_node_id':'final','nodes':nodes}
         offer=json.loads(json.dumps(response_catalog))
-        offer.update(scope='draft-complete-selected', requested_execution='auto', required_selected_execution='local', prefix_position=depth-2,
-                     response_source_nodes=[dict(row,kind='router-vpn' if i in (0,depth-1,2 if depth==9 else depth-2 if depth==96 else -1) else 'external') for i,row in enumerate(nodes)])
-        offer['prefixes'][0].update(position=depth-2,id=nodes[-2]['id'])
-        offer['candidates'][0]['proposed_path']=nodes[:-1]+[{'id':'paired','mode':'shadowsocks'}]
-        for name,value in [('catalog',offer),('draft',draft)]: (directory/f'selected-{depth}-{name}.json').write_text(json.dumps(value))
+        offer.update(scope='draft-complete-selected', requested_execution='auto', required_selected_execution='local', prefix_position=position,
+                     response_source_nodes=[dict(row,kind='router-vpn' if i in (0,depth-1,private_position) else 'external') for i,row in enumerate(nodes)])
+        offer['prefixes'][0].update(position=position,id=nodes[position]['id'])
+        offer['candidates'][0]['proposed_path']=nodes[:position+1]+[{'id':'paired','mode':'shadowsocks'}]+(nodes[position+1:] if early else [])
+        offer['candidates'][0]['proposal_action']='save-intermediate-profile' if early else 'save-final-profile'
+        prefix='intermediate' if early else 'selected'
+        for name,value in [('catalog',offer),('draft',draft)]: (directory/f'{prefix}-{depth}-{name}.json').write_text(json.dumps(value))
     for name,value in [('catalog',catalog),('row',row),('response-catalog',response_catalog),('response-row',response_row),('deep-response-catalog',deep_catalog),('deep-response-draft',deep_draft),('packet-response-catalog',packet_catalog),('packet-response-draft',packet_draft)]: (directory/(name+'.json')).write_text(json.dumps(value))
     program=r'''
 #include <gtk/gtk.h>
@@ -992,6 +1109,9 @@ static void rv_http_free_v16(RVHttpJobV16*j){if(!j)return;freed++;g_free(j->resp
 HELPERS
 static guint selected_deliveries;
 static gboolean linux_ordered_adopt_measured_v1(GtkWindow*parent,const char*draft,int position,JsonObject*response) {
+    if(GTK_IS_WINDOW(parent)&&draft&&!strcmp(linux_ec_string(response,"draft_action"),"insert-measured-hop")&&linux_ec_bool(response,"chosen")) {
+        selected_deliveries++; return TRUE;
+    }
     if(GTK_IS_WINDOW(parent)&&draft&&position==2&&linux_ec_bool(response,"chosen")&&linux_ec_number(response,"selection_epoch")==17&&json_array_get_length(linux_ec_array(response,"proposed_path"))==5){selected_deliveries++;return TRUE;}
     return GTK_IS_WINDOW(parent) && draft != NULL && position == 0 && linux_ec_bool(response,"chosen");
 }
@@ -1155,14 +1275,43 @@ int main(int argc,char**argv){
  }
 
  {
-  const int pos=14;
   linux_ordered_candidates_open_captured(&app,FALSE,FALSE);
   LinuxOrderedCandidates*form=g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates");
-  JsonNode*discovery=fixture("catalog"),*offer=fixture("selected-16-catalog");
+  JsonNode*offer=fixture("intermediate-4-catalog"), *discovery=fixture("catalog");
+  JsonObject*value=linux_oc_root(offer);
+  JsonArray*prefixes=linux_ec_array(value,"prefixes");
+  JsonNode*entry=json_node_copy(json_array_get_element(linux_ec_array(linux_oc_root(discovery),"prefixes"),0));
+  json_object_set_string_member(linux_oc_root(entry),"id","entry");
+  JsonArray*original=json_array_new();json_array_add_element(original,entry);
+  json_array_add_element(original,json_node_copy(json_array_get_element(prefixes,0)));
+  json_object_set_array_member(value,"prefixes",original);
+  json_object_remove_member(value,"scope");json_object_remove_member(value,"origin");
+  json_object_remove_member(value,"response_source_nodes");
+  json_object_set_string_member(value,"selected_execution","local");json_object_set_int_member(value,"selection_epoch",37);
+  form->position=1;
+  check(!linux_oc_receive(form,value,1),"connected first import lost its source map");
+  JsonObject*choice=json_array_get_object_element(linux_ec_array(value,"candidates"),0);
+  json_object_remove_member(choice,"proposal_action");
+  check(!linux_oc_receive(form,value,1),"long proposal borrowed the three-node catalog");
+  JsonArray*path=linux_ec_array(choice,"proposed_path");while(json_array_get_length(path)>3)json_array_remove_element(path,3);
+  check(linux_oc_receive(form,value,1),"three-node connected Compare catalog lost");
+  json_object_set_string_member(choice,"proposal_action","save-intermediate-profile");
+  check(!linux_oc_receive(form,value,1),"marked Save borrowed a three-node catalog");json_object_remove_member(choice,"proposal_action");
+  JsonNode*extra=json_node_copy(json_array_get_element(original,1));
+  json_object_set_int_member(linux_oc_root(extra),"position",2);json_array_add_element(original,extra);
+  check(!linux_oc_receive(form,value,1),"additional stop borrowed a three-node catalog");
+  reply_code(form,discovery,409);gtk_widget_destroy(form->dialog);json_node_free(discovery);json_node_free(offer);
+ }
+ for(int early=0;early<2;early++){
+  const int pos=early?9:14;
+  const char *action=early?"save-intermediate-profile":"save-final-profile", *crossed=early?"save-final-profile":"save-intermediate-profile";
+  linux_ordered_candidates_open_captured(&app,FALSE,FALSE);
+  LinuxOrderedCandidates*form=g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates");
+  JsonNode*discovery=fixture("catalog"),*offer=fixture(early?"intermediate-16-catalog":"selected-16-catalog");
   JsonObject*catalog_value=linux_oc_root(offer);
   JsonArray*prefixes=linux_ec_array(linux_oc_root(discovery),"prefixes");
   json_array_add_element(prefixes,json_node_copy(json_array_get_element(linux_ec_array(catalog_value,"prefixes"),0)));
-  reply(form,discovery);check(gtk_combo_box_set_active_id(GTK_COMBO_BOX(form->prefix),"14"),"connected picker lost selected penultimate position");
+  reply(form,discovery);check(gtk_combo_box_set_active_id(GTK_COMBO_BOX(form->prefix),early?"9":"14"),"connected picker lost selected penultimate position");
   gtk_button_clicked(GTK_BUTTON(form->refresh));check(form->position==pos,"connected refresh selected a different prefix");
   json_object_remove_member(catalog_value,"origin");json_object_remove_member(catalog_value,"scope");
   json_object_set_string_member(catalog_value,"selected_execution","local");json_object_set_int_member(catalog_value,"selection_epoch",37);
@@ -1182,12 +1331,12 @@ int main(int argc,char**argv){
   gtk_entry_set_text(GTK_ENTRY(form->name),"Measured paired exit");gtk_button_clicked(GTK_BUTTON(form->save));
   JsonNode*write=parse_json(g_ptr_array_index(bodies,bodies->len-1));JsonObject*posted=linux_oc_root(write);
   check(!strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/prefix-candidates/save-profile")&&!strcmp(linux_ec_string(posted,"name"),"Measured paired exit")&&
-        !strcmp(linux_ec_string(posted,"candidate_id"),"paired")&&json_array_get_length(linux_ec_array(posted,"proposed_path"))==16,"connected Save lost its original name or final path");
+        !strcmp(linux_ec_string(posted,"candidate_id"),"paired")&&json_array_get_length(linux_ec_array(posted,"proposed_path"))==16+(guint)early,"connected Save lost its original name or final path");
   json_object_set_boolean_member(value,"ok",TRUE);json_object_set_boolean_member(value,"active_path_changed",FALSE);
-  json_object_set_string_member(value,"profile_name","Measured paired exit");json_object_set_string_member(value,"proposal_action","save-final-profile");json_object_set_string_member(value,"candidate_id","foreign");
+  json_object_set_string_member(value,"profile_name","Measured paired exit");json_object_set_string_member(value,"proposal_action",action);json_object_set_string_member(value,"candidate_id","foreign");
   json_object_set_member(value,"proposed_path",json_node_copy(linux_ec_member(posted,"proposed_path")));
   check(!linux_oc_receive(form,value,4),"connected Save confirmed a foreign candidate");json_object_set_string_member(value,"candidate_id","paired");
-  json_object_set_string_member(value,"proposal_action","save-intermediate-profile");check(!linux_oc_receive(form,value,4),"connected Save accepted an intermediate action");json_object_set_string_member(value,"proposal_action","save-final-profile");
+  json_object_set_string_member(value,"proposal_action",crossed);check(!linux_oc_receive(form,value,4),"connected Save accepted a different action");json_object_set_string_member(value,"proposal_action",action);
   JsonObject*first=json_array_get_object_element(linux_ec_array(value,"proposed_path"),0);json_object_set_string_member(first,"id","foreign-import");
   check(!linux_oc_receive(form,value,4),"connected Save confirmed a foreign original path");json_object_set_string_member(first,"id","entry");
   reply(form,receipt);check(strstr(gtk_label_get_text(GTK_LABEL(form->status)),"Measured paired exit")&&!form->pending,"connected Save lost the named profile");
@@ -1205,14 +1354,23 @@ int main(int argc,char**argv){
   reply(form,receipt);check(!form->pending&&!gtk_widget_get_sensitive(form->save),"original connected admission tombstone left cleanup pending");
   gtk_widget_destroy(form->dialog);json_node_free(write);json_node_free(receipt);json_node_free(sample);json_node_free(offer);json_node_free(discovery);
  }
- for(int close_case=0;close_case<9;close_case++){
+ for(int scenario=0;scenario<20;scenario++){
+  const int use_cases[]={0,4,5,7,9,10,12};
+  gboolean use=scenario>=13;
+  int close_case=use?use_cases[scenario-13]:scenario;
   GtkWidget*owner=gtk_window_new(GTK_WINDOW_TOPLEVEL);
   const char*original="{\"execution\":\"local\",\"expected_selected_node_id\":\"final\",\"nodes\":[{\"id\":\"entry\",\"mode\":\"wg\"},{\"id\":\"middle\",\"mode\":\"shadowsocks\"},{\"id\":\"final\",\"mode\":\"shadowsocks\"}]}";
   char*deep_original=NULL;int response_position=close_case==2?14:close_case==3?2:1,response_count=close_case==2?16:close_case==3?4:3;
   gboolean mapped=close_case>=4;
   const char*scope=mapped?"draft-complete-selected":"saved-prefix-local";
   if(mapped){response_count=close_case==4?4:close_case==5?9:(close_case==6||close_case==8)?16:96;response_position=response_count-2;}
-  g_autofree char*selected_draft=g_strdup_printf("selected-%d-draft",response_count),*selected_catalog=g_strdup_printf("selected-%d-catalog",response_count);
+  gboolean insert=close_case>=9;
+  if(insert){
+   const int counts[]={4,16,9,95},positions[]={1,9,6,92};
+   response_count=counts[close_case-9];response_position=positions[close_case-9];
+  }
+  const char *fixture_prefix=insert?"intermediate":"selected", *action=insert?"save-intermediate-profile":"save-final-profile";
+  g_autofree char*selected_draft=g_strdup_printf("%s-%d-draft",fixture_prefix,response_count),*selected_catalog=g_strdup_printf("%s-%d-catalog",fixture_prefix,response_count);
   if(close_case>=2){JsonNode*input=fixture(mapped?selected_draft:close_case==2?"deep-response-draft":"packet-response-draft");deep_original=encode(input);json_node_free(input);original=deep_original;}
   linux_ordered_candidates_open_draft(&app,GTK_WINDOW(owner),original,response_position);
   LinuxOrderedCandidates*form=g_object_get_data(G_OBJECT(app.window),"linux-ordered-candidates");
@@ -1220,6 +1378,13 @@ int main(int argc,char**argv){
   if(mapped){
    JsonObject*m=linux_oc_root(offer);JsonArray*rows=linux_ec_array(m,"response_source_nodes");JsonObject*first=json_array_get_object_element(rows,1);
    json_object_set_string_member(first,"kind","router-vpn");check(!linux_oc_receive(form,m,1),"foreign first remote acquired private response");json_object_set_string_member(first,"kind","external");
+   if(insert){
+    JsonObject*choice=json_array_get_object_element(linux_ec_array(m,"candidates"),0);
+    JsonObject*added=json_array_get_object_element(linux_ec_array(choice,"proposed_path"),response_position+1);
+    json_object_set_string_member(choice,"id","final");json_object_set_string_member(added,"id","final");check(!linux_oc_receive(form,m,1),"retained original final offered as an intermediate candidate");json_object_set_string_member(choice,"id","paired");json_object_set_string_member(added,"id","paired");
+    JsonObject*private_row=json_array_get_object_element(rows,2);json_object_set_string_member(private_row,"kind","router-vpn");
+    check(!linux_oc_receive(form,m,1),"earlier response accepted a paired interior");json_object_set_string_member(private_row,"kind","external");
+   }
    if(json_array_get_length(rows)>4){
     JsonObject*second=json_array_get_object_element(rows,2),*last=json_array_get_object_element(rows,response_position);
     g_autofree char*a=g_strdup(linux_ec_string(second,"kind")),*b=g_strdup(linux_ec_string(last,"kind"));
@@ -1228,8 +1393,19 @@ int main(int argc,char**argv){
     json_object_set_string_member(second,"kind",a);json_object_set_string_member(last,"kind",b);
    }
   }
+  if(use){
+   JsonObject*choice=json_array_get_object_element(linux_ec_array(linux_oc_root(offer),"candidates"),0);
+   JsonNode *draft=parse_json(original);JsonArray*nodes=linux_ec_array(linux_oc_root(draft),"nodes"),*path=json_array_new();
+   for(guint i=0;i<json_array_get_length(nodes);i++){
+    json_array_add_element(path,json_node_copy(json_array_get_element(nodes,i)));
+    if(i==(guint)response_position)json_array_add_element(path,json_node_copy(json_array_get_element(linux_ec_array(choice,"proposed_path"),i+1)));
+   }
+   json_object_set_array_member(choice,"draft_path",path);json_object_set_string_member(choice,"draft_action","insert-measured-hop");
+   if(close_case==10){json_object_remove_member(choice,"proposed_path");json_object_remove_member(choice,"proposal_action");}
+   json_node_free(draft);
+  }
   reply(form,offer);
-  check(form->phase==2&&form->pending&&gtk_widget_get_visible(form->name)&&!strcmp(gtk_button_get_label(GTK_BUTTON(form->save)),"Save profile with this final"),"response draft lost named future-profile action");
+  check(form->phase==2&&form->pending&&gtk_widget_get_visible(form->name)&&((use&&close_case==10)||!strcmp(gtk_button_get_label(GTK_BUTTON(form->save)),insert?"Save profile with this hop":"Save profile with this final")),"response draft lost named future-profile action");
   JsonNode*receipt=parse_json("{}");JsonObject*value=linux_oc_root(receipt);
   json_object_set_int_member(value,"schema",1);json_object_set_string_member(value,"origin","editor-draft");json_object_set_string_member(value,"scope",scope);json_object_set_string_member(value,"proof_scope","selected-prefix");
   if(mapped){json_object_set_member(value,"response_source_nodes",json_node_copy(linux_ec_member(linux_oc_root(offer),"response_source_nodes")));
@@ -1252,15 +1428,49 @@ int main(int argc,char**argv){
   if(mapped){json_object_set_string_member(value,"selected_execution","server");check(!linux_oc_receive(form,value,2),"Server winner acquired selected private review");json_object_set_string_member(value,"selected_execution","local");
     JsonObject*changed=json_array_get_object_element(linux_ec_array(value,"response_source_nodes"),1);json_object_set_string_member(changed,"id","foreign-import");check(!linux_oc_receive(form,value,2),"crossed selected source acquired review");json_object_set_string_member(changed,"id","source-1");}
   reply(form,receipt);choose(form);linux_oc_controls(form);
-  check(gtk_widget_get_sensitive(form->save)&&form->pending&&strstr(gtk_label_get_text(GTK_LABEL(form->note)),"authenticated"),"response review did not show fresh private-agent timing after native DOWN");
+  check(gtk_widget_get_sensitive(form->save)==!(use&&close_case==10)&&form->pending&&strstr(gtk_label_get_text(GTK_LABEL(form->note)),"authenticated"),"response review did not show fresh private-agent timing after native DOWN");
+  if(use){
+   gboolean eligible=close_case!=5 && close_case!=7;
+   check(gtk_widget_get_sensitive(form->use_draft)==eligible && gtk_widget_get_visible(form->use_draft)==eligible,"Use escaped the original draft capacity or private roles");
+   if(eligible){
+    guint before=selected_deliveries;
+    const char *preview=gtk_label_get_text(GTK_LABEL(form->preview));
+    check(strstr(preview,"Use in draft") && strstr(preview,"final") && (strstr(preview,"Named profile")!=NULL)==!insert,"draft preview confused insertion with named final replacement");
+    gtk_button_clicked(GTK_BUTTON(form->use_draft));
+    JsonNode *body=parse_json(g_ptr_array_index(bodies,bodies->len-1));JsonObject *post=linux_oc_root(body);
+    JsonObject *choice=json_array_get_object_element(linux_ec_array(linux_oc_root(offer),"candidates"),0);
+    check(form->phase==6&&!strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/draft-candidates/choose")&&
+          !linux_ec_member(post,"name")&&json_node_equal(linux_ec_member(post,"proposed_path"),linux_ec_member(choice,"draft_path")),"Use submitted a named Save or lost original final");
+    json_object_set_string_member(value,"draft_action","save-final-profile");json_object_set_string_member(value,"candidate_id","paired");
+    json_object_set_boolean_member(value,"chosen",TRUE);json_object_set_boolean_member(value,"accepted",FALSE);json_object_set_boolean_member(value,"reviewing",FALSE);
+    json_object_set_boolean_member(value,"drained",TRUE);json_object_set_boolean_member(value,"cancelled",FALSE);
+    json_object_set_string_member(value,"saved_profile_id","");json_object_set_boolean_member(value,"running",FALSE);json_object_set_boolean_member(value,"cleanup_pending",FALSE);
+    json_object_set_member(value,"proposed_path",json_node_copy(linux_ec_member(choice,"draft_path")));
+    check(!linux_oc_receive(form,value,6),"foreign action applied an unsaved insertion");json_object_set_string_member(value,"draft_action","insert-measured-hop");
+    JsonObject *final=json_array_get_object_element(linux_ec_array(value,"proposed_path"),response_count);
+    json_object_set_string_member(final,"id","other-final");check(!linux_oc_receive(form,value,6),"Use lost the original final");json_object_set_string_member(final,"id","final");
+    json_object_set_boolean_member(value,"native_down",FALSE);check(!linux_oc_receive(form,value,6),"Use skipped native DOWN");json_object_set_boolean_member(value,"native_down",TRUE);
+    json_object_set_string_member(value,"saved_profile_id","unexpected");check(!linux_oc_receive(form,value,6),"Use confirmed a persistent save");json_object_set_string_member(value,"saved_profile_id","");
+    if(mapped){json_object_set_int_member(value,"selection_epoch",38);check(!linux_oc_receive(form,value,6),"Use borrowed another epoch");json_object_set_int_member(value,"selection_epoch",37);}
+    form->close_wanted=TRUE;check(!linux_oc_receive(form,value,6),"late Choose after Close changed the draft");form->close_wanted=FALSE;
+    form->cancel_wanted=TRUE;check(!linux_oc_receive(form,value,6),"late Choose after Cancel changed the draft");form->cancel_wanted=FALSE;
+    reply(form,receipt);check(selected_deliveries==before+1&&!async_state.auxiliary_jobs,"Use failed to deliver one unsaved choice");json_node_free(body);
+    gtk_widget_destroy(owner);json_node_free(receipt);json_node_free(sample);json_node_free(offer);g_free(deep_original);continue;
+   }
+  }
   guint old_requests=paths->len,old_adoptions=selected_deliveries;gtk_button_clicked(GTK_BUTTON(form->save));check(paths->len==old_requests,"named final save invented a profile name");
   gtk_entry_set_text(GTK_ENTRY(form->name),"Measured future final");gtk_button_clicked(GTK_BUTTON(form->save));
   JsonNode*write=parse_json(g_ptr_array_index(bodies,bodies->len-1));JsonObject*posted=linux_oc_root(write);
-  check(!strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/draft-candidates/save-profile")&&!strcmp(linux_ec_string(posted,"name"),"Measured future final")&&!strcmp(linux_ec_string(posted,"scope"),scope)&&!strcmp(linux_ec_string(posted,"candidate_id"),"paired")&&json_array_get_length(linux_ec_array(posted,"proposed_path"))==(guint)response_count,"named final Save lost its exact name, path or original scope");json_node_free(write);
+  check(!strcmp(g_ptr_array_index(paths,paths->len-1),"/api/multihop/draft-candidates/save-profile")&&!strcmp(linux_ec_string(posted,"name"),"Measured future final")&&!strcmp(linux_ec_string(posted,"scope"),scope)&&!strcmp(linux_ec_string(posted,"candidate_id"),"paired")&&json_array_get_length(linux_ec_array(posted,"proposed_path"))==(guint)response_count+(guint)insert,"named final Save lost its exact name, path or original scope");json_node_free(write);
   json_object_set_boolean_member(value,"ok",TRUE);json_object_set_boolean_member(value,"saved",TRUE);json_object_set_boolean_member(value,"accepted",FALSE);json_object_set_boolean_member(value,"reviewing",FALSE);json_object_set_boolean_member(value,"cleanup_pending",TRUE);
-  json_object_set_string_member(value,"saved_profile_id","future-final");json_object_set_string_member(value,"profile_name","Measured future final");json_object_set_string_member(value,"candidate_id","paired");json_object_set_string_member(value,"proposal_action","save-final-profile");
+  json_object_set_string_member(value,"saved_profile_id","future-final");json_object_set_string_member(value,"profile_name","Measured future final");json_object_set_string_member(value,"candidate_id","paired");json_object_set_string_member(value,"proposal_action",action);
   JsonObject*choice=json_array_get_object_element(linux_ec_array(linux_oc_root(offer),"candidates"),0);json_object_set_member(value,"proposed_path",json_node_copy(linux_ec_member(choice,"proposed_path")));
   JsonObject*first=json_array_get_object_element(linux_ec_array(value,"proposed_path"),0);json_object_set_string_member(first,"id","foreign");check(!linux_oc_receive(form,value,4)&&form->pending&&!form->saved_profile[0],"named saved response changed its upstream path");json_object_set_string_member(first,"id","entry");
+  if(insert){
+   JsonObject*final=json_array_get_object_element(linux_ec_array(value,"proposed_path"),response_count);
+   json_object_set_string_member(final,"id","crossed");check(!linux_oc_receive(form,value,4),"intermediate Save confirmed a different original final");json_object_set_string_member(final,"id","final");
+   json_object_set_string_member(value,"proposal_action","save-final-profile");check(!linux_oc_receive(form,value,4),"intermediate Save confirmed a final replacement");json_object_set_string_member(value,"proposal_action",action);
+  }
   if(close_case)check(linux_oc_delete(form->dialog,NULL,form)&&form->close_wanted,"Close did not retain pending named save");
   reply(form,receipt);check(form->pending&&!strcmp(form->saved_profile,"future-final")&&!strcmp(form->draft,original)&&selected_deliveries==old_adoptions&&!gtk_widget_get_sensitive(form->save),"named save changed Home, inserted a hop or forgot the committed write before cleanup");
   form->retry=0;linux_oc_tick(form);json_object_set_boolean_member(value,"drained",TRUE);json_object_set_boolean_member(value,"cleanup_pending",FALSE);reply(form,receipt);

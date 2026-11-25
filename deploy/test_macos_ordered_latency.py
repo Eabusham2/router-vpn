@@ -604,7 +604,7 @@ for execution in ["local","server","auto"] {
         let run:[String:Any]=["scope":scope,"request_id":request,"view_token":view,"prefix_position":0,"candidate_ids":["different"],"samples":50]
         try draftRequest("",run,180);try draftRequest("?request_id="+request,nil)
         try draftRequest("/cancel",["scope":scope,"request_id":request,"view_token":view])
-        let choice:[String:Any]=["scope":scope,"request_id":request,"view_token":view,"candidate_id":"different","proposed_path":proposed]
+        let choice:[String:Any]=["scope":scope,"request_id":request,"view_token":view,"candidate_id":proposed[1]["id"]!,"proposed_path":proposed]
         try draftRequest("/choose",choice)
         var altered=catalog;altered["expected_selected_node_id"]="other"
         rejected("candidate source capture changed its final node"){try draftRequest(path,altered)}
@@ -612,7 +612,7 @@ for execution in ["local","server","auto"] {
         rejected("candidate source tokens changed"){try draftRequest(path,altered)}
         rejected("selected draft scope ignored"){try draftRequest(path.replacingOccurrences(of:scope,with:"saved-complete-local"),catalog)}
         let streamPath=path.replacingOccurrences(of:"position=0",with:"position=1")
-        if execution=="local" {try draftRequest(streamPath,catalog);checks+=1}
+        if execution=="local" || execution=="auto" && count < 96 {try draftRequest(streamPath,catalog);checks+=1}
         else {rejected("selected execution borrowed a Local response prefix"){try draftRequest(streamPath,catalog)}}
         rejected("draft choose became a profile save"){try draftRequest("/save-profile",choice)}
         var wrong=run;wrong.removeValue(forKey:"scope")

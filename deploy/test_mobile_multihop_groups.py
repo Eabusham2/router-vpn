@@ -4,9 +4,11 @@ from pathlib import Path
 import argparse
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -25,6 +27,26 @@ PREFIX_METHODS = ('2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm',
 DESKTOP_EXECUTION_PHASE = 'desktop execution and ownership'
 ORIGINAL_GRAPHS_PHASE = 'ordered original graphs and ownership'
 DESKTOP_EXECUTION_BATCH_ROOTS = 16
+CONTROLLER_PHASE = 'controller, proof and remaining ownership'
+CONTROLLER_BATCH_ROOTS = 8
+APPLE_FIXTURE_ROOT = 'TestEmitAppleOpenVPNExecutionFixtures'
+APPLE_FIXTURE_ENV = 'ROUTER_VPN_APPLE_OPENVPN_FIXTURES'
+APPLE_FIXTURE_COUNT_ENV = 'ROUTER_VPN_APPLE_OPENVPN_PACKET_COUNT'
+APPLE_FIXTURE_KEYS = frozenset(f'{count}/{mode}/{network}/{layer}'
+    for count in range(3, 9) for mode in ('wg', 'awg2-fast', 'awg2-strong', 'mixed')
+    for network in ('tcp', 'udp') for layer in ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening'))
+SELECTED_DEPTH_ROOT = 'TestSelectedPairedStreamDepth'
+SELECTED_DEPTH_PHASE = 'selected private stream complete source depths'
+SELECTED_DEPTHS = tuple(range(4, 97))
+
+
+def selected_depth_inventory():
+    # These are the unchanged original source cases, including every capacity
+    # refusal. They are not evidence of a live path at each source depth.
+    return tuple((depths, '^' + SELECTED_DEPTH_ROOT + '$/^(' + '|'.join(map(str, depths)) + ')$',
+                  frozenset((SELECTED_DEPTH_ROOT, *(SELECTED_DEPTH_ROOT + '/' + str(n) for n in depths))))
+                 for start in range(0, len(SELECTED_DEPTHS), 8)
+                 for depths in (SELECTED_DEPTHS[start:start+8],))
 
 
 def prefix_inventory():
@@ -360,6 +382,7 @@ PHASES = (
     # The typed mobile restore owns a fresh native/MTU join; keep its complete
     # matrix separate from the existing generic fallback at the same budget.
     ('mobile CONNECT execution restore', r'^TestMobileNodeChainCONNECTExecutionRestore'),
+    (SELECTED_DEPTH_PHASE, '^' + SELECTED_DEPTH_ROOT + '$'),
     (PREFIX_PHASE, '^' + PREFIX_ROOT + '$'),
 )
 # Explicit complete ownership keeps CI groups bounded without silently losing a
@@ -414,8 +437,9 @@ CI_GROUPS = {
         *(label for label, _ in CANDIDATE_TYPED_DESKTOP_PHASES),
         'desktop execution and ownership', 'imported transports and ownership',
         'mobile CONNECT execution restore',
-        'controller, proof and remaining ownership',
     ),
+    'runtime_depth': (SELECTED_DEPTH_PHASE,),
+    'runtime_remaining': (CONTROLLER_PHASE,),
 }
 
 
@@ -457,7 +481,7 @@ REQUIRED = frozenset((*MULTIPLE_IMPORTED_CANDIDATE_ROOTS, *MULTIPLE_IMPORTED_DES
     'TestDesktopNodeChainPolicyLaunchOwnerReceiptAndClosedConstructor',
     'TestDesktopNodeChainReadyRequiresCompletePhysicalAndProofIdentity',
     'TestMobileNodeChainCONNECTExecutionRestoreKeepsOriginalOwnerMTUAndChoice',
-)) | EXECUTION_FIFTY_REQUIRED | set(ENTRY_CANDIDATE_ROOTS) | set(LOCAL_EXECUTION_CANDIDATE_ROOTS) | {PREFIX_ROOT}
+)) | EXECUTION_FIFTY_REQUIRED | set(ENTRY_CANDIDATE_ROOTS) | set(LOCAL_EXECUTION_CANDIDATE_ROOTS) | {PREFIX_ROOT, SELECTED_DEPTH_ROOT, APPLE_FIXTURE_ROOT}
 
 
 def inventory(output):
@@ -491,7 +515,7 @@ def partition(names, predicates=PHASES):
     groups = [(label, [name for name in names if re.match(pattern, name)])
               for label, pattern in predicates]
     assigned = {name for _, selected in groups for name in selected}
-    groups.append(('controller, proof and remaining ownership',
+    groups.append((CONTROLLER_PHASE,
                    [name for name in names if name not in assigned]))
     validate_partition(names, groups)
     return groups
@@ -563,35 +587,114 @@ def imported_root_verdict(raw, root, code):
 
 
 def complete_phase_batches(label, selected):
-    if label not in (DESKTOP_EXECUTION_PHASE, ORIGINAL_GRAPHS_PHASE):
+    if label not in (DESKTOP_EXECUTION_PHASE, ORIGINAL_GRAPHS_PHASE, CONTROLLER_PHASE):
         raise ValueError('Uncaptured complete-root phase')
-    pattern = dict(PHASES)[label]
+    def belongs(root):
+        if label == CONTROLLER_PHASE:
+            return not any(re.match(pattern, root) for _, pattern in PHASES)
+        return re.match(dict(PHASES)[label], root)
     if (not selected or len(selected) != len(set(selected)) or
-            any(not NAME.fullmatch(root) or not re.match(pattern, root) for root in selected)):
+            any(not NAME.fullmatch(root) or not belongs(root) for root in selected)):
         raise ValueError(label+' lost its complete disjoint discovered inventory')
-    return tuple(tuple(selected[start:start+DESKTOP_EXECUTION_BATCH_ROOTS])
-                 for start in range(0, len(selected), DESKTOP_EXECUTION_BATCH_ROOTS))
+    size = CONTROLLER_BATCH_ROOTS if label == CONTROLLER_PHASE else DESKTOP_EXECUTION_BATCH_ROOTS
+    batches, pending = [], []
+    for root in selected:
+        if root == APPLE_FIXTURE_ROOT:
+            if pending:
+                batches.append(tuple(pending))
+                pending = []
+            batches.append((root,))
+        else:
+            pending.append(root)
+            if len(pending) == size:
+                batches.append(tuple(pending))
+                pending = []
+    if pending:
+        batches.append(tuple(pending))
+    return tuple(batches)
 
 
 def desktop_execution_batches(selected):
     return complete_phase_batches(DESKTOP_EXECUTION_PHASE, selected)
 
 
+def apple_fixture_inventory():
+    return tuple((count, frozenset(key for key in APPLE_FIXTURE_KEYS if key.startswith(str(count+2)+'/')))
+                 for count in range(1, 7))
+
+
+def run_apple_fixture_root(label, run):
+    # The original 144-case generator itself exceeded 180s under race detection.
+    # Execute its unchanged body for each packet count under both original
+    # bounds. Every mode/network/layer combination must appear exactly once.
+    def original_object(pairs):
+        output = dict(pairs)
+        if len(output) != len(pairs):
+            raise ValueError('Original Apple fixture generator duplicated an output key')
+        return output
+    completed = set()
+    for count, expected in apple_fixture_inventory():
+        print(f'Shared multihop: original Apple OpenVPN packet count {count}; 24 required source fixtures', flush=True)
+        with tempfile.TemporaryDirectory(prefix='routervpn-shared-apple-') as directory:
+            destination = Path(directory)/'openvpn.json'
+            result = run(prefix_command(exact_selector([APPLE_FIXTURE_ROOT])),
+                         cwd=ROOT, capture_output=True, timeout=240,
+                         env={**os.environ, APPLE_FIXTURE_ENV: str(destination),
+                              APPLE_FIXTURE_COUNT_ENV: str(count)})
+            raw = result.stdout + result.stderr
+            print(raw.decode(errors='replace'), end='', flush=True)
+            complete_roots_verdict(raw, [APPLE_FIXTURE_ROOT], result.returncode, label)
+            if not destination.is_file() or destination.is_symlink():
+                raise ValueError('Original Apple fixture generator lost its private output')
+            output = json.loads(destination.read_text(), object_pairs_hook=original_object)
+            if not isinstance(output, dict) or set(output) != expected or completed.intersection(output):
+                raise ValueError('Original Apple fixture generator lost its complete disjoint source inventory')
+            completed.update(output)
+    if completed != APPLE_FIXTURE_KEYS:
+        raise ValueError('Original Apple fixture generator omitted or duplicated a source case')
+
+
 def run_phase(label, selected, run=None):
     if run is None:
         run = subprocess.run
-    if label in (DESKTOP_EXECUTION_PHASE, ORIGINAL_GRAPHS_PHASE):
-        # The combined desktop and 129-root original-graph phases each exceeded
-        # 180s. Whole-root batches keep that bound and every descendant;
+    if label == SELECTED_DEPTH_PHASE:
+        if selected != [SELECTED_DEPTH_ROOT]:
+            raise ValueError('Selected depth phase lost its original complete root')
+        # The old 87-root fallback exhausted its 180s process budget while
+        # this source sweep was still at depth 45. Keep all 4..96 cases and
+        # both original bounds; each batch must prove its exact full leaves.
+        clock = load_clock_verdict()
+        completed = []
+        for depths, selection, expected in selected_depth_inventory():
+            print(f'Shared multihop: selected source depths {depths[0]}..{depths[-1]}', flush=True)
+            result = run(prefix_command(selection), cwd=ROOT, capture_output=True, timeout=240)
+            raw = result.stdout + result.stderr
+            print(raw.decode(errors='replace'), end='', flush=True)
+            case = clock.Case(label, selection, expected, 180, 240)
+            receipt = clock.verdict(raw, case, result.returncode)
+            if not receipt['accepted']:
+                raise ValueError('Selected source depths refused: ' + json.dumps(receipt, sort_keys=True))
+            completed.extend(depths)
+        if completed != list(SELECTED_DEPTHS):
+            raise ValueError('Selected source depth inventory omitted, duplicated or reordered a case')
+        return
+    if label in (DESKTOP_EXECUTION_PHASE, ORIGINAL_GRAPHS_PHASE, CONTROLLER_PHASE):
+        # The combined desktop, original-graph and remaining-controller phases
+        # each exceeded 180s. Whole-root batches keep that bound and every descendant;
         # the final receipt must cover the original discovery exactly once.
         completed = []
         batches = desktop_execution_batches(selected) if label == DESKTOP_EXECUTION_PHASE else complete_phase_batches(label, selected)
         for index, roots in enumerate(batches, 1):
             print('Shared multihop: '+label+' batch '+str(index)+'; '+str(len(roots))+' complete roots', flush=True)
-            result = run(prefix_command(exact_selector(roots)), cwd=ROOT, capture_output=True, timeout=240)
-            raw = result.stdout + result.stderr
-            print(raw.decode(errors='replace'), end='', flush=True)
-            complete_roots_verdict(raw, roots, result.returncode, label)
+            # This source generator skips without a private destination. Its
+            # six bounded runs must prove the full original 144-case inventory.
+            if roots == (APPLE_FIXTURE_ROOT,):
+                run_apple_fixture_root(label, run)
+            else:
+                result = run(prefix_command(exact_selector(roots)), cwd=ROOT, capture_output=True, timeout=240)
+                raw = result.stdout + result.stderr
+                print(raw.decode(errors='replace'), end='', flush=True)
+                complete_roots_verdict(raw, roots, result.returncode, label)
             completed.extend(roots)
         if completed != selected:
             raise ValueError(label+' omitted, duplicated or reordered a discovered root')
@@ -645,6 +748,191 @@ class PartitionTests(unittest.TestCase):
             'TestDesktopNodeChainExecutionFuture',
             'TestFutureController', 'Example', 'FuzzFutureSeed', 'TestÜnicode',
         })
+
+    def test_selected_depth_inventory_preserves_original_source_and_disjoint_assignment(self):
+        self.assertEqual(SELECTED_DEPTHS, tuple(range(4, 97)))
+        self.assertRegex((ROOT/'internal/hopmeasure/ordered.go').read_text(),
+                         r'const PhysicalTraversalDepth = 96\b')
+        self.assertIn('const NodeChainExtendedLocalMaximumNodes = hopmeasure.PhysicalTraversalDepth',
+                      (ROOT/'internal/mobilemultihop/node_chain.go').read_text())
+        self.assertIn('for n := 4; n <= NodeChainExtendedLocalMaximumNodes; n++ {',
+                      (ROOT/'internal/mobilemultihop/node_chain_selected_private_stream_test.go').read_text())
+        groups = partition(self.names)
+        self.assertEqual(dict(groups)[SELECTED_DEPTH_PHASE], [SELECTED_DEPTH_ROOT])
+        self.assertNotIn(SELECTED_DEPTH_ROOT, dict(groups)['controller, proof and remaining ownership'])
+        self.assertEqual(select_ci_group(groups, 'runtime_depth'), [(SELECTED_DEPTH_PHASE, [SELECTED_DEPTH_ROOT])])
+        self.assertNotIn(SELECTED_DEPTH_PHASE, dict(select_ci_group(groups, 'runtime')))
+        self.assertEqual([n for depths, _, _ in selected_depth_inventory() for n in depths], list(SELECTED_DEPTHS))
+        with self.assertRaises(ValueError):
+            inventory('\n'.join(name for name in self.names if name != SELECTED_DEPTH_ROOT))
+        with self.assertRaises(ValueError):
+            partition(self.names, PHASES+(('duplicated depth', '^'+SELECTED_DEPTH_ROOT+'$'),))
+
+    def test_selected_depth_dispatch_requires_every_original_verdict_and_deadline(self):
+        phases = selected_depth_inventory()
+        package = 'router-vpn/internal/mobilemultihop'
+        def rows(expected):
+            output = [dict(Action='start', Package=package)]
+            for name in sorted(expected):
+                output.extend(dict(Action=action, Package=package, Test=name) for action in ('run', 'pass'))
+            return output + [dict(Action='pass', Package=package)]
+        encode = lambda output: ('\n'.join(json.dumps(row) for row in output)+'\n').encode()
+        calls = []
+        def execute(args, **kwargs):
+            depths, selection, expected = phases[len(calls)]
+            calls.append(args)
+            self.assertEqual(args, prefix_command(selection))
+            self.assertIn('-race', args)
+            self.assertIn('-timeout=180s', args)
+            self.assertEqual(kwargs, dict(cwd=ROOT, capture_output=True, timeout=240))
+            self.assertTrue(1 <= len(depths) <= 8)
+            return SimpleNamespace(returncode=0, stdout=encode(rows(expected)), stderr=b'')
+        with redirect_stdout(StringIO()):
+            run_phase(SELECTED_DEPTH_PHASE, [SELECTED_DEPTH_ROOT], execute)
+        self.assertEqual(len(calls), len(phases))
+        clock = load_clock_verdict()
+        for depths, selection, expected in phases:
+            case = clock.Case(SELECTED_DEPTH_PHASE, selection, expected, 180, 240)
+            original = rows(expected)
+            for name in expected:
+                for action in ('run', 'pass'):
+                    omitted = [row for row in original if not (row.get('Test') == name and row['Action'] == action)]
+                    duplicated = original[:-1] + [next(row for row in original if row.get('Test') == name and row['Action'] == action)] + original[-1:]
+                    for altered in (omitted, duplicated):
+                        self.assertFalse(clock.verdict(encode(altered), case, 0)['accepted'])
+        for fault in ('fail', 'skip', 'foreign', 'race', 'exit', 'missing-terminal'):
+            output = rows(phases[0][2]); code = 0
+            if fault in ('fail', 'skip'): output[2]['Action'] = fault
+            elif fault == 'foreign': output[1]['Test'] = SELECTED_DEPTH_ROOT+'/97'
+            elif fault == 'race': output.insert(1, dict(Action='output', Output='WARNING: DATA RACE'))
+            elif fault == 'exit': code = 1
+            else: output.pop()
+            calls = []
+            def fail(args, **kwargs):
+                calls.append(args)
+                return SimpleNamespace(returncode=code, stdout=encode(output), stderr=b'')
+            with self.subTest(fault=fault), redirect_stdout(StringIO()), self.assertRaises(ValueError):
+                run_phase(SELECTED_DEPTH_PHASE, [SELECTED_DEPTH_ROOT], fail)
+            self.assertEqual(len(calls), 1)
+        for selected in ([], [SELECTED_DEPTH_ROOT]*2, ['TestForeign']):
+            with self.assertRaises(ValueError):
+                run_phase(SELECTED_DEPTH_PHASE, selected, execute)
+
+    def test_remaining_roots_keep_complete_batches_and_their_own_required_worker(self):
+        groups = partition(self.names)
+        selected = dict(groups)[CONTROLLER_PHASE]
+        self.assertEqual(select_ci_group(groups, 'runtime_remaining'), [(CONTROLLER_PHASE, selected)])
+        self.assertNotIn(CONTROLLER_PHASE, dict(select_ci_group(groups, 'runtime')))
+        self.assertEqual([root for batch in complete_phase_batches(CONTROLLER_PHASE, selected) for root in batch], selected)
+        for count in (1, 8, 9, 16, 88):
+            roots = ['TestFutureController'+str(n) for n in range(count)]
+            calls = []
+            def execute(args, **kwargs):
+                chosen = [root for root in roots if re.fullmatch(args[-1], root)]
+                self.assertTrue(1 <= len(chosen) <= 8)
+                self.assertEqual(args, prefix_command(exact_selector(chosen)))
+                self.assertIn('-race', args)
+                self.assertIn('-timeout=180s', args)
+                self.assertEqual(kwargs, dict(cwd=ROOT, capture_output=True, timeout=240))
+                calls.extend(chosen)
+                package = 'router-vpn/internal/mobilemultihop'
+                rows = [dict(Action='start', Package=package)]
+                for root in chosen:
+                    rows.extend(dict(Action=action, Package=package, Test=name) for name, action in (
+                        (root, 'run'), (root+'/original', 'run'), (root+'/original', 'pass'), (root, 'pass')))
+                rows.append(dict(Action='pass', Package=package))
+                return SimpleNamespace(returncode=0, stdout=('\n'.join(json.dumps(row) for row in rows)+'\n').encode(), stderr=b'')
+            with self.subTest(count=count), redirect_stdout(StringIO()):
+                run_phase(CONTROLLER_PHASE, roots, execute)
+            self.assertEqual(calls, roots)
+        for invalid in ([], ['TestFutureController']*2, [SELECTED_DEPTH_ROOT],
+                        ['TestDesktopFuture'], ['TestNodeChainFuture'], ['TestFutureController/partial']):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                run_phase(CONTROLLER_PHASE, invalid, lambda *args, **kwargs: self.fail('Unowned roots executed'))
+        for mutation in ('omitted', 'duplicated'):
+            assignment = {key: list(value) for key, value in CI_GROUPS.items()}
+            if mutation == 'omitted': assignment['runtime_remaining'] = []
+            else: assignment['runtime'].append(CONTROLLER_PHASE)
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                select_ci_group(groups, 'runtime_remaining', assignment)
+
+    def test_remaining_roots_refuse_missing_original_child_before_next_batch(self):
+        roots = ['TestFutureController'+str(n) for n in range(9)]
+        package = 'router-vpn/internal/mobilemultihop'
+        rows = [dict(Action='start', Package=package)]
+        for root in roots[:8]:
+            rows.extend(dict(Action=action, Package=package, Test=name) for name, action in (
+                (root, 'run'), (root+'/original', 'run'), (root+'/original', 'pass'), (root, 'pass')))
+        rows.append(dict(Action='pass', Package=package))
+        for missing in (roots[0], roots[0]+'/original'):
+            altered = [row for row in rows if not (row.get('Test') == missing and row['Action'] == 'pass')]
+            calls = []
+            def failed(args, **kwargs):
+                calls.append(args)
+                return SimpleNamespace(returncode=0, stdout=('\n'.join(json.dumps(row) for row in altered)+'\n').encode(), stderr=b'')
+            with self.subTest(missing=missing), redirect_stdout(StringIO()), self.assertRaises(ValueError):
+                run_phase(CONTROLLER_PHASE, roots, failed)
+            self.assertEqual(len(calls), 1)
+
+    def test_original_apple_fixture_root_executes_without_a_skip_or_borrowed_output(self):
+        roots = ['TestFutureControllerFirst', APPLE_FIXTURE_ROOT, 'TestFutureControllerLast']
+        self.assertEqual(complete_phase_batches(CONTROLLER_PHASE, roots), tuple((root,) for root in roots))
+        phases = apple_fixture_inventory()
+        self.assertEqual([count for count, _ in phases], list(range(1, 7)))
+        self.assertEqual(sum(len(expected) for _, expected in phases), 144)
+        self.assertEqual(set().union(*(expected for _, expected in phases)), APPLE_FIXTURE_KEYS)
+        for count, expected in phases:
+            self.assertEqual(len(expected), 24)
+            self.assertTrue(all(key.startswith(str(count+2)+'/') for key in expected))
+        package = 'router-vpn/internal/mobilemultihop'
+        attempts = [('', 0)] + [(fault, count) for count in (1, 6) for fault in
+            ('skip', 'missing-output', 'incomplete-output', 'foreign-output', 'duplicate-output', 'symlink-output', 'array-output')]
+        for fault, fault_count in attempts:
+            calls, destinations = [], []
+            def execute(args, **kwargs):
+                chosen = [root for root in roots if re.fullmatch(args[-1], root)]
+                self.assertEqual(len(chosen), 1)
+                root = chosen[0]; calls.append(root)
+                self.assertEqual(args, prefix_command(exact_selector([root])))
+                self.assertEqual(kwargs['timeout'], 240)
+                verdict = 'pass'
+                if root == APPLE_FIXTURE_ROOT:
+                    count = len(destinations)+1
+                    self.assertEqual(kwargs['env'][APPLE_FIXTURE_COUNT_ENV], str(count))
+                    destination = Path(kwargs['env'][APPLE_FIXTURE_ENV])
+                    self.assertNotEqual(str(destination), '/unowned/original-fixtures.json')
+                    self.assertEqual(destination.parent.stat().st_mode & 0o777, 0o700)
+                    self.assertNotIn(destination, destinations)
+                    destinations.append(destination)
+                    active_fault = fault if count == fault_count else ''
+                    if active_fault == 'skip': verdict = 'skip'
+                    if active_fault != 'missing-output':
+                        keys = set(dict(phases)[count])
+                        if active_fault == 'incomplete-output': keys.pop()
+                        if active_fault == 'foreign-output': keys.add('9/wg/tcp/off')
+                        encoded = json.dumps(dict.fromkeys(keys, {}))
+                        if active_fault == 'duplicate-output': encoded = encoded[:-1]+', '+json.dumps(sorted(keys)[0])+': {}}'
+                        if active_fault == 'array-output': encoded = json.dumps(sorted(keys))
+                        if active_fault == 'symlink-output':
+                            target = destination.parent/'borrowed.json'
+                            target.write_text(encoded)
+                            destination.symlink_to(target)
+                        else:
+                            destination.write_text(encoded)
+                else:
+                    self.assertNotIn('env', kwargs)
+                rows = [dict(Action='start', Package=package), dict(Action='run', Package=package, Test=root),
+                        dict(Action=verdict, Package=package, Test=root), dict(Action='pass', Package=package)]
+                return SimpleNamespace(returncode=0, stdout=('\n'.join(json.dumps(row) for row in rows)+'\n').encode(), stderr=b'')
+            with self.subTest(fault=fault, count=fault_count), redirect_stdout(StringIO()), patch.dict(os.environ, {
+                    APPLE_FIXTURE_ENV:'/unowned/original-fixtures.json', APPLE_FIXTURE_COUNT_ENV:'9'}):
+                if fault:
+                    with self.assertRaises(ValueError): run_phase(CONTROLLER_PHASE, roots, execute)
+                    self.assertEqual(calls, [roots[0]] + [APPLE_FIXTURE_ROOT]*fault_count)
+                else:
+                    run_phase(CONTROLLER_PHASE, roots, execute)
+                    self.assertEqual(calls, [roots[0]] + [APPLE_FIXTURE_ROOT]*6 + [roots[-1]])
+            self.assertTrue(destinations and all(not path.parent.exists() for path in destinations))
 
     def test_new_connect_roots_are_disjoint_without_repartitioning_old_roots(self):
         groups = dict(partition(self.names))

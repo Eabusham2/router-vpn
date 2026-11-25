@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -178,24 +179,33 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 	}
 	var measured *selectedResponseNativeCase
 	var candidateRoute []multipleImportedCandidateSetup
+	var peerRoutes multipleImportedPeerRoutes
 	if response {
 		if count == 3 && entryMode == "wg" {
 			layout = multipleImportedLayout{"selected-private-response", 3, []int{1}}
 		}
 		measured = &selectedResponseNativeCase{fault: strings.TrimPrefix(measure, "private-response/"), pairedPosition: privatePosition}
-		var final *routedPrivateResponseFinal
-		if measured.fault == "original" {
-			measured.createReplacementPeer(t, count)
-			final = &measured.final
-		}
-		input, route, provider := newRoutedPrivateResponseFinal(t, measured.fault, measured.accept, final)
-		measured.input, measured.provider = input, provider
-		candidateRoute = []multipleImportedCandidateSetup{{count - 2, route, false}}
-		if final != nil {
-			// The reloaded final carries its resolver's datagrams through the same
-			// imported predecessor and physical SS2022 peer used for measurement.
-			packetRoute := desktopNodeLayerRoute{Network: "udp", Destination: route.Destination, Physical: route.Physical}
-			candidateRoute = append(candidateRoute, multipleImportedCandidateSetup{count - 2, packetRoute, false})
+		if first > 0 {
+			if privatePosition != 0 || !(count == 3 && first == 1 || count >= 4 && first <= count-3) {
+				t.Fatal("invalid original imported insertion stop")
+			}
+			measured.insertAfter = first
+			peerRoutes = measured.insertionRoutes
+		} else {
+			var final *routedPrivateResponseFinal
+			if measured.fault == "original" {
+				measured.createReplacementPeer(t, count)
+				final = &measured.final
+			}
+			input, route, provider := newRoutedPrivateResponseFinal(t, measured.fault, measured.accept, final)
+			measured.input, measured.provider = input, provider
+			candidateRoute = []multipleImportedCandidateSetup{{count - 2, route, false}}
+			if final != nil {
+				// The reloaded final carries its resolver's datagrams through the same
+				// imported predecessor and physical SS2022 peer used for measurement.
+				packetRoute := desktopNodeLayerRoute{Network: "udp", Destination: route.Destination, Physical: route.Physical}
+				candidateRoute = append(candidateRoute, multipleImportedCandidateSetup{count - 2, packetRoute, false})
+			}
 		}
 	}
 	if layout.count <= 8 && !privateStream && measured == nil {
@@ -214,7 +224,7 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 	if measure == "wrong-key" {
 		fault = "wrong-interior-key"
 	}
-	f := newMultipleImportedHostnameFixture(t, layout, entryMode, "off", fault, func(h tun.Handler) tun.Handler {
+	f := newMultipleImportedFixtureWithRoutes(t, layout, entryMode, "off", fault, func(h tun.Handler) tun.Handler {
 		health = h.(*desktopNodeWGHandler).rules["tcp/"+api.Addr().String()].Target
 		api.Handler = h
 		front.Handler = api
@@ -228,7 +238,7 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 		}
 		front.faster = winner
 		return front
-	}, privatePositions, nil, candidateRoute...)
+	}, privatePositions, nil, peerRoutes, candidateRoute...)
 	if privateStream {
 		if measure == "wrong-public" {
 			f.members[1].wrong.Store(true)
@@ -272,7 +282,9 @@ func RunExtendedOriginalWorker(t *testing.T, count int, entryMode, mode, winner,
 	if privateStream && measured == nil {
 		return
 	}
-	if measured != nil && measured.replacement != nil {
+	if measured != nil && measured.insertAfter > 0 && measured.fault == "original" {
+		measured.reloadIntermediate(t, f, api, front, health, mode, winner, start)
+	} else if measured != nil && measured.replacement != nil {
 		next := measured.replacement
 		next.ctx = f.ctx
 		next.physical = f.physical
@@ -517,6 +529,117 @@ func (c *selectedResponseNativeCase) createReplacementPeer(t *testing.T, count i
 	c.final.health = func() { final.private.Add(1) }
 	c.final.routes = []desktopNodeLayerRoute{{"tcp", "1.1.1.1:443", public}, {"tcp", "1.0.0.1:443", public}, {"udp", "192.168.50.133:53", next.dnsServer(t)}, {"tcp", selectedPrivateApplication, app}}
 	c.replacement = next
+}
+
+// The candidate can forward only to the physical successor retained from the
+// original source. Application and DNS service remain exclusively at its old exit.
+func (c *selectedResponseNativeCase) insertionRoutes(t *testing.T, original *multipleImportedFixture, pos int, cert *tls.Certificate) []desktopNodeLayerRoute {
+	t.Helper()
+	last := len(original.members) - 1
+	if pos == last {
+		c.original = original
+		app := desktopImportedWGSSHTTP(t, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.Host != selectedPrivateApplication || r.URL.RequestURI() != "/adopted" || r.Header.Get("Authorization") != "" {
+				http.Error(w, "foreign request", http.StatusForbidden)
+				return
+			}
+			c.app.Add(1)
+			_, _ = w.Write([]byte("retained original final"))
+		}))
+		return []desktopNodeLayerRoute{{"tcp", selectedPrivateApplication, app}}
+	}
+	if pos != c.insertAfter {
+		return nil
+	}
+	suffix := original.members[pos+1]
+	if suffix == nil || suffix.physical == "" || suffix.imported != (pos+1 < last) {
+		t.Fatal("missing original encrypted successor")
+	}
+	m := &multipleImportedMember{position: pos + 1, publicIP: "203.0.113.198", entered: make(chan struct{}, 1)}
+	c.inserted = m
+	c.final.health = func() { m.private.Add(1) }
+	c.final.routes = []desktopNodeLayerRoute{{"tcp", suffix.virtual, suffix.physical}, {"udp", suffix.virtual, suffix.physical}, {"tcp", "1.1.1.1:443", original.publicServer(t, m, cert)}}
+	input, route, provider := newRoutedPrivateResponseFinal(t, c.fault, c.accept, &c.final)
+	c.input, c.provider = input, provider
+	m.provider, m.physical, m.virtual = provider, provider.address, route.Destination
+	return []desktopNodeLayerRoute{route, {"udp", route.Destination, route.Physical}}
+}
+
+func (c *selectedResponseNativeCase) reloadIntermediate(t *testing.T, old *multipleImportedFixture, api, front *extendedWGFront, health, mode, winner string, start ExtendedWorkerFactory) {
+	t.Helper()
+	at := c.insertAfter + 1
+	candidateSource := old.source
+	candidateSource.Schema = 6
+	candidateSource.Nodes = slices.Insert(slices.Clone(old.source.Nodes), at, c.input)
+	candidateSource.IdentitySources = slices.Insert(slices.Clone(old.source.IdentitySources), at, c.final.identity)
+	raw := []byte(desktopNodeChainJSON(t, candidateSource))
+	draft := len(old.members) == 3
+	var err error
+	if draft {
+		if old.source.Schema != 2 || at != 2 {
+			t.Fatal("unsaved intermediate lost its original schema-2 penultimate")
+		}
+	} else {
+		name := filepath.Join(t.TempDir(), "named-intermediate.json")
+		if err := os.WriteFile(name, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if raw, err = os.ReadFile(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	next := &multipleImportedFixture{ctx: old.ctx, physical: old.physical, ca: old.ca, tls: old.tls, members: slices.Insert(slices.Clone(old.members), at, c.inserted)}
+	if err = json.Unmarshal(raw, &next.source); err != nil || next.source.Schema != 6 || next.source.Execution != old.source.Execution ||
+		len(next.source.Nodes) != len(old.source.Nodes)+1 || len(next.source.IdentitySources) != len(next.source.Nodes) ||
+		next.source.Nodes[at] != c.input || next.source.IdentitySources[at] != c.final.identity ||
+		!slices.Equal(next.source.Nodes[:at], old.source.Nodes[:at]) || !slices.Equal(next.source.Nodes[at+1:], old.source.Nodes[at:]) ||
+		!slices.Equal(next.source.IdentitySources[:at], old.source.IdentitySources[:at]) || !slices.Equal(next.source.IdentitySources[at+1:], old.source.IdentitySources[at:]) {
+		t.Fatal("intermediate source lost an original prefix, suffix or private identity", err)
+	}
+	next.chain, err = mobilemultihop.NewNodeChain(string(raw))
+	if err != nil {
+		t.Fatal("intermediate source could not compile", err)
+	}
+	loaded := next.chain.ProofInventory()
+	if len(loaded) != len(next.members) || loaded[at].ProfileID != privateResponsePeerID || loaded[at].NodeID == "" || loaded[at].StartLayer != "off" {
+		t.Fatal("fresh source did not retain the independently measured private candidate")
+	}
+	for i, original := range old.chain.ProofInventory() {
+		index := i
+		if i >= at {
+			index++
+		}
+		got := loaded[index]
+		if got.Position != index || got.ProfileID != original.ProfileID || got.NodeID != original.NodeID || got.SourceSHA256 != original.SourceSHA256 || got.Mode != original.Mode || got.Kind != original.Kind || got.StartLayer != original.StartLayer {
+			t.Fatal("fresh intermediate source changed an original member", i)
+		}
+	}
+	t.Cleanup(func() {
+		ctx, stop := context.WithTimeout(context.Background(), 3*time.Second)
+		defer stop()
+		if err := next.chain.CloseContext(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	c.replacement = next
+	before := responsePrefixConnections(old)
+	exit := old.members[len(old.members)-1]
+	oldPrivate, oldPublic, oldDNS := exit.private.Load(), exit.public.Load(), old.dns.Load()
+	streams := c.provider.stats().Streams
+	runOriginalSelectedOwner(t, next, api, front, health, mode, winner, "reloaded-private-intermediate", 0, 0, 0, c, start)
+	for i, after := range responsePrefixConnections(old) {
+		if after <= before[i] {
+			t.Fatal("loaded insertion skipped an original prefix or suffix", i)
+		}
+	}
+	if c.provider.stats().Streams <= streams || c.inserted.private.Load() == 0 || exit.private.Load() <= oldPrivate || exit.public.Load() <= oldPublic || old.dns.Load() <= oldDNS || old.invalidDNS.Load() || c.app.Load() != 1 {
+		t.Fatal("loaded intermediate did not forward to the original verified final")
+	}
+	if draft {
+		t.Logf("RELOADED_PRIVATE_DRAFT nodes=%d schema=%d inserted=%d suffix=%d saved=false requested=auto winner=local original_final=true private=true dns=true application=true joined=true", len(next.members), next.source.Schema, at, len(old.members)-at)
+	} else {
+		t.Logf("RELOADED_PRIVATE_INTERMEDIATE nodes=%d inserted=%d suffix=%d requested=auto winner=local original_final=true private=true dns=true application=true joined=true", len(next.members), at, len(old.members)-at)
+	}
 }
 
 // Check the live manager before the valid request can renew the same worker.

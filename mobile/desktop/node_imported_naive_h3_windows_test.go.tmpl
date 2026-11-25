@@ -520,7 +520,7 @@ func (f *desktopImportedH3WindowsFixture) start(t *testing.T) {
 	}
 	f.owner, e = f.box.RouterVPNDesktopImportedActivatePhysical(f.policy)
 	if e != nil || f.owner == nil || !f.owner.Current() {
-		t.Fatal("protected H3 lost original activation", e)
+		t.Fatal("protected H3 lost original activation", e, mobiletor.DesktopWindowsNodeCompositionAdmissionFailure(f.prepared))
 	}
 }
 func (f *desktopImportedH3WindowsFixture) outbound(t *testing.T, tag string) adapter.Outbound {
@@ -734,7 +734,7 @@ func (f *desktopImportedH3WindowsFixture) snapshot(t *testing.T, peer *desktopIm
 	})
 	nativeObserved := time.Now()
 	if e != nil || view.Closed || view.Target != f.prepared || view.Owner.Kind != "windows-isolated-token" || !view.Options.RetainBaselineForHandoff || !f.owner.Current() {
-		t.Fatal("protected imported H3 lost actual BFE/socket owner readback", e)
+		t.Fatal("protected imported H3 lost actual BFE/socket owner readback", e, mobiletor.DesktopWindowsNodeCompositionAdmissionFailure(f.prepared))
 	}
 	capture, e := f.policy.OriginalController().ImportedDesktopCapture()
 	if e != nil {

@@ -49,6 +49,26 @@ func DesktopWindowsNodeCompositionAppID() ([]byte, error) {
 	return api.executableAppID()
 }
 
+// Failure-only observation of published state. It takes no policy or identity
+// gate, performs no BFE call, and cannot retry or admit the failed operation.
+func DesktopWindowsNodeCompositionAdmissionFailure(target DesktopWindowsProtectionTarget) string {
+	if !desktopWindowsNodeComposition.TryLock() {
+		return "constructor busy"
+	}
+	p := desktopWindowsNodeComposition.owner
+	desktopWindowsNodeComposition.Unlock()
+	if p == nil || p.capture != target.Capture {
+		return "original policy unavailable"
+	}
+	identity, owner := p.publicIdentity.Load(), p.publicOwner.Load()
+	if identity == nil || owner == nil {
+		return "original identity unavailable"
+	}
+	now := time.Now().UnixMilli()
+	return fmt.Sprintf("policy_retired=%t policy_cancelled=%t policy_age_ms=%d identity_current=%t identity_cancelled=%t identity_age_ms=%d",
+		p.retired.Load(), p.ctx.Err() != nil, now-p.observed.Load(), identity.Current(p.capture, *owner), identity.ctx.Err() != nil, now-identity.observed.Load())
+}
+
 func desktopWindowsNodeCompositionConstruct(ctx context.Context, capture DesktopSocketCapture, options DesktopWindowsSocketOptions, predecessor *DesktopWindowsProtectionTarget, exact bool) (*DesktopWindowsSocketPolicy, error) {
 	return desktopWindowsNodeCompositionCaptured(ctx, capture, options, predecessor, exact, nil)
 }

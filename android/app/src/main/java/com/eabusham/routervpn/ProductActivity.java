@@ -405,8 +405,8 @@ public final class ProductActivity extends Activity {
             }).setNegativeButton("Close",null).show();
     }
 
-    private void runCandidateTimes(){closeCandidateMeasurement();detachCandidatePreparation();if(AndroidNodeCandidatePreparation.retained()!=null||!connection.isConnected()){preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater);preparedCandidateDialog.show();}else{candidateDialog=new AndroidNodeCandidateDialog(this);candidateDialog.show();}}
-    private void resumeCandidatePreparation(){if(orderedPicker!=null&&orderedPicker.visible())return;if(AndroidNodeCandidatePreparation.retained()!=null){detachCandidatePreparation();preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater);preparedCandidateDialog.show();}}
+    private void runCandidateTimes(){closeCandidateMeasurement();detachCandidatePreparation();if(AndroidNodeCandidatePreparation.retained()!=null||!connection.isConnected()){preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater,this::showOrderedEditor);preparedCandidateDialog.show();}else{candidateDialog=new AndroidNodeCandidateDialog(this);candidateDialog.show();}}
+    private void resumeCandidatePreparation(){if(orderedPicker!=null&&orderedPicker.visible())return;if(AndroidNodeCandidatePreparation.retained()!=null){detachCandidatePreparation();preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater,this::showOrderedEditor);preparedCandidateDialog.show();}}
     private void detachCandidatePreparation(){if(preparedCandidateDialog!=null){preparedCandidateDialog.detach();preparedCandidateDialog=null;}}
 
     private void closeOrderedPicker(){if(orderedPicker!=null){orderedPicker.close();orderedPicker=null;}}
@@ -732,6 +732,7 @@ public final class ProductActivity extends Activity {
                 }).setNegativeButton("Cancel",null).show();
     }
 
+    private AlertDialog orderedEditorDialog;
     private void showOrderedEditor(AndroidOrderedPathSelection draft){
         try {
             if(mutationBusy())throw new IllegalStateException("Finish the current VPN operation before editing its ordered nodes.");
@@ -744,7 +745,8 @@ public final class ProductActivity extends Activity {
             }
             if(members.isEmpty())labels.add("Choose final Router node");
             else if(draft.canAddPrefix())labels.add("Add another intermediate node");
-            choiceDialog("Ordered Router path","Start with two nodes. Tap a hop to edit it or measure candidates through a supported prefix. Save path keeps your choice for Connect.\n\n"
+            if(orderedEditorDialog!=null && orderedEditorDialog.isShowing())orderedEditorDialog.dismiss();
+            orderedEditorDialog=choiceDialog("Ordered Router path","Start with two nodes. Tap a hop to edit it or measure candidates through a supported prefix. Save path keeps your choice for Connect.\n\n"
                     +"Most paths support two to eight nodes. Longer Local paths can use paired WireGuard hops, or begin with paired WireGuard or AmneziaWG hops followed by imported and paired Shadowsocks 2022 streams. These paths end at a paired Shadowsocks 2022 node and require Start Layer Off. The native source, MTU and traversal limits apply.\n\n"
                     +"A three-node Local path can start with two distinct saved Shadowsocks 2022 nodes with literal IPs and Start Layer Off. It ends at a paired Shadowsocks 2022 node.")
                     .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
@@ -765,7 +767,7 @@ public final class ProductActivity extends Activity {
             if(mutationBusy())throw new IllegalStateException("Finish the current VPN operation before choosing execution.");
             draft.requireCurrent();
             choiceDialog("Ordered execution","For paths of up to eight nodes, Local, Server and Compare both support independently saved Shadowsocks 2022 nodes at any interior position between a paired WireGuard or AmneziaWG entry and a paired Shadowsocks 2022 final. Each imported node needs a literal IP address and Start Layer Off. A route with only paired packet hops can also use a paired Hysteria2 final.\n\n"
-                    +"A paired Shadowsocks intermediate measured through an imported or paired stream uses Local execution and keeps the remaining route in order. Longer Server and Compare paths require one paired WireGuard entry, literal imported Shadowsocks intermediates and a paired Shadowsocks final, all with Start Layer Off. The request must fit the original lease limits.\n\n"
+                    +"Use in draft inserts a measured paired Shadowsocks node after the chosen hop and keeps the remaining route in order. Compare can insert one paired intermediate when Local wins on a WireGuard route with literal imported Shadowsocks interiors. Longer Server and Compare paths require one paired WireGuard entry, literal imported Shadowsocks intermediates and a paired Shadowsocks final, all with Start Layer Off. The request must fit the original lease limits.\n\n"
                     +"A single SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node goes immediately before the Shadowsocks final. A single Shadowsocks hostname can use that position after at least two paired hops with its saved Custom TCP resolver. A route starting with two imported Shadowsocks nodes requires Local execution.\n\n"
                     +"Compare both tests the same external endpoint through Local and Server, averages each path’s final-node and external HTTP response times, then verifies the winner. Failed paths receive no score.")
                     .setItems(new String[]{"Local","Server","Compare both"},(d,w)->{
@@ -841,8 +843,8 @@ public final class ProductActivity extends Activity {
         java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> capture=draft.candidateDraftCapture(position);
         showOrderedEditor(draft);
         detachCandidatePreparation();
-        preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater);
-        preparedCandidateDialog.show(capture,position);
+        preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater,this::showOrderedEditor);
+        preparedCandidateDialog.showDraft(capture,position,draft);
     }
 
     private void configurePairMultihop(){

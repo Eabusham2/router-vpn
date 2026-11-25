@@ -21,6 +21,10 @@ TAG = "router-vpn-sha-" + SHA
 
 
 class FakeBroker:
+    class _jobs:
+        class DownloadCancelled(Exception):
+            pass
+
     DIRECT_ARTIFACTS = {"router-vpn-android.apk": {}}
     _artifact_policy = SimpleNamespace(
         EXACT_SHA_RELEASE_TAG_PREFIX="router-vpn-sha-",

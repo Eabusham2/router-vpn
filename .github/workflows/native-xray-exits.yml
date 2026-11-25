@@ -11,6 +11,7 @@ on:
       - 'deploy/test_ios_xray_exits.py'
       - 'deploy/test_ios_multihop_profiles.py'
       - 'internal/applexray/**'
+      - 'internal/hopmeasure/ordered.go'
       - 'internal/mobilemultihop/**'
       - 'internal/multihoprelay/**'
       - 'internal/mobiletor/**'
@@ -24,6 +25,8 @@ on:
       - 'deploy/test_server_node_chain_*.py'
       - 'deploy/test_native_naive_pairing.py'
       - 'deploy/test_mobile_multihop_groups.py'
+      - 'deploy/test_focused_multihop_clocks.py'
+      - 'deploy/test_desktop_node_chain_ss_prefix_contract_runner.py'
       - 'server/scripts/provision-multihop-relays.py'
 permissions:
   contents: read
@@ -96,12 +99,56 @@ jobs:
           path: ${{ runner.temp }}/apple-xray-exits
           if-no-files-found: error
           retention-days: 7
+  shared-core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+      - name: Run the shared multihop tests
+        env:
+          CORE_SHARD: ${{ matrix.shard }}
+        run: python3 deploy/test_mobile_multihop_groups.py --group core --core-shard "$CORE_SHARD"
+  shared-groups:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ["runtime", "runtime_depth", "runtime_remaining", "fifty", "fifty_closed", "imported_prefix"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+      - name: Run the shared multihop tests
+        env:
+          SHARED_GROUP: ${{ matrix.group }}
+        run: python3 deploy/test_mobile_multihop_groups.py --group "$SHARED_GROUP"
   android-and-native-parser:
-    needs: apple-graphs
+    needs: [apple-graphs, shared-core, shared-groups]
+    if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
+      - name: Require the Apple fixtures and every shared shard
+        env:
+          APPLE_RESULT: ${{ needs.apple-graphs.result }}
+          CORE_RESULT: ${{ needs.shared-core.result }}
+          GROUP_RESULT: ${{ needs.shared-groups.result }}
+        run: |
+          test "$APPLE_RESULT" = success
+          test "$CORE_RESULT" = success
+          test "$GROUP_RESULT" = success
       - uses: actions/checkout@v4
+      - name: Verify complete shared test coverage
+        run: python3 deploy/test_native_xray_shared_workflow.py
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.3'
@@ -115,7 +162,6 @@ jobs:
           python3 deploy/test_server_node_chain_preparation.py
           python3 deploy/test_server_node_chain_native_runner.py
           python3 deploy/test_native_xray_relay_build.py
-          python3 deploy/test_mobile_multihop_groups.py
           go test -race -count=1 -timeout=180s ./internal/applexray ./internal/multihoprelay ./cmd/router-agent
           go vet ./internal/applexray ./internal/mobilemultihop ./internal/multihoprelay ./cmd/router-agent
           python3 deploy/test_native_xray_pairing.py

@@ -80,6 +80,16 @@ func responseExpectedSourceAt(nodes []common.MultihopNodeSelection, privatePosit
 	return rows
 }
 
+func responseExpectedPositions(count, privatePosition int) []int {
+	positions := []int{0}
+	if privatePosition < 0 && count < 96 {
+		for i := 1; i < count-2; i++ {
+			positions = append(positions, i)
+		}
+	}
+	return append(positions, count-2)
+}
+
 func checkPrivateResponsePublicSource(t *testing.T, raw []byte, view desktopSelectedCandidateHTTPTestView) {
 	t.Helper()
 	var response desktopSelectedCandidateHTTPTestView
@@ -127,7 +137,7 @@ func TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfil
 			if err := validateDesktopNodeChainCandidateStatus(catalog.selectedPlan.plan, id, status, time.Now()); err != nil {
 				t.Fatal("original private response description", err)
 			}
-			view, q := exerciseDesktopSelectedCandidateHTTP(t, f, catalog, id, "local", count-2, []int{0, count - 2})
+			view, q := exerciseDesktopSelectedCandidateHTTP(t, f, catalog, id, "local", count-2, responseExpectedPositions(count, layout.privatePosition))
 			if view.Requested != "auto" || view.Required != "local" || view.Selected != "local" || view.Epoch == 0 || !reflect.DeepEqual(view.ResponseNodes, responseExpectedSourceAt(nodes, layout.privatePosition)) {
 				t.Fatal("connected catalog omitted or changed an original source role")
 			}

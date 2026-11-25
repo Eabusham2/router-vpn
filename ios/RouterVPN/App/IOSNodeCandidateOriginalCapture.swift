@@ -16,7 +16,7 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
         }
     }
     func selectedResponse(in proofs: [Self]) -> Bool {
-        guard (3...IOSMultihopNodeSelection.physicalTraversalDepth).contains(proofs.count), position == proofs.count - 2,
+        guard (3...IOSMultihopNodeSelection.physicalTraversalDepth).contains(proofs.count), position > 0, position < proofs.count - 1,
               proofs[position] == self, metric == "routed-candidate-response",
               proofs.first?.mode == "wg", proofs.dropFirst().allSatisfy({ $0.mode == "shadowsocks" }),
               Set(proofs.map(\.profile_id)).count == proofs.count else { return false }
@@ -25,8 +25,11 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
         guard Set(privateIDs).count == privateIDs.count,
               !proofs[0].node_id.isEmpty, !proofs[proofs.count-1].node_id.isEmpty,
               privateStops.count <= 1, privateStops.allSatisfy({ $0.position >= 2 }) else { return false }
-        return proofs.enumerated().allSatisfy { index, row in
-            row.position == index && (index == position || row.measurement == nil)
+        let finalPrefix = proofs.count - 2
+        let first = privateStops.isEmpty && proofs.count < IOSMultihopNodeSelection.physicalTraversalDepth ? 1 : finalPrefix
+        let eligible = first...finalPrefix
+        return eligible.contains(position) && proofs.enumerated().allSatisfy { index, row in
+            row.position == index && row.measurement == (eligible.contains(index) ? "routed-candidate-response" : nil)
         }
     }
     func supported(in proofs: [Self]) -> Bool {

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"router-vpn/internal/common"
@@ -26,7 +29,10 @@ func TestValidatedPrivateRouterAPI(t *testing.T) {
 }
 
 func TestDesktopForwardingMasterGetAndPut(t *testing.T) {
-	enabled := false
+	var enabled atomic.Bool
+	var mutations atomic.Int32
+	var forcedReply atomic.Value
+	forcedReply.Store("")
 	token := "node-token-abcdefghijklmnopqrstuvwxyz012345"
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != desktopForwardingMasterPath {
@@ -44,12 +50,17 @@ func TestDesktopForwardingMasterGetAndPut(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Enabled == nil {
 				t.Fatalf("invalid PUT body: %v", err)
 			}
-			enabled = *body.Enabled
+			enabled.Store(*body.Enabled)
+			mutations.Add(1)
 		default:
 			t.Fatalf("unexpected method %s", r.Method)
 		}
 		w.Header().Set("content-type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "enabled": enabled, "peer": "10.77.0.2", "proof": "test"})
+		if raw := forcedReply.Load().(string); raw != "" {
+			_, _ = w.Write([]byte(raw))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "enabled": enabled.Load(), "peer": "10.77.0.2", "proof": "test"})
 	}))
 	defer remote.Close()
 
@@ -82,16 +93,82 @@ func TestDesktopForwardingMasterGetAndPut(t *testing.T) {
 		t.Fatalf("unexpected GET body: %s", getRec.Body.String())
 	}
 
-	putReq := httptest.NewRequest(http.MethodPut, desktopForwardingMasterPath, strings.NewReader(`{"enabled":true}`))
-	putRec := httptest.NewRecorder()
-	a.forwardingMaster(putRec, putReq)
-	if putRec.Code != http.StatusOK {
-		t.Fatalf("PUT failed: %d %s", putRec.Code, putRec.Body.String())
+	request := func(method string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := httptest.NewRecorder()
+		a.forwardingMaster(out, httptest.NewRequest(method, desktopForwardingMasterPath, bytes.NewReader(raw)))
+		return out
 	}
+	router, path := getBody["router_id"], getBody["path_token"]
+	if router != profile.ID || !desktopOrderedDigest.MatchString(fmt.Sprint(path)) {
+		t.Fatal("missing original owner", getBody)
+	}
+	put := func(owner, proof any, wanted bool) *httptest.ResponseRecorder {
+		return request(http.MethodPut, map[string]any{"enabled": wanted, "router_id": owner, "path_token": proof})
+	}
+	putRec := put(router, path, true)
 	var putBody map[string]any
-	if err := json.Unmarshal(putRec.Body.Bytes(), &putBody); err != nil || putBody["enabled"] != true {
-		t.Fatalf("unexpected PUT body: %s", putRec.Body.String())
+	if putRec.Code != 200 || json.Unmarshal(putRec.Body.Bytes(), &putBody) != nil ||
+		putBody["enabled"] != true || putBody["router_id"] != router || putBody["path_token"] != path {
+		t.Fatal("PUT did not confirm the original displayed owner", putRec.Code, putRec.Body.String())
 	}
+	for _, body := range []map[string]any{
+		{"enabled": false}, {"router_id": router, "path_token": path}, {"enabled": nil, "router_id": router, "path_token": path},
+		{"enabled": false, "router_id": "another-home", "path_token": path}, {"enabled": false, "router_id": router, "path_token": strings.Repeat("0", 64)},
+	} {
+		if out := request(http.MethodPut, body); out.Code < 400 || mutations.Load() != 1 {
+			t.Fatal("foreign or incomplete request reached router", out.Code)
+		}
+	}
+	for _, response := range []string{`{"ok":true}`, `{"ok":true,"enabled":null}`, `{"ok":true,"enabled":"false"}`} {
+		forcedReply.Store(response)
+		for _, out := range []*httptest.ResponseRecorder{request(http.MethodGet, nil), put(router, path, false)} {
+			if out.Code != http.StatusBadGateway {
+				t.Fatal("incomplete remote state verified", response, out.Code, out.Body.String())
+			}
+		}
+	}
+	forcedReply.Store("")
+	before := mutations.Load()
+	reconnect := func(node common.RouterProfile) {
+		tracker.observe(observedConnection{Phase: "off"})
+		a.mu.Lock()
+		a.state.RouterID, a.profiles.SelectedID = node.ID, node.ID
+		a.mu.Unlock()
+		tracker.declareRequest("wg", "wg")
+		tracker.observe(observedConnection{Connected: true, Phase: "connected", Mode: "wg", LogicalMode: "wg", RuntimeMode: "wg", Base: "wg", RouterID: node.ID, Profile: node})
+	}
+	other := profile
+	other.ID = "other-home"
+	a.profiles.Profiles = append(a.profiles.Profiles, other)
+	for _, node := range []common.RouterProfile{other, profile} {
+		reconnect(node)
+		if out := put(router, path, true); out.Code != http.StatusConflict || mutations.Load() != before {
+			t.Fatal("stale displayed router or session mutated after reconnect", out.Code)
+		}
+	}
+	// A changed ordered route can retain the same final, mode and session.
+	a.mu.Lock()
+	a.state.Mode = "multihop"
+	a.mu.Unlock()
+	setActiveMultihopGraph(a, multihopSelection{Entry: other, Exit: profile, Base: "wg", EntryMode: "wg", ExitMode: "shadowsocks"})
+	defer clearActiveMultihopGraph(a)
+	out := request(http.MethodGet, nil)
+	var original map[string]any
+	if out.Code != 200 || json.Unmarshal(out.Body.Bytes(), &original) != nil {
+		t.Fatal("missing ordered forwarding state", out.Code, out.Body.String())
+	}
+	changed, _ := getActiveMultihopGraph(a)
+	changed.EntryID = "changed-entry"
+	activeMultihopGraphs.Store(a, changed)
+	if out := put(router, original["path_token"], true); out.Code != http.StatusConflict || mutations.Load() != before {
+		t.Fatal("different ordered path reached router", out.Code)
+	}
+
 }
 
 func TestDesktopForwardingMasterRejectsExternalOrDisconnected(t *testing.T) {

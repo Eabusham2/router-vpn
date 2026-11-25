@@ -51,7 +51,18 @@ $script:status=[pscustomobject]@{connected=$false;phase='off';stop_pending=$fals
 if($script:starts-ne0-or$script:posts.Count-ne0){throw 'Protection pending admitted Connect'}
 $script:UnifiedProtectionPending=$false;$script:status=[pscustomobject]@{connected=$true;phase='connected';stop_pending=$false};UnifiedConnect
 if($script:posts.Count-ne1-or$script:posts[0].Path-cne'/api/disconnect'){throw 'Ordinary Disconnect changed'}
-$script:status=[pscustomobject]@{connected=$false;phase='off';stop_pending=$false};UnifiedConnect
+$script:status=[pscustomobject]@{connected=$false;phase='off';stop_pending=$false}
+$lease=Open-RouterVPNProfileState $PSScriptRoot
+try {
+ $intent=@{schema=1;operation_id=('a'*32);phase='preparing'}
+ Set-RouterVPNProfileIntent $lease $intent
+ try {
+  $script:posts=@()
+  UnifiedConnect
+  if($script:starts-ne0-or$script:posts.Count-ne0){throw 'Pending profile load admitted ordinary Connect'}
+ }finally{Set-RouterVPNProfileIntent $lease $intent -Remove}
+}finally{$lease.Stream.Dispose()}
+UnifiedConnect
 if($script:starts-ne1){throw 'Normal Connect no longer reaches selection'}
 $script:busy=$true;$script:UnifiedStopRetryToken=$token;$script:posts=@();UnifiedConnect
 if($script:cancels-ne0-or$script:posts.Count-ne0){throw 'Owned retry preempted another local operation'}
@@ -106,7 +117,9 @@ if($errors.Count){throw ($errors.Message -join '; ')}
 ''',encoding='utf-8-sig')
     run([shell,'-NoProfile','-File',str(builder),str(composed)])
     source=composed.read_text(encoding='utf-8')
-    functions='\n'.join(section(source,r'^function '+name+r'(?:\([^\n]*\))?\{.*?^\}') for name in ['GetUnifiedStopRetryToken','TestUnifiedProtectionStatusBusy','AssertUnifiedProtectionMutationIdle','SetUnifiedStopRetryPresentation','StartUnifiedStopRetry','UnifiedConnect'])
+    state_module=str(ROOT/'client/RouterVPN-Windows-UIState.psm1').replace("'", "''")
+    functions=f"Import-Module '{state_module}' -Global -ErrorAction Stop\n"
+    functions+='\n'.join(section(source,r'^function '+name+r'(?:\([^\n]*\))?\{.*?^\}') for name in ['GetUnifiedStopRetryToken','TestUnifiedProtectionStatusBusy','AssertUnifiedProtectionMutationIdle','SetUnifiedStopRetryPresentation','StartUnifiedStopRetry','UnifiedConnect'])
     functions += '\n'+'\n'.join(section(source,r'^function '+name+r'[^\n]*') for name in ['Test-RouterVPNMutationBusyFromStatus','Test-RouterVPNMutationBusy','Assert-RouterVPNMutationIdle'])
     assert 'SetUnifiedStopRetryPresentation $Status' in source
     assert '$script:UnifiedAsyncOwnedStopRetry=($Path-ceq\'/api/disconnect/retry\')' in source
@@ -114,6 +127,14 @@ if($errors.Count){throw ($errors.Message -join '; ')}
         assert name=='shipping' or body!=functions
         path=directory/(name+'.ps1');path.write_text(body+'\n'+PS_TEST,encoding='utf-8-sig')
         run([shell,'-NoProfile','-File',str(path)],broken=name!='shipping')
+    # A real pending journal must cause this specific refusal even though its
+    # original rendered Stop receipt has already been consumed.
+    guard='if(Test-RouterVPNProfileLoadPending $PSScriptRoot)'
+    assert functions.count(guard)==1
+    bypass=directory/'skip-profile-load-guard.ps1'
+    bypass.write_text(functions.replace(guard,'if($false)')+'\n'+PS_TEST,encoding='utf-8-sig')
+    changed=subprocess.run([shell,'-NoProfile','-File',str(bypass)],capture_output=True,timeout=90)
+    assert changed.returncode!=0 and b'Pending profile load admitted ordinary Connect' in changed.stdout+changed.stderr
     callbacks='\n'.join(section(source,r'^function '+name+r'(?:\([^\n]*\))?\{.*?^\}') for name in ['CancelUnifiedApiAsync','CompleteUnifiedApiAsync'])
     for name,body in {'async-shipping':callbacks,'async-cancel-broadens':callbacks.replace('(-not$script:UnifiedAsyncOwnedStopRetry -and ($script:UnifiedAsyncDisconnectAfterCancel -or $DisconnectAfter))','($script:UnifiedAsyncDisconnectAfterCancel -or $DisconnectAfter)'),'async-finally-broadens':callbacks.replace('(-not$script:UnifiedAsyncOwnedStopRetry -and $script:UnifiedAsyncDisconnectAfterCancel)','$script:UnifiedAsyncDisconnectAfterCancel')}.items():
         assert name=='async-shipping' or body!=callbacks

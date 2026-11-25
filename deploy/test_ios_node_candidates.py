@@ -55,6 +55,10 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
     case "selected-entry": try selectedEntryProposals()
     case "selected-packet": try selectedPacketStops()
     case "selected-response": try selectedResponseFinal([3,4,9,16])
+    case "insert-imported": try selectedResponseFinal([4,9,16],privatePosition:0,insert:true)
+    case "draft-insertion":
+     try selectedResponseFinal([3,4,9],privatePosition:0,exerciseDraft:true)
+     try selectedResponseFinal([4],privatePosition:2,exerciseDraft:true)
     case "all-imported": try selectedResponseFinal([4,9,16],privatePosition:0)
     case "earlier-private": try selectedResponseFinal([5,9,16],privatePosition:2)
     default: try completePaths(CommandLine.arguments[2])
@@ -214,11 +218,13 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    for stop in [1,3,5,7] {try reject("imported or final stop cannot claim connected TCP samples"){_ = try IOSNodeCandidateProposal.compileConnectedExecution(retained.ordinaryLaunchInput,selectedProfile:original,sourceSHA256:retained.sourceSHA256,configSHA256:retained.configSHA256,records:records,position:stop,candidateID:"next-candidate",measuredInput:measured)}}
   }
  }
- static func selectedResponseFinal(_ counts: [Int] = [3], privatePosition: Int? = nil)throws {
+ static func selectedResponseFinal(_ counts: [Int] = [3], privatePosition: Int? = nil, insert: Bool = false, exerciseDraft: Bool = false)throws {
   let metric = "routed-candidate-response", candidate = "measured-new-final"
   for count in counts { for requested in ["auto","server"] {
-   let position=count-2, last=count-1
-   let paired=count==3 ? 0 : privatePosition ?? position
+   let finalPrefix=count-2, last=count-1
+   let position=insert ? (count==4 ? 1:count==9 ? 3:12) : finalPrefix
+   let paired=count==3 ? 0 : privatePosition ?? finalPrefix
+   let expected=paired==0 ? Array(1...finalPrefix) : [finalPrefix]
    let imports=Set(1..<last).subtracting([paired])
    var bundles=try multipleFixture(count,imports,requested,"off")
    bundles[last]=try editProfile(bundles[last]) { profile in
@@ -237,19 +243,21 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    aliases[0]["id"]="original-final-alias";alias["selectedRouterID"]="original-final-alias";alias["routerProfiles"]=aliases
    records["original-final-alias"]=try data(alias)
    let stamp=IOSCandidateCatalogPublication.Stamp(schema:1,epoch:UUID().uuidString,generation:1,ready:true,sources_sha256:try IOSCandidateCatalogPublication.sourcesDigest(records))
-   let proofs=selected.members.enumerated().map { i,m in IOSNodeCandidatePrefix(position:i,profile_id:m.id,node_id:m.profile["node_proof_id"] as? String ?? "",mode:m.mode,measurement:i==position ? metric:nil) }
+   let proofs=selected.members.enumerated().map { i,m in IOSNodeCandidatePrefix(position:i,profile_id:m.id,node_id:m.profile["node_proof_id"] as? String ?? "",mode:m.mode,measurement:expected.contains(i) ? metric:nil) }
    func positions(_ winner:String)throws->[Int] {
     try IOSNodeCandidateProposal.selectedPositions(input:Data(input.utf8),bundle:bundles[last],proofs:proofs,source:selected.sourceSHA256,config:selected.configSHA256,winner:winner)
    }
    try reject("Server winner borrowed imported private response"){_=try positions("server")}
    if requested=="server" {try reject("explicit Server became a Local response"){_=try positions("local")};continue}
-   try check("Compare Local private response is offered only after WireGuard and one literal import",try positions("local")==[0,position])
+   try check("Compare Local private response is offered only after WireGuard and one literal import",try positions("local")==[0]+expected)
    let inventory=try IOSNodeCandidateCapture.compile(records:records,stamp:stamp,prefixPosition:position,proofs:proofs,selectedResponse:true)
    try check("only distinct paired final admitted to selected response inventory",inventory.rows.filter{!$0.input.isEmpty}.map(\.id)==[candidate])
    if count >= 4 {
-    var crossed=proofs
-    let slot=paired>0 ? paired:position, old=proofs[slot]
-    crossed[slot]=IOSNodeCandidatePrefix(position:slot,profile_id:old.profile_id,node_id:old.node_id.isEmpty ? String(repeating:"c",count:64):"",mode:old.mode,measurement:old.measurement)
+    let slot=paired>0 ? paired:2
+    let crossed=proofs.enumerated().map { i,row in
+     IOSNodeCandidatePrefix(position:i,profile_id:row.profile_id,node_id:i==slot ? (paired>0 ? "" : String(repeating:"c",count:64)) : row.node_id,
+       mode:row.mode,measurement:((paired>0 && i>0 && i<=finalPrefix) || i==finalPrefix) ? metric:nil)
+    }
     try reject("catalog accepted a role map from another original"){_=try IOSNodeCandidateCapture.compile(records:records,stamp:stamp,prefixPosition:position,proofs:crossed,selectedResponse:true)}
     try reject("native position accepted a crossed private role"){_=try IOSNodeCandidateProposal.selectedPositions(input:Data(input.utf8),bundle:bundles[last],proofs:crossed,source:selected.sourceSHA256,config:selected.configSHA256,winner:"local")}
    }
@@ -264,6 +272,11 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
    try check("selected native frame retained exact measured prefix",try JSONDecoder().decode(IOSNodeCandidateMetadata.self,from:frames.result()).prefix_position==position)
    try reject("metadata frame crossed the original selected prefix"){_=try IOSCandidateMetadataPages(metadataFrame,inventoryBytes:inventory.inventory.count,legacyLimit:32768,family:.selected,selectedResponse:(position,proofs[0].profile_id))}
    try validate(proofs[position])
+   if insert {
+    let other=position==1 ? 2:1
+    try reject("another eligible response stop authorized this receipt"){try validate(proofs[other])}
+    try reject("another eligible response stop authorized this frame"){_=try IOSCandidateMetadataPages(metadataFrame,inventoryBytes:inventory.inventory.count,legacyLimit:32768,family:.selected,selectedResponse:(other,proofs[other].profile_id))}
+   }
    try reject("response metadata lost the reopened original stop"){try validate(proofs[0])}
    try reject("packet positions cannot authorize a private response"){try validate(nil)}
    let measured=inventory.rows.first{$0.id==candidate}!.input
@@ -271,8 +284,31 @@ SWIFT=C.SWIFT[:C.SWIFT.index('@MainActor @main struct Tests')]+MULTIPLE_FIXTURE+
     try IOSNodeCandidateProposal.compileConnectedExecution(input,selectedProfile:final,sourceSHA256:selected.sourceSHA256,configSHA256:selected.configSHA256,
      records:records,position:position,candidateID:id,measuredInput:source,winner:winner)
    }
-   let future=try propose("local",candidate,measured),ids=proofs.dropLast().map(\.profile_id)+[candidate]
+   let future=try propose("local",candidate,measured)
+   if exerciseDraft {
+    func insertInDraft() throws -> IOSNodeCandidateProposal {
+     try IOSNodeCandidateProposal.compileConnectedExecution(input,selectedProfile:final,sourceSHA256:selected.sourceSHA256,configSHA256:selected.configSHA256,
+      records:records,position:position,candidateID:candidate,measuredInput:measured,winner:"local",retainFinal:true)
+    }
+    if paired>0 {
+     try reject("second private stream entered a Compare draft"){_=try insertInDraft()}
+    } else {
+     let insertion=try insertInDraft()
+     var expectedIDs=proofs.map(\.profile_id);expectedIDs.insert(candidate,at:position+1)
+     guard let nodes=insertion.profiles.last?.multihopNodes else {throw IOSNodeCandidateCapture.issue()}
+     try check("draft proposal inserted the measured candidate and kept the old final",nodes.map(\.id)==expectedIDs && insertion.profiles.map(\.id)==expectedIDs)
+     try check("new Compare source exposes only its own penultimate response",IOSMultihopNodeSelection.compareResponsePositions(nodes,profiles:insertion.profiles)==[nodes.count-2])
+     try check("compiling the draft left the original route and named replacement independent",selected.ordinaryLaunchInput==input && future.profiles.last?.id==candidate)
+    }
+   }
+   var ids=proofs.map(\.profile_id)
+   if insert {ids.insert(candidate,at:position+1)} else {ids[last]=candidate}
    try check("explicit future replacement preserves ordered Compare source",future.profiles.map(\.id)==ids && future.profiles.last?.multihopNodes?.map(\.id)==ids && future.profiles.last?.multihopExecution=="auto")
+   if insert {
+    try check("insertion retained every suffix proof and the original final",future.profiles.dropFirst(position+2).map { $0.nodeProofID ?? "" } == proofs.dropFirst(position+1).map(\.node_id) && future.profiles.last?.id==proofs[last].profile_id)
+    let suffix=position+1
+    try reject("unmeasured original suffix became a new paired candidate"){_=try propose("local",proofs[suffix].profile_id,measured)}
+   }
    try check("original selected source survived future compilation",selected.ordinaryLaunchInput==input && selected.members.last?.id==proofs[last].profile_id)
    try reject("Server winner compiled Local response proposal"){_=try propose("server",candidate,measured)}
    let old=try IOSNodeCandidateCapture.member(profile:final,files:object(bundles[last])["profiles"] as! [String:[String:String]])
@@ -641,12 +677,14 @@ POSITIVE_CASES = (
     ('execution', 'server', 'Apple candidate phase server: 142 source and receipt checks PASS'),
     ('execution', 'auto', 'Apple candidate phase auto: 142 source and receipt checks PASS'),
     ('private-response', 'selected-response', 'Apple candidate phase selected-response: 58 source and receipt checks PASS'),
+    ('imported-intermediate', 'insert-imported', 'Apple candidate phase insert-imported: 57 source and receipt checks PASS'),
+    ('draft-insertion', 'draft-insertion', 'Apple candidate phase draft-insertion: 68 source and receipt checks PASS'),
     ('imported-final', 'all-imported', 'Apple candidate phase all-imported: 45 source and receipt checks PASS'),
     ('imported-final', 'earlier-private', 'Apple candidate phase earlier-private: 45 source and receipt checks PASS'),
 )
 CONTROL_GROUPS = {
     'selection': (
-        ('server-winner', 'IOSNodeChainExecutionCapture.swift', 'requested == "auto", winner == "local" else { return nil }', 'requested == "auto" else { return nil }', 'ACCEPTED Server winner borrowed imported private response', 'selected-response'),
+        ('server-winner', 'IOSNodeChainExecutionCapture.swift', 'requested == "auto", winner == "local" else { return [] }', 'requested == "auto" else { return [] }', 'ACCEPTED Server winner borrowed imported private response', 'selected-response'),
         ('typed-packet', 'IOSNodeChainExecutionCapture.swift', '(position == 0 || !isSOCKS && !isCONNECT)', '(position == 0 || !isMultipleImported && !isSOCKS && !isCONNECT)', 'original typed source exposes each paired packet stop only', 'selected-packet'),
         ('ordinary-packet', 'IOSNodeChainExecutionCapture.swift', '(position == 0 || !isSOCKS && !isCONNECT)', '(position == 0 || isMultipleImported)', 'original ordinary selected execution retains recursive packet stops', 'selected-entry'),
         ('packet-metadata', 'IOSNodeCandidateResult.swift', 'selectedPositions.contains(prefix_position), prefix.supported,', 'selectedPositions.contains(prefix_position) && prefix_position == 0, prefix.supported,', 'selected metadata admits each original paired packet stop', 'selected-packet'),
@@ -711,5 +749,5 @@ def main(phase='all'):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--phase', choices=('all', 'base', 'execution', 'private-response', 'imported-final', *CONTROL_GROUPS), default='all')
+    parser.add_argument('--phase', choices=('all', 'base', 'execution', 'private-response', 'imported-final', 'imported-intermediate', 'draft-insertion', *CONTROL_GROUPS), default='all')
     main(parser.parse_args().phase)

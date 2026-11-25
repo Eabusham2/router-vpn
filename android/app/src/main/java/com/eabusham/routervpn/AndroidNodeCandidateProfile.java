@@ -30,13 +30,21 @@ final class AndroidNodeCandidateProfile {
     private final String execution;
     final String description;
     AndroidNodeCandidateProfile(AndroidNodeCandidateMeasurement operation,AndroidNodeCandidateResult result)throws Exception {
-        this(operation,result,null);
+        this(operation,result,null,false);
     }
     static AndroidNodeCandidateProfile captureTemporary(AndroidNodeCandidateMeasurement operation,AndroidNodeCandidateResult result,SavedResultAuthority authority)throws Exception {
         if(authority==null)throw new IllegalArgumentException("The original temporary preparation authority is required.");
-        return new AndroidNodeCandidateProfile(operation,result,authority);
+        return new AndroidNodeCandidateProfile(operation,result,authority,false);
     }
-    private AndroidNodeCandidateProfile(AndroidNodeCandidateMeasurement operation,AndroidNodeCandidateResult result,SavedResultAuthority authority)throws Exception {
+    static AndroidNodeCandidateProfile captureDraftInsertion(AndroidNodeCandidateMeasurement operation, AndroidNodeCandidateResult result,
+            SavedResultAuthority authority, AndroidNodeCandidateProfile named) throws Exception {
+        AndroidNodeCandidateCatalog catalog = operation.catalog;
+        if (!catalog.originalSource.measurementOnly() || !"routed-candidate-response".equals(catalog.measurement)) return null;
+        catalog.originalSource.requireCandidatePurpose(catalog.prefix);
+        if (named != null && named.sources.size() == catalog.originalSource.members.size() + 1) return named;
+        return new AndroidNodeCandidateProfile(operation,result,authority,true);
+    }
+    private AndroidNodeCandidateProfile(AndroidNodeCandidateMeasurement operation,AndroidNodeCandidateResult result,SavedResultAuthority authority,boolean retainFinal)throws Exception {
         if(operation==null||result==null)throw new IllegalArgumentException("The original measured candidate is required.");
         this.operation=operation;this.result=result;this.savedAuthority=authority;requireCurrent();
         AndroidNodeCandidateCatalog catalog=operation.catalog;
@@ -54,16 +62,17 @@ final class AndroidNodeCandidateProfile {
         if(original==null||replacement<1||replacement>=original.members.size()||original.members.size()!=original.modes.size())
             throw new IllegalStateException("The measured prefix has no original next-hop position.");
         execution=original.execution;
-        boolean insert=response&&replacement<original.members.size()-1;
+        boolean insert=response&&(retainFinal || replacement<original.members.size()-1);
         if(response){
             if(candidate.imported||!"shadowsocks".equals(candidateMode)
                     ||!AndroidNodeChainCapture.responsePrefix(original.members,original.modes,catalog.prefix,execution))
                 throw new IllegalStateException("The authenticated response lost its original stream or paired candidate.");
             if (!"local".equals(execution)) {
-                AndroidNodeStore.ChainSource originalFinal=original.members.get(original.members.size()-1);
-                if (insert || !"auto".equals(execution) || candidate.profileId.equals(originalFinal.profileId)
-                        || candidate.proofId.equals(originalFinal.proofId))
-                    throw new IllegalStateException("Choose a different paired final for the original Compare route.");
+                if (!"auto".equals(execution)) throw unavailable("A selected private response needs the original Compare Local winner.");
+                for (AndroidNodeStore.ChainSource member : original.members) {
+                    if (candidate.profileId.equals(member.profileId) || candidate.proofId.equals(member.proofId))
+                        throw unavailable("Choose a paired node distinct from every original route member.");
+                }
             }
             if(insert&&original.members.size()>=AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH)
                 throw unavailable("The original path has reached its physical traversal limit.");
@@ -80,7 +89,7 @@ final class AndroidNodeCandidateProfile {
         if(insert){
             sources.add(replacement,candidate);modes.add(replacement,candidateMode);
             if(!AndroidNodeChainCapture.pairedStreamInterior(sources,modes,execution,replacement))
-                throw unavailable("Saving this intermediate needs a Local packet prefix followed by literal Shadowsocks streams with Start Layer off.");
+                throw unavailable("This intermediate requires a qualified packet entry followed by independent Shadowsocks streams with Start Layer off.");
         }else{
             sources.set(replacement,candidate);modes.set(replacement,candidateMode);
         }
@@ -166,6 +175,16 @@ final class AndroidNodeCandidateProfile {
         synchronized(operation){
             requireSavedCurrent();AndroidConnectionProfileStore store=new AndroidConnectionProfileStore(context,new AndroidNodeStore(context),new AndroidStandardExitStore(context));
             return store.appendOrderedProposal(name,sources,modes,execution,()->{try{requireSavedCurrent();}catch(Exception stale){throw new IllegalStateException("Retest this original candidate before saving.",stale);}});
+        }
+    }
+    void useInDraft(AndroidOrderedPathSelection draft) throws Exception {
+        synchronized (operation) {
+            AndroidNodeCandidateCatalog catalog = operation.catalog;
+            if (savedAuthority == null || !"routed-candidate-response".equals(catalog.measurement)
+                    || sources.size() != catalog.originalSource.members.size() + 1)
+                throw new IllegalStateException("This measurement has no complete insertion for the current draft.");
+            requireSavedCurrent();
+            draft.insertMeasured(catalog.originalSource,catalog.prefix,sources.get(catalog.prefix + 1),()->result.current(System.currentTimeMillis()));
         }
     }
 }
