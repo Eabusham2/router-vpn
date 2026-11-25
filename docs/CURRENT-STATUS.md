@@ -1,3 +1,7 @@
+# November 25 native client and Setup Center repairs
+
+The iOS hop editor retains the paired WireGuard entry when selecting an imported public exit. Setup Center can restart the guide and validates onboarding status replies even when browser storage is unavailable. All nine desktop controller cases passed together in 21.86 seconds on Linux without the race detector. With the race detector, all nine passed individually and the combined run reached its 120-second limit during case four. Darwin retains six baseline packages and 47 controls. Hosted native release and installed-device acceptance are pending. [Repair record and verification results](IMPLEMENTATION-2026-11-25-NATIVE-REPAIRS.md)
+
 # 2026-11-25: Ordered external exits and selected Server responses
 
 The [external-final and Server response record](IMPLEMENTATION-2026-11-25-EXTERNAL-FINAL-AND-SERVER-RESPONSES.md)
