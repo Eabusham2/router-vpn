@@ -1,0 +1,23 @@
+{"Action":"start","Package":"router-vpn/cmd/client"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement","Output":"=== RUN   TestDesktopSelectedCandidateResultRetirement\n"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement/original"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement/original","Output":"=== RUN   TestDesktopSelectedCandidateResultRetirement/original\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement/original","Output":"--- PASS: TestDesktopSelectedCandidateResultRetirement/original (4.20s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement/original"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement/same-bytes-foreign-inode"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement/same-bytes-foreign-inode","Output":"=== RUN   TestDesktopSelectedCandidateResultRetirement/same-bytes-foreign-inode\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement/same-bytes-foreign-inode","Output":"--- PASS: TestDesktopSelectedCandidateResultRetirement/same-bytes-foreign-inode (4.37s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement/same-bytes-foreign-inode"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement/modified-original-bytes"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement/modified-original-bytes","Output":"=== RUN   TestDesktopSelectedCandidateResultRetirement/modified-original-bytes\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement/modified-original-bytes","Output":"--- PASS: TestDesktopSelectedCandidateResultRetirement/modified-original-bytes (4.09s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement/modified-original-bytes"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement/missing-original"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement/missing-original","Output":"=== RUN   TestDesktopSelectedCandidateResultRetirement/missing-original\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement/missing-original","Output":"--- PASS: TestDesktopSelectedCandidateResultRetirement/missing-original (4.16s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement/missing-original"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement","Output":"--- PASS: TestDesktopSelectedCandidateResultRetirement (16.82s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateResultRetirement"}
+{"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client"}

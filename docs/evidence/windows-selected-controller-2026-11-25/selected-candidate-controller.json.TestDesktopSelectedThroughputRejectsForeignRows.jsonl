@@ -1,0 +1,39 @@
+{"Action":"start","Package":"router-vpn/cmd/client"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows","Output":"=== RUN   TestDesktopSelectedThroughputRejectsForeignRows\n"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/unjoined"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/unjoined","Output":"=== RUN   TestDesktopSelectedThroughputRejectsForeignRows/unjoined\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/unjoined","Output":"--- PASS: TestDesktopSelectedThroughputRejectsForeignRows/unjoined (0.00s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/unjoined"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/fifty"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/fifty","Output":"=== RUN   TestDesktopSelectedThroughputRejectsForeignRows/fifty\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/fifty","Output":"--- PASS: TestDesktopSelectedThroughputRejectsForeignRows/fifty (0.00s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/fifty"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/winner"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/winner","Output":"=== RUN   TestDesktopSelectedThroughputRejectsForeignRows/winner\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/winner","Output":"--- PASS: TestDesktopSelectedThroughputRejectsForeignRows/winner (0.00s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/winner"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/swapped"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/swapped","Output":"=== RUN   TestDesktopSelectedThroughputRejectsForeignRows/swapped\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/swapped","Output":"--- PASS: TestDesktopSelectedThroughputRejectsForeignRows/swapped (0.00s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/swapped"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/missing-final"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/missing-final","Output":"=== RUN   TestDesktopSelectedThroughputRejectsForeignRows/missing-final\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/missing-final","Output":"--- PASS: TestDesktopSelectedThroughputRejectsForeignRows/missing-final (0.00s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/missing-final"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/wrong-size"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/wrong-size","Output":"=== RUN   TestDesktopSelectedThroughputRejectsForeignRows/wrong-size\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/wrong-size","Output":"--- PASS: TestDesktopSelectedThroughputRejectsForeignRows/wrong-size (0.00s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/wrong-size"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/bad-duration"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/bad-duration","Output":"=== RUN   TestDesktopSelectedThroughputRejectsForeignRows/bad-duration\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/bad-duration","Output":"--- PASS: TestDesktopSelectedThroughputRejectsForeignRows/bad-duration (0.00s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/bad-duration"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/bad-rate"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/bad-rate","Output":"=== RUN   TestDesktopSelectedThroughputRejectsForeignRows/bad-rate\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/bad-rate","Output":"--- PASS: TestDesktopSelectedThroughputRejectsForeignRows/bad-rate (0.00s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows/bad-rate"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows","Output":"--- PASS: TestDesktopSelectedThroughputRejectsForeignRows (4.08s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputRejectsForeignRows"}
+{"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client"}

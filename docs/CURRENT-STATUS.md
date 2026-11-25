@@ -1,6 +1,8 @@
 # November 25 native client and Setup Center repairs
 
-The iOS hop editor retains the paired WireGuard entry when selecting an imported public exit. Setup Center can restart the guide and validates onboarding status replies even when browser storage is unavailable. All nine desktop controller cases passed together in 21.86 seconds on Linux without the race detector. With the race detector, all nine passed individually and the combined run reached its 120-second limit during case four. Darwin retains six baseline packages and 47 controls. Hosted native release and installed-device acceptance are pending. [Repair record and verification results](IMPLEMENTATION-2026-11-25-NATIVE-REPAIRS.md)
+The iOS hop editor retains the paired WireGuard entry when selecting an imported public exit. Setup Center validates current onboarding replies, discards pending checks on restart, and works when browser storage is unavailable. The native Windows controller diagnostic at `7d86b5ccd` passed 18 roots and 91 required verdicts with race detection, including all nine private-response cases in 115.16 seconds under their original 120-second deadline. Its complete controller input digest matched `9cda43e30`; the original receipt and transcripts are retained. Darwin retains six baseline packages and 47 controls. [Repair record and verification results](IMPLEMENTATION-2026-11-25-NATIVE-REPAIRS.md)
+
+Follow-up repairs pin Naive HTTP/2 header storage across its native stream-start call and make the Windows Xray fixture wait for its owned REALITY detector before traffic. The original lifecycle rules, encrypted cases and time limits remain required. These changes passed their local source and runner suites; their new native results, the complete release and installed-device acceptance are still pending.
 
 # 2026-11-25: Ordered external exits and selected Server responses
 

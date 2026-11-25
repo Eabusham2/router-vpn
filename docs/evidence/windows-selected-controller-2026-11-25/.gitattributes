@@ -1,0 +1,2 @@
+# Preserve the CRLF bytes in the original Windows runner artifact.
+selected-candidate-controller.json* -text !eol whitespace=cr-at-eol

@@ -1,0 +1,7 @@
+{"Action":"start","Package":"router-vpn/cmd/client"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerUnregisteredCannotBeSaved"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerUnregisteredCannotBeSaved","Output":"=== RUN   TestDesktopSelectedServerUnregisteredCannotBeSaved\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerUnregisteredCannotBeSaved","Output":"--- PASS: TestDesktopSelectedServerUnregisteredCannotBeSaved (9.40s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedServerUnregisteredCannotBeSaved"}
+{"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client"}

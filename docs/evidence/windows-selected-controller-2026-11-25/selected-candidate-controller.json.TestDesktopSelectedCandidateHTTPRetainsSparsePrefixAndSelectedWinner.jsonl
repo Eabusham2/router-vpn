@@ -1,0 +1,19 @@
+{"Action":"start","Package":"router-vpn/cmd/client"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner","Output":"=== RUN   TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner\n"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/server/server"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/server/server","Output":"=== RUN   TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/server/server\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/server/server","Output":"--- PASS: TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/server/server (9.19s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/server/server"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/auto/local"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/auto/local","Output":"=== RUN   TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/auto/local\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/auto/local","Output":"--- PASS: TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/auto/local (9.29s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/auto/local"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/auto/server"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/auto/server","Output":"=== RUN   TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/auto/server\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/auto/server","Output":"--- PASS: TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/auto/server (8.91s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner/auto/server"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner","Output":"--- PASS: TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner (27.39s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner"}
+{"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client"}

@@ -1,0 +1,7 @@
+{"Action":"start","Package":"router-vpn/cmd/client"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseRejectsChangedOriginalSuffixBeforeSave"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseRejectsChangedOriginalSuffixBeforeSave","Output":"=== RUN   TestDesktopSelectedIntermediateResponseRejectsChangedOriginalSuffixBeforeSave\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseRejectsChangedOriginalSuffixBeforeSave","Output":"--- PASS: TestDesktopSelectedIntermediateResponseRejectsChangedOriginalSuffixBeforeSave (9.10s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseRejectsChangedOriginalSuffixBeforeSave"}
+{"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client"}

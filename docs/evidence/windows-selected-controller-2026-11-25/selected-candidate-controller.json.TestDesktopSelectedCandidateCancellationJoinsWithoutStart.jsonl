@@ -1,0 +1,19 @@
+{"Action":"start","Package":"router-vpn/cmd/client"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart","Output":"=== RUN   TestDesktopSelectedCandidateCancellationJoinsWithoutStart\n"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/factory-failure"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/factory-failure","Output":"=== RUN   TestDesktopSelectedCandidateCancellationJoinsWithoutStart/factory-failure\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/factory-failure","Output":"--- PASS: TestDesktopSelectedCandidateCancellationJoinsWithoutStart/factory-failure (4.60s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/factory-failure"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/metadata-refusal"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/metadata-refusal","Output":"=== RUN   TestDesktopSelectedCandidateCancellationJoinsWithoutStart/metadata-refusal\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/metadata-refusal","Output":"--- PASS: TestDesktopSelectedCandidateCancellationJoinsWithoutStart/metadata-refusal (4.50s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/metadata-refusal"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/cancel-before-metadata"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/cancel-before-metadata","Output":"=== RUN   TestDesktopSelectedCandidateCancellationJoinsWithoutStart/cancel-before-metadata\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/cancel-before-metadata","Output":"--- PASS: TestDesktopSelectedCandidateCancellationJoinsWithoutStart/cancel-before-metadata (4.34s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart/cancel-before-metadata"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart","Output":"--- PASS: TestDesktopSelectedCandidateCancellationJoinsWithoutStart (13.44s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateCancellationJoinsWithoutStart"}
+{"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client"}

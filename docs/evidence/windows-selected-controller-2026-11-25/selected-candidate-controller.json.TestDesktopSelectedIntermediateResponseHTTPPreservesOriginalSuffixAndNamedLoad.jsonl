@@ -1,0 +1,23 @@
+{"Action":"start","Package":"router-vpn/cmd/client"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad","Output":"=== RUN   TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad\n"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/4/1"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/4/1","Output":"=== RUN   TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/4/1\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/4/1","Output":"--- PASS: TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/4/1 (12.63s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/4/1"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/9/6"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/9/6","Output":"=== RUN   TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/9/6\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/9/6","Output":"--- PASS: TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/9/6 (12.38s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/9/6"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/16/8"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/16/8","Output":"=== RUN   TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/16/8\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/16/8","Output":"--- PASS: TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/16/8 (16.49s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/16/8"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/16/13"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/16/13","Output":"=== RUN   TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/16/13\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/16/13","Output":"--- PASS: TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/16/13 (15.95s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad/16/13"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad","Output":"--- PASS: TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad (57.45s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad"}
+{"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client"}

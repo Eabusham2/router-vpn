@@ -1,0 +1,91 @@
+{"Action":"start","Package":"router-vpn/cmd/client"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals\n"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/source"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/source","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/source\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/source","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/source (0.02s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/source"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/config"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/config","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/config\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/config","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/config (0.02s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/config"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/preparation-source"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/preparation-source","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/preparation-source\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/preparation-source","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/preparation-source (0.01s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/preparation-source"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/preparation-config"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/preparation-config","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/preparation-config\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/preparation-config","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/preparation-config (0.02s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/preparation-config"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/epoch"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/epoch","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/epoch\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/epoch","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/epoch (0.02s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/epoch"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/requested"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/requested","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/requested\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/requested","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/requested (0.01s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/requested"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/execution"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/execution","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/execution\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/execution","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/execution (0.01s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/execution"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/position"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/position","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/position\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/position","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/position (0.01s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/position"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/prefix"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/prefix","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/prefix\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/prefix","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/prefix (0.01s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/prefix"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/target-id"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/target-id","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/target-id\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/target-id","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/target-id (0.02s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/target-id"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/target-source"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/target-source","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/target-source\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/target-source","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/target-source (0.02s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/target-source"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/extra-target-field"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/extra-target-field","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/extra-target-field\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/extra-target-field","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/extra-target-field (0.02s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/extra-target-field"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/missing"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/missing","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/missing\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/missing","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/missing (0.01s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/missing"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/extra"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/extra","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/extra\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/extra","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/extra (0.01s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/extra"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/duplicate"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/duplicate","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/duplicate\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/duplicate","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/duplicate (0.01s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/duplicate"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/whitespace"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/whitespace","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/whitespace\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/whitespace","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/whitespace (0.01s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/whitespace"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/request"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/request","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/request\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/request","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/request (0.01s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/request"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/generation"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/generation","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/generation\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/generation","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/generation (0.01s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/generation"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/inventory"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/inventory","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/inventory\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/inventory","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/inventory (0.01s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/inventory"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/capture"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/capture","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/capture\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/capture","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/capture (0.02s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/capture"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/revision"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/revision","Output":"=== RUN   TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/revision\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/revision","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/revision (0.01s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals/revision"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals","Output":"--- PASS: TestDesktopSelectedCandidateMetadataRejectsForeignOriginals (4.37s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidateMetadataRejectsForeignOriginals"}
+{"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client"}

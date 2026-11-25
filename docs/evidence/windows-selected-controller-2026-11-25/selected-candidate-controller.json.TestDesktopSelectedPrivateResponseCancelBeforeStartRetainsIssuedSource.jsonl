@@ -1,0 +1,19 @@
+{"Action":"start","Package":"router-vpn/cmd/client"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource","Output":"=== RUN   TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource\n"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/private-penultimate/16"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/private-penultimate/16","Output":"=== RUN   TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/private-penultimate/16\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/private-penultimate/16","Output":"--- PASS: TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/private-penultimate/16 (9.88s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/private-penultimate/16"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/all-imported/16"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/all-imported/16","Output":"=== RUN   TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/all-imported/16\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/all-imported/16","Output":"--- PASS: TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/all-imported/16 (9.20s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/all-imported/16"}
+{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/earlier-private/16"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/earlier-private/16","Output":"=== RUN   TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/earlier-private/16\n"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/earlier-private/16","Output":"--- PASS: TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/earlier-private/16 (11.89s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource/earlier-private/16"}
+{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource","Output":"--- PASS: TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource (30.97s)\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource"}
+{"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
+{"Action":"pass","Package":"router-vpn/cmd/client"}

@@ -1,0 +1,369 @@
+{
+  "compile": {
+    "command": [
+      "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+      "test",
+      "-c",
+      "-race",
+      "-p=1",
+      "-mod=readonly",
+      "-o",
+      "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+      "./cmd/client"
+    ],
+    "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3"
+  },
+  "compiler": "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+  "phase": "connected",
+  "race": true,
+  "records": [
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedServerUnregisteredCannotBeSaved$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "3b8ec7f58fa7a034f1034c456f0de63a6fd3eccdd2264764e4c31e43607b4b9e",
+      "returncode": 0,
+      "root": "TestDesktopSelectedServerUnregisteredCannotBeSaved",
+      "tests": 1
+    },
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedServerResponseConnected$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "5339acb705b9ec3f1576fe2a505a3165ecbbab8b57a058454b46cd285f0cc7b0",
+      "returncode": 0,
+      "root": "TestDesktopSelectedServerResponseConnected",
+      "tests": 4
+    },
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedThroughputPublicController$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "850f1fe8390204dae00df837a5ba3a534f480e017eb9fdc0602b324bf857deb1",
+      "returncode": 0,
+      "root": "TestDesktopSelectedThroughputPublicController",
+      "tests": 4
+    },
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedThroughputCancellationJoinsOriginal$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "fd7f4e26e1896f9f19aec9731c1642b9048c19dbff826bb8cbb9b1faea63918e",
+      "returncode": 0,
+      "root": "TestDesktopSelectedThroughputCancellationJoinsOriginal",
+      "tests": 1
+    },
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedThroughputTerminalOwnership$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "12640ea89c0bebe2e0341d389777ca44edcc3c50337b0f5c5c13553d0581764b",
+      "returncode": 0,
+      "root": "TestDesktopSelectedThroughputTerminalOwnership",
+      "tests": 5
+    },
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedThroughputRejectsForeignRows$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "ea0acc4fbba8ad2a2af4b9906f0134e942e8a04a2cbfdd53e31297dc35b871ef",
+      "returncode": 0,
+      "root": "TestDesktopSelectedThroughputRejectsForeignRows",
+      "tests": 9
+    },
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "935071913ca0140d41100090c94071b17208a7417321ecbab5efa9e4547138ff",
+      "returncode": 0,
+      "root": "TestDesktopSelectedCandidateHTTPRetainsSparsePrefixAndSelectedWinner",
+      "tests": 4
+    },
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedCandidateMetadataRejectsForeignOriginals$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "45ce57dc26fc54989a3efcad08e05478d7d89ebbb29455601f73244929db8964",
+      "returncode": 0,
+      "root": "TestDesktopSelectedCandidateMetadataRejectsForeignOriginals",
+      "tests": 22
+    },
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedCandidateCancellationJoinsWithoutStart$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "678ee197eb9ff7dd71825b702e0bfef342d972666f05779c6610024b477f4472",
+      "returncode": 0,
+      "root": "TestDesktopSelectedCandidateCancellationJoinsWithoutStart",
+      "tests": 4
+    },
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedCandidatePendingRetirementPreservesForeignMetadata$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "48f5b36c7af954b8f9001b10619d596601ec53d4b38edca24fea1e94ead88546",
+      "returncode": 0,
+      "root": "TestDesktopSelectedCandidatePendingRetirementPreservesForeignMetadata",
+      "tests": 1
+    },
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedCandidateResultRetirement$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "fc1d5443dea050aa10e43a80600c19b41d64a3a99e6c150dec64a2d8e14d7f0d",
+      "returncode": 0,
+      "root": "TestDesktopSelectedCandidateResultRetirement",
+      "tests": 5
+    },
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedMeasurementWorkspaceRetirement$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "1fc5a433b37fe5575f1026d652c1ee0bc7d71e79bf8719430aeb42acd3ea2b31",
+      "returncode": 0,
+      "root": "TestDesktopSelectedMeasurementWorkspaceRetirement",
+      "tests": 6
+    },
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "1c5d4f284d61ad881b1b178fadea3703a7321d8c8449f5691c194657e17bd377",
+      "returncode": 0,
+      "root": "TestDesktopSelectedPrivateResponseHTTPPreservesCompleteSourceAndNamedProfile",
+      "tests": 10
+    },
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "a47770a844d675d52cadc76cd54ddab24b5695e37bbae526d7caa3f44533da81",
+      "returncode": 0,
+      "root": "TestDesktopSelectedPrivateResponseCancelBeforeStartRetainsIssuedSource",
+      "tests": 4
+    },
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedPrivateResponseConnectedServerWinnerHasNoPrivateOffer$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "599773c3fd7cd266a70b2fb74906cb4a3b2c7d74544d29518730bc950ae3a135",
+      "returncode": 0,
+      "root": "TestDesktopSelectedPrivateResponseConnectedServerWinnerHasNoPrivateOffer",
+      "tests": 4
+    },
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "d822f62586f365716bdb00d44bb5e0a8b83e5cdc3de82caafc4d5e7e24bb4c58",
+      "returncode": 0,
+      "root": "TestDesktopSelectedIntermediateResponseHTTPPreservesOriginalSuffixAndNamedLoad",
+      "tests": 5
+    },
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedIntermediateResponseRejectsChangedOriginalSuffixBeforeSave$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "37a478ea8f5314c2c313251dca983b76981d9c20bf4de3874f21f5dc1c05fea7",
+      "returncode": 0,
+      "root": "TestDesktopSelectedIntermediateResponseRejectsChangedOriginalSuffixBeforeSave",
+      "tests": 1
+    },
+    {
+      "command": [
+        "D:\\a\\_temp\\routervpn-go-windows-sockets\\bin\\go.exe",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\routervpn-selected-candidate-controller-q5_s9lof\\controller.test.exe",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestDesktopSelectedIntermediateResponseCancelCannotBorrowAnotherEligibleStop$"
+      ],
+      "image_sha256": "7e8e542a5a32505b7a370cbbacc88804d487bb6d39075372de39e9dd6e5589b3",
+      "output_sha256": "8fcbd4f39a5ed87dbde123dad7eb90ef725226190138db770666b5d4ef1a8c20",
+      "returncode": 0,
+      "root": "TestDesktopSelectedIntermediateResponseCancelCannotBorrowAnotherEligibleStop",
+      "tests": 1
+    }
+  ],
+  "schema": 1,
+  "scope": "Shipping desktop controller, HTTP, selected inventory, MTU and mailbox retirement. The child process and kernel are modeled.",
+  "source_sha256": "d4e693e3d8fa3990eef61a9f47d14e9fdfbf1c7ea9735de238359f504a592dc3",
+  "status": "passed",
+  "target": "windows/amd64",
+  "toolchain": "go1.26.3"
+}
