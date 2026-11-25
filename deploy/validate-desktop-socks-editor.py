@@ -30,7 +30,7 @@ SOURCE_PATHS = (
     "deploy/test_desktop_connection_profile_modes.py",
     "deploy/test_desktop_connection_profile_modes_runner.py",
 )
-WINDOWS_EDITOR_WITNESSES = {'socks-execution-old-trio': 'SOCKS execution refused a complete later prefix', 'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer',
+WINDOWS_EDITOR_WITNESSES = {'followup-position': 'A fresh trial did not follow the inserted hop before its retained suffix', 'socks-execution-old-trio': 'SOCKS execution refused a complete later prefix', 'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer',
  'socks-execution-global': 'SOCKS execution borrowed unrelated global '
                            'capability',
  'socks-execution-capability': 'SOCKS execution accepted absent or nonboolean '
@@ -108,7 +108,8 @@ LINUX_CONTROLS = ('local-imported-position', 'local-imported-capability', 'hyste
  'response-inventory',
  'hostname-minimum',
  'hostname-capability',
- 'hostname-conflict', 'hysteria-execution-global')
+ 'hostname-conflict', 'hysteria-execution-global',
+ 'followup-inserted-position', 'followup-linked-suffix', 'extended-paired-layer')
 TARGETS = {
     "linux/amd64": ("Linux", ("x86_64", "AMD64")),
     "windows/amd64": ("Windows", ("AMD64", "x86_64")),

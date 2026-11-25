@@ -81,7 +81,7 @@ class JobLifecycleTests(unittest.TestCase):
                     self.assertEqual(manager.status(job)["status"], "delivering")
                     if action == "expire":
                         with manager.lock:
-                            deadline = manager.jobs[job]["retention_deadline_epoch"]
+                            deadline = manager.jobs[job]["retention_deadline_monotonic"]
                         self.assertEqual(manager.reap_expired(deadline), 1)
                     elif action == "delete":
                         manager.cancel(job)
@@ -94,17 +94,54 @@ class JobLifecycleTests(unittest.TestCase):
                     manager.finish_delivery(job, True, 1)
                     self.assertEqual(manager.status(job)["status"], result)
 
-    def test_reaper_uses_original_deadline_during_unpolled_stream(self):
-        manager = self.manager()
-        with patch.object(broker._jobs, "PACKAGE_RETENTION_SECONDS", 0.4):
+    def test_civil_clock_changes_preserve_ready_countdown_and_repeat_delivery(self):
+        with (patch.object(broker._jobs, "time", SimpleNamespace(**vars(time))) as job_time,
+              patch.object(broker._jobs, "_retention_now", return_value=1000.0) as elapsed):
+            # Mock only the broker's clocks. Threads and the fixture keep real time.
+            ready_epoch = 1_700_000_000
+            job_time.time = lambda: ready_epoch
+            manager = self.manager()
             job = self.ready(manager)
-        stream, meta = manager.begin_delivery(job)
-        stream.close()
-        manager.update_delivery(job, 1, 2, meta["delivery_attempts"])
-        # No status call or explicit reap can drive the timer in this interval.
-        self.wait_for(lambda: not self.work.exists())
-        manager.finish_delivery(job, True, meta["delivery_attempts"])
-        self.assertEqual(manager.status(job)["status"], "expired")
+            original_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ready_epoch + 1800))
+            for (age, wall_shift, remaining, success) in ((17.25, 7200, 1783, False),
+                                                         (1799.75, -7200, 1, True)):
+                elapsed.return_value = 1000 + age
+                job_time.time = lambda: ready_epoch + age + wall_shift
+                state = manager.status(job)
+                self.assertEqual(state["retained_until"], original_utc)
+                self.assertEqual(state["expires_in_seconds"], remaining)
+                self.assertIn("download_url", state)
+                self.assertNotIn("retention_deadline_monotonic", state)
+                stream, meta = manager.begin_delivery(job)
+                with stream:
+                    self.assertEqual(stream.read(1), b"x")
+                manager.finish_delivery(job, success, meta["delivery_attempts"])
+                state = manager.status(job)
+                self.assertEqual(state["status"], "delivered" if success else "delivery-interrupted")
+                self.assertEqual(state["expires_in_seconds"], remaining)
+                self.assertEqual(state["retained_until"], original_utc)
+            elapsed.return_value = 2800.0
+            with self.assertRaises(RuntimeError):
+                manager.begin_delivery(job)
+            self.wait_for(lambda: not self.work.exists())
+            expired = manager.status(job)
+            self.assertEqual((expired["status"], expired["expires_in_seconds"]), ("expired", 0))
+            self.assertNotIn("download_url", expired)
+
+    def test_reaper_uses_original_deadline_during_unpolled_stream(self):
+        # Keep the elapsed clock and broker threads running during a civil clock rollback.
+        with patch.object(broker._jobs, "time", SimpleNamespace(**vars(time))) as job_time:
+            manager = self.manager()
+            with patch.object(broker._jobs, "PACKAGE_RETENTION_SECONDS", 0.4):
+                job = self.ready(manager)
+            stream, meta = manager.begin_delivery(job)
+            stream.close()
+            manager.update_delivery(job, 1, 2, meta["delivery_attempts"])
+            job_time.time = lambda: time.time() - 7200
+            # No status call or explicit reap can drive the timer in this interval.
+            self.wait_for(lambda: not self.work.exists())
+            manager.finish_delivery(job, True, meta["delivery_attempts"])
+            self.assertEqual(manager.status(job)["status"], "expired")
 
     def test_delivery_start_failures_leave_no_unjoinable_writer(self):
         manager = self.manager()
@@ -574,7 +611,7 @@ p._fetch_job_source(*sys.argv[2:])
         self.assertEqual(first["retained_until"], second["retained_until"])
         self.assertTrue(trees[0].is_dir())
         with manager.lock:
-            deadline = manager.jobs[job]["retention_deadline_epoch"]
+            deadline = manager.jobs[job]["retention_deadline_monotonic"]
         manager.reap_expired(deadline)
         self.assertFalse(self.work.exists())
 

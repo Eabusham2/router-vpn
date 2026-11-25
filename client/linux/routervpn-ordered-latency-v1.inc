@@ -78,7 +78,7 @@ static JsonNode *linux_ol_source_roles_v1(JsonObject *source, int count, gboolea
         if ((i == 0 || i == count - 1) && g_strcmp0(kind, "private-node")) return NULL;
         public = public || !g_strcmp0(kind, "public-path");
         if (i > 0 && i < count - 1 && !g_strcmp0(kind, "private-node")) {
-            if (selected && (i == 1 || private_interior)) return NULL;
+            if (selected && i == 1) return NULL;
             private_interior++;
         }
         g_string_append_printf(canonical, "%s\"%s\"", i ? "," : "", kind);
@@ -111,7 +111,7 @@ static JsonNode *linux_ol_selected_v1(JsonObject *capture) {
     JsonArray *nodes = linux_ol_array_v1(selected, "nodes");
     if (nodes == NULL || json_array_get_length(nodes) < 2 || (extended ? (!multiple || json_array_get_length(nodes) != count) : json_array_get_length(nodes) > 8)) goto done;
     JsonArray *public = NULL;
-    guint seen = 0, private_interiors = 0;
+    guint seen = 0;
     gboolean earlier_public = FALSE;
     if (multiple) {
         JsonObject *original = linux_ol_object_v1(selected, "multiple_imported");
@@ -129,10 +129,7 @@ static JsonNode *linux_ol_selected_v1(JsonObject *capture) {
         if (json_object_get_size(node) != 4 || !linux_ol_text_v1(id, 64) || strspn(id, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != strlen(id) ||
             !linux_ol_number_v1(node, "position", position, position, TRUE) || g_strcmp0(linux_ol_string_v1(node, "role"), role) ||
             (g_strcmp0(kind, "private-node") && (g_strcmp0(kind, "public-path") || position == 0 || position + 1 >= json_array_get_length(nodes) || (!multiple && position != json_array_get_length(nodes)-2)))) goto done;
-        if (extended && position > 0 && position + 1 < count && !g_strcmp0(kind, "private-node")) {
-            if (position == 1 || private_interiors) goto done;
-            private_interiors++;
-        }
+        if (extended && position == 1 && g_strcmp0(kind, "public-path")) goto done;
         if (multiple && !g_strcmp0(kind, "public-path")) {
             if (seen >= json_array_get_length(public)) goto done;
             JsonNode *raw_row = json_array_get_element(public, seen++);

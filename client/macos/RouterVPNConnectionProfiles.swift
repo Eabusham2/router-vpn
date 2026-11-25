@@ -176,7 +176,7 @@ enum RouterVPNOrderedNodes {
                 guard finalProfile(profile, mode: "shadowsocks") else { return false }
                 if position < rows.count - 1 && !prefixModes.contains(mode) {
                     guard packets > 0, position >= packets, mode == "shadowsocks",
-                          !selectedExecution || (!pairedStream && position >= 2 && packets == 1 && rows[0]["mode"] == "wg"),
+                          !selectedExecution || (position >= 2 && packets == 1 && rows[0]["mode"] == "wg"),
                           rows.dropFirst(packets).allSatisfy({ $0["mode"] == "shadowsocks" }) else { return false }
                     pairedStream = true
                 }
@@ -486,7 +486,7 @@ struct RouterVPNOrderedNodeDraft {
                 return RouterVPNOrderedNodes.importedExecutionPrefixes(nodes, profiles: capturedCatalog) &&
                     capturedCatalog.filter { ($0["id"] as? String).map(sourceIDs.contains) == true }.allSatisfy(RouterVPNOrderedNodes.startLayerOff)
             }
-            if index < nodes.count - 2 && (nodes.count >= 96 || !prefixes.dropFirst().allSatisfy(importedIDs.contains)) { return false }
+            if index < nodes.count - 2 && nodes.count >= RouterVPNOrderedNodes.physicalTraversalDepth { return false }
             let sourceIDs = Set(prefixes + [control])
             return modes.dropFirst().allSatisfy { $0 == "shadowsocks" } &&
                 RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog, selectedExecution: true) &&
@@ -1431,7 +1431,16 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
                 let current = try owner.api.json("/api/profiles", timeout: 5) as? [String: Any] ?? [:]
                 _ = try RouterVPNOrderedNodes.connectBody(updated.selection(), current: current)
                 self.draft = updated
-                self.render(selected: index + 1)
+                let inserted = index + 1
+                self.render(selected: inserted)
+                guard updated.nodes.count < RouterVPNOrderedNodes.physicalTraversalDepth, updated.canMeasure(after: inserted) else { return }
+                let revision = self.revision
+                DispatchQueue.main.async { [weak self, weak owner] in
+                    guard let self, let owner, self.window?.isVisible == true, self.revision == revision,
+                          self.path.indexOfSelectedItem == inserted, owner.connectionProfileSelectionGeneration == self.draft.generation,
+                          owner.captureConnectionProfileSelection().selectedNodeID == self.draft.control else { return }
+                    self.measureNext()
+                }
             }
         } catch { status.stringValue = error.localizedDescription }
     }

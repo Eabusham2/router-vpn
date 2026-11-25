@@ -63,7 +63,7 @@ struct IOSOrderedLatencyExecution: Sendable {
         if let extended {
             let pairedStreams = kinds.indices.dropFirst().dropLast().filter { kinds[$0] == "private-node" }
             guard ids == extended.ids, kinds == extended.kinds, kinds.first == "private-node", kinds.last == "private-node",
-                  pairedStreams.isEmpty || pairedStreams.count == 1 && pairedStreams[0] >= 2 else { throw R.issue() }
+                  !pairedStreams.contains(1) else { throw R.issue() }
         }
         self.binding = binding; self.ids = ids; self.kinds = kinds
     }

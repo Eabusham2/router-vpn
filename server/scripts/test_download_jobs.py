@@ -96,7 +96,7 @@ def main() -> int:
             # Expiry owns the job under the manager lock, removes the package and
             # build workspace, and publishes terminal state only after cleanup.
             with manager.lock:
-                manager.jobs[job_id]["retention_deadline_epoch"] = time.time() - 1
+                manager.jobs[job_id]["retention_deadline_monotonic"] = m._retention_now() - 1
             assert manager.reap_expired() == 1
             expired = manager.status(job_id)
             assert expired["status"] == "expired" and expired["expires_in_seconds"] == 0

@@ -93,10 +93,10 @@ final class AndroidNodeCandidateProfile {
 }'''
 SOURCES[APP + 'AndroidExternalComparisonNetwork.java'] = '''package com.eabusham.routervpn;
 final class AndroidExternalComparisonNetwork {
- static volatile AndroidExternalComparisonNetwork latest;final android.net.Network physical;volatile boolean valid=true,closed;int proved;
+ static volatile AndroidExternalComparisonNetwork latest;final android.net.Network physical;volatile boolean valid=true,closed,holdClose,closeAttempted;int proved;
  AndroidExternalComparisonNetwork(android.content.Context context){physical=((android.net.ConnectivityManager)context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE)).physical;latest=this;}
  void start(){}void requireBeforeStart(){requireCurrent();}void requireCurrent(){if(!valid||closed)throw new IllegalStateException("captured physical cohort changed away and back");}
- void requireProved(android.net.Network actual){requireCurrent();if(actual!=physical)throw new IllegalStateException("different native physical network");proved++;}void close(){closed=true;}
+ void requireProved(android.net.Network actual){requireCurrent();if(actual!=physical)throw new IllegalStateException("different native physical network");proved++;}void close(){closeAttempted=true;if(holdClose)throw new IllegalStateException("network observer is still retiring");closed=true;}
 }'''
 
 CASES = r'''
@@ -112,6 +112,23 @@ CASES = r'''
   return AndroidNodeCandidatePreparation.reserve(f.service,f.runtime,f.source,AndroidHomeStateStore.snapshot(f.service),AndroidNodeChainSession.selection(f.service,f.source),2,callback);
  }
  static void retire(AndroidNodeCandidatePreparation operation)throws Exception{operation.cancelFromUser();await(()->!activePreparation(),"original preparation observer did not close");}
+ static void reviewRelease()throws Exception {
+  try(Fixture f=new Fixture(3,"wg","wg")){
+   Completion attached=new Completion();var operation=prepare(f,attached);
+   CountDownLatch continued=new CountDownLatch(1);
+   check(!operation.finishDraftReview(attached,continued::countDown),"permission-only candidate acquired a follow-up");
+   operation.start();attached.awaitDone();f.drain();
+   var network=AndroidExternalComparisonNetwork.latest;network.holdClose=true;
+   try {
+    check(!operation.finishDraftReview(new Completion(),continued::countDown),"unattached observer acquired a follow-up");
+    check(operation.finishDraftReview(attached,()->{if(network.closed&&AndroidNodeCandidatePreparation.retained()==null)continued.countDown();}),"original review could not wait for release");
+    check(!operation.finishDraftReview(attached,continued::countDown),"a second choice replaced the first release callback");
+    await(()->network.closeAttempted,"network close was never attempted");
+    check(AndroidNodeCandidatePreparation.retained()==operation&&continued.getCount()==1,"a closing observer released the next draft trial");
+   } finally {network.holdClose=false;}
+   check(continued.await(5,TimeUnit.SECONDS),"network release did not hand off the original draft choice");
+  }
+ }
  static void completePreparation()throws Exception {
   try(Fixture f=new Fixture(3,"wg","wg")){
    int history=AndroidStartupPolicy.recorded;Completion detached=new Completion(),callback=new Completion();var operation=prepare(f,detached);operation.attach(callback);operation.detach(detached);check(operation.observes(callback),"old Activity detached its replacement observer");
@@ -191,6 +208,7 @@ CASES = r'''
   String family=args.length==0?"all":args[0];
   try {
    if(family.equals("all")||family.equals("complete"))completePreparation();
+   if(family.equals("all")||family.equals("review-release"))reviewRelease();
    if(family.equals("all")||family.equals("permission"))capturedPermission();
    if(family.equals("all")||family.equals("graph-join"))failedNativeGraphJoin();
    if(family.equals("all")||family.equals("revoke"))revokedWhileCandidateDrains();

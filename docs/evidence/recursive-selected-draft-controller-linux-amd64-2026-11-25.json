@@ -1,0 +1,117 @@
+{
+  "schema": 1,
+  "status": "passed",
+  "scope": "Focused original controller roots, using the complete unmodified race-enabled test package. This is not a passing receipt for the full connected or draft shipping phase.",
+  "records": [
+    {
+      "root": "TestSelectedPrivateResponseDraftUseRejectsChangedOwner",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-recursive-targeted-odr4h76r/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestSelectedPrivateResponseDraftUseRejectsChangedOwner$"
+      ],
+      "returncode": 0,
+      "seconds": 82.34437418100424,
+      "output_sha256": "72c3c6ea856aa201fc2765dedc114bd4271673fef80bdafede95898cc4690dc2",
+      "tests": 8
+    },
+    {
+      "root": "TestSelectedPrivateResponseDraftUseMultiplePrivateAndCapacity",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-recursive-targeted-odr4h76r/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestSelectedPrivateResponseDraftUseMultiplePrivateAndCapacity$"
+      ],
+      "returncode": 0,
+      "seconds": 2.165433148999,
+      "output_sha256": "6616f6f8b70fcc91bbb51d90cb2292b5e5f263eb509ad62cfbe048718be5e7db",
+      "tests": 1
+    },
+    {
+      "root": "TestSelectedPrivateResponseDraftUseStartsFreshMeasurement",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-recursive-targeted-odr4h76r/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestSelectedPrivateResponseDraftUseStartsFreshMeasurement$"
+      ],
+      "returncode": 0,
+      "seconds": 33.47430753500521,
+      "output_sha256": "c6db8fb54875d48726fc0d6f76f0da54bf767035529d597ad8ba00ed3d131294",
+      "tests": 1
+    },
+    {
+      "root": "TestSelectedPrivateResponseDraftUsePreservesUnsavedPath",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-recursive-targeted-odr4h76r/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestSelectedPrivateResponseDraftUsePreservesUnsavedPath$"
+      ],
+      "returncode": 0,
+      "seconds": 83.9593206609934,
+      "output_sha256": "f5e1ca55291c2633c84a69e976ad3f8624622684fcbe4dd6b17753dda9e0ba0d",
+      "tests": 7
+    },
+    {
+      "root": "TestSelectedPrivateResponseDraftUseExtendsMultiplePrivateHops",
+      "command": [
+        "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+        "tool",
+        "test2json",
+        "-p",
+        "router-vpn/cmd/client",
+        "/tmp/routervpn-recursive-targeted-odr4h76r/controller.test",
+        "-test.v=test2json",
+        "-test.count=1",
+        "-test.timeout=120s",
+        "-test.run=^TestSelectedPrivateResponseDraftUseExtendsMultiplePrivateHops$"
+      ],
+      "returncode": 0,
+      "seconds": 95.98799713399785,
+      "output_sha256": "42f5484c0be51c934b8f004bcd7d58d9ca69c6f51076d8f9851bf35afb319b49",
+      "tests": 7
+    }
+  ],
+  "source_sha256": "2e7e1d1808249f4263d95a07fc715e88d97207a2f9b510628cd01309817953a8",
+  "target": "linux/amd64",
+  "race": true,
+  "compile": [
+    "/workspace/scratch/7295393517ae/.toolchains/go1.26.3/go/bin/go",
+    "test",
+    "-c",
+    "-race",
+    "-p=1",
+    "-mod=readonly",
+    "-o",
+    "/tmp/routervpn-recursive-targeted-odr4h76r/controller.test",
+    "./cmd/client"
+  ],
+  "image_sha256": "ef6c0f221c220e5a6d70bbc4bb10197166f707670f40cf05de7f9531229842c9"
+}

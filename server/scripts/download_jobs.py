@@ -31,6 +31,13 @@ RETAINED = {"ready", "delivered", "delivery-interrupted"}
 CLEAN_TERMINAL = {"failed", "cancelled", "expired"}
 
 
+def _retention_now() -> float:
+    # Linux boot time counts suspend and is independent of civil clock changes.
+    if hasattr(time, "CLOCK_BOOTTIME"):
+        return time.clock_gettime(time.CLOCK_BOOTTIME)
+    return time.monotonic()
+
+
 class DownloadCancelled(RuntimeError):
     """Raised cooperatively when an authenticated Setup Center job is cancelled."""
 
@@ -67,17 +74,17 @@ class DownloadJobManager:
         self.reaper.start()
 
     @staticmethod
-    def _remaining(job: dict, now: float | None = None) -> int:
+    def _remaining(job: dict) -> int:
         if str(job.get("status") or "") in CLEAN_TERMINAL | {"cleaning", "cleanup-pending"}:
             return 0
-        deadline = float(job.get("retention_deadline_epoch") or 0)
-        if deadline <= 0:
+        deadline = job.get("retention_deadline_monotonic")
+        if deadline is None:
             return PACKAGE_RETENTION_SECONDS
-        return max(0, math.ceil(deadline - (time.time() if now is None else now)))
+        return max(0, math.ceil(deadline - _retention_now()))
 
     def _public(self, job: dict) -> dict:
         hidden = {"work_dir", "work_identity", "work_fd", "path", "package_identity", "package_sha256", "chunk_hashes", "ready_ctime_ns", "ready_file", "cancel_requested", "retention_deadline_epoch",
-                  "cleanup_target_status", "cleanup_target_phase",
+                  "retention_deadline_monotonic", "cleanup_target_status", "cleanup_target_phase",
                   "cleanup_error_code", "cleanup_error"}
         out = {k: v for k, v in job.items() if k not in hidden}
         out["status_url"] = f"/api/download-jobs/{job['id']}"
@@ -117,7 +124,7 @@ class DownloadJobManager:
                 "error_code": "", "error": "",
                 "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
                 "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
-                "updated_epoch": now, "retention_deadline_epoch": 0.0,
+                "updated_epoch": now, "retention_deadline_epoch": 0.0, "retention_deadline_monotonic": None,
                 "cancel_requested": False, "work_dir": "", "path": "",
             }
             self._trim_history_locked()
@@ -241,7 +248,8 @@ class DownloadJobManager:
                 phase = job.pop("cleanup_target_phase")
                 job.update(work_dir="", path="", status=status, phase=phase,
                            progress=0, error_code=job.pop("cleanup_error_code"),
-                           error=job.pop("cleanup_error"), retention_deadline_epoch=0.0)
+                           error=job.pop("cleanup_error"), retention_deadline_epoch=0.0,
+                           retention_deadline_monotonic=None)
                 if not job["phase_history"] or job["phase_history"][-1] != phase:
                     job["phase_history"].append(phase)
             else:
@@ -307,6 +315,7 @@ class DownloadJobManager:
                            status="ready", phase="ready", progress=100,
                            source=source, size=identity[2], bytes_total=identity[2], path=str(package),
                            retention_deadline_epoch=now + PACKAGE_RETENTION_SECONDS,
+                           retention_deadline_monotonic=_retention_now() + PACKAGE_RETENTION_SECONDS,
                            updated_epoch=now,
                            updated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)))
                 retained = True
@@ -521,7 +530,8 @@ class DownloadJobManager:
             return self._public(dict(job))
 
     def reap_expired(self, now: float | None = None) -> int:
-        current = time.time() if now is None else float(now)
+        """Expire READY leases at the supplied or current monotonic instant."""
+        current = _retention_now() if now is None else float(now)
         doomed = []
         with self.lock:
             for job in self.jobs.values():
@@ -530,7 +540,7 @@ class DownloadJobManager:
                     doomed.append(self._claim_cleanup_locked(job, job["work_dir"],
                         job["cleanup_target_status"], job["cleanup_target_phase"],
                         job["cleanup_error_code"], job["cleanup_error"]))
-                elif status in RETAINED | {"delivering"} and 0 < job["retention_deadline_epoch"] <= current:
+                elif status in RETAINED | {"delivering"} and job["retention_deadline_monotonic"] <= current:
                     job["cancel_requested"] = True
                     doomed.append(self._claim_cleanup_locked(job, job["work_dir"], "expired", "expired",
                         "expired", "temporary package and build workspace deleted after 30 minutes"))
@@ -545,10 +555,10 @@ class DownloadJobManager:
             with self.lock:
                 if self.closed.is_set() and not self.workers and all(j["status"] in CLEAN_TERMINAL for j in self.jobs.values()):
                     return
-                deadlines = [j["retention_deadline_epoch"] for j in self.jobs.values() if j["status"] in RETAINED | {"delivering"}]
+                deadlines = [j["retention_deadline_monotonic"] for j in self.jobs.values() if j["status"] in RETAINED | {"delivering"}]
             delay = REAPER_INTERVAL_SECONDS
             if deadlines:
-                delay = min(delay, max(0, min(deadlines) - time.time()))
+                delay = min(delay, max(0, min(deadlines) - _retention_now()))
             self.wake_reaper.wait(delay)
 
     def close(self, timeout: float = 10) -> None:

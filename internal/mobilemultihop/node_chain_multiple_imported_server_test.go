@@ -26,15 +26,28 @@ func multipleImportedServerPlanFixture(t *testing.T, layout nodeChainImportedLay
 	t.Helper()
 	local := nodeChainMultipleImportedFixture(t, layout, mode, layer)
 	if layout.name == "selected-private-stream" {
-		pair := nodeChainModeFixtureNodes(t, []string{"wg", "wg", "shadowsocks", "shadowsocks"}, make([]string, 4))
-		identity := nodeChainModeFixtureNodes(t, []string{"wg", "wg", "wg", "wg"}, make([]string, 4))
+		// Keep the depth fixture's independent identities for its first stream
+		// and final. Additional streams receive distinct identity companions.
+		pairedCount := len(local.Nodes) - len(layout.positions) - 2
+		size := max(4, pairedCount+3)
+		modes, identities := make([]string, size), make([]string, size)
+		for i := range modes {
+			modes[i], identities[i] = "shadowsocks", "wg"
+		}
+		pair := nodeChainModeFixtureNodes(t, modes, make([]string, size))
+		identity := nodeChainModeFixtureNodes(t, identities, make([]string, size))
+		nextPrivate := 2
 		for i := 1; i < len(local.Nodes); i++ {
 			if local.IdentitySources[i] == "" {
 				continue
 			}
-			slot := 2
-			if i == len(local.Nodes)-1 {
-				slot = 3
+			slot := 3
+			if i < len(local.Nodes)-1 {
+				slot = nextPrivate
+				nextPrivate++
+				if nextPrivate == 3 {
+					nextPrivate++
+				}
 			}
 			original := pair[slot]
 			// These independent stream keys cannot collide with the fixture's

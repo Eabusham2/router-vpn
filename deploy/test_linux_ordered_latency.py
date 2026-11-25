@@ -329,7 +329,7 @@ def extended_throughput(directory, flags, native_originals=None, model_only=Fals
         for fault in ('', 'first-private', 'second-private', 'lost', 'swapped', 'local-marker', 'label'):
             original, result = selected_private_throughput(16, winner, fault)
             cases.append(dict(preflight=original, result=result,
-                              requests=1 if fault in ('first-private','second-private','local-marker') else 2, adopt=not fault))
+                              requests=1 if fault in ('first-private','local-marker') else 2, adopt=fault in ('', 'second-private')))
     for count, (preflight, result) in native_throughput_pairs(native_originals).items():
         assert len(json.loads(result)['hops']) == count
         cases.append(dict(preflight=json.loads(preflight), result=json.loads(result), requests=2, adopt=True))

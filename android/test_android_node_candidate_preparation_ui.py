@@ -26,21 +26,24 @@ SOURCES={
 }
 BOUNDARIES=r'''package com.eabusham.routervpn;
 import android.content.Context;import java.util.*;
-final class AndroidNodeChainCapture{static boolean responsePrefix(java.util.List<?> sources,java.util.List<String> modes,int position,String execution){return position==1&&modes.size()>2&&modes.get(position).equals("shadowsocks")&&(execution.equals("local")||execution.equals("auto")&&modes.equals(List.of("wg","shadowsocks","shadowsocks","shadowsocks")));}}
-final class AndroidNodeStore{static final class ChainCapture{final List<?> members=List.of();List<String> modes=List.of("wg","awg2-fast","awg2-strong","shadowsocks");String execution="local";boolean valid=true;int draftPrefix=-1;boolean measurementOnly(){return draftPrefix>=0;}void requirePurpose(int p){if(!"local".equals(execution))throw new IllegalStateException("selected draft cannot start a normal connection");requireCandidatePurpose(p);}void requireCandidatePurpose(int p){if(p!=draftPrefix)throw new IllegalStateException("wrong draft prefix");}void requireCurrent(){if(!valid)throw new IllegalStateException("source changed");}}}
-final class AndroidOrderedPathSelection{final AndroidNodeStore.ChainCapture source=new AndroidNodeStore.ChainCapture();int measured=-1,insertions;java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> candidateDraftCapture(int prefix){measured=prefix;return ()->source;}}
+final class AndroidNodeChainCapture{static boolean responsePrefix(java.util.List<?> sources,java.util.List<String> modes,int position,String execution){return position>0&&position<modes.size()-1&&modes.get(position).equals("shadowsocks")&&(execution.equals("local")||execution.equals("auto")&&modes.get(0).equals("wg"));}}
+final class AndroidNodeStore{static final int PHYSICAL_TRAVERSAL_DEPTH=96;static final class ChainCapture{final List<?> members=List.of();List<String> modes=List.of("wg","awg2-fast","awg2-strong","shadowsocks");String execution="local";boolean valid=true;int draftPrefix=-1;boolean measurementOnly(){return draftPrefix>=0;}void requirePurpose(int p){if(!"local".equals(execution))throw new IllegalStateException("selected draft cannot start a normal connection");requireCandidatePurpose(p);}void requireCandidatePurpose(int p){if(p!=draftPrefix)throw new IllegalStateException("wrong draft prefix");}void requireCurrent(){if(!valid)throw new IllegalStateException("source changed");}}}
+final class AndroidOrderedPathSelection{long revision(){return insertions;}List<String> members(){return source.modes;}boolean canMeasureResponseThrough(int p){return AndroidNodeChainCapture.responsePrefix(source.members,source.modes,p,source.execution);}AndroidNodeStore.ChainCapture source=new AndroidNodeStore.ChainCapture();int measured=-1,insertions;java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> candidateDraftCapture(int prefix){measured=prefix;return ()->source;}}
 final class AndroidStandardExitStore{AndroidStandardExitStore(Context c){}}
 final class AndroidHomeStateStore{static final class Snapshot{boolean connected;}static Snapshot home=new Snapshot();static Snapshot snapshot(Context c){return home;}}
 final class AndroidConnectionSelection{static String selected="original";static String digest(Context c,AndroidNodeStore n){return selected;}static void requireCurrent(Context c,AndroidNodeStore n,String s){if(!s.equals(selected))throw new IllegalStateException("selection changed");}}
 final class AndroidConnectionProfileStore{static AndroidNodeStore.ChainCapture source=new AndroidNodeStore.ChainCapture();static class Record{String name;Record(String n){name=n;}}AndroidConnectionProfileStore(Context c,AndroidNodeStore n,AndroidStandardExitStore e){}AndroidNodeStore.ChainCapture currentOrderedPath(){return source;}}
 final class AndroidNodeCandidateResult{final String name;AndroidNodeCandidateResult(){this("Original candidate");}AndroidNodeCandidateResult(String name){this.name=name;}final double score=2.5;boolean valid=true;boolean current(long now){return valid;}}
-final class AndroidNodeCandidateProfile{static int writes;static AndroidNodeCandidateResult lastSavedResult;final String description="Original saved prefix → candidate";final AndroidNodeCandidatePreparation owner;final AndroidNodeCandidateResult result;AndroidNodeCandidateProfile(AndroidNodeCandidatePreparation o,AndroidNodeCandidateResult r){owner=o;result=r;}void useInDraft(AndroidOrderedPathSelection draft){if(!owner.retired||owner.cancelled||!result.valid)throw new IllegalStateException("retired insertion");draft.insertions++;}AndroidConnectionProfileStore.Record save(Context c,String name){if(!owner.retired||owner.cancelled||!result.valid)throw new IllegalStateException("retired result authority");if(name.trim().isEmpty())throw new IllegalStateException("name required");writes++;lastSavedResult=result;return new AndroidConnectionProfileStore.Record(name);}}
+final class AndroidNodeCandidateProfile{static int writes;static AndroidNodeCandidateResult lastSavedResult;final String description="Original saved prefix → candidate";final AndroidNodeCandidatePreparation owner;final AndroidNodeCandidateResult result;AndroidNodeCandidateProfile(AndroidNodeCandidatePreparation o,AndroidNodeCandidateResult r){owner=o;result=r;}int useInDraft(AndroidOrderedPathSelection draft){if(!owner.retired||owner.cancelled||!result.valid)throw new IllegalStateException("retired insertion");draft.insertions++;var fresh=new AndroidNodeStore.ChainCapture();fresh.modes=new ArrayList<>(draft.source.modes);fresh.draftPrefix=draft.source.draftPrefix+1;fresh.modes.add(fresh.draftPrefix,"shadowsocks");fresh.execution=draft.source.execution;draft.source=fresh;return fresh.draftPrefix;}AndroidConnectionProfileStore.Record save(Context c,String name){if(!owner.retired||owner.cancelled||!result.valid)throw new IllegalStateException("retired result authority");if(name.trim().isEmpty())throw new IllegalStateException("name required");writes++;lastSavedResult=result;return new AndroidConnectionProfileStore.Record(name);}}
 final class AndroidNodeCandidatePreparation{
  // SHIPPING_PREFIX_DECISION
+ // SHIPPING_REVIEW_RELEASE
+ Runnable afterReviewRelease;boolean delayRelease,userCancelled;
  interface Callback{void progress(String detail);void finished(List<Choice> choices,Throwable failure);}static final class Choice{final AndroidNodeCandidateResult result;final AndroidNodeCandidateProfile profile;final String saveReason;String draftReason(){return saveReason;}AndroidNodeCandidateProfile draftInsertion(){return profile;}Choice(AndroidNodeCandidatePreparation o){result=new AndroidNodeCandidateResult();profile=new AndroidNodeCandidateProfile(o,result);saveReason="";}Choice(String reason){result=new AndroidNodeCandidateResult("Measured retained duplicate");profile=null;saveReason=reason;}}
  AndroidNodeStore.ChainCapture original;boolean ownsSource(AndroidNodeStore.ChainCapture value){return original!=null&&original==value;}static volatile AndroidNodeCandidatePreparation active;volatile boolean started,cancelled,retired;volatile Callback observer;final List<Choice> results=new ArrayList<>();static AndroidNodeCandidatePreparation retained(){return active;}
  synchronized boolean observes(Callback c){return observer==c;}void detach(Callback c){if(observer==c)observer=null;}void attach(Callback c){observer=c;if(retired)c.finished(results,null);else c.progress("Testing saved path; original candidate drain pending");}
- void cancelFromUser(){cancelled=true;if(active==this)active=null;}
+ void cancelFromUser(){cancelled=userCancelled=true;if(!delayRelease)releaseReview();}
+ void finishNetworkClose(){cancelled=userCancelled;releaseReview();}
  void complete(){retired=true;results.add(new Choice(this));Callback c=observer;if(c!=null)c.finished(results,null);}
 }
 final class AndroidUnifiedConnectionController{
@@ -58,6 +61,7 @@ PRODUCT=r'''package com.eabusham.routervpn;
 final class CandidateProductSurface extends android.app.Activity{
  static class EditorPicker{boolean visible(){return true;}}EditorPicker orderedPicker;
  final AndroidNodeStore nodeStore=new AndroidNodeStore();final AndroidUnifiedConnectionController connection=new AndroidUnifiedConnectionController();AndroidNodeCandidateDialog candidateDialog;AndroidNodeCandidatePreparationDialog preparedCandidateDialog;int refreshes;void refreshConnectionLater(){refreshes++;}
+ boolean resumed=true;void toast(String value){}String safe(Exception e){return e.getMessage();}
  AndroidOrderedPathSelection reviewed;void showOrderedEditor(AndroidOrderedPathSelection d){reviewed=d;}
  void edit(AndroidOrderedPathSelection d,int p)throws Exception{measureOrderedDraft(d,p);}
  void test(){runCandidateTimes();}void resumeTest(){resumeCandidatePreparation();}void pauseTest(){detachCandidatePreparation();}
@@ -117,16 +121,36 @@ public final class CandidatePreparationUITest{
   check(draft.insertions==0&&TextView.latest.contains("fresh, complete insertion"),"draft insertion became available before DOWN");
   ui.pauseTest();Button.draft=null;ui.resumeTest();check(Button.draft!=null,"activity lost the original measured draft on permission return");
   ui.connection.approve();var owner=ui.connection.purpose;owner.complete();
-  Button.draft.click.run(Button.draft);AlertDialog.last.pick(0);
-  check(draft.insertions==1&&ui.reviewed==draft&&owner.cancelled&&AndroidNodeCandidateProfile.writes==0&&ui.connection.requests==1,"explicit insertion saved, reconnected, or lost the measured draft");
-  ui=screen();ui.edit(draft,1);workers();ui.connection.approve();owner=ui.connection.purpose;owner.complete();
+  var originalSource=draft.source;owner.delayRelease=true;Button.draft.click.run(Button.draft);AlertDialog.last.pick(0);workers();
+  check(owner.userCancelled&&AndroidNodeCandidatePreparation.retained()==owner&&ui.connection.requests==1,"next trial ignored the retained original network observer");
+  owner.finishNetworkClose();workers();
+  check(ui.connection.requests==2&&ui.connection.prefix==2&&ui.connection.purpose!=owner&&!ui.connection.purpose.started&&ui.connection.captured!=originalSource&&ui.connection.captured.modes.size()==5,"next trial skipped permission, reused a source, or measured the last prefix instead of the inserted hop");
+  check(draft.insertions==1&&ui.reviewed==draft&&owner.cancelled&&AndroidNodeCandidateProfile.writes==0&&ui.connection.requests==2,"explicit insertion saved, reconnected, or lost the measured draft");
+  ui.preparedCandidateDialog.cancel();draft.source.draftPrefix=1;ui=screen();ui.edit(draft,1);workers();ui.connection.approve();owner=ui.connection.purpose;owner.complete();
   Button.draft.click.run(Button.draft);owner.results.get(0).result.valid=false;AlertDialog.last.pick(0);
-  check(draft.insertions==1&&TextView.latest.contains("retired insertion"),"expired result inserted an intermediate");
+  check(ui.connection.requests==1&&draft.insertions==1&&TextView.latest.contains("retired insertion"),"expired result inserted an intermediate");
   ui.preparedCandidateDialog.cancel();
+  ui=screen();var full=new AndroidOrderedPathSelection();full.source.execution="auto";full.source.draftPrefix=1;
+  full.source.modes=new ArrayList<>(Collections.nCopies(95,"shadowsocks"));full.source.modes.set(0,"wg");ui.edit(full,1);workers();ui.connection.approve();ui.connection.purpose.complete();
+  Button.draft.click.run(Button.draft);AlertDialog.last.pick(0);ui.connection.purpose.finishNetworkClose();workers();
+  check(full.members().size()==96&&ui.connection.requests==1&&ui.reviewed==full,"capacity-limited draft opened another trial");
   ui=screen();draft.source.valid=false;ui.edit(draft,1);workers();check(ui.connection.requests==0&&TextView.latest.contains("source changed"),"stale draft entered measurement");
   ui=screen();draft.source.valid=true;ui.edit(draft,2);workers();check(ui.connection.requests==0&&TextView.latest.contains("wrong draft prefix"),"draft changed its captured position");
  }
- public static void main(String[] args)throws Exception{idleAndRotation();earlierDraft();ownershipAndFailure();mixedProposalRows();fullSavedChoices();System.out.println("Android candidate shipping UI: "+checks+" exact source, purpose, rotation, DOWN and explicit Save checks PASS");}
+ static void changedWhileReleasing()throws Exception{
+  for(int change=0;change<4;change++){
+   var ui=screen();var draft=new AndroidOrderedPathSelection();draft.source.execution="auto";draft.source.draftPrefix=1;draft.source.modes=List.of("wg","shadowsocks","shadowsocks","shadowsocks");
+   ui.edit(draft,1);workers();ui.connection.approve();var old=ui.connection.purpose;old.complete();old.delayRelease=true;
+   Button.draft.click.run(Button.draft);AlertDialog.last.pick(0);
+   if(change==0)ui.pauseTest();
+   if(change==1)draft.insertions++;
+   if(change==2)AndroidHomeStateStore.home=new AndroidHomeStateStore.Snapshot();
+   if(change==3)ui.preparedCandidateDialog.cancel();
+   old.finishNetworkClose();workers();
+   check(ui.connection.requests==1,"retired candidate review launched through a changed editor, home, or Activity");
+  }
+ }
+ public static void main(String[] args)throws Exception{idleAndRotation();earlierDraft();changedWhileReleasing();ownershipAndFailure();mixedProposalRows();fullSavedChoices();System.out.println("Android candidate shipping UI: "+checks+" exact source, purpose, rotation, DOWN and explicit Save checks PASS");}
 }'''
 
 def main():
@@ -135,11 +159,13 @@ def main():
     helper=(JAVA/'AndroidNodeCandidatePreparation.java').read_text()
     start=helper.index('    static boolean packetPrefix(');end=helper.index('    boolean prefixOnly()',start)
     boundaries=BOUNDARIES.replace('// SHIPPING_PREFIX_DECISION',helper[start:end])
+    review=helper[helper.index('    boolean finishDraftReview('):helper.index('    private long deliverCompletion(')]
+    boundaries=boundaries.replace('// SHIPPING_REVIEW_RELEASE',review)
     methods=[]
     for signature in ('    private void runCandidateTimes(', '    private void resumeCandidatePreparation(', '    private void detachCandidatePreparation(', '    private void closeCandidateMeasurement('):
         start=product.index(signature);methods.append(product[start:product.index('\n',start)])
-    start=product.index('    private void measureOrderedDraft(')
-    methods.append(product[start:product.index('\n    }',start)+6])
+    for signature in ('    private void measureOrderedDraft(', '    private void continueOrderedDraft('):
+        start=product.index(signature);methods.append(product[start:product.index('\n    }',start)+6])
     for signature in ('    @Override protected void onPause(', '    @Override protected void onDestroy('):
         start=product.index(signature);assert 'detachCandidatePreparation();' in product[start:product.index('\n',start)]
     start=product.index('    @Override protected void onResume(');assert 'resumeCandidatePreparation();' in product[start:product.index('\n',start)]
@@ -152,6 +178,7 @@ def main():
         classes=work/'classes';compile=['javac','--release','17','-d',str(classes),*map(str,work.rglob('*.java'))]
         subprocess.run(compile,check=True,timeout=45);run=['java','-cp',str(classes),'com.eabusham.routervpn.CandidatePreparationUITest'];subprocess.run(run,check=True,timeout=30)
         controls=(
+            ('AndroidNodeCandidatePreparationDialog.java','continueDraft.accept(editor,inserted);','continueDraft.accept(editor,inserted+1);','next trial skipped permission, reused a source, or measured the last prefix instead of the inserted hop'),
             ('AndroidNodeCandidatePreparationDialog.java','AndroidNodeCandidatePreparation.packetPrefix(source,i)','true','unsupported or final prefix lost complete-path disclosure'),
             ('AndroidNodeCandidatePreparationDialog.java','if(captured!=null)connection.cancelCandidatePermission(captured);', '', 'recreated sheet retained captured permission receipt'),
             ('AndroidNodeCandidatePreparationDialog.java','owner.attach(notice);','/* no attachment */','recreated sheet did not attach captured progress'),

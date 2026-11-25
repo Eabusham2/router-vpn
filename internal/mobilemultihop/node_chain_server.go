@@ -449,9 +449,13 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		return nil, nodeChainServerError
 	}
 	p.descriptor.DNSPolicySHA256 = externalDigest(policyRaw)
-	private := p.descriptor.PrivateStreamPosition()
-	if p.descriptor.Validate() != nil || (private > 0 && !privateStreamCompanionUnique(p.descriptor.Members[private-1].StreamIdentitySHA256, p.nodes, source.IdentitySources, private-1)) {
+	if p.descriptor.Validate() != nil {
 		return nil, nodeChainServerError
+	}
+	for index, member := range p.descriptor.Members {
+		if member.StreamIdentitySHA256 != "" && !privateStreamCompanionUnique(member.StreamIdentitySHA256, p.nodes, source.IdentitySources, index) {
+			return nil, nodeChainServerError
+		}
 	}
 	var expected []PhysicalEgress
 	if p.openvpn != nil {

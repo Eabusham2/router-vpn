@@ -18,7 +18,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
     struct SelectedMeasurementSource: Equatable, Sendable {
         let source: String, config: String, requested: String
         let ids: [String]
-        let privateStreamPosition: Int?
+        let privateStreamPositions: Set<Int>
     }
     let selectedMeasurementSource: SelectedMeasurementSource?
     let hopMeasurementRows: Int
@@ -167,7 +167,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
               let schema = local["schema"] as? Int,
               preparationSchema == 1 ? (schema == 1 || schema == 2 && nodes.count >= 3) : (schema == preparationSchema && nodes.count >= 3),
               schema != 6 || rawProfile == "shadowsocks" else { return false }
-        var selectedPrivateStream: Int?
+        var selectedPrivateStreams = Set<Int>()
         if let sealedField {
             // Bind both representations of every private member and independent
             // identity before retaining the complete original launch for replay.
@@ -190,8 +190,8 @@ struct IOSSessionIdentity: Equatable, Sendable {
                           let member = try? JSONSerialization.jsonObject(with: Data(nodes[position].utf8)) as? [String: Any] else { return false }
                     return member["mode"] as? String == "shadowsocks"
                 }
-                if let position = privateStreams.first {
-                    guard privateStreams.count == 1, position >= 2, Self.extendedLocalMembers(sealed, nodes: nodes, selected: true) else { return false }
+                if !privateStreams.isEmpty {
+                    guard !privateStreams.contains(1), Self.extendedLocalMembers(sealed, nodes: nodes, selected: true) else { return false }
                     for (i, text) in nodes.enumerated() {
                         guard let member = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { return false }
                         if identities[i].isEmpty {
@@ -206,7 +206,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
                             guard let layer = member["start"] as? String, ["", "off"].contains(layer) else { return false }
                         }
                     }
-                    selectedPrivateStream = position
+                    selectedPrivateStreams = Set(privateStreams)
                 }
             }
             if nodes.count > 8 {
@@ -231,7 +231,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
                     ids.append(id)
                 }
                 guard Set(ids).count == ids.count else { return false }
-                selectedSource = SelectedMeasurementSource(source: digest, config: config, requested: requested, ids: ids, privateStreamPosition: selectedPrivateStream)
+                selectedSource = SelectedMeasurementSource(source: digest, config: config, requested: requested, ids: ids, privateStreamPositions: selectedPrivateStreams)
                 capturedRows = nodes.count
             }
         }
@@ -258,7 +258,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
                 if position == nodes.count - 1 {
                     guard member["mode"] as? String == rawProfile else { return false }
                 } else if schema == 6 {
-                    guard position == selectedPrivateStream ? member["mode"] as? String == "shadowsocks" :
+                    guard selectedPrivateStreams.contains(position) ? member["mode"] as? String == "shadowsocks" :
                           ["wg", "awg2-fast", "awg2-strong"].contains(member["mode"] as? String ?? "") else { return false }
                 }
                 if rawProfile == "hysteria2" {
@@ -268,7 +268,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
                               let profile = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
                               profile["start_layer"] == nil || (profile["start_layer"] as? String).map({ ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains($0) }) == true else { return false }
                     } else {
-                        guard position == selectedPrivateStream ? member["mode"] as? String == "shadowsocks" :
+                        guard selectedPrivateStreams.contains(position) ? member["mode"] as? String == "shadowsocks" :
                           ["wg", "awg2-fast", "awg2-strong"].contains(member["mode"] as? String ?? "") else { return false }
                     }
                 }
@@ -285,7 +285,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
               let identities = source["identity_sources"] as? [String], identities.count == nodes.count else { return false }
         guard !selected || schema == 6 else { return false }
         var packets = 0, hasStream = false, hasImport = false
-        var entryMode: String?, privateStream: Int?
+        var entryMode: String?
         for (index, text) in nodes.enumerated() {
             guard let member = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any] else { return false }
             if identities[index].isEmpty {
@@ -303,8 +303,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
                 guard mode == "shadowsocks" else { return false }
             } else if mode == "shadowsocks" {
                 if selected {
-                    guard index >= 2, privateStream == nil, packets == 1, entryMode == "wg", hasImport else { return false }
-                    privateStream = index
+                    guard index >= 2, packets == 1, entryMode == "wg", hasImport else { return false }
                 }
                 guard schema == 6, packets > 0, let id = profile["node_proof_id"] as? String, !id.isEmpty else { return false }
                 hasStream = true

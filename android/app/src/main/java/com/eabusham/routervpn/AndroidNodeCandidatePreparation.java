@@ -28,6 +28,7 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
         private Choice(AndroidNodeCandidateResult result,AndroidNodeCandidateProfile.ProposalUnavailable unavailable){this.result=result;profile=null;saveReason=unavailable.getMessage();}
     }
     private static AndroidNodeCandidatePreparation active;
+    private Runnable afterReviewRelease;
     private final Context context;
     private final AndroidNodeChainRuntime runtime;
     private final AndroidNodeStore.ChainCapture source;
@@ -231,9 +232,30 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
         if(userCancelled){choices=Collections.emptyList();terminalCompletionReady=true;deliverCompletion(-1);}
         boolean closed=network==null;
         while(!closed){try{network.close();closed=true;}catch(Throwable pending){pause();}}
-        synchronized(AndroidNodeCandidatePreparation.class){if(active==this)active=null;}
-        observer=null;
+        releaseReview();
     }
+
+    boolean finishDraftReview(Callback attached, Runnable continuation) {
+        synchronized(AndroidNodeCandidatePreparation.class) {
+            if(active!=this || !retired || userCancelled || !observes(attached) || afterReviewRelease!=null)return false;
+            afterReviewRelease=continuation;
+            userCancelled=true;
+        }
+        return true;
+    }
+
+    private void releaseReview() {
+        Runnable continuation;
+        synchronized(AndroidNodeCandidatePreparation.class) {
+            if(active!=this)return;
+            active=null;
+            continuation=afterReviewRelease;
+            afterReviewRelease=null;
+        }
+        observer=null;
+        if(continuation!=null)continuation.run();
+    }
+
     private long deliverCompletion(long delivered) {
         final Callback callback;final long version;
         synchronized(this){callback=observer;version=observerVersion;}

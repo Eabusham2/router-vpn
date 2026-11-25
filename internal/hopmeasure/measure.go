@@ -338,12 +338,19 @@ func NewExtendedMixedStreamLocalContext(ctx context.Context, engine Engine, hops
 	return newExtendedMixedLocalContext(ctx, engine, hops, packets, originalPublic)
 }
 
-// NewSelectedPrivateStreamContext checks the one paired stream against the
+// NewSelectedPrivateStreamContext checks each paired stream against the
 // original public/private mask. Server prefixes must share one trial digest.
-func NewSelectedPrivateStreamContext(ctx context.Context, engine Engine, hops []Hop, originalPublic []bool, private int, serverSourceSHA string) (*Service, error) {
+func NewSelectedPrivateStreamContext(ctx context.Context, engine Engine, hops []Hop, originalPublic []bool, privatePositions []int, serverSourceSHA string) (*Service, error) {
 	n := len(hops)
-	if n < 4 || n > PhysicalTraversalDepth || len(originalPublic) != n || private < 2 || private >= n-1 {
+	if n < 4 || n > PhysicalTraversalDepth || len(originalPublic) != n || len(privatePositions) == 0 {
 		return nil, errors.New("selected private stream lost its original position")
+	}
+	private := make(map[int]bool, len(privatePositions))
+	for i, pos := range privatePositions {
+		if pos < 2 || pos >= n-1 || i > 0 && pos <= privatePositions[i-1] {
+			return nil, errors.New("selected private stream inventory changed position or order")
+		}
+		private[pos] = true
 	}
 	server := serverSourceSHA != ""
 	if server && !nodeID.MatchString(serverSourceSHA) {
@@ -354,7 +361,7 @@ func NewSelectedPrivateStreamContext(ctx context.Context, engine Engine, hops []
 		if server && i > 0 && h.Tag != "routervpn-chain-server-"+strconv.Itoa(i)+"-"+serverSourceSHA[:16] {
 			return nil, errors.New("selected private stream changed its original Server prefix")
 		}
-		expected := i > 0 && i < n-1 && i != private
+		expected := i > 0 && i < n-1 && !private[i]
 		kind := "private-node"
 		if expected {
 			kind = "public-path"

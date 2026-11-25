@@ -80,9 +80,9 @@ func responseExpectedSourceAt(nodes []common.MultihopNodeSelection, privatePosit
 	return rows
 }
 
-func responseExpectedPositions(count, privatePosition int) []int {
+func responseExpectedPositions(count, _ int) []int {
 	positions := []int{0}
-	if privatePosition < 0 && count < 96 {
+	if count < 96 {
 		for i := 1; i < count-2; i++ {
 			positions = append(positions, i)
 		}

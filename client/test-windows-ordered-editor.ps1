@@ -2,7 +2,7 @@ param([string]$Root=(Split-Path $PSScriptRoot -Parent),[switch]$WPF,[string]$Neg
     [ValidateSet('all','editor','wg','awg2-fast','awg2-strong','socks','openvpn')][string]$Group='all')
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
-$controls=@{'local-imported-position'='Local imported nodes lost complete original path';'local-imported-capability'='Local imported nodes accepted invalid source capability';'hysteria-final-layer-required'='Hysteria final layer was not offered';'hysteria-final-layer-type'='Hysteria accepted malformed final layer';'hysteria-execution-global'='Hysteria execution borrowed unrelated global capability';'openvpn-execution-global'='OpenVPN execution borrowed unrelated global capability';'openvpn-execution-capability'='OpenVPN execution accepted absent or nonboolean native hint';'openvpn-execution-final-layer'='OpenVPN execution refused captured final layer';'connect-execution-final-layer-required'='CONNECT execution refused captured final layer';'socks-execution-final-layer'='SOCKS execution refused captured final layer';'socks-execution-old-trio'='SOCKS execution refused a complete later prefix';'connect-execution-prefix-layer'='CONNECT execution admitted a malformed paired prefix layer';'hostname-minimum'='hostname trio acquired suffix packet authority';'hostname-conflict'='hostname execution accepted conflicting source capabilities';'hostname-capability'='hostname execution lost complete saved prefix';'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted malformed final layer';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary';'socks-execution-global'='SOCKS execution borrowed unrelated global capability';'socks-execution-capability'='SOCKS execution accepted absent or nonboolean native hint';'socks-execution-entry-layer'='SOCKS execution accepted malformed entry layer';'socks-execution-layer'='SOCKS execution admitted layered middle or final'}
+$controls=@{'followup-position'='A fresh trial did not follow the inserted hop before its retained suffix';'local-imported-position'='Local imported nodes lost complete original path';'local-imported-capability'='Local imported nodes accepted invalid source capability';'hysteria-final-layer-required'='Hysteria final layer was not offered';'hysteria-final-layer-type'='Hysteria accepted malformed final layer';'hysteria-execution-global'='Hysteria execution borrowed unrelated global capability';'openvpn-execution-global'='OpenVPN execution borrowed unrelated global capability';'openvpn-execution-capability'='OpenVPN execution accepted absent or nonboolean native hint';'openvpn-execution-final-layer'='OpenVPN execution refused captured final layer';'connect-execution-final-layer-required'='CONNECT execution refused captured final layer';'socks-execution-final-layer'='SOCKS execution refused captured final layer';'socks-execution-old-trio'='SOCKS execution refused a complete later prefix';'connect-execution-prefix-layer'='CONNECT execution admitted a malformed paired prefix layer';'hostname-minimum'='hostname trio acquired suffix packet authority';'hostname-conflict'='hostname execution accepted conflicting source capabilities';'hostname-capability'='hostname execution lost complete saved prefix';'imported-execution-prefix'='complete imported execution prefix refused';'connect-execution-global'='CONNECT execution borrowed unrelated global capability';'connect-execution-final'='CONNECT execution admitted malformed final layer';'imported-execution-capability'='imported execution accepted absent or nonboolean native capability';'connect-protocol'='CONNECT request borrowed a different saved protocol';'connect-mode'='CONNECT Add substituted its exact saved transport';'socks-mode'='SOCKS Add substituted its saved transport';'final-mode'='Apply substituted the explicitly selected Hysteria2 final';'raw-mode'='raw ordered mode whitelist admitted an alias or unsupported transport';'add-mode'='Add changed the selected node or transport';'change-mode'='Change mode replaced its original node or ignored selected transport';'row-label'='editor row mislabeled its captured transport';'source-token'='relinked middle node replaced the original editor draft';'summary-reset'='new incomplete ordered selection displayed a previous path transport summary';'socks-execution-global'='SOCKS execution borrowed unrelated global capability';'socks-execution-capability'='SOCKS execution accepted absent or nonboolean native hint';'socks-execution-entry-layer'='SOCKS execution accepted malformed entry layer';'socks-execution-layer'='SOCKS execution admitted layered middle or final'}
 if($NegativeControl-and$controls.Keys-cnotcontains$NegativeControl){throw 'Unknown ordered editor causal control.'}
 if($PositiveOnly-and$NegativeControl){throw 'Positive editor phase cannot select a causal control.'}
 $Client=Join-Path $Root 'client'
@@ -140,6 +140,11 @@ function ShippingFunction([string]$Name){
 }
 $Editor=ShippingFunction 'ShowUnifiedOrderedNodes'
 if($NegativeControl-ceq'add-mode'){$Editor=$Editor.Replace('id=[string]$available.SelectedValue;mode=$mode',"id=[string]`$available.SelectedValue;mode='wg'")}
+if($NegativeControl-ceq'followup-position'){
+    $anchor='&$refresh;$list.SelectedIndex=$next;$status.Text='
+    if(([regex]::Matches($Editor,[regex]::Escape($anchor))).Count-ne1){throw 'Measured insertion callback changed.'}
+    $Editor=$Editor.Replace($anchor,'&$refresh;$list.SelectedIndex=$rows.Count-1;$status.Text=')
+}
 if($NegativeControl-ceq'change-mode'){$Editor=$Editor.Replace('id=$rows[$position].id;mode=$mode',"id=`$rows[`$position].id;mode='wg'")}
 if($NegativeControl-ceq'final-mode'){$Editor=$Editor.Replace('mode=[string]$finalMode.SelectedValue',"mode='shadowsocks'")}
 if($NegativeControl-ceq'row-label'){$Editor=$Editor.Replace('(Get-RouterVPNOrderedModeTitle $node.mode)',"'WireGuard'")}
@@ -185,7 +190,9 @@ if($WPF){
     $dialog.Show();$dialog.UpdateLayout()
     Check ($dialog.ActualWidth-ge510-and$dialog.ActualHeight-ge440) 'native editor layout did not render at its supported size'
 }else{
-    $dialog=[pscustomobject]@{Controls=@{};Closed=$false}
+    $dialog=[pscustomobject]@{Controls=@{};Closed=$false;IsVisible=$true}
+    $dialog|Add-Member ScriptMethod Hide {$this.IsVisible=$false}
+    $dialog|Add-Member ScriptMethod Show {$this.IsVisible=$true}
     $dialog|Add-Member ScriptMethod FindName {param($name)return $this.Controls[$name]}
     $dialog|Add-Member ScriptMethod Close {$this.Closed=$true}
     foreach($name in @('Available','PrefixMode','Order','Add','Up','Down','Remove','ChangeMode','Final','FinalMode','Status','Cancel','Apply')){$dialog.Controls[$name]=New-Widget}
@@ -218,6 +225,10 @@ try{
     $add=Callback 'Add';$changeMode=Callback 'ChangeMode';$up=Callback 'Up';$down=Callback 'Down';$remove=Callback 'Remove';$apply=Callback 'Apply'
     $measureNext=Callback 'MeasureNext'
     function ShowOrderedCandidates($Draft,$Position,$Editor) {
+        if($script:DraftFault -cne 'recapture' -and @($Draft.nodes.id) -ccontains 'prefix-2'){
+            $script:FollowupBody=$Draft;$script:FollowupPosition=$Position
+            return $null
+        }
         $script:MeasuredBody=$Draft
         $next=$Position+1
         $all=[Collections.Generic.List[object]]::new()
@@ -231,26 +242,29 @@ try{
             'execution' {$choice.requested_execution='local'}
             'editor' {$rootControls['UnifiedExecution'].SelectedIndex=0}
             'selection' {$RouterCombo.SelectedValue='foreign'}
+            'row' {$list.SelectedIndex=0}
+            'hidden' {$Editor.Hide()}
             'token' {$choice.expected_profile_tokens.'prefix-1'='0'*64}
             'suffix' {$choice.proposed_path[-1]=[pscustomobject]@{id=$id;mode='hysteria2'}}
         }
         return $choice
     }
     foreach($index in @(1,2)){
-        foreach($fault in @('execution','editor','selection','token','suffix','valid')){
+        foreach($fault in @('execution','editor','selection','row','hidden','token','suffix','valid')){
             $rows.Clear();foreach($original in @([pscustomobject]@{id='prefix-0';mode='wg'},[pscustomobject]@{id='prefix-1';mode='awg2-fast'})){$rows.Add($original)}
             $RouterCombo.SelectedValue=$id;$rootControls['UnifiedExecution'].SelectedIndex=$index;&$refresh;$list.SelectedIndex=1
-            $script:DraftFault=$fault;$script:MeasuredBody=$null;&$measureNext
+            $script:DraftFault=$fault;$script:MeasuredBody=$null;$script:FollowupBody=$null;&$measureNext
+            if($fault -ceq 'hidden'){$dialog.Show()}
             Check ($null-ne$MeasuredBody-and$MeasuredBody.execution-ceq@('local','server','auto')[$index]-and$MeasuredBody.nodes.Count-eq3-and$MeasuredBody.expected_profile_tokens.Count-eq3) 'Measure next failed to capture the complete selected graph'
             if($fault-ceq'valid'){
                 Check (($rows.id-join',')-ceq'prefix-0,prefix-1,prefix-2'-and$rows[2].mode-ceq'awg2-strong'-and$rootControls['UnifiedExecution'].SelectedIndex-eq$index) 'Measure next did not insert one original measured member'
-            }else{Check (($rows.id-join',')-ceq'prefix-0,prefix-1') ('Measure next adopted another draft: '+$fault)}
+            }else{Check ($null-eq$FollowupBody-and($rows.id-join',')-ceq'prefix-0,prefix-1') ('Measure next adopted another draft: '+$fault)}
         }
     }
     # Each mutation must first reach its own named witness. The full source
     # matrix, including its explicit invalid routes, runs on the shipping code.
     $originalProfiles=$store.profiles
-    if(-not $NegativeControl){
+    if(-not $NegativeControl -or $NegativeControl-ceq'followup-position'){
     $import=@{id='import-b';name='Imported B';node_kind='external';profile_token='b'*64;start_layer='off';external=@{protocol='shadowsocks';ordered_middle_supported=$true;ordered_local_imported_nodes_supported=$true}}
     $store.profiles+=@($import)
     $rows.Clear();$rows.Add([pscustomobject]@{id='prefix-0';mode='wg'});$rows.Add([pscustomobject]@{id=$import.id;mode='shadowsocks'})
@@ -274,12 +288,16 @@ try{
         $rows.Clear();$rows.Add([pscustomobject]@{id='prefix-0';mode='wg'});$rows.Add([pscustomobject]@{id=$import.id;mode='shadowsocks'})
         $RouterCombo.SelectedValue=$id;&$refresh;$list.SelectedIndex=1
         $capturedHomeSelection=$rootControls['UnifiedNodeChainButton'].Tag
+        $suffix=@{id='suffix-ss';name='Suffix SS';node_kind='external';profile_token='c'*64;start_layer='off';external=$import.external}
+        $store.profiles+=@($suffix);$rows.Add([pscustomobject]@{id=$suffix.id;mode='shadowsocks'})
+        &$refresh;$list.SelectedIndex=1;$script:FollowupBody=$null;$script:FollowupPosition=-1
         $script:DraftFault='response';&$measureNext
-        Check (($rows.id -join ',') -ceq 'prefix-0,import-b,prefix-2' -and $rows[2].mode -ceq 'shadowsocks' -and
+        Check ($FollowupPosition -eq 2 -and ($FollowupBody.nodes.id -join ',') -ceq ('prefix-0,import-b,prefix-2,suffix-ss,'+$id)) 'A fresh trial did not follow the inserted hop before its retained suffix'
+        Check (($rows.id -join ',') -ceq 'prefix-0,import-b,prefix-2,suffix-ss' -and $rows[2].mode -ceq 'shadowsocks' -and
            [object]::ReferenceEquals($capturedHomeSelection,$rootControls['UnifiedNodeChainButton'].Tag)) 'Authenticated Use changed Home or lost the private stream insertion'
         $script:DraftFault='recapture';$script:MeasuredBody=$null;$list.SelectedIndex=2;&$measureNext
-        Check ($null -ne $MeasuredBody -and ($MeasuredBody.nodes.id -join ',') -ceq ('prefix-0,import-b,prefix-2,'+$id) -and
-           $MeasuredBody.expected_profile_tokens.Count -eq 4 -and $MeasuredBody.execution -ceq 'auto') 'Remeasure lost the token-bound unsaved response path'
+        Check ($null -ne $MeasuredBody -and ($MeasuredBody.nodes.id -join ',') -ceq ('prefix-0,import-b,prefix-2,suffix-ss,'+$id) -and
+           $MeasuredBody.expected_profile_tokens.Count -eq 5 -and $MeasuredBody.execution -ceq 'auto') 'Remeasure lost the token-bound unsaved response path'
         $store.profiles=@($originalProfiles)+@(7..14|ForEach-Object{[pscustomobject]@{id=('prefix-'+$_);name=('Prefix '+$_);node_kind='router-vpn';start_layer='off';profile_token=('{0:x64}' -f ($_+1))}})
         $script:CurrentStore=$store;$rows.Clear();$prefixMode.SelectedIndex=0;$finalMode.Tag='shadowsocks'
         $rootControls['UnifiedExecution'].SelectedIndex=0;&$refresh
@@ -321,7 +339,7 @@ try{
                     if($index -eq 2){Check ($MeasuredBody.execution -ceq 'auto' -and ($MeasuredBody.nodes.id -join ',') -ceq ($all.id -join ',')) 'Measured Compare changed its original source'}
                     foreach($k in @(1,($count-3))){
                         $script:MeasuredBody=$null;$list.SelectedIndex=$k;&$measureNext
-                        $allowed=$index -eq 2 -and $privatePosition -eq -1 -and $count -lt 96
+                        $allowed=$index -eq 2 -and $count -lt 96
                         Check (($null -ne $MeasuredBody) -eq $allowed) 'Earlier authenticated response did not use every retained original source'
                         if($allowed){Check (($MeasuredBody.nodes.id -join ',') -ceq ($all.id -join ',')) 'Earlier Measure dropped the original suffix'}
                     }

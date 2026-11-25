@@ -994,31 +994,34 @@ function ShowUnifiedOrderedNodes {
             $dialog.FindName('MeasureNext').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent))
         })
         $dialog.FindName('MeasureNext').Add_Click({try{
-            $position=$list.SelectedIndex
-            $captured=&$captureEditor
-            if(-not(Test-RouterVPNOrderedCandidatePosition $captured.nodes $position $captured.execution $store.profiles)){throw 'Choose a supported original prefix to measure from.'}
-            $body=New-RouterVPNOrderedConnectPayload $captured (Api '/api/profiles' -Timeout 5)
-            $choice=ShowOrderedCandidates -Draft $body -Position $position -Editor $dialog
-            if($null-eq$choice){return}
-            $fresh=&$captureEditor
-            if([string]$RouterCombo.SelectedValue-cne$id-or[string]$choice.expected_selected_node_id-cne$id-or$fresh.execution-cne$captured.execution-or($captured.execution-cne'local'-and[string]$choice.requested_execution-cne$captured.execution)){throw 'The selected exit or execution changed. Recapture the draft.'}
-            $proposed=@($choice.proposed_path);$next=$position+1
-            if(@($choice.expected_profile_tokens.PSObject.Properties).Count-ne$proposed.Count-or$proposed.Count-ne($captured.nodes.Count+1)-or$fresh.nodes.Count-ne$captured.nodes.Count-or[string]$proposed[$next].id-cne[string]$choice.candidate_id){throw 'The proposed path changed.'}
-            for($i=0;$i-lt$captured.nodes.Count;$i++){
-                $j=if($i-lt$next){$i}else{$i+1}
-                foreach($field in @('id','mode')){if($fresh.nodes[$i].$field-cne$captured.nodes[$i].$field-or$proposed[$j].$field-cne$captured.nodes[$i].$field){throw 'The original draft changed. Recapture the prefix.'}}
-            }
-            $current=Api '/api/profiles' -Timeout 5
-            $tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
-            foreach($node in $proposed){
-                $original=@($store.profiles|Where-Object{[string]$_.id-ceq[string]$node.id})
-                $issued=@($choice.expected_profile_tokens.PSObject.Properties|Where-Object{$_.Name-ceq$node.id})
-                if($original.Count-ne1-or$issued.Count-ne1-or$issued[0].Value-cne$original[0].profile_token){throw 'A source changed. Reopen the ordered editor.'}
-                $tokens.Add($node.id,$issued[0].Value)
-            }
-            [void](New-RouterVPNOrderedConnectPayload ([pscustomobject]@{control_id=$id;nodes=$proposed;profile_tokens=$tokens;execution=$captured.execution}) $current)
-            $rows.Insert($next,[pscustomobject]@{id=$proposed[$next].id;mode=$proposed[$next].mode})
-            &$refresh;$list.SelectedIndex=$next;$status.Text='Added the measured hop to this draft.'
+            do {
+                $position=$list.SelectedIndex
+                $captured=&$captureEditor
+                if(-not(Test-RouterVPNOrderedCandidatePosition $captured.nodes $position $captured.execution $store.profiles)){throw 'Choose a supported original prefix to measure from.'}
+                $body=New-RouterVPNOrderedConnectPayload $captured (Api '/api/profiles' -Timeout 5)
+                $choice=ShowOrderedCandidates -Draft $body -Position $position -Editor $dialog
+                if($null-eq$choice){return}
+                if(-not $dialog.IsVisible -or $list.SelectedIndex -ne $position){throw 'The measured row or its editor changed. Recapture the current prefix.'}
+                $fresh=&$captureEditor
+                if([string]$RouterCombo.SelectedValue-cne$id-or[string]$choice.expected_selected_node_id-cne$id-or$fresh.execution-cne$captured.execution-or($captured.execution-cne'local'-and[string]$choice.requested_execution-cne$captured.execution)){throw 'The selected exit or execution changed. Recapture the draft.'}
+                $proposed=@($choice.proposed_path);$next=$position+1
+                if(@($choice.expected_profile_tokens.PSObject.Properties).Count-ne$proposed.Count-or$proposed.Count-ne($captured.nodes.Count+1)-or$fresh.nodes.Count-ne$captured.nodes.Count-or[string]$proposed[$next].id-cne[string]$choice.candidate_id){throw 'The proposed path changed.'}
+                for($i=0;$i-lt$captured.nodes.Count;$i++){
+                    $j=if($i-lt$next){$i}else{$i+1}
+                    foreach($field in @('id','mode')){if($fresh.nodes[$i].$field-cne$captured.nodes[$i].$field-or$proposed[$j].$field-cne$captured.nodes[$i].$field){throw 'The original draft changed. Recapture the prefix.'}}
+                }
+                $current=Api '/api/profiles' -Timeout 5
+                $tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
+                foreach($node in $proposed){
+                    $original=@($store.profiles|Where-Object{[string]$_.id-ceq[string]$node.id})
+                    $issued=@($choice.expected_profile_tokens.PSObject.Properties|Where-Object{$_.Name-ceq$node.id})
+                    if($original.Count-ne1-or$issued.Count-ne1-or$issued[0].Value-cne$original[0].profile_token){throw 'A source changed. Reopen the ordered editor.'}
+                    $tokens.Add($node.id,$issued[0].Value)
+                }
+                [void](New-RouterVPNOrderedConnectPayload ([pscustomobject]@{control_id=$id;nodes=$proposed;profile_tokens=$tokens;execution=$captured.execution}) $current)
+                $rows.Insert($next,[pscustomobject]@{id=$proposed[$next].id;mode=$proposed[$next].mode})
+                &$refresh;$list.SelectedIndex=$next;$status.Text='Added the measured hop to this draft.'
+            } while ($proposed.Count -lt (Get-RouterVPNOrderedPhysicalTraversalDepth) -and (Test-RouterVPNOrderedCandidatePosition $proposed $next $fresh.execution $store.profiles))
         }catch{$status.Text=$_.Exception.Message}})
         $dialog.FindName('Apply').Add_Click({try{
             Assert-RouterVPNMutationIdle 'applying the ordered node path'

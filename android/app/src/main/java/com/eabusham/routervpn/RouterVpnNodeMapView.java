@@ -18,6 +18,7 @@ import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.accessibility.AccessibilityNodeInfo;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -82,6 +83,7 @@ final class RouterVpnNodeMapView extends View {
     private final Runnable locationExpiry = this::hideRealUserLocation;
     private Location userLocation;
     private boolean locationRequestPending;
+    private boolean locationTouchStarted;
     private String locationState="LOCATE ME";
 
     RouterVpnNodeMapView(Context context){this(context,null);}
@@ -89,7 +91,8 @@ final class RouterVpnNodeMapView extends View {
         super(context,attrs);
         text.setTextSize(sp(12));secondary.setTextSize(sp(10));
         setMinimumHeight((int)dp(260));
-        setContentDescription("Interactive Router VPN globe using stored node coordinates and measured latency only. Tap LOCATE ME to explicitly request a real device location marker.");
+        setContentDescription("Router VPN globe. Your location is hidden.");
+        setFocusable(true);
         setClickable(true);
         locationManager=(LocationManager)context.getSystemService(Context.LOCATION_SERVICE);
         land=new AndroidMapLand(context.getAssets());
@@ -179,22 +182,38 @@ final class RouterVpnNodeMapView extends View {
     }
 
     @Override public boolean onTouchEvent(MotionEvent event){
-        if(event.getAction()!=MotionEvent.ACTION_UP)return true;
         RectF world=worldRect();
-        if(locationButtonRect(world).contains(event.getX(),event.getY())){if(locationListener!=null||locationRequestPending)hideRealUserLocation();else enableRealUserLocation();performClick();return true;}
-        if(markerClickListener==null||markers.isEmpty())return performClick();
+        boolean onLocation=locationButtonRect(world).contains(event.getX(),event.getY());
+        switch(event.getActionMasked()){
+            case MotionEvent.ACTION_DOWN:
+                locationTouchStarted=onLocation;
+                return true;
+            case MotionEvent.ACTION_CANCEL:
+            case MotionEvent.ACTION_POINTER_DOWN:
+                locationTouchStarted=false;
+                return true;
+            case MotionEvent.ACTION_UP:
+                boolean activate=locationTouchStarted && onLocation;
+                boolean locationGesture=locationTouchStarted || onLocation;
+                locationTouchStarted=false;
+                if(activate)return performClick();
+                if(locationGesture)return true;
+                break;
+            default: return true;
+        }
+        if(markerClickListener==null||markers.isEmpty())return true;
         Marker best=null;float bestDistance=Float.MAX_VALUE;
         for(Marker marker:markers){if(!valid(marker))continue;float dx=xFor(marker.longitude,world)-event.getX(),dy=yFor(marker.latitude,world)-event.getY(),distance=(float)Math.hypot(dx,dy);if(distance<bestDistance){bestDistance=distance;best=marker;}}
-        if(best!=null&&bestDistance<=dp(34)){markerClickListener.onMarkerClick(best);performClick();return true;}
-        return performClick();
+        if(best!=null&&bestDistance<=dp(34))markerClickListener.onMarkerClick(best);
+        return true;
     }
 
     private void enableRealUserLocation(){
         Activity activity=findActivity();
-        if(activity==null||locationManager==null){locationState="LOCATION UNAVAILABLE";invalidate();return;}
+        if(activity==null||locationManager==null){locationState="LOCATION UNAVAILABLE";refreshLocationControl();return;}
         locationRequestPending=true;
         if(!hasLocationPermission()){
-            locationState="ALLOW LOCATION";invalidate();
+            locationState="ALLOW LOCATION";refreshLocationControl();
             activity.requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION},LOCATION_PERMISSION_REQUEST);
             return;
         }
@@ -238,7 +257,7 @@ final class RouterVpnNodeMapView extends View {
             }
         }catch(SecurityException denied){hideRealUserLocation();return;}
         if(!requested&&!validUserLocation()){hideRealUserLocation();locationState="NO LOCATION FIX";}
-        invalidate();
+        refreshLocationControl();
     }
 
     private void acceptRealLocation(Location location){
@@ -247,7 +266,7 @@ final class RouterVpnNodeMapView extends View {
         long ageMs=(SystemClock.elapsedRealtimeNanos()-location.getElapsedRealtimeNanos())/1_000_000L;
         removeCallbacks(locationExpiry);
         postDelayed(locationExpiry,Math.max(1,MAX_LAST_LOCATION_AGE_MS-ageMs));
-        userLocation=new Location(location);locationState="HIDE ME";invalidate();
+        userLocation=new Location(location);locationState="HIDE ME";refreshLocationControl();
     }
 
     private void hideRealUserLocation(){
@@ -256,7 +275,7 @@ final class RouterVpnNodeMapView extends View {
         locationRequestPending=false;
         removeCallbacks(locationExpiry);
         try{if(locationManager!=null&&previous!=null)locationManager.removeUpdates(previous);}catch(SecurityException ignored){}
-        userLocation=null;locationState="LOCATE ME";invalidate();
+        userLocation=null;locationState="LOCATE ME";refreshLocationControl();
     }
 
     private boolean hasLocationPermission(){return getContext().checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED||getContext().checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)==PackageManager.PERMISSION_GRANTED;}
@@ -272,7 +291,25 @@ final class RouterVpnNodeMapView extends View {
     private boolean validUserLocation(){return userLocation!=null&&hasLocationPermission()&&freshLocation(userLocation);}
     private RectF locationButtonRect(RectF world){float w=dp(104),h=dp(28);return new RectF(world.right-w-dp(10),world.top+dp(8),world.right-dp(10),world.top+dp(8)+h);}
 
-    @Override public boolean performClick(){super.performClick();return true;}
+    private void refreshLocationControl(){
+        String status = validUserLocation() ? "Your location is visible." :
+                "LOCATE ME".equals(locationState) ? "Your location is hidden." : locationState.toLowerCase(Locale.ROOT);
+        setContentDescription("Router VPN globe. " + status);
+        invalidate();
+    }
+
+    @Override public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info){
+        super.onInitializeAccessibilityNodeInfo(info);
+        String label = validUserLocation() ? "Hide my location" : locationRequestPending || locationListener!=null ? "Cancel location request" : "Locate me";
+        info.addAction(new AccessibilityNodeInfo.AccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK,label));
+    }
+
+    @Override public boolean performClick(){
+        super.performClick();
+        if(locationRequestPending || locationListener!=null)hideRealUserLocation();
+        else enableRealUserLocation();
+        return true;
+    }
     private RectF worldRect(){float pad=dp(14);return new RectF(pad,pad,getWidth()-pad,getHeight()-pad);}
     private boolean valid(Marker m){return Double.isFinite(m.latitude)&&Double.isFinite(m.longitude)&&m.latitude>=-90&&m.latitude<=90&&m.longitude>=-180&&m.longitude<=180&&(m.explicitCoordinates||!(m.latitude==0&&m.longitude==0));}
     private float xFor(double lon,RectF world){return world.left+(float)((lon+180d)/360d)*world.width();}

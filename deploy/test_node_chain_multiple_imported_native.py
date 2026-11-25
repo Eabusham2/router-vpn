@@ -172,6 +172,13 @@ for count, position in ((3, 1), (4, 1), (9, 6), (16, 8), (16, 13)):
         leaf = f'{count}-imported-stop-{position}-{fault}'
         INTERMEDIATE_POSITIONS[leaf] = position
         PRIVATE_RESPONSE_SOURCES[leaf] = (count, 0, fault)
+RECURSIVE_PRIVATE_POSITIONS = {}
+for count, paired, stop in ((5, (2,), 1), (5, (2,), 2), (7, (2, 4), 3), (9, (2, 4), 4)):
+    for fault in (('original', 'wrong-candidate-key', 'late-cancel', 'server-winner') if count == 7 else ('original',)):
+        leaf = f'{count}-recursive-stop-{stop}-{fault}'
+        INTERMEDIATE_POSITIONS[leaf] = stop
+        RECURSIVE_PRIVATE_POSITIONS[leaf] = paired
+        PRIVATE_RESPONSE_SOURCES[leaf] = (count, paired[0], fault)
 PRIVATE_RESPONSE_CASES = tuple(PRIVATE_RESPONSE_SOURCES)
 
 
@@ -203,8 +210,10 @@ def suffix_refusal_marker(leaf):
 
 def private_response_source_marker(leaf):
     count, paired, _ = PRIVATE_RESPONSE_SOURCES[leaf]
-    role = 'paired' if paired == count - 2 else 'imported'
-    return f"PRIVATE_RESPONSE_SOURCE nodes={count} schema={2 if count == 3 else 6} position={response_position(leaf)} role={role} paired={paired or 'none'}"
+    positions = RECURSIVE_PRIVATE_POSITIONS.get(leaf, (paired,) if paired else ())
+    role = 'paired' if response_position(leaf) in positions else 'imported'
+    private = ','.join(map(str, positions)) or 'none'
+    return f"PRIVATE_RESPONSE_SOURCE nodes={count} schema={2 if count == 3 else 6} position={response_position(leaf)} role={role} paired={private}"
 
 
 SELECTED_CASES += PRIVATE_RESPONSE_CASES

@@ -24,9 +24,9 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
         let privateStops = proofs.dropFirst().dropLast().filter { !$0.node_id.isEmpty }
         guard Set(privateIDs).count == privateIDs.count,
               !proofs[0].node_id.isEmpty, !proofs[proofs.count-1].node_id.isEmpty,
-              privateStops.count <= 1, privateStops.allSatisfy({ $0.position >= 2 }) else { return false }
+              privateStops.allSatisfy({ $0.position >= 2 }) else { return false }
         let finalPrefix = proofs.count - 2
-        let first = privateStops.isEmpty && proofs.count < IOSMultihopNodeSelection.physicalTraversalDepth ? 1 : finalPrefix
+        let first = proofs.count < IOSMultihopNodeSelection.physicalTraversalDepth ? 1 : finalPrefix
         let eligible = first...finalPrefix
         return eligible.contains(position) && proofs.enumerated().allSatisfy { index, row in
             row.position == index && row.measurement == (eligible.contains(index) ? "routed-candidate-response" : nil)

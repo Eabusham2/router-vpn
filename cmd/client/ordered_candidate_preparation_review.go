@@ -160,12 +160,14 @@ func (p *orderedCandidatePreparation) finishForReview(job *orderedCandidatePrepa
 	if !finished {
 		return errors.New("candidate result completion was already consumed")
 	}
-	go expireOrderedCandidatePreparedJob(p.control, p.owner, job)
+	// Capture the issued deadline under the same lock that publishes the
+	// review. The retirement goroutine never rereads a mutable review field.
+	go expireOrderedCandidatePreparedJob(p.control, p.owner, job, job.expires)
 	return nil
 }
 
-func expireOrderedCandidatePreparedJob(control *viaEntryControl, owner *viaEntryOwner, job *orderedCandidatePreparedJob) {
-	timer := time.NewTimer(time.Until(job.expires))
+func expireOrderedCandidatePreparedJob(control *viaEntryControl, owner *viaEntryOwner, job *orderedCandidatePreparedJob, expires time.Time) {
+	timer := time.NewTimer(time.Until(expires))
 	defer timer.Stop()
 	<-timer.C
 	control.mu.Lock()

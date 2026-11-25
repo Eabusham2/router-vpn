@@ -19,7 +19,7 @@ protocol ObservableObject {}
  var status=Status.connected,connectedDate:Date?=Date(timeIntervalSince1970:10)
  func sendProviderMessage(_ data:Data,responseHandler:@escaping(Data?)->Void)throws{Native.shared.handle(data,responseHandler)}
 }
-struct SelectedMeasurementSource { let ids: [String], source: String, config: String, requested: String; let privateStreamPosition: Int? = nil }
+struct SelectedMeasurementSource { let ids: [String], source: String, config: String, requested: String; let privateStreamPositions: Set<Int> = [] }
 extension String {
  var hopMeasurementRows:Int { self == "local-maximum" ? 96 : self == "local-long" ? 16 : self == "local-deep" ? 9 : 8 }
  var selectedMeasurementSource:SelectedMeasurementSource? {nil}

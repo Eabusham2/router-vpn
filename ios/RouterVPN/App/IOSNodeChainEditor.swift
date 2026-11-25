@@ -60,7 +60,7 @@ struct IOSNodeChainDraft {
             if hasPairedStream {
                 let privateStops = IOSMultihopNodeSelection.pairedStreamPositions(nodes, execution: execution, profiles: linked)
                 guard selected == nodes, !privateStops.isEmpty, position == 0 else {
-                    throw IOSMultihopNodeSelection.issue("Choose the WireGuard entry or the qualified penultimate hop of a Compare route.")
+                    throw IOSMultihopNodeSelection.issue("Choose the WireGuard entry or a supported Shadowsocks hop in a Compare route.")
                 }
                 return nodes
             }

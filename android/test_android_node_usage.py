@@ -121,8 +121,28 @@ class MapCanvasBoundary {
   float left,top,right,bottom;
   RectF(float l,float t,float r,float b){left=l;top=t;right=r;bottom=b;}
   float width(){return right-left;}float height(){return bottom-top;}
+  boolean contains(float x,float y){return x>=left&&x<right&&y>=top&&y<bottom;}
   float centerX(){return (left+right)/2;}float centerY(){return (top+bottom)/2;}
  }
+ static final class MotionEvent {
+  static final int ACTION_DOWN=0,ACTION_UP=1,ACTION_CANCEL=3,ACTION_POINTER_DOWN=5;
+  final int action;final float x,y;
+  MotionEvent(int action,float x,float y){this.action=action;this.x=x;this.y=y;}
+  int getActionMasked(){return action;}float getX(){return x;}float getY(){return y;}
+ }
+ static final class AccessibilityNodeInfo {
+  static final int ACTION_CLICK=16;
+  record AccessibilityAction(int action,String label){}
+  String clickLabel;
+  void addAction(AccessibilityAction value){if(value.action()==ACTION_CLICK)clickLabel=value.label();}
+ }
+ static final class Manifest {static final class permission {static final String ACCESS_FINE_LOCATION="fine",ACCESS_COARSE_LOCATION="coarse";}}
+ static final class Activity {int permissionPrompts;void requestPermissions(String[] which,int code){permissionPrompts++;}}
+ final Activity activity=new Activity();Activity findActivity(){return activity;}
+ static final int LOCATION_PERMISSION_REQUEST=6403;
+ String description;void setContentDescription(String value){description=value;}
+ public boolean onTouchEvent(MotionEvent e){return false;}public boolean performClick(){return false;}
+ public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info){}public void onWindowFocusChanged(boolean focus){}
  static final class SystemClock {static long now=120_000_000_000L;static long elapsedRealtimeNanos(){return now;}}
  static final class Location {
   final long at;final double lat,lon;final float accuracy;
@@ -165,6 +185,10 @@ class MapCanvasBoundary {
 }
 final class RouterVpnNodeMapView extends MapCanvasBoundary {
  static final String ROLE_ENTRY="entry",ROLE_HOP="hop",ROLE_EXIT="exit",ROLE_SELECTED="selected",ROLE_EXTERNAL="external",ROLE_NORMAL="normal";
+ boolean locationTouchStarted;
+ interface OnMarkerClickListener{void onMarkerClick(Marker marker);}OnMarkerClickListener markerClickListener;
+ void touch(int action,float x,float y){onTouchEvent(new MotionEvent(action,x,y));}
+ String advertisedAction(){var info=new AccessibilityNodeInfo();onInitializeAccessibilityNodeInfo(info);return info.clickLabel;}
  // SHIPPING_MAP_MARKER
  // SHIPPING_MAP_VALID
  // SHIPPING_MAP_DRAW
@@ -183,6 +207,9 @@ _map_methods = ('    void setMarkers(', '    void setOrderedPath(', '    @Overri
                 '    private void drawLocationButton(', '    private RectF locationButtonRect(', '    private RectF worldRect(',
                 '    private boolean freshLocation(', '    private void requestFreshLocation(', '    private void acceptRealLocation(',
                 '    private void hideRealUserLocation(', '    @Override protected void onDetachedFromWindow(',
+                '    private void enableRealUserLocation(', '    private void refreshLocationControl(',
+                '    @Override public void onInitializeAccessibilityNodeInfo(', '    @Override public boolean performClick(',
+                '    @Override public boolean onTouchEvent(', '    @Override public void onWindowFocusChanged(',
                 '    private void drawRouteSegment(', '    private int routeColor(',
                 '    private boolean validUserLocation(', '    private Paint paintFor(', '    private float xFor(', '    private float yFor(')
 ACTIVITY = ACTIVITY.replace(' // SHIPPING_MAP_DRAW', '\n'.join(S.block(_map_source, method) for method in _map_methods))
@@ -378,6 +405,22 @@ public final class NodeUsageTest{
    prefs.edit().putBoolean("multihop_on",true).putString("selected_kind","router-vpn").putString("selected_id",f.b.id).putString("multihop_entry",f.a.id).putString("multihop_exit",f.b.id).apply();
    long now=MapCanvasBoundary.SystemClock.now;
    var good=new MapCanvasBoundary.Location(now-2_000_000_000L,12,34,20f);
+   map.permission=false;map.onWindowFocusChanged(true);
+   check("Locate me".equals(map.advertisedAction())&&map.activity.permissionPrompts==0,"focused map requested location before activation");
+   map.setMarkers(List.of(new RouterVpnNodeMapView.Marker("test","Test",10,10,"normal")));
+   int[] markerClicks={0};map.markerClickListener=marker->markerClicks[0]++;
+   map.touch(0,337,179);map.touch(1,337,179);
+   map.touch(0,20,200);map.touch(1,20,200);
+   map.touch(0,20,200);map.touch(1,590,30);
+   map.touch(0,590,30);map.touch(3,590,30);map.touch(1,590,30);
+   check(markerClicks[0]==1&&map.activity.permissionPrompts==0,"marker, blank or cancelled touch requested location");
+   check(map.performClick()&&map.activity.permissionPrompts==1&&"Cancel location request".equals(map.advertisedAction()),"accessible map activation did not own one explicit permission request");
+   map.performClick();map.permission=true;map.onWindowFocusChanged(true);
+   check(map.locationManager.listener==null&&"Locate me".equals(map.advertisedAction()),"cancelled accessibility action started a fix when focus returned");
+   map.locationManager.cached=good;map.touch(0,590,30);map.touch(1,590,30);
+   check(map.frame().userPins==1&&"Hide my location".equals(map.advertisedAction()),"location button and accessibility action did not share the fresh fix");
+   var hidden=map.locationManager.listener;map.performClick();hidden.onLocationChanged(good);
+   check(map.frame().userPins==0&&"Locate me".equals(map.advertisedAction()),"accessible Hide retained a pin or accepted the old listener");
    map.locationManager.cached=good;map.requestFix();var retired=map.locationManager.listener;
    check(map.frame().userPins==1&&map.delay==28_000,"cached fix did not keep its original monotonic deadline");
    MapCanvasBoundary.SystemClock.now+=28_000_000_000L;

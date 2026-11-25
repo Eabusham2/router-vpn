@@ -34,8 +34,8 @@ class DesktopEditorVerdicts(unittest.TestCase):
                     D.require_host(target, *wrong)
 
     def test_complete_original_and_new_inventories(self):
-        self.assertEqual(len(D.WINDOWS_CONTROLS), 33)
-        self.assertEqual(len(D.LINUX_CONTROLS), 40)
+        self.assertEqual(len(D.WINDOWS_CONTROLS), 34)
+        self.assertEqual(len(D.LINUX_CONTROLS), 43)
         self.assertIn("socks-mode", D.WINDOWS_CONTROLS)
         self.assertEqual(D.LINUX_CONTROLS[10:15], ("socks-execution-global", "socks-execution-capability", "socks-execution-entry-layer", "socks-execution-final-layer", "socks-execution-layer"))
         for target in D.TARGETS:
@@ -43,13 +43,18 @@ class DesktopEditorVerdicts(unittest.TestCase):
 
     def test_linux_inventory_matches_the_actual_native_fixture(self):
         source = (D.ROOT / "client/linux/test-ordered-nodes-v1.py").read_text(encoding="utf-8")
-        inventories = [node.value for node in ast.walk(ast.parse(source))
+        tree = ast.parse(source)
+        inventories = [node.value for node in ast.walk(tree)
                        if isinstance(node, ast.Assign) and isinstance(node.value, ast.List)
                        and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
                        and node.targets[0].id == "controls"]
         self.assertEqual(len(inventories), 1)
         actual = tuple(ast.literal_eval(row.elts[0]) for row in inventories[0].elts)
         self.assertEqual(actual, D.LINUX_CONTROLS)
+        additions = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                     and isinstance(node.func, ast.Attribute) and node.func.attr in {"append", "extend"}
+                     and isinstance(node.func.value, ast.Name) and node.func.value.id == "controls"]
+        self.assertFalse(additions, "Declare every GTK control in the validated full inventory")
 
     def test_windows_inventory_matches_actual_powershell_and_each_new_guard_is_required(self):
         source = (D.ROOT / "client/test-windows-ordered-editor.ps1").read_text(encoding="utf-8")
@@ -68,7 +73,7 @@ class DesktopEditorVerdicts(unittest.TestCase):
                 D.windows_suite_budget(suite.replace(row, replacement, 1))
 
     def test_hostname_controls_remain_exact_in_both_required_inventories(self):
-        self.assertEqual(D.LINUX_CONTROLS[-4:-1], ("hostname-minimum", "hostname-capability", "hostname-conflict"))
+        self.assertEqual(D.LINUX_CONTROLS[-7:-4], ("hostname-minimum", "hostname-capability", "hostname-conflict"))
         suite = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
         for name in ("hostname-minimum", "hostname-conflict", "hostname-capability"):
             row = repr(name) + ": " + repr(D.WINDOWS_EDITOR_WITNESSES[name]) + ","
@@ -135,7 +140,7 @@ class DesktopEditorVerdicts(unittest.TestCase):
 
 
     def test_hysteria_control_is_additive_and_required(self):
-        self.assertEqual(D.LINUX_CONTROLS[-1], "hysteria-execution-global")
+        self.assertEqual(D.LINUX_CONTROLS[-4:], ("hysteria-execution-global", "followup-inserted-position", "followup-linked-suffix", "extended-paired-layer"))
         self.assertEqual(D.WINDOWS_EDITOR_WITNESSES["hysteria-execution-global"], "Hysteria execution borrowed unrelated global capability")
         for target in ("windows/amd64", "linux/amd64"):
             raw = complete(target)
@@ -150,8 +155,8 @@ class DesktopEditorVerdicts(unittest.TestCase):
 
     def test_windows_suite_budget_covers_each_original_bounded_command(self):
         source = (D.ROOT / "deploy/test_desktop_connection_profile_modes.py").read_text(encoding="utf-8")
-        self.assertEqual(D.windows_suite_budget(source), 6030)
-        self.assertEqual(D.windows_suite_budget(source), (1 + 6 + 21 + 6 + 33) * 90)
+        self.assertEqual(D.windows_suite_budget(source), 6120)
+        self.assertEqual(D.windows_suite_budget(source), (1 + 6 + 21 + 6 + 34) * 90)
         self.assertIn('execute("gtk-profiles", command, 900)', Path(D.__file__).read_text(encoding="utf-8"))
 
     def test_windows_suite_budget_refuses_changed_child_or_case_inventory(self):

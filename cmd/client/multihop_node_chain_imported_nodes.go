@@ -31,7 +31,7 @@ func desktopPairedStreamRoles(rows []common.MultihopNodeSelection, imported func
 	return hasPrivate && hasImport
 }
 
-// Server and Compare qualify one private stream after the first literal
+// Server and Compare qualify private streams after the first literal
 // imported member. The captured compiler still proves every endpoint, key,
 // identity and Off layer; a broader Local stream layout cannot select it.
 func desktopSelectedPrivateStreamRoles(rows []common.MultihopNodeSelection, imported func(int) bool) bool {
@@ -48,7 +48,7 @@ func desktopSelectedPrivateStreamRoles(rows []common.MultihopNodeSelection, impo
 			private++
 		}
 	}
-	return private == 1
+	return private > 0
 }
 
 func desktopNodeChainSchemaSixImport(members []desktopNodeChainMember, position int) bool {

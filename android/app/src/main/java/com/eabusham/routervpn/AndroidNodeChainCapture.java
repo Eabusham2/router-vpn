@@ -41,9 +41,8 @@ final class AndroidNodeChainCapture implements AutoCloseable {
                         if (member.imported) requireLiteralImportedSS(member);
                         else if (!member.proofId.matches("[0-9a-f]{64}") || !proofs.add(member.proofId)) return false;
                     }
-                    int privatePosition = selectedPrivateStreamPosition(modes, imported);
-                    return privatePosition >= 0 && (prefix == sources.size()-2
-                            || privatePosition == 0 && sources.size() < AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH);
+                    return selectedStreamLayout(modes, imported) && (prefix == sources.size()-2
+                            || sources.size() < AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH);
                 } catch (Exception unavailable) { return false; }
             }
             if (prefix != 1 || !modes.equals(java.util.Arrays.asList("wg","shadowsocks","shadowsocks"))
@@ -497,7 +496,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         if(selected) {
             List<Boolean> imported = new ArrayList<>();
             for (AndroidNodeStore.ChainSource member : members) imported.add(member.imported);
-            if (selectedPrivateStreamPosition(modes, imported) != interior) return false;
+            if (!selectedStreamLayout(modes, imported)) return false;
         }
         if((!selected && !"local".equals(execution))||members.size()>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH||modes.size()!=members.size()
                 ||interior<1||interior>=last||members.get(0).imported||members.get(last).imported||members.get(interior).imported
@@ -518,20 +517,11 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         return imported;
     }
 
-    // A valid all-imported interior returns zero. Invalid shapes return minus one.
-    static int selectedPrivateStreamPosition(List<String> modes, List<Boolean> imported) {
+    static boolean selectedStreamLayout(List<String> modes, List<Boolean> imported) {
         int last = modes.size() - 1;
-        if (last < 3 || last >= AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || imported.size() != modes.size()
-                || imported.get(0) || imported.get(last) || !"wg".equals(modes.get(0))) return -1;
-        int privateStream = 0;
-        for (int i = 1; i <= last; i++) {
-            if (!"shadowsocks".equals(modes.get(i))) return -1;
-            if (i < last && !imported.get(i)) {
-                if (i == 1 || privateStream != 0) return -1;
-                privateStream = i;
-            }
-        }
-        return privateStream;
+        return last >= 3 && last < AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH && imported.size() == modes.size()
+                && !imported.get(0) && imported.get(1) && !imported.get(last)
+                && "wg".equals(modes.get(0)) && modes.subList(1, modes.size()).stream().allMatch("shadowsocks"::equals);
     }
 
     static void requireCompleteShape(List<AndroidNodeStore.ChainSource> members,List<String> modes,String execution) throws Exception {

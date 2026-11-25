@@ -10,6 +10,7 @@ VPN/network receipts remain separate gates.
 from pathlib import Path
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -125,7 +126,10 @@ print("Actual Swift asynchronous external comparison actions: \(checks) checks P
 
 def linux_form(directory):
     source = (ROOT/'client/linux/routervpn-telemetry-v9.inc').read_text()
-    methods = source[source.index('/* One panel retains one server-issued intent.'):source.index('#include "routervpn-performance-v17.inc"')]
+    panel = source[source.index('/* One panel retains one server-issued intent.'):source.index('#include "routervpn-performance-v17.inc"')]
+    declaration = panel[:panel.index('} LinuxExternalComparison;') + len('} LinuxExternalComparison;')]
+    definitions = re.findall(r'^static [\w *]+\b(?:linux_ec_\w+|linux_external_comparison_open)\(', panel, re.MULTILINE)
+    methods = '\n'.join([declaration, *(block(panel, marker) for marker in definitions)])
     program = r'''
 #include <gtk/gtk.h>
 #include <json-glib/json-glib.h>

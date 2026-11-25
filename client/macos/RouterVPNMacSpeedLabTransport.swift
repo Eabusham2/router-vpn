@@ -20,7 +20,7 @@ enum RouterVPNSelectedPublicInventory {
         guard (9...96).contains(roles.count), roles.first == "private-node", roles.last == "private-node",
               roles[1] == "public-path" else { return false }
         let interior = roles.dropFirst().dropLast()
-        return interior.filter { $0 == "private-node" }.count == 1 && interior.allSatisfy { $0 == "public-path" || $0 == "private-node" }
+        return interior.contains("private-node") && interior.allSatisfy { $0 == "public-path" || $0 == "private-node" }
     }
     static let fields: Set<String> = ["schema", "source_sha256", "config_sha256", "generation_sha256", "selected_execution", "nodes"]
     static func selectedSize(_ count: Int?, capture: [String: Any], nodes: [[String: Any]]) -> Bool {

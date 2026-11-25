@@ -333,7 +333,7 @@ static gboolean linux_ordered_local_imported_path_v1(const LinuxOrderedSelection
             if (!linux_ordered_router_v1(profile)) return FALSE;
             if (position + 1 < count && !linux_ordered_prefix_v1(mode)) {
                 if (!packet_prefixes || position < packet_prefixes || strcmp(mode,"shadowsocks")) return FALSE;
-                if (selected && (paired_stream || position < 2 || packet_prefixes != 1 ||
+                if (selected && (position < 2 || packet_prefixes != 1 ||
                     strcmp(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, 0), "mode"), "wg"))) return FALSE;
                 paired_stream = TRUE;
             }
@@ -472,7 +472,6 @@ static gboolean linux_ordered_measurement_prefix_v1(const LinuxOrderedSelectionV
                 for (guint i = 0; i < count; i++) {
                     JsonObject *row = json_array_get_object_element(selection->nodes,i);
                     JsonObject *profile = external_source_profile_v24(catalog,linux_ordered_string_v1(row,"id"));
-                    if (insert && i > 0 && i < count-1 && strcmp(linux_ordered_string_v1(profile,"node_kind"),"external")) return FALSE;
                     JsonNode *layer = json_object_get_member(profile,"start_layer");
                     if ((i && strcmp(linux_ordered_string_v1(row,"mode"),"shadowsocks")) ||
                         (layer && (!JSON_NODE_HOLDS_VALUE(layer) || json_node_get_value_type(layer) != G_TYPE_STRING ||
@@ -826,7 +825,18 @@ typedef struct {
     GtkWidget *dialog, *list, *candidate, *transport, *execution, *status, *add, *remove, *up, *down;
     gboolean syncing, closed;
     char *offered_draft;
+    guint next_measurement;
+    int next_position;
+    char *next_draft;
 } LinuxOrderedEditorV1;
+
+static void linux_ordered_cancel_next_v1(LinuxOrderedEditorV1 *editor) {
+    if (editor->next_measurement) {
+        g_source_remove(editor->next_measurement);
+        editor->next_measurement = 0;
+    }
+    g_clear_pointer(&editor->next_draft, g_free);
+}
 
 static const char *linux_ordered_editor_final_mode_v1(LinuxOrderedEditorV1 *editor) {
     return editor->final_mode != NULL ? editor->final_mode : "shadowsocks";
@@ -924,6 +934,7 @@ static void linux_ordered_candidate_changed_v1(GtkComboBox *combo, gpointer data
 }
 
 static void linux_ordered_render_v1(LinuxOrderedEditorV1 *editor, int selected) {
+    linux_ordered_cancel_next_v1(editor);
     GList *children = gtk_container_get_children(GTK_CONTAINER(editor->list));
     for (GList *it = children; it != NULL; it = it->next) gtk_widget_destroy(GTK_WIDGET(it->data));
     g_list_free(children);
@@ -1015,6 +1026,28 @@ static LinuxOrderedSelectionV1 *linux_ordered_editor_selection_v1(LinuxOrderedEd
 
 static void (*linux_ordered_present_measurement_v1)(App *, GtkWindow *, const char *, int);
 
+/* Run after the choosing dialog has consumed native DOWN and closed. Re-read
+ * the catalog for this exact insertion, including the retained suffix. */
+static gboolean linux_ordered_continue_measured_v1(gpointer data) {
+    LinuxOrderedEditorV1 *editor = data;
+    editor->next_measurement = 0;
+    g_autofree char *expected = g_steal_pointer(&editor->next_draft);
+    int position = editor->next_position;
+    App *app = editor->owned->unified->app;
+    if (!expected || !app->window || !linux_ordered_present_measurement_v1 || !linux_ordered_editable_v1(editor) ||
+        !gtk_widget_get_visible(editor->dialog) || linux_ordered_index_v1(editor) != position ||
+        g_object_get_data(G_OBJECT(app->window), "linux-ordered-candidates")) return G_SOURCE_REMOVE;
+    LinuxOrderedSelectionV1 *selection = linux_ordered_editor_selection_v1(editor);
+    if (!selection) return G_SOURCE_REMOVE;
+    g_autofree char *actual = linux_ordered_connect_body_v1(selection);
+    g_autoptr(JsonNode) current = !strcmp(expected, actual) ? linux_ordered_read_v1("/api/profiles") : NULL;
+    if (current && linux_ordered_measurement_prefix_v1(selection, json_node_get_object(current), position) &&
+        linux_ordered_editable_v1(editor) && linux_ordered_index_v1(editor) == position)
+        linux_ordered_present_measurement_v1(app, GTK_WINDOW(editor->dialog), expected, position);
+    linux_ordered_selection_free_v1(selection);
+    return G_SOURCE_REMOVE;
+}
+
 static gboolean linux_ordered_adopt_measured_v1(GtkWindow *parent, const char *captured, int position, JsonObject *response) {
     LinuxOrderedEditorV1 *editor = g_object_get_data(G_OBJECT(parent), "ordered-live-editor");
     if (!editor || !linux_ordered_editable_v1(editor) || position != linux_ordered_index_v1(editor) ||
@@ -1044,6 +1077,12 @@ static gboolean linux_ordered_adopt_measured_v1(GtkWindow *parent, const char *c
         g_ptr_array_insert(editor->modes, added, g_strdup(linux_ordered_string_v1(row, "mode")));
         linux_ordered_render_v1(editor, added);
         gtk_label_set_text(GTK_LABEL(editor->status), "Added the measured hop to this draft.");
+        if (linux_ordered_present_measurement_v1 && json_array_get_length(next->nodes) < ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH &&
+            linux_ordered_measurement_prefix_v1(next, json_node_get_object(current), added)) {
+            editor->next_position = (int)added;
+            editor->next_draft = linux_ordered_connect_body_v1(next);
+            editor->next_measurement = g_idle_add(linux_ordered_continue_measured_v1, editor);
+        }
     }
     if (current) json_node_free(current);
     linux_ordered_selection_free_v1(next);
@@ -1103,7 +1142,9 @@ static gboolean linux_ordered_apply_v1(LinuxOrderedEditorV1 *editor) {
 
 static void linux_ordered_closed_v1(GtkWidget *widget, gpointer data) {
     (void)widget;
-    ((LinuxOrderedEditorV1 *)data)->closed = TRUE;
+    LinuxOrderedEditorV1 *editor = data;
+    editor->closed = TRUE;
+    linux_ordered_cancel_next_v1(editor);
 }
 
 static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
@@ -1180,6 +1221,7 @@ static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
     g_signal_connect(editor.transport, "changed", G_CALLBACK(linux_ordered_mode_v1), &editor);
     linux_ordered_render_v1(&editor, 0); gtk_widget_show_all(editor.dialog);
     while (gtk_dialog_run(GTK_DIALOG(editor.dialog)) == GTK_RESPONSE_APPLY) if (linux_ordered_apply_v1(&editor)) break;
+    linux_ordered_cancel_next_v1(&editor);
     editor.closed = TRUE; g_object_set_data(G_OBJECT(editor.dialog), "ordered-live-editor", NULL); gtk_widget_destroy(editor.dialog);
     if (g_signal_handler_is_connected(unified->app->window, parent_closed))
         g_signal_handler_disconnect(unified->app->window, parent_closed);

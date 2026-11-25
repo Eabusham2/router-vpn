@@ -1,5 +1,10 @@
 # Selected earlier-hop measurements and unsaved draft insertion
 
+The [later recursive continuation](IMPLEMENTATION-2026-11-25-RECURSIVE-SELECTED-CONTINUATION.md)
+supersedes this record's single-private-intermediate restriction and its manual
+desktop/Android continuation behavior. The original evidence below remains
+attached to the source and case inventory that produced it.
+
 This continuation implements the recursive editor interaction required by
 [the reconciled product contract](REQUIREMENTS-RECONCILED.md). A measured candidate
 can be inserted into the original unsaved draft after its temporary native owner

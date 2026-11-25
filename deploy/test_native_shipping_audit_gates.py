@@ -1166,7 +1166,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, 'c.nodes[0].mode != "wg"', "false"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, "len(c.nodes) > NodeChainExtendedLocalMaximumNodes", "false"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, 'c.proofs[i].StartLayer != "off"', "false"),
-            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, "i == 1 || paired != 0", "false"),
+            ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, "i == 1", "false"),
             ("internal/mobilemultihop/node_chain_multiple_imported_execution.go", private_stream, "m == nil || m.hostname != nil", "m == nil"),
             ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "refs := nodeChainSelectedReferences(members)", "refs := nodeChainSelectedReferences(members[:2])"),
             ("cmd/client/multihop_node_chain_imported_nodes.go", schema, "common.ExtendedMixedLocalPacketCount(refs)", "1"),
@@ -1189,8 +1189,11 @@ class NativeShippingAuditTests(unittest.TestCase):
     def test_local_paired_streams_keep_each_original_authority(self):
         path = "cmd/client/multihop_node_chain_imported_nodes.go"
         roles = "func desktopPairedStreamRoles(rows []common.MultihopNodeSelection, imported func(int) bool) bool"
+        selected = "func desktopSelectedPrivateStreamRoles(rows []common.MultihopNodeSelection, imported func(int) bool) bool"
         schema = "func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error)"
         for declaration, before, after in (
+            (selected, "return private > 0", "return private == 1"),
+            (selected, "!imported(1)", "false"),
             (roles, "return hasPrivate && hasImport", "return hasPrivate || hasImport"),
             (roles, "!stream && !imported(i)", "!imported(i)"),
             (roles, "imported(len(rows)-1)", "false"),

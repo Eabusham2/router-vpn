@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -261,37 +262,51 @@ func selectedResponseAppFixture(t *testing.T, count, privatePosition int) (*app,
 }
 
 func selectedResponseAppFixtureWithCandidates(t *testing.T, count, privatePosition, candidateCount int) (*app, []common.MultihopNodeSelection, string) {
+	var positions []int
+	if privatePosition >= 0 {
+		positions = append(positions, privatePosition)
+	}
+	return selectedResponseAppFixtureWithPrivatePositions(t, count, candidateCount, positions...)
+}
+
+func selectedResponseAppFixtureWithPrivatePositions(t *testing.T, count, candidateCount int, privatePositions ...int) (*app, []common.MultihopNodeSelection, string) {
 	t.Helper()
 	a, inventory := desktopNodeChainCaptureFixture(t, count+candidateCount)
 	rows := slices.Clone(inventory[:count])
 	rows[count-1].Mode = "shadowsocks"
 	candidate := inventory[count].ID
-	keys := map[string]byte{}
-	for i, node := range inventory[count:] {
-		keys[node.ID] = byte('x' + i)
+	keys := map[string]bool{}
+	for _, node := range inventory[count:] {
+		keys[node.ID] = true
 	}
 	if count == 3 {
 		installDesktopOrderedImported(t, a, rows)
 	} else {
 		var imports []int
 		for position := 1; position < count-1; position++ {
-			if position != privatePosition {
+			if !slices.Contains(privatePositions, position) {
 				imports = append(imports, position)
 			}
 		}
 		installDesktopIndependentImports(t, a, rows, imports)
-		if privatePosition >= 0 {
-			rows[privatePosition].Mode = "shadowsocks"
-			keys[rows[privatePosition].ID] = 'v'
+		for _, position := range privatePositions {
+			if position < 2 || position >= count-1 {
+				t.Fatal("private fixture position is outside the qualified stream suffix")
+			}
+			rows[position].Mode = "shadowsocks"
+			keys[rows[position].ID] = true
 		}
 	}
-	for id, seed := range keys {
+	for id := range keys {
 		file := filepath.Join(clientRoot(a), "generated", id, "shadowsocks", "sing-box.json")
 		raw, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
 		}
-		oldKey, newKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("s"), 32)), base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{seed}, 32))
+		// Domain-derived keys remain independent of every repeated-byte import
+		// key, including extended routes whose import positions overlap ASCII.
+		key := sha256.Sum256([]byte("selected-response-fixture:" + id))
+		oldKey, newKey := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("s"), 32)), base64.StdEncoding.EncodeToString(key[:])
 		if strings.Count(string(raw), oldKey) != 1 {
 			t.Fatal("independent encrypted candidate setup")
 		}
@@ -571,8 +586,8 @@ func testOriginalSelectedDraftLifecycle(t *testing.T, a *app, draft *multihopCon
 	}
 	if choice[2] == "private-measure-only" {
 		for _, offer := range view.candidates {
-			if len(offer.DraftProposal) != 0 || offer.DraftAction != "" {
-				t.Fatal("fresh one-private Compare source offered a second private insertion")
+			if len(offer.DraftProposal) != len(draft.Nodes)+1 || offer.DraftAction != orderedCandidateDraftInsertAction {
+				t.Fatal("fresh Compare source lost its independently compiled draft insertion")
 			}
 		}
 		cancelled := orderedCandidateHTTP(t, a, "/api/multihop/draft-candidates/cancel", map[string]any{"request_id": q.RequestID, "view_token": view.token, "scope": q.Scope})

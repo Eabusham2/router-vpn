@@ -83,7 +83,7 @@ func TestCompareLocalPrivatePenultimateCandidate(t *testing.T) {
 				f := multipleImportedExecutionRuntimeFixture(t, selectedPrivateStreamLayout(n, shape.private), requested)
 				prep := f.runtime.projection.preparation
 				for i := 0; i < n; i++ {
-					eligible := i == position || shape.private == 0 && i > 0 && i < position
+					eligible := i > 0 && i <= position
 					if prep.SupportsCompareLocalResponseCandidate(i) != (requested == "auto" && eligible) {
 						t.Fatal("source advertised another metric or stop", i)
 					}

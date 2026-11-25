@@ -82,7 +82,7 @@ def run(command, *, negative=False, witness=None, observation=None, marker="PROF
         print(output.strip(), flush=True)
 
 
-WINDOWS_EDITOR_CONTROLS = {'local-imported-position': 'Local imported nodes lost complete original path', 'local-imported-capability': 'Local imported nodes accepted invalid source capability', 'hysteria-final-layer-required': 'Hysteria final layer was not offered', 'hysteria-final-layer-type': 'Hysteria accepted malformed final layer', 'hysteria-execution-global': 'Hysteria execution borrowed unrelated global capability', 'openvpn-execution-global': 'OpenVPN execution borrowed unrelated global capability', 'openvpn-execution-capability': 'OpenVPN execution accepted absent or nonboolean native hint', 'openvpn-execution-final-layer': 'OpenVPN execution refused captured final layer', 'socks-execution-final-layer': 'SOCKS execution refused captured final layer', 'socks-execution-old-trio': 'SOCKS execution refused a complete later prefix', 'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer', 'hostname-minimum': 'hostname trio acquired suffix packet authority', 'hostname-conflict': 'hostname execution accepted conflicting source capabilities', 'hostname-capability': 'hostname execution lost complete saved prefix', 'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',
+WINDOWS_EDITOR_CONTROLS = {'followup-position': 'A fresh trial did not follow the inserted hop before its retained suffix', 'local-imported-position': 'Local imported nodes lost complete original path', 'local-imported-capability': 'Local imported nodes accepted invalid source capability', 'hysteria-final-layer-required': 'Hysteria final layer was not offered', 'hysteria-final-layer-type': 'Hysteria accepted malformed final layer', 'hysteria-execution-global': 'Hysteria execution borrowed unrelated global capability', 'openvpn-execution-global': 'OpenVPN execution borrowed unrelated global capability', 'openvpn-execution-capability': 'OpenVPN execution accepted absent or nonboolean native hint', 'openvpn-execution-final-layer': 'OpenVPN execution refused captured final layer', 'socks-execution-final-layer': 'SOCKS execution refused captured final layer', 'socks-execution-old-trio': 'SOCKS execution refused a complete later prefix', 'connect-execution-prefix-layer': 'CONNECT execution admitted a malformed paired prefix layer', 'hostname-minimum': 'hostname trio acquired suffix packet authority', 'hostname-conflict': 'hostname execution accepted conflicting source capabilities', 'hostname-capability': 'hostname execution lost complete saved prefix', 'socks-execution-global': 'SOCKS execution borrowed unrelated global capability',
  'socks-execution-capability': 'SOCKS execution accepted absent or nonboolean native hint',
  'socks-execution-entry-layer': 'SOCKS execution accepted malformed entry layer',
  'socks-execution-layer': 'SOCKS execution admitted layered middle or final',
@@ -1115,16 +1115,16 @@ for count in [4, 9, 16, 96] {
         var penultimate = original
         penultimate.orderedNodes.swapAt(position,count-2)
         let measured = try RouterVPNOrderedNodeDraft(selection: penultimate,generation:UUID(),catalog:profiles)
-        check(measured.canMeasure(after:count-2) == (execution == "auto") && !measured.canMeasure(after:1),
+        let insert = execution == "auto" && count < 96
+        check(measured.canMeasure(after:count-2) == (execution == "auto") && measured.canMeasure(after:1) == insert,
               "the editor did not bind its private response to the Compare penultimate source")
-        if position != count-2 { check(!editor.canMeasure(after:position) && editor.canMeasure(after:count-2) == (execution == "auto"),
+        if position != count-2 { check(editor.canMeasure(after:position) == insert && editor.canMeasure(after:count-2) == (execution == "auto"),
                                        "the editor offered private response for a different saved position") }
         var publicProfiles = profiles
         publicProfiles[position]["node_kind"]="external";publicProfiles[position]["external"]=profiles[1]["external"]
         let allImported = try RouterVPNOrderedNodeDraft(selection: original, generation: UUID(), catalog: publicProfiles)
         check(allImported.canMeasure(after:count-2) == (execution == "auto"),
               "the all-imported selected route lost its penultimate Compare prefix")
-        let insert = execution == "auto" && count < 96
         check(allImported.canMeasure(after:1) == insert && allImported.canMeasure(after:count-3) == insert,
               "Compare insertion lost an eligible imported prefix or exceeded capacity")
         publicProfiles[0]["start_layer"]="aes-256-gcm"
@@ -1164,6 +1164,14 @@ for count in [4, 9, 16, 96] {
             if fault == "second-private" {
                 let i = count == 4 ? 1 : position + 1
                 sources[i].removeValue(forKey: "external"); sources[i]["node_kind"] = "router-vpn"
+                if i >= 2 {
+                    let recursive = try RouterVPNOrderedNodeDraft(selection:bad,generation:UUID(),catalog:sources)
+                    check(recursive.canMeasure(after:i) == insert && recursive.canMeasure(after:position) == insert,
+                          "two distinct private stream positions lost independent measurement")
+                    let request = try RouterVPNOrderedNodes.connectBody(try recursive.selection(),current:["selected_id":bad.selectedNodeID,"profiles":sources])
+                    check(request["nodes"] as? [[String:String]] == bad.orderedNodes,"recursive draft changed its original route")
+                    continue
+                }
             }
             if fault == "layer" { sources[count-1]["start_layer"] = "aes-256-gcm" }
             if fault == "hostname" {
@@ -1459,6 +1467,12 @@ for requested in ["server","auto"] {
     rejects({try submitted.2(["requested_execution":requested])},"stale editor delivered a measured hop");picker.revision=previous
     try submitted.2(["candidate_id":"added-packet","requested_execution":requested,"expected_selected_node_id":captured.selectedNodeID,"proposed_path":proposal,"expected_profile_tokens":tokens])
     check(picker.draft.nodes==proposal && picker.draft.execution==requested,"actual editor callback lost selected proposed path")
+    owner.draftMeasurement=nil;DispatchQueue.main.run()
+    check(owner.draftMeasurement?.1==2 && owner.draftMeasurement?.0["nodes"] as? [[String:String]]==proposal && proposal.count-2 != 2,"accepted insertion did not reopen the exact measured node ahead of its retained suffix")
+    let stalePicker=OrderedEditor(editorOriginal);stalePicker.owner=owner;stalePicker.path.selectItem(at:1);stalePicker.measureNext()
+    try owner.draftMeasurement!.2(original)
+    owner.draftMeasurement=nil;stalePicker.revision=UUID();DispatchQueue.main.run()
+    check(owner.draftMeasurement == nil,"retired editor revision started a queued candidate trial")
     owner.draftMeasurement=nil;picker.menuWillOpen(picker.candidates.menu);DispatchQueue.main.run()
     check(picker.candidates.menu.cancelled && owner.draftMeasurement?.1==proposal.count-2,"selected draft picker did not offer next-hop measurement")
     owner.draftMeasurement=nil
@@ -2617,6 +2631,9 @@ def macos(directory):
         "hysteria-final-layer-required": ('return ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(hysteriaFinalLayer)', 'return hysteriaFinalLayer.isEmpty || hysteriaFinalLayer == "off"', "Hysteria final layer was not offered"),
         "paired-ss-execution-capability": ('"ordered_paired_ss_executions" : pairedHysteria', '"ordered_executions" : pairedHysteria', "paired SS execution did not use its distinct native capability"),
     })
+    imported_execution_variants["retired-draft-followup"] = (
+        'self.window?.isVisible == true, self.revision == revision,',
+        'self.window?.isVisible == true,', "retired editor revision started a queued candidate trial")
     for name, (old, new, _) in imported_execution_variants.items():
         variants[name] = replace_once(source, old, new)
     for name, program in variants.items():

@@ -19,8 +19,8 @@ type nodeChainMultipleImportedExecutionBinding struct {
 	sourceSeal, launch string
 }
 
-// An original WG entry and paired final enclose literal imports and at most one
-// paired stream, which can follow the first import. Zero means all interiors are imported.
+// Return the first paired stream after the first literal import, or zero if all
+// interior streams are imported. Validate every member before assigning a role.
 func (c *NodeChain) selectedStreamLayout() (int, bool) {
 	if c == nil || c.importedNodes == nil || c.importedNodes.customEntry || len(c.nodes) < 4 || len(c.nodes) > NodeChainExtendedLocalMaximumNodes || len(c.proofs) != len(c.nodes) || c.nodes[0] == nil || c.nodes[0].mode != "wg" {
 		return 0, false
@@ -34,10 +34,12 @@ func (c *NodeChain) selectedStreamLayout() (int, bool) {
 			return 0, false
 		}
 		if c.nodes[i] != nil {
-			if i == 1 || paired != 0 || c.nodes[i].mode != "shadowsocks" || c.importedSSMemberAt(i) != nil {
+			if i == 1 || c.nodes[i].mode != "shadowsocks" || c.importedSSMemberAt(i) != nil {
 				return 0, false
 			}
-			paired = i
+			if paired == 0 {
+				paired = i
+			}
 		} else if m := c.importedSSMemberAt(i); m == nil || m.hostname != nil {
 			return 0, false
 		}
@@ -51,7 +53,7 @@ func (c *NodeChain) selectedPrivateStreamPosition() int {
 }
 
 func (c *NodeChain) selectedPrivateStream(position int) bool {
-	return position >= 2 && c.selectedPrivateStreamPosition() == position
+	return c != nil && position >= 2 && position < len(c.nodes)-1 && c.nodes[position] != nil && c.selectedPrivateStreamPosition() > 0
 }
 
 // Only sources covered by the original selected transport family can own a

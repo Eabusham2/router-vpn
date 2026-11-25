@@ -177,7 +177,7 @@ final class AndroidNodeCandidateProfile {
             return store.appendOrderedProposal(name,sources,modes,execution,()->{try{requireSavedCurrent();}catch(Exception stale){throw new IllegalStateException("Retest this original candidate before saving.",stale);}});
         }
     }
-    void useInDraft(AndroidOrderedPathSelection draft) throws Exception {
+    int useInDraft(AndroidOrderedPathSelection draft) throws Exception {
         synchronized (operation) {
             AndroidNodeCandidateCatalog catalog = operation.catalog;
             if (savedAuthority == null || !"routed-candidate-response".equals(catalog.measurement)
@@ -185,6 +185,7 @@ final class AndroidNodeCandidateProfile {
                 throw new IllegalStateException("This measurement has no complete insertion for the current draft.");
             requireSavedCurrent();
             draft.insertMeasured(catalog.originalSource,catalog.prefix,sources.get(catalog.prefix + 1),()->result.current(System.currentTimeMillis()));
+            return catalog.prefix + 1;
         }
     }
 }

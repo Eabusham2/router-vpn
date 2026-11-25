@@ -23,11 +23,12 @@ final class AndroidNodeCandidatePreparationDialog {
     private final Notice notice;
     private final AndroidUnifiedConnectionController.Callback permission;
     private volatile boolean detached;
+    private boolean waitingForReviewRelease;
     private AndroidNodeCandidatePreparation owner;
     private AlertDialog dialog,proposalDialog;
     private TextView output;
     private AndroidOrderedPathSelection editor;
-    private final java.util.function.Consumer<AndroidOrderedPathSelection> reviewDraft;
+    private final java.util.function.BiConsumer<AndroidOrderedPathSelection,Integer> continueDraft;
     private static WeakReference<AndroidNodeStore.ChainCapture> editorSource = new WeakReference<>(null);
     private static WeakReference<AndroidOrderedPathSelection> sourceEditor = new WeakReference<>(null);
     private List<AndroidNodeCandidatePreparation.Choice> choices=Collections.emptyList();
@@ -39,8 +40,8 @@ final class AndroidNodeCandidatePreparationDialog {
         public void progress(String detail){AndroidNodeCandidatePreparationDialog value=attached();if(value!=null)value.update(detail);}
         public void finished(List<AndroidNodeCandidatePreparation.Choice> choices,Throwable failure){AndroidNodeCandidatePreparationDialog value=attached();if(value!=null)value.completed(choices,failure);}
     }
-    AndroidNodeCandidatePreparationDialog(Activity activity,AndroidNodeStore nodes,AndroidUnifiedConnectionController connection,Runnable changed,java.util.function.Consumer<AndroidOrderedPathSelection> reviewDraft){
-        this.reviewDraft=reviewDraft;this.activity=activity;this.nodes=nodes;this.connection=connection;this.changed=changed;notice=new Notice(this);
+    AndroidNodeCandidatePreparationDialog(Activity activity,AndroidNodeStore nodes,AndroidUnifiedConnectionController connection,Runnable changed,java.util.function.BiConsumer<AndroidOrderedPathSelection,Integer> continueDraft){
+        this.continueDraft=continueDraft;this.activity=activity;this.nodes=nodes;this.connection=connection;this.changed=changed;notice=new Notice(this);
         permission=new AndroidUnifiedConnectionController.Callback(){public void progress(String detail){update(detail);}public void finished(boolean ok,String detail){update(detail);}};
     }
     void show(){show(null,-1);}
@@ -106,7 +107,7 @@ final class AndroidNodeCandidatePreparationDialog {
     private AndroidNodeCandidatePreparation capturedOwner(){AndroidNodeCandidatePreparation current=AndroidNodeCandidatePreparation.retained();return current!=null&&current.observes(notice)?current:null;}
     private void update(String detail){activity.runOnUiThread(()->{if(!visible())return;if(owner==null)owner=capturedOwner();output.setText(detail);changed.run();});}
     private void completed(List<AndroidNodeCandidatePreparation.Choice> completed,Throwable failure){activity.runOnUiThread(()->{
-        if(!visible())return;if(owner==null)owner=capturedOwner();choices=Collections.unmodifiableList(new ArrayList<>(completed));
+        if(!visible() || waitingForReviewRelease)return;if(owner==null)owner=capturedOwner();choices=Collections.unmodifiableList(new ArrayList<>(completed));
         boolean savable=false;for(var choice:choices)if(choice.profile!=null&&choice.saveReason.isEmpty()&&choice.result.current(System.currentTimeMillis()))savable=true;
         StringBuilder text=new StringBuilder(failure==null?(choices.isEmpty()?"Temporary VPN stopped. No complete current candidate scores are available.":savable?"Temporary VPN stopped. Complete proposals are ready to save.":"Temporary VPN stopped. Candidate measurements are available. Each row gives its Save reason."):"Candidate results unavailable: "+failure.getMessage());
         text.append("\n\nPacket prefixes measure TCP handshakes. Qualified Shadowsocks prefixes measure authenticated responses from the paired candidate. Each score requires 50 successful samples. Load and Connect remain separate choices.");
@@ -135,12 +136,35 @@ final class AndroidNodeCandidatePreparationDialog {
         proposalDialog=new AlertDialog.Builder(activity).setTitle("Insert after measured hop").setItems(labels.toArray(new CharSequence[0]),(d,w)->{
             if (!visible()) return;
             try {
-                available.get(w).draftInsertion().useInDraft(editor);
-                cancel();
-                reviewDraft.accept(editor);
+                AndroidNodeCandidatePreparation original=capturedOwner();
+                if(original==null)throw new IllegalStateException("This candidate review has closed.");
+                AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(activity);
+                int inserted=available.get(w).draftInsertion().useInDraft(editor);
+                long revision=editor.revision();
+                WeakReference<AndroidNodeCandidatePreparationDialog> screen=new WeakReference<>(this);
+                if(!original.finishDraftReview(notice,()->{
+                    AndroidNodeCandidatePreparationDialog attached=screen.get();
+                    if(attached!=null)attached.activity.runOnUiThread(()->attached.continueReleasedDraft(home,revision,inserted));
+                }))throw new IllegalStateException("The previous review changed. Reopen the current draft.");
+                choices=Collections.emptyList();
+                waitingForReviewRelease=true;
+                output.setText("Added the measured hop. Waiting for the previous review to close.");
             } catch (Exception stale) { update("Cannot insert into this draft. "+stale.getMessage()); }
         }).setNegativeButton("Back",null).show();
     }
+    private void continueReleasedDraft(AndroidHomeStateStore.Snapshot home,long revision,int inserted) {
+        if(!visible())return;
+        waitingForReviewRelease=false;
+        if(editor==null || editor.revision()!=revision || !connection.pathCurrent(home) ||
+                connection.isActiveOrTransitioning() || AndroidNodeCandidatePreparation.retained()!=null){
+            update("The editor or connection changed. Reopen the current draft to measure its next hop.");
+            return;
+        }
+        detach();
+        changed.run();
+        continueDraft.accept(editor,inserted);
+    }
+
     private void chooseProfile(){
         if(!visible())return;
         List<AndroidNodeCandidatePreparation.Choice> available=new ArrayList<>();List<String> labels=new ArrayList<>();

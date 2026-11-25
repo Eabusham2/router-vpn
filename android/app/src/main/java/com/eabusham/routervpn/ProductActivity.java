@@ -405,8 +405,8 @@ public final class ProductActivity extends Activity {
             }).setNegativeButton("Close",null).show();
     }
 
-    private void runCandidateTimes(){closeCandidateMeasurement();detachCandidatePreparation();if(AndroidNodeCandidatePreparation.retained()!=null||!connection.isConnected()){preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater,this::showOrderedEditor);preparedCandidateDialog.show();}else{candidateDialog=new AndroidNodeCandidateDialog(this);candidateDialog.show();}}
-    private void resumeCandidatePreparation(){if(orderedPicker!=null&&orderedPicker.visible())return;if(AndroidNodeCandidatePreparation.retained()!=null){detachCandidatePreparation();preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater,this::showOrderedEditor);preparedCandidateDialog.show();}}
+    private void runCandidateTimes(){closeCandidateMeasurement();detachCandidatePreparation();if(AndroidNodeCandidatePreparation.retained()!=null||!connection.isConnected()){preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater,this::continueOrderedDraft);preparedCandidateDialog.show();}else{candidateDialog=new AndroidNodeCandidateDialog(this);candidateDialog.show();}}
+    private void resumeCandidatePreparation(){if(orderedPicker!=null&&orderedPicker.visible())return;if(AndroidNodeCandidatePreparation.retained()!=null){detachCandidatePreparation();preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater,this::continueOrderedDraft);preparedCandidateDialog.show();}}
     private void detachCandidatePreparation(){if(preparedCandidateDialog!=null){preparedCandidateDialog.detach();preparedCandidateDialog=null;}}
 
     private void closeOrderedPicker(){if(orderedPicker!=null){orderedPicker.close();orderedPicker=null;}}
@@ -767,7 +767,7 @@ public final class ProductActivity extends Activity {
             if(mutationBusy())throw new IllegalStateException("Finish the current VPN operation before choosing execution.");
             draft.requireCurrent();
             choiceDialog("Ordered execution","For paths of up to eight nodes, Local, Server and Compare both support independently saved Shadowsocks 2022 nodes at any interior position between a paired WireGuard or AmneziaWG entry and a paired Shadowsocks 2022 final. Each imported node needs a literal IP address and Start Layer Off. A route with only paired packet hops can also use a paired Hysteria2 final.\n\n"
-                    +"Use in draft inserts a measured paired Shadowsocks node after the chosen hop and keeps the remaining route in order. Compare can insert one paired intermediate when Local wins on a WireGuard route with literal imported Shadowsocks interiors. Longer Server and Compare paths require one paired WireGuard entry, literal imported Shadowsocks intermediates and a paired Shadowsocks final, all with Start Layer Off. The request must fit the original lease limits.\n\n"
+                    +"Use in draft inserts a measured paired Shadowsocks node after the chosen hop and keeps the remaining route in order. Longer Server and Compare paths require one paired WireGuard entry when mixing paired and imported Shadowsocks streams. Keep a literal import directly after the entry and a paired Shadowsocks final. Later intermediates can each be paired or imported. Keep every Start Layer Off. After Compare selects Local, each measured insertion keeps the original final. The request must fit the original lease limits.\n\n"
                     +"A single SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node goes immediately before the Shadowsocks final. A single Shadowsocks hostname can use that position after at least two paired hops with its saved Custom TCP resolver. A route starting with two imported Shadowsocks nodes requires Local execution.\n\n"
                     +"Compare both tests the same external endpoint through Local and Server, averages each path’s final-node and external HTTP response times, then verifies the winner. Failed paths receive no score.")
                     .setItems(new String[]{"Local","Server","Compare both"},(d,w)->{
@@ -839,11 +839,22 @@ public final class ProductActivity extends Activity {
         }).setNegativeButton("Back",(d,w)->showOrderedEditor(draft)).show();
     }
 
+    private void continueOrderedDraft(AndroidOrderedPathSelection draft,int inserted) {
+        if(!resumed || isFinishing() || isDestroyed())return;
+        try {
+            if(draft.members().size()<AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH && draft.canMeasureResponseThrough(inserted)) {
+                measureOrderedDraft(draft,inserted);
+                return;
+            }
+        } catch(Exception unavailable) { toast(safe(unavailable)); }
+        showOrderedEditor(draft);
+    }
+
     private void measureOrderedDraft(AndroidOrderedPathSelection draft,int position) throws Exception {
         java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> capture=draft.candidateDraftCapture(position);
         showOrderedEditor(draft);
         detachCandidatePreparation();
-        preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater,this::showOrderedEditor);
+        preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater,this::continueOrderedDraft);
         preparedCandidateDialog.showDraft(capture,position,draft);
     }
 

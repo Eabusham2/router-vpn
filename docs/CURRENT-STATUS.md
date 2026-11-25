@@ -1,3 +1,17 @@
+# 2026-11-25: Recursive selected-hop continuation and integration
+
+The [recursive continuation record](IMPLEMENTATION-2026-11-25-RECURSIVE-SELECTED-CONTINUATION.md)
+extends the qualified Compare-selected Local response family to repeated
+independent paired/imported Shadowsocks interiors. Use preserves the remaining
+route, and native editors continue from the inserted hop with a fresh capture.
+The same continuation repairs Android location accessibility, makes the
+30-minute READY lease independent of civil-clock corrections, and fixes the
+observed native CI fixture integration errors. It records actual executable
+results, the five-root/24-verdict focused race receipt, local aggregate controller
+timeouts, the seven new encrypted cases
+awaiting hosted qualification, and the remaining software and live acceptance
+requirements. Earlier single-private restrictions below are historical.
+
 # 2026-11-25: Unsaved selected-hop insertion and system lifecycle repairs
 
 The [selected draft insertion record](IMPLEMENTATION-2026-11-25-SELECTED-DRAFT-INSERTION.md)

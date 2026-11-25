@@ -139,8 +139,10 @@ require("macOS build", mac_build, (
 assert '"$ONBOARDING_SRC"' in mac_build
 require("macOS forwarding master", mac_telemetry, (
     "unified-forward-master", "/api/forwarding/master", "Forward ON", "Forward OFF",
-    "toggleUnifiedForwardingMaster", "refreshUnifiedForwardingMaster",
-    "Forwarding master did not reach the requested state", "Real server forwarding master",
+    "toggleUnifiedForwardingMaster", "refreshUnifiedForwardingMaster", "Real server forwarding master",
+    "updated.router == original.router", "updated.path == original.path",
+    "updated.enabled != original.enabled", "self.setUnifiedForwardState(nil)",
+    "The forwarding response did not verify the displayed connection and requested state",
 ))
 assert 'action: #selector(openUnifiedForwarding)' not in mac_telemetry, "macOS Forward side control regressed to forwarding-page navigation"
 require("macOS VPN route chrome", mac_globe, (
@@ -173,8 +175,11 @@ assert "text.replace(auto_onboarding" in linux_build, "Linux builder does not re
 assert 'gcc -O2 -Wall -Wextra -Werror' in linux_build
 require("Linux forwarding master", linux_telemetry, (
     "/api/forwarding/master", "Forward ON", "Forward OFF", "linux_telemetry_forward_v9",
-    "linux_telemetry_read_forward_v9", "linux_telemetry_set_forward_label_v9",
-    "Forwarding master response did not verify the requested state",
+    "linux_forward_state_valid(actual)", 'linux_ec_bool(actual, "enabled") == wanted',
+    '!strcmp(linux_ec_string(actual, "router_id"), router)', '!strcmp(linux_ec_string(actual, "path_token"), path)',
+    "linux_telemetry_set_forward_label_v9(t, verified ? actual : NULL)",
+    "if (current && i == 1 && !atomic_load(&job->cancelled)) linux_telemetry_set_forward_label_v9(t, value)",
+    "The forwarding response did not verify the displayed connection and requested state",
 ))
 assert "linux_unified_show_detail_v8(t->base,5)" not in linux_telemetry, "Linux Forward side control regressed to a detail-page shortcut"
 assert "Forward shortcut" not in linux_telemetry, "Linux telemetry still describes forwarding as a shortcut"

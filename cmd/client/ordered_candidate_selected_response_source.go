@@ -16,7 +16,6 @@ func desktopCompareLocalPrivateResponseMembers(members []desktopNodeChainMember,
 		members[len(members)-1].Mode != "shadowsocks" || members[len(members)-1].Profile.External != nil {
 		return false
 	}
-	private := 0
 	for i, member := range members {
 		if member.Profile.StartLayer != "" && member.Profile.StartLayer != "off" {
 			return false
@@ -31,14 +30,13 @@ func desktopCompareLocalPrivateResponseMembers(members []desktopNodeChainMember,
 			if i == 1 {
 				return false
 			}
-			private++
 		} else if !desktopNodeChainImportedExecutionMiddle(member.Profile) {
 			return false
 		}
 	}
 	// This source-only map retains all original roles. The original captured
 	// compiler and selected Local trial still grant the actual response plan.
-	return private <= 1 && (position == len(members)-2 || private == 0 && len(members) < mobilemultihop.NodeChainExtendedLocalMaximumNodes) &&
+	return (position == len(members)-2 || len(members) < mobilemultihop.NodeChainExtendedLocalMaximumNodes) &&
 		desktopNodeChainMultipleImportedExecutionShape(members)
 }
 

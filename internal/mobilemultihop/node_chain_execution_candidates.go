@@ -92,9 +92,9 @@ func (p *NodeChainExecutionPreparation) SupportsCompareLocalResponseCandidate(po
 		return false
 	}
 	if p.multiple != nil {
-		private, eligible := p.local.selectedStreamLayout()
+		_, eligible := p.local.selectedStreamLayout()
 		finalPrefix := len(p.local.proofs) - 2
-		insert := private == 0 && len(p.local.proofs) < NodeChainExtendedLocalMaximumNodes && position > 0 && position < finalPrefix
+		insert := len(p.local.proofs) < NodeChainExtendedLocalMaximumNodes && position > 0 && position < finalPrefix
 		return eligible && p.multiple.local == p.local && p.multiple.owners == p.local.importedNodes &&
 			(position == finalPrefix || insert) &&
 			p.local.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement

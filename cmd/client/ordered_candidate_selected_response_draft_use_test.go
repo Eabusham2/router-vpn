@@ -28,9 +28,30 @@ func TestSelectedPrivateResponseDraftUsePreservesUnsavedPath(t *testing.T) {
 }
 
 func TestSelectedPrivateResponseDraftUseStartsFreshMeasurement(t *testing.T) {
-	a, nodes, candidate := selectedResponseAppFixtureWithCandidates(t, 3, -1, 2)
+	a, nodes, candidate := selectedResponseAppFixtureWithCandidates(t, 3, -1, 3)
 	a, draft, request := selectedDraftSourceFixture(t, a, nodes, "auto", 1, candidate)
 	testOriginalSelectedDraftLifecycle(t, a, draft, request, [3]string{"auto", "local", "private-use-recursive"})
+}
+
+func TestSelectedPrivateResponseDraftUseExtendsMultiplePrivateHops(t *testing.T) {
+	for _, layout := range []struct {
+		name            string
+		count, position int
+		private         []int
+	}{
+		{"6-before", 6, 1, []int{2, 4}},
+		{"6-between", 6, 3, []int{2, 4}},
+		{"6-after", 6, 4, []int{2, 4}},
+		{"16-before", 16, 1, []int{3, 7, 12}},
+		{"16-between", 16, 6, []int{3, 7, 12}},
+		{"16-after", 16, 14, []int{3, 7, 12}},
+	} {
+		t.Run(layout.name, func(t *testing.T) {
+			a, nodes, candidate := selectedResponseAppFixtureWithPrivatePositions(t, layout.count, 1, layout.private...)
+			a, draft, request := selectedDraftSourceFixture(t, a, nodes, "auto", layout.position, candidate)
+			testOriginalSelectedDraftLifecycle(t, a, draft, request, [3]string{"auto", "local", "private-use"})
+		})
+	}
 }
 
 func TestSelectedPrivateResponseDraftUseRejectsChangedOwner(t *testing.T) {
@@ -112,7 +133,9 @@ func testOriginalSelectedResponseDraftUse(t *testing.T, ctx context.Context, p *
 		p.owner.cancelled = true
 		p.control.mu.Unlock()
 	case "private-use-expired":
+		p.control.mu.Lock()
 		job.expires = time.Now().Add(-time.Second)
+		p.control.mu.Unlock()
 	case "private-use-file-candidate", "private-use-file-final":
 		id := q.CandidateIDs[0]
 		if behavior == "private-use-file-final" {
@@ -195,28 +218,32 @@ func testOriginalSelectedResponseDraftUse(t *testing.T, ctx context.Context, p *
 	if behavior != "private-use-recursive" {
 		return
 	}
-	var nextCandidate string
+	var remaining []string
 	for _, profile := range a.profiles.Profiles {
 		if _, used := chosen.Tokens[profile.ID]; !used && profile.External == nil {
-			nextCandidate = profile.ID
-			break
+			remaining = append(remaining, profile.ID)
 		}
 	}
-	if nextCandidate == "" {
+	if len(remaining) == 0 {
 		t.Fatal("recursive fixture has no independent next candidate")
 	}
+	nextCandidate := remaining[0]
 	nextDraft := &multihopConnectRequest{Execution: "auto", Nodes: slices.Clone(chosen.Nodes), desktopProfileExpectations: desktopProfileExpectations{
 		ExpectedSelectedNodeID: &chosen.SelectedID, ExpectedProfileTokens: chosen.Tokens}}
-	next := orderedCandidatePreparationRequest{draft: nextDraft, Scope: q.Scope, RequestID: strings.Repeat("b", 32), Position: len(nextDraft.Nodes) - 2, CandidateIDs: []string{nextCandidate}, Samples: 50}
+	next := orderedCandidatePreparationRequest{draft: nextDraft, Scope: q.Scope, RequestID: fmt.Sprintf("%032x", len(nextDraft.Nodes)), Position: len(nextDraft.Nodes) - 2, CandidateIDs: []string{nextCandidate}, Samples: 50}
 	nextView, err := captureOrderedCandidatePreparedSelection(ctx, a, next.Position, next.Scope, nextDraft, func(ctx context.Context) (string, error) { return "original-chain-physical-network", ctx.Err() })
 	if err != nil || nextView.token == view.token || nextView.selection.Native.source == view.selection.Native.source ||
 		!slices.Equal(nodeChainSelectedReferences(nextView.selection.Nodes), chosen.Nodes) || next.RequestID == q.RequestID {
 		t.Fatal("recursive draft reused the old source or request", err)
 	}
-	testOriginalSelectedDraftLifecycle(t, a, nextDraft, next, [3]string{"auto", "local", "private-measure-only"})
+	nextBehavior := "private-use"
+	if len(remaining) > 1 {
+		nextBehavior = "private-use-recursive"
+	}
+	testOriginalSelectedDraftLifecycle(t, a, nextDraft, next, [3]string{"auto", "local", nextBehavior})
 }
 
-func TestSelectedPrivateResponseDraftUseRejectsSecondPrivateAndCapacity(t *testing.T) {
+func TestSelectedPrivateResponseDraftUseMultiplePrivateAndCapacity(t *testing.T) {
 	ctx := context.Background()
 	a, nodes, candidate := selectedResponseAppFixture(t, 5, 2)
 	a, draft, request := selectedDraftSourceFixture(t, a, nodes, "auto", 3, candidate)
@@ -228,8 +255,9 @@ func TestSelectedPrivateResponseDraftUseRejectsSecondPrivateAndCapacity(t *testi
 	for _, offer := range view.candidates {
 		if offer.ID == candidate {
 			seen = true
-			if len(offer.DraftProposal) != 0 || offer.DraftAction != "" || offer.ProposalAction != "save-final-profile" || len(offer.Proposal) != len(nodes) {
-				t.Fatal("one-private source lost named Save or admitted two-private draft Use")
+			wanted := slices.Insert(slices.Clone(nodes), request.Position+1, common.MultihopNodeSelection{ID: candidate, Mode: "shadowsocks"})
+			if !slices.Equal(offer.DraftProposal, wanted) || offer.DraftAction != orderedCandidateDraftInsertAction || offer.ProposalAction != "save-final-profile" || len(offer.Proposal) != len(nodes) {
+				t.Fatal("one-private source lost its separate named Save or second-private draft Use")
 			}
 		}
 	}

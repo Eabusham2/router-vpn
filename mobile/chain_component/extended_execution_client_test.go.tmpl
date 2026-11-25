@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -302,12 +303,12 @@ func runExtendedSelectedClient(t *testing.T, f *multipleImportedFixture, prep *m
 			t.Fatal("private stream acquired remote packet candidate authority")
 		}
 		local, err := runtime.NewLocalCandidatePlanContext(ctx, privatePosition, inventory)
-		if mode == "auto" && frozen.Execution == "local" && privatePosition == len(f.members)-2 {
+		if mode == "auto" && frozen.Execution == "local" && prep.SupportsCompareLocalResponseCandidate(privatePosition) {
 			if err != nil || local == nil || local.CaptureSHA256() == "" {
 				t.Fatal("selected private penultimate hop lost its private response plan", err)
 			}
 		} else if err == nil || local != nil {
-			t.Fatal("stream outside the selected private replacement scope acquired a candidate plan")
+			t.Fatal("stream outside the selected Local scope acquired a candidate plan")
 		}
 		if candidateReplies.Load() != 0 {
 			t.Fatal("source-only candidate checks opened a private candidate socket")
@@ -597,18 +598,18 @@ func checkOriginalOrderedResponse(t *testing.T, ctx context.Context, f *multiple
 // The challenge server rejects nonce reuse and authenticates the exact
 // private NodeID. All candidate sockets use the existing selected Box.
 type selectedResponseNativeCase struct {
-	fault, input   string
-	pairedPosition int
-	insertAfter    int
-	original       *multipleImportedFixture
-	inserted       *multipleImportedMember
-	final          routedPrivateResponseFinal
-	replacement    *multipleImportedFixture
-	app            atomic.Int32
-	provider       desktopExternalInstalledSSPeer
-	accepted       atomic.Int32
-	changed        atomic.Bool
-	service        atomic.Pointer[mobilemultihop.NodeChainExecutionCandidateMeasurement]
+	fault, input    string
+	pairedPositions []int
+	insertAfter     int
+	original        *multipleImportedFixture
+	inserted        *multipleImportedMember
+	final           routedPrivateResponseFinal
+	replacement     *multipleImportedFixture
+	app             atomic.Int32
+	provider        desktopExternalInstalledSSPeer
+	accepted        atomic.Int32
+	changed         atomic.Bool
+	service         atomic.Pointer[mobilemultihop.NodeChainExecutionCandidateMeasurement]
 }
 
 const selectedResponseRequestID = "b923fa87fc1252d3f0c520aeb3786fe8"
@@ -739,7 +740,7 @@ func (c *selectedResponseNativeCase) run(t *testing.T, ctx context.Context, f *m
 	if c.insertAfter > 0 {
 		position = c.insertAfter
 	}
-	paired := "none"
+	var privatePositions []string
 	proofs := f.chain.ProofInventory()
 	if len(proofs) != len(f.members) || len(f.source.IdentitySources) != len(proofs) || proofs[0].Mode != "wg" || proofs[0].NodeID == "" || proofs[len(proofs)-1].Mode != "shadowsocks" || proofs[len(proofs)-1].NodeID == "" {
 		t.Fatal("selected response lost the original paired entry or final")
@@ -751,7 +752,7 @@ func (c *selectedResponseNativeCase) run(t *testing.T, ctx context.Context, f *m
 	}
 	for i := 1; i < len(f.members)-1; i++ {
 		member := f.members[i]
-		private := i == c.pairedPosition
+		private := slices.Contains(c.pairedPositions, i)
 		if proofs[i].Mode != "shadowsocks" || member.imported == private || (f.source.IdentitySources[i] != "") != private {
 			t.Fatal("selected response changed an original imported or paired stream", i)
 		}
@@ -759,10 +760,14 @@ func (c *selectedResponseNativeCase) run(t *testing.T, ctx context.Context, f *m
 			if proofs[i].NodeID == "" || proofs[i].Kind != "" || proofs[i].NodeKind != "" || member.private.Load() == 0 {
 				t.Fatal("selected route did not prove its original private stream", i)
 			}
-			paired = strconv.Itoa(i)
+			privatePositions = append(privatePositions, strconv.Itoa(i))
 		} else if proofs[i].NodeID != "" || proofs[i].Kind != "public-path" || proofs[i].NodeKind != "external" || member.public.Load() == 0 {
 			t.Fatal("selected route did not prove its original public prefix", i)
 		}
+	}
+	paired := strings.Join(privatePositions, ",")
+	if paired == "" {
+		paired = "none"
 	}
 	role := "imported"
 	if !f.members[position].imported {

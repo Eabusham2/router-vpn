@@ -147,6 +147,7 @@ static void selected_draft_choice(App*app,GtkWindow*parent,const char*raw,int po
     check(linux_ordered_adopt_measured_v1(parent,raw,position,response)&&editor->ids->len==3&&!strcmp(g_ptr_array_index(editor->ids,1),"n3")&&!strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->execution)),execution),"selected editor did not insert measured hop in original route");
     json_object_unref(response);json_node_free(captured);
 }
+enum { FOLLOW_INSERTED = 13, CHANGE_ROW, RELINK_SUFFIX, PREVIOUS_DIALOG, CHANGE_OWNER, CLOSE_EDITOR };
 static guint response_draft_deliveries;
 static void selected_response_draft_choice(App *app, GtkWindow *parent, const char *raw, int position) {
     (void)app;
@@ -156,18 +157,19 @@ static void selected_response_draft_choice(App *app, GtkWindow *parent, const ch
     JsonObject *tokens=linux_ordered_object_v1(body,"expected_profile_tokens");
     check(!strcmp(obj_string(body,"execution"),"auto") && !strcmp(obj_string(body,"expected_selected_node_id"),"exit"),"unsaved response lost original editor owner");
     if(response_draft_deliveries++){
-        check(position==2 && json_array_get_length(original)==4 && json_object_get_size(tokens)==4 &&
+        check(position==2 && json_array_get_length(original)==5 && json_object_get_size(tokens)==5 &&
               !strcmp(obj_string(json_array_get_object_element(original,2),"id"),"n3") &&
               !strcmp(obj_string(json_array_get_object_element(original,2),"mode"),"shadowsocks") &&
-              !strcmp(obj_string(json_array_get_object_element(original,3),"id"),"exit"),"remeasuring the draft lost its private stream or original final");
+              !strcmp(obj_string(json_array_get_object_element(original,3),"id"),"n4") &&
+              !strcmp(obj_string(json_array_get_object_element(original,4),"id"),"exit"),"next measurement lost the inserted private hop or retained suffix");
         return;
     }
-    check(position==1 && json_array_get_length(original)==3,"unsaved response lost original stop");
+    check(position==1 && json_array_get_length(original)==4,"unsaved response lost original stop");
     g_autoptr(JsonObject) response=json_object_new();
     json_object_set_string_member(response,"draft_action","insert-measured-hop");json_object_set_string_member(response,"candidate_id","n3");
     json_object_set_string_member(response,"expected_selected_node_id","exit");json_object_set_string_member(response,"requested_execution","auto");
     JsonArray *path=json_array_new();
-    for(guint i=0;i<3;i++){
+    for(guint i=0;i<json_array_get_length(original);i++){
         json_array_add_element(path,json_node_copy(json_array_get_element(original,i)));
         if(i==1){JsonObject *added=json_object_new();json_object_set_string_member(added,"id","n3");json_object_set_string_member(added,"mode","shadowsocks");json_array_add_object_element(path,added);}
     }
@@ -190,13 +192,34 @@ static gboolean drive_editor(gpointer data) {
         select_row(list,2);check(gtk_widget_get_sensitive(transport),"final transport chooser unavailable");choose(transport,"wg");check(strcmp(gtk_combo_box_get_active_id(GTK_COMBO_BOX(transport)),"shadowsocks")==0,"packet mode accepted as final");click(d,"Remove");
         check(gtk_list_box_get_row_at_index(GTK_LIST_BOX(list),2)!=NULL&&gtk_list_box_get_row_at_index(GTK_LIST_BOX(list),3)==NULL,"final removed or middle truncated");
         gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_APPLY);
-    } else if(editor_case==13) {
+    } else if(editor_case>=FOLLOW_INSERTED && editor_case<=CLOSE_EDITOR) {
         choose(candidate,"n1");click(d,"Add entry / hop");choose(candidate,"n2");click(d,"Add entry / hop");
+        choose(candidate,"n4");click(d,"Add entry / hop");
         choose(find_name(d,"ordered-execution"),"auto");select_row(list,1);
+        LinuxOrderedEditorV1 *editor=g_object_get_data(G_OBJECT(d),"ordered-live-editor");
+        JsonObject *suffix=external_source_profile_v24(json_node_get_object(catalog),"n4");
+        g_autofree char *token=g_strdup(obj_string(suffix,"profile_token"));
+        guint original_posts=posts, original_writes=writes;
+        response_draft_deliveries=0;
         linux_ordered_present_measurement_v1=selected_response_draft_choice;
-        click(d,"Measure next hop…");click(d,"Measure next hop…");
-        linux_ordered_present_measurement_v1=NULL;
-        check(response_draft_deliveries==2,"the unsaved measured route could not be measured again");
+        click(d,"Measure next hop…");
+        check(response_draft_deliveries==1 && editor->next_measurement,"insertion failed to defer the next catalog until the chooser closes");
+        if(editor_case==CHANGE_ROW) select_row(list,3);
+        if(editor_case==RELINK_SUFFIX) {
+            g_autofree char *relinked=g_compute_checksum_for_string(G_CHECKSUM_SHA256,"relinked-fourth-node",-1);
+            json_object_set_string_member(suffix,"profile_token",relinked);
+        }
+        if(editor_case==PREVIOUS_DIALOG) g_object_set_data(G_OBJECT(unified->app->window),"linux-ordered-candidates",d);
+        if(editor_case==CHANGE_OWNER) late_read=TRUE;
+        if(editor_case!=CLOSE_EDITOR) {
+            while(editor->next_measurement) g_main_context_iteration(NULL,TRUE);
+            if(editor_case==FOLLOW_INSERTED)
+                check(response_draft_deliveries==2,"successful GTK insertion did not automatically measure the inserted position");
+            else check(response_draft_deliveries==1,"stale GTK editor acquired another candidate catalog");
+            check(posts==original_posts && writes==original_writes,"recursive measurement saved or connected the draft");
+        }
+        if(editor_case==PREVIOUS_DIALOG) g_object_set_data(G_OBJECT(unified->app->window),"linux-ordered-candidates",NULL);
+        json_object_set_string_member(suffix,"profile_token",token);
         gtk_dialog_response(GTK_DIALOG(d),GTK_RESPONSE_CANCEL);
     } else if(editor_case==11||editor_case==12) {
         choose(find_name(d,"ordered-execution"),editor_case==11?"server":"auto");
@@ -1012,16 +1035,16 @@ static void selected_private_stream_model(void) {
             JsonObject *middle = json_array_get_object_element(selection->nodes,private_position);
             JsonObject *penultimate = json_array_get_object_element(selection->nodes,count-2);
             g_autofree char *a = g_strdup(linux_ordered_string_v1(middle,"id")), *b = g_strdup(linux_ordered_string_v1(penultimate,"id"));
-            if (private_position!=count-2) check(!linux_ordered_measurement_prefix_v1(selection,store,private_position) && linux_ordered_measurement_prefix_v1(selection,store,count-2)==!strcmp(executions[e],"auto"),"selected response used a different saved position");
+            gboolean insert = !strcmp(executions[e],"auto") && count < 96;
+            if (private_position!=count-2) check(linux_ordered_measurement_prefix_v1(selection,store,private_position)==insert && linux_ordered_measurement_prefix_v1(selection,store,count-2)==!strcmp(executions[e],"auto"),"selected response used a different saved position");
             json_object_set_string_member(middle,"id",b);json_object_set_string_member(penultimate,"id",a);
-            check(linux_ordered_measurement_prefix_v1(selection,store,count-2)==!strcmp(executions[e],"auto") && !linux_ordered_measurement_prefix_v1(selection,store,1),"selected editor did not bind the Compare response to its penultimate source");
+            check(linux_ordered_measurement_prefix_v1(selection,store,count-2)==!strcmp(executions[e],"auto") && linux_ordered_measurement_prefix_v1(selection,store,1)==insert,"selected editor lost its Compare response positions");
             json_object_set_string_member(middle,"id",a);json_object_set_string_member(penultimate,"id",b);
             JsonObject *private_source = json_array_get_object_element(profiles,private_position);
             JsonObject *import_source = json_array_get_object_element(profiles,1);
             json_object_set_string_member(private_source,"node_kind","external");
             json_object_set_member(private_source,"external",json_node_copy(json_object_get_member(import_source,"external")));
             check(linux_ordered_measurement_prefix_v1(selection,store,count-2)==!strcmp(executions[e],"auto"),"all-imported selected route lost its penultimate Compare prefix");
-            gboolean insert = !strcmp(executions[e],"auto") && count < 96;
             check(linux_ordered_measurement_prefix_v1(selection,store,1)==insert && linux_ordered_measurement_prefix_v1(selection,store,count-3)==insert,"Compare insertion lost an eligible imported prefix or exceeded capacity");
             JsonObject *first_source = json_array_get_object_element(profiles,0);
             json_object_set_string_member(first_source,"start_layer","aes-256-gcm");
@@ -1116,16 +1139,6 @@ int main(int argc,char **argv) {
     edit(0,TRUE);LinuxOrderedStateV1*owned=linux_ordered_state_v1(&state);check(owned->selection!=NULL,"Apply lost original path");char*original=snapshot();
     check(strstr(original,"awg2-fast")&&strstr(original,"awg2-strong"),"mixed modes not retained");
     edit(11,FALSE);edit(12,FALSE);
-    {
-        JsonObject *literal=external_source_profile_v24(json_node_get_object(catalog),"n2"), *external=json_object_new();
-        json_object_set_string_member(literal,"node_kind","external");json_object_set_string_member(external,"protocol","shadowsocks");
-        json_object_set_boolean_member(external,"ordered_middle_supported",TRUE);json_object_set_boolean_member(external,"ordered_execution_middle_supported",TRUE);
-        json_object_set_boolean_member(external,"ordered_local_imported_nodes_supported",TRUE);json_object_set_boolean_member(external,"ordered_multiple_imported_execution_supported",TRUE);
-        json_object_set_object_member(literal,"external",external);refresh_all(&app);
-        edit(13,TRUE);
-        json_object_remove_member(literal,"external");json_object_set_string_member(literal,"node_kind","router-vpn");refresh_all(&app);
-        char *unchanged=snapshot();check(!strcmp(original,unchanged),"unsaved measured response changed Home");g_free(unchanged);
-    }
     edit(1,FALSE);char*after=snapshot();check(strcmp(original,after)==0,"cancel modified retained path");g_free(after);
     edit(2,FALSE);after=snapshot();check(strcmp(original,after)==0,"late choice applied");g_free(after);
     edit(3,FALSE);after=snapshot();check(strcmp(original,after)==0,"replaced added source applied");g_free(after);
@@ -1236,6 +1249,28 @@ int main(int argc,char **argv) {
     check(linux_ordered_execution_v1(owned->selection,"local"),"Hysteria Local selection lost");
     profiles(0);request=parse_json(last_body);q=json_node_get_object(request);check(strcmp(obj_string(q,"mode"),"hysteria2")==0,"profile write replaced Hysteria2 final");json_node_free(request);
     linux_ordered_store_v1(owned,NULL,FALSE);profiles(1);after=snapshot();check(strcmp(original,after)==0,"profile Load replaced Hysteria2 final");g_free(after);
+    {
+        JsonObject *external=json_object_new();
+        json_object_set_string_member(external,"protocol","shadowsocks");
+        json_object_set_boolean_member(external,"ordered_middle_supported",TRUE);json_object_set_boolean_member(external,"ordered_execution_middle_supported",TRUE);
+        json_object_set_boolean_member(external,"ordered_local_imported_nodes_supported",TRUE);json_object_set_boolean_member(external,"ordered_multiple_imported_execution_supported",TRUE);
+        const char *imports[]={"n2","n4"};
+        for(guint i=0;i<G_N_ELEMENTS(imports);i++){
+            JsonObject *literal=external_source_profile_v24(json_node_get_object(catalog),imports[i]);
+            json_object_set_string_member(literal,"node_kind","external");json_object_set_object_member(literal,"external",json_object_ref(external));
+        }
+        json_object_unref(external);refresh_all(&app);
+        for(int scenario=FOLLOW_INSERTED;scenario<=CLOSE_EDITOR;scenario++) edit(scenario,TRUE);
+        while(g_main_context_iteration(NULL,FALSE)) { }
+        check(response_draft_deliveries==1,"closed editor launched another measurement");
+        linux_ordered_present_measurement_v1=NULL;
+        for(guint i=0;i<G_N_ELEMENTS(imports);i++){
+            JsonObject *literal=external_source_profile_v24(json_node_get_object(catalog),imports[i]);
+            json_object_remove_member(literal,"external");json_object_set_string_member(literal,"node_kind","router-vpn");
+        }
+        refresh_all(&app);
+        char *unchanged=snapshot();check(!strcmp(original,unchanged),"unsaved measured response changed Home");g_free(unchanged);
+    }
     g_object_ref(app.window);edit(5,TRUE);after=snapshot();check(strcmp(original,after)==0,"parent close replaced original path");g_free(after);
     g_free(original);g_object_unref(app.window);gtk_widget_destroy(state.node);gtk_widget_destroy(state.mode);gtk_widget_destroy(state.multihop);json_node_free(catalog);if(saved)json_node_free(saved);g_free(last_body);g_free(last_path);g_free(keypath);
     printf("Shipping GTK ordered editor + Add/Load/Update/Connect: %u checks PASS; real callbacks/persistence, doubled controller boundary.\n",checks);return 0;

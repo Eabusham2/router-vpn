@@ -412,7 +412,7 @@ public final class NodeCandidateHarness {
    check(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,"auto")&&capture.capture.ownsSelectedCandidatePrefix(source,prefix),"Compare import lacked original measurable capture");
    var crossedModes=new ArrayList<>(source.modes);crossedModes.set(0,"awg2-fast");
    check(!AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,"server")&&!AndroidNodeChainCapture.responsePrefix(source.members,crossedModes,prefix,"auto"),"Server or AWG acquired private response");
-   for(int i=1;i<lastPrefix;i++)check(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,i,"auto")== (paired<0),"an earlier import gained the wrong response scope");
+   for(int i=1;i<lastPrefix;i++)check(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,i,"auto"),"an earlier import gained the wrong response scope");
    var potential=AndroidNodeCandidateCatalog.captureSources(f.context,source,prefix);
    var alternateSource=f.nodes.candidateSource(alternate.id);
    check(potential.rows.stream().anyMatch(r->r.id.equals(alternateSource.profileId)&&!r.input.isEmpty())&&
@@ -445,11 +445,6 @@ public final class NodeCandidateHarness {
       }
      };
      var named=AndroidNodeCandidateProfile.captureTemporary(operation,scoredRow,authority);
-     if (paired>0) {
-      reject(()->AndroidNodeCandidateProfile.captureDraftInsertion(operation,scoredRow,authority,named),"second private interior entered a Compare draft");
-      check(named.description.endsWith(alternateSource.profileId+" (shadowsocks)"),"refused insertion removed the available named replacement");
-      continue;
-     }
      var insertion=AndroidNodeCandidateProfile.captureDraftInsertion(operation,scoredRow,authority,named);
      reject(()->insertion.useInDraft(draft),"unjoined measurement changed the draft");
      operation.cancel();check(finished.await(10,TimeUnit.SECONDS),"original insertion measurement did not join");
@@ -462,13 +457,13 @@ public final class NodeCandidateHarness {
      }
      var other=new AndroidOrderedPathSelection(f.nodes,f.profiles);
      other.removePrefix(1);other.setPrefixMode(0,"wg");other.addPrefix(middle.id,"shadowsocks");other.setExecution("auto");
-     for(int i=2;i<=lastPrefix;i++)other.addPrefix(additional.get(i),"shadowsocks");
+     for(int i=2;i<=lastPrefix;i++)other.addPrefix(i==paired?privateID:additional.get(i),"shadowsocks");
      var copy=other.candidateDraftCapture(prefix).call();
      check(copy.modes.equals(source.modes)&&copy.members.size()==source.members.size(),"foreign editor did not reproduce the original selection");
      reject(()->insertion.useInDraft(other),"a different editor adopted the measured result");
      var expected=new ArrayList<String>();for(var member:source.members)expected.add(member.id);
      expected.add(prefix+1,alternate.id);
-     insertion.useInDraft(draft);
+     check(insertion.useInDraft(draft)==prefix+1,"candidate editor resumed from a different hop than the measured insertion");
      var actual=new ArrayList<String>();for(var member:draft.members())actual.add(member.source.id);
      check(actual.equals(expected)&&draft.members().get(prefix+1).mode.equals("shadowsocks"),"draft insertion lost an original suffix or final node");
      before.same(f,"explicit Use in draft");
