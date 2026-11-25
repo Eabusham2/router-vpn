@@ -342,14 +342,14 @@ def check(read):
     assert ast.unparse(dispatch.orelse[0]) == "subprocess.run([sys.executable, str(root / 'deploy' / external_test)], check=True, timeout=300)", "Apple gates lost their original checked 300-second boundary"
     phase_driver = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'run_node_candidate_phases')
     assert ast.literal_eval(phase_driver.body[0].value) == {
-        'base': ('original', 'capacity'),
+        'base': ('original', 'public-response', 'capacity'),
         'execution': ('local', 'server', 'auto'),
         'private-response': ('selected-response',),
         'imported-final': ('all-imported', 'earlier-private'),
         'imported-intermediate': ('insert-imported',),
         'draft-insertion': ('draft-insertion',),
         'selection': ('server-winner', 'typed-packet', 'ordinary-packet', 'packet-metadata'),
-        'catalog': ('unsupported-input', 'original-role', 'prefix-frame', 'receipt-expiry'),
+        'catalog': ('unsupported-input', 'original-role', 'prefix-frame', 'public-filter', 'public-endpoint', 'receipt-expiry'),
         'proposal': ('proposal-prefix', 'proposal-source', 'proposal-capture'),
     }, 'Apple node candidate case inventory changed'
     phase_loop = phase_driver.body[-1]
