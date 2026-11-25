@@ -128,12 +128,12 @@ CONTROLS = {
     "invalidated_drain": ("if(-not$Finished-or$Stage-cne'complete'", "if(-not$Finished-or$State.Invalid-or$Stage-cne'complete'"),
 }
 
-def run(shell, arguments, *, broken=False):
+def run(shell, arguments, *, broken=False, witness="ORDERED CONTROL"):
     command=[shell,"-NoLogo","-NoProfile","-NonInteractive"]
     if os.name == "nt": command.append("-STA")
     command += ["-File",str(TEST),*arguments]
     result=subprocess.run(command,capture_output=True,text=True,timeout=50)
-    if (result.returncode == 0) == broken or (broken and "ORDERED CONTROL" not in result.stdout+result.stderr):
+    if (result.returncode == 0) == broken or (broken and witness not in result.stdout+result.stderr):
         raise AssertionError(f"Wrong executable verdict {command}:\n{result.stdout}{result.stderr}")
     print(result.stdout.strip() if not broken else "Rejected "+arguments[-1],flush=True)
     return dict(exit=result.returncode,stdout=result.stdout.strip(),stderr=result.stderr.strip())
@@ -154,7 +154,8 @@ def main():
                 source=SOURCE.read_text()
                 if source.count(before)!=1: raise AssertionError(f"control {name} no longer has one causal target")
                 path=Path(value)/(name+".ps1");path.write_text(source.replace(before,after,1))
-                results.append(dict(case=name,**run(args.shell,["-Source",str(path)],broken=True)))
+                witness = "ORDERED CONTROL Public exit admission at 9 nodes failed" if name == "three_only" else "ORDERED CONTROL"
+                results.append(dict(case=name,**run(args.shell,["-Source",str(path)],broken=True,witness=witness)))
     print(json.dumps(dict(scope="shipping PowerShell model and actual loopback HTTP; WPF only on Windows",results=results),indent=2))
 
 if __name__ == "__main__": main()

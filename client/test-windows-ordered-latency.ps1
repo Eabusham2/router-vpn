@@ -176,7 +176,8 @@ foreach($size8 in @(3,9)){
     }
     $v8=Status;$v8.capture=$cap8;$v8.nodes=$rows8;$v8.history=@()
     $state8=New-RouterVPNOrderedState $BaseUrl $cap8.profile_id
-    Receive-RouterVPNOrderedStatus $state8 $v8 -Initial
+    try { Receive-RouterVPNOrderedStatus $state8 $v8 -Initial }
+    catch { Check $false ("Public exit admission at $size8 nodes failed: "+$_.Exception.Message) }
     Check ($state8.Nodes.Count -eq $size8) 'public exit lost an original ordered role'
     $state8.Node=$rows8[-1];$state8.Request='e'*32;$body8=New-RouterVPNOrderedBody $state8
     Check ($body8.capture.external_final_node_id -ceq $rows8[-1].node_id -and $body8.capture.profile_id -ceq $rows8[0].node_id) 'retest lost external exit binding'

@@ -53,8 +53,12 @@ for count8 in [3,9] {
             check(owner.body["external_final_node_id"] as? String == row.node_id,"external exit identity survives retest")
             let post:[String:Any]=["capture":owner.body,"node_id":row.node_id,"request_id":String(repeating:"e",count:32),"position":i]
             let address=URL(string:"http://127.0.0.1:8788/api/speed-lab/ordered-latency")!
-            let transport=try RouterVPNMacSpeedLabTransport(url:address,body:post,timeout:6){_ in}
-            transport.cancel()
+            do {
+                let transport=try RouterVPNMacSpeedLabTransport(url:address,body:post,timeout:6){_ in}
+                transport.cancel()
+            } catch {
+                check(false, "Public exit transport at position \(i) of \(count8) rejected: \(error)")
+            }
             var changed=post;changed["position"]=0
             rejected("external exit cannot borrow the paired control position") {
                 let transport=try RouterVPNMacSpeedLabTransport(url:address,body:changed,timeout:6){_ in};transport.cancel()
@@ -710,8 +714,9 @@ def run_case(directory, name, change, transport_change=None):
     result = subprocess.run([str(case / "fixture")], capture_output=True, text=True, timeout=30)
     if (result.returncode == 0) != (change is None and transport_change is None):
         raise AssertionError(f"{name} wrong verdict {result.returncode}:\n{result.stdout}{result.stderr}")
-    if (change is not None or transport_change is not None) and "FAIL:" not in result.stderr:
-        raise AssertionError(f"{name} failed without its semantic assertion")
+    witness = "FAIL: Public exit transport at position 8 of 9 rejected" if name == "transport-three-only" else "FAIL:"
+    if (change is not None or transport_change is not None) and witness not in result.stderr:
+        raise AssertionError(f"{name} failed without its semantic assertion:\n{result.stdout}{result.stderr}")
     return {"case":name,"exit":result.returncode,"stdout":result.stdout.strip(),"stderr":result.stderr.strip()}
 
 TRANSPORT_CONTROLS = {
