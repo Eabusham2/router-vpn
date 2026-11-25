@@ -329,6 +329,7 @@ type desktopComparisonStoreOwner struct {
 	path string
 	info os.FileInfo
 	raw  []byte
+	load *connectionProfileLoadTransaction
 }
 
 func captureDesktopComparisonStore(a *app, expected common.RouterProfileStore) (*desktopComparisonStoreOwner, error) {
@@ -341,13 +342,13 @@ func captureDesktopComparisonStore(a *app, expected common.RouterProfileStore) (
 	if err != nil {
 		return nil, err
 	}
-	var stored common.RouterProfileStore
+	stored, load, decodeErr := decodePrivateProfiles(raw)
 	after, statErr := os.Lstat(path)
-	if statErr != nil || !desktopComparisonSameFile(info, after) || decodeRelayControlJSON(raw, &stored) != nil || !reflect.DeepEqual(stored, expected) {
+	if statErr != nil || !desktopComparisonSameFile(info, after) || decodeErr != nil || !reflect.DeepEqual(stored, expected) || load != nil && !load.Finished {
 		clear(raw)
 		return nil, errors.New("external comparison private profile store differs from its captured saved state")
 	}
-	return &desktopComparisonStoreOwner{path: path, info: after, raw: raw}, nil
+	return &desktopComparisonStoreOwner{path: path, info: after, raw: raw, load: load}, nil
 }
 
 func (s *desktopComparisonStoreOwner) current() error {
@@ -391,7 +392,7 @@ func (s *desktopComparisonStoreOwner) writeCheckedContext(ctx context.Context, s
 	if err := s.currentContext(ctx); err != nil {
 		return err
 	}
-	raw, err := json.MarshalIndent(store, "", "  ")
+	raw, err := marshalPrivateProfiles(store, s.load)
 	if err != nil || len(raw) > maxPrivateStoreBytes {
 		clear(raw)
 		return errors.New("external comparison cannot serialize the captured private store")

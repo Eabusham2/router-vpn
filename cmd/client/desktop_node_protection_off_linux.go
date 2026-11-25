@@ -290,7 +290,7 @@ func (off *desktopLinuxNodeProtectionOff) verifyProfileLocked(ctx context.Contex
 	if ctx == nil || ctx.Err() != nil || !off.profileWritten || a.cfg.ProfilesFile != off.savedPath {
 		return errDesktopProtectionOffUnsaved
 	}
-	want, err := json.MarshalIndent(a.profiles, "", "  ")
+	want, err := a.marshalPrivateProfilesLocked()
 	if err != nil {
 		return errors.Join(errDesktopProtectionOffUnsaved, err)
 	}

@@ -368,7 +368,7 @@ enum RouterVPNOrderedNodes {
 
 // Public references only. Source tokens are opaque hashes produced by the
 // controller; credentials remain in its private node store.
-struct RouterVPNConnectionProfileSelection: Equatable, Sendable {
+struct RouterVPNConnectionProfileSelection: Codable, Equatable, Sendable {
     var selectedNodeID = ""
     var multihopEnabled = false
     var entryID = ""
@@ -624,6 +624,38 @@ struct MacConnectionCustomPreset: Codable {
 }
 
 extension ProductWindowController {
+    func requireCoordinatedProfilePath(_ pending: MacProfileLoadTransaction.Journal) throws {
+        guard connectionProfileSelection != nil else { return } // A fresh window has no prior live selectors.
+        let displayed = captureConnectionProfileSelection()
+        var old = pending.previous.selection
+        var staged = pending.desired?.selection
+        // The preference compare-and-swap separately checks the toggle, which
+        // can be one of the fields already written before a crash.
+        old.multihopEnabled = displayed.multihopEnabled
+        staged?.multihopEnabled = displayed.multihopEnabled
+        guard displayed == old || displayed == staged else {
+            throw RouterVPNOrderedNodes.issue("A newer native path is displayed. AppKit kept the original Load for recovery.")
+        }
+    }
+
+    func adoptCoordinatedProfileSelection(_ selection: RouterVPNConnectionProfileSelection) throws {
+        adoptLoadedConnectionProfileSelection(selection, persistPreferences: false)
+        guard connectionProfileSelection == selection, connectionProfileCatalogSelectedID == selection.selectedNodeID else {
+            throw RouterVPNOrderedNodes.issue("The AppKit window could not adopt the captured profile path.")
+        }
+    }
+
+    func recoverCoordinatedProfileLoad() throws {
+        let store = MacProfileLoadTransaction.Store.standard
+        guard store.pending else { return }
+        try store.locked {
+            guard let record = try store.read() else { return }
+            _ = try MacProfileLoadTransaction.recover(record, store: store, defaults: .standard,
+                send: { phase, fields in try self.api.request(MacProfileLoadTransaction.base + phase, method: "POST", body: fields, timeout: 15) },
+                checkPath: requireCoordinatedProfilePath, adopt: adoptCoordinatedProfileSelection)
+        }
+    }
+
     func makeOrderedNodeDraft() throws -> RouterVPNOrderedNodeDraft {
         try requireMutationIdle("editing the ordered path")
         let selection = captureConnectionProfileSelection()
@@ -774,17 +806,6 @@ extension ProductWindowController {
         }
     }
 
-    func beginConnectionProfileLoad() {
-        // A timed-out or malformed successful POST cannot establish whether
-        // the controller still owns the old selection. Preserve references for
-        // recovery, but retire the UI's authority before crossing that boundary.
-        connectionProfileSelection = captureConnectionProfileSelection()
-        connectionProfileSelectionGeneration = UUID()
-        connectionProfileCatalogSelectedID = ""
-        routerPopup.selectItem(at: -1); nodePopup.selectItem(at: -1)
-        multihopEntryPopup.selectItem(at: -1); multihopExitPopup.selectItem(at: -1)
-    }
-
     @objc func connectionProfileHopChanged() {
         guard ensureMutationIdle("changing multihop selection") else { restoreOwnedConnectionProfileSelection(); return }
         recordVisibleConnectionProfileSelection()
@@ -876,12 +897,14 @@ extension ProductWindowController {
         return selection
     }
 
-    func adoptLoadedConnectionProfileSelection(_ selection: RouterVPNConnectionProfileSelection) {
+    func adoptLoadedConnectionProfileSelection(_ selection: RouterVPNConnectionProfileSelection, persistPreferences: Bool = true) {
         connectionProfileSelectionGeneration = UUID()
         connectionProfileSelection = selection
         connectionProfileCatalogSelectedID = selection.selectedNodeID
-        UserDefaults.standard.set(selection.multihopEnabled, forKey: macConnectionMultihopEnabledKey)
-        UserDefaults.standard.set(selection.execution, forKey: "routervpn.multihop.execution.v1")
+        if persistPreferences {
+            UserDefaults.standard.set(selection.multihopEnabled, forKey: macConnectionMultihopEnabledKey)
+            UserDefaults.standard.set(selection.execution, forKey: "routervpn.multihop.execution.v1")
+        }
         let tokens = (try? connectionProfileCatalogTokens(profiles)) ?? [:]
         routerPopup.selectItem(at: connectionProfileIdentityIndex(selection.selectedNodeID, ids: routerIDs, tokens: tokens, selection: selection))
         nodePopup.selectItem(at: connectionProfileIdentityIndex(selection.selectedNodeID, ids: routerIDs, tokens: tokens, selection: selection))
@@ -902,6 +925,7 @@ extension ProductWindowController {
     }
 
     func requireResolvedConnectionProfileSelection() throws {
+        guard !MacProfileLoadTransaction.Store.standard.pending else { throw RouterVPNOrderedNodes.issue("Recover the pending connection profile Load first.") }
         let selection = captureConnectionProfileSelection()
         let tokens = try connectionProfileCatalogTokens(profiles)
         guard selection.selectedNodeID == connectionProfileCatalogSelectedID,
@@ -1071,6 +1095,7 @@ extension ProductWindowController {
     }
 
     @objc func manageConnectionProfiles() {
+        do { try recoverCoordinatedProfileLoad() } catch { showConnectionProfileMessage(error.localizedDescription, error: true); return }
         guard ensureMutationIdle("opening connection profiles") else { return }
         while true {
             do {
@@ -1103,7 +1128,7 @@ extension ProductWindowController {
                 case 0:
                     guard let id = popup.selectedItem?.representedObject as? String, let profile = list.profiles.first(where: { $0.id == id }) else { showConnectionProfileMessage("Select a saved profile first.", error: true); continue }
                     let payload = try connectionProfilePOST("/api/connection-profile/setup/load", body: ["id": id, "expected_mode": profile.mode])
-                    try applyLoadedConnectionProfile(payload)
+                    refreshAll(); refreshUnifiedModeMenu(preferred: payload["mode"] as? String); refreshUnifiedChrome()
                     let loadedName = (payload["profile"] as? [String: Any])?["name"] as? String ?? "profile"
                     showConnectionProfileMessage("Loaded \(loadedName). Connect separately so the selected dataplane is established and proved.", error: false)
                 case 1:
@@ -1213,7 +1238,29 @@ extension ProductWindowController {
               UserDefaults.standard.data(forKey: macConnectionCustomPresetsKey) == presets else {
             throw RouterVPNOrderedNodes.issue("The selected path changed before the profile request.")
         }
-        if loading { beginConnectionProfileLoad() }
+        if loading {
+            let service = transport ?? api
+            let previous = try MacProfileLoadTransaction.Local(defaults: .standard, selection: original)
+            connectionProfileSelectionGeneration = UUID()
+            let ticket = connectionProfileSelectionGeneration
+            return try MacProfileLoadTransaction.load(body: request, previous: previous, store: .standard, defaults: .standard,
+                send: { phase, fields in try service.request(MacProfileLoadTransaction.base + phase, method: "POST", body: fields, timeout: 15) },
+                validate: { result in
+                    try self.requireMutationIdle("adopting the prepared connection profile")
+                    try previous.verify(in: .standard)
+                    guard self.connectionProfileSelectionGeneration == ticket, self.captureConnectionProfileSelection() == original,
+                          let expected = request["expected_mode"] as? String, let actual = result["mode"] as? String,
+                          expected.utf8.elementsEqual(actual.utf8),
+                          let originals = request["expected_profile_tokens"] as? [String:String] else {
+                        throw RouterVPNOrderedNodes.issue("The selected source or saved mode changed before Load.")
+                    }
+                    let current = try self.connectionProfileCatalogTokens(self.profiles)
+                    guard originals.allSatisfy({ id, token in current[id] == token }) else {
+                        throw RouterVPNOrderedNodes.issue("An original node changed before loading this profile.")
+                    }
+                    return try self.validatedLoadedConnectionProfileSelection(result)
+                }, checkPath: requireCoordinatedProfilePath, adopt: adoptCoordinatedProfileSelection)
+        }
         let admittedGeneration = connectionProfileSelectionGeneration
         let data = try (transport ?? api).request(path, method: "POST", body: request, timeout: 15)
         guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw NSError(domain: "RouterVPN.ConnectionProfile", code: 1, userInfo: [NSLocalizedDescriptionKey: "Connection profile endpoint returned invalid JSON."]) }
@@ -1233,24 +1280,8 @@ extension ProductWindowController {
         if writing {
             let retained = try confirmedConnectionProfileSave(value, body: request, original: original)
             adoptLoadedConnectionProfileSelection(retained)
-        } else if loading {
-            guard let expected = request["expected_mode"] as? String, let actual = value["mode"] as? String,
-                  actual.utf8.elementsEqual(expected.utf8) else {
-                throw RouterVPNOrderedNodes.issue("The saved mode changed while loading the profile.")
-            }
-            _ = try validatedLoadedConnectionProfileSelection(value)
         }
         return value
-    }
-
-    private func applyLoadedConnectionProfile(_ payload: [String: Any]) throws {
-        try requireMutationIdle("loading a connection profile")
-        let selection = try validatedLoadedConnectionProfileSelection(payload)
-        let mode = try macApplyLoadedConnectionMode(payload)
-        adoptLoadedConnectionProfileSelection(selection)
-        refreshAll()
-        refreshUnifiedModeMenu(preferred: mode)
-        refreshUnifiedChrome()
     }
 
     private func showConnectionProfileMessage(_ text: String, error: Bool) {

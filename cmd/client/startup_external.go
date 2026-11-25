@@ -43,7 +43,7 @@ type startupExternalSelection struct {
 
 func (a *app) captureStartupPolicy() (*startupPolicyCapture, error) {
 	a.mu.Lock()
-	if a.controllerClosingLocked() {
+	if a.controllerClosingLocked() || a.profileLoad != nil && !a.profileLoad.Finished {
 		a.mu.Unlock()
 		return nil, nil
 	}

@@ -69,6 +69,7 @@ def check_requirements_release(source, caller):
         ],
         "requirements-and-safety": [
             ["python3 deploy/test_startup_race_groups.py"],
+            ["python3 deploy/test_appkit_profile_load_loopback.py --race"],
             ["python3 deploy/" + name for name in (
                 "recovered-requirements-1-264-audit.py", "recovered-requirements-265-311-audit.py",
                 "recovered-addendum-312-356-audit.py", "recovered-corrections-audit.py")],
@@ -343,6 +344,18 @@ class RunnerTests(unittest.TestCase):
                 with self.subTest(workflow=filename), self.assertRaises(ValueError):
                     check_workflow(changed, job, step, scope)
 
+    def test_appkit_loopback_requires_original_execution_receipts(self):
+        import test_appkit_profile_load_loopback as loopback
+        names = [loopback.LOOPBACK + "/" + fault for fault in ("none", "reject", "after-prepare", "after-commit")] + [loopback.LOOPBACK]
+        def events(choices):
+            return "\n".join(json.dumps({"Action": action, "Test": name}) for name, action in choices)
+        passed = [(name, "pass") for name in names]
+        loopback.require_executions(events(passed))
+        for index, (name, _) in enumerate(passed):
+            for replacement in ([], [(name, "skip")], [(name, "pass"), (name, "pass")]):
+                with self.subTest(name=name, replacement=replacement), self.assertRaises(ValueError):
+                    loopback.require_executions(events(passed[:index] + replacement + passed[index + 1:]))
+
     def test_requirements_jobs_and_release_caller_keep_every_original_command(self):
         folder = gate.ROOT / ".github/workflows"
         source = (folder / "requirements-closure.yml").read_text()
@@ -358,6 +371,9 @@ class RunnerTests(unittest.TestCase):
                 source.replace("          set -euo pipefail", "          set +e"),
                 source.replace("        run: python3 deploy/test_startup_race_groups.py",
                                "        run: python3 deploy/test_startup_race_groups.py || true"),
+                source.replace("        run: python3 deploy/test_appkit_profile_load_loopback.py --race\n", ""),
+                source.replace("        run: python3 deploy/test_appkit_profile_load_loopback.py --race",
+                               "        run: python3 deploy/test_appkit_profile_load_loopback.py --build-swift /tmp/compile-only"),
                 source.replace("          python3 deploy/native-session-mutation-audit.py\n", ""),
                 source.replace("          git diff --check", "          true")):
             with self.subTest(change=changed), self.assertRaises(ValueError):

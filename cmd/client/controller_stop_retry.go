@@ -13,8 +13,9 @@ import (
 
 type controllerStatus struct {
 	state
-	StopPending bool   `json:"stop_pending"`
-	StopToken   string `json:"stop_token,omitempty"`
+	StopPending        bool   `json:"stop_pending"`
+	StopToken          string `json:"stop_token,omitempty"`
+	ProfileLoadPending bool   `json:"profile_load_pending"`
 }
 
 func validStopRetryToken(token string) bool {
@@ -42,7 +43,7 @@ func (a *app) controllerStatusContext(ctx context.Context) (controllerStatus, er
 				return controllerStatus{}, err
 			}
 			_, registered := sessionTrackers.Load(a)
-			status := controllerStatus{state: a.state}
+			status := controllerStatus{state: a.state, ProfileLoadPending: a.profileLoad != nil && !a.profileLoad.Finished}
 			a.mu.Unlock()
 			if registered {
 				continue
@@ -61,7 +62,7 @@ func (a *app) controllerStatusContext(ctx context.Context) (controllerStatus, er
 			return controllerStatus{}, err
 		}
 		current, registered := sessionTrackers.Load(a)
-		status := controllerStatus{state: a.state}
+		status := controllerStatus{state: a.state, ProfileLoadPending: a.profileLoad != nil && !a.profileLoad.Finished}
 		var err error
 		if !registered || current != t {
 			err = errors.New("controller status DNS owner changed during capture")

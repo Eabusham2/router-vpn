@@ -111,26 +111,6 @@ func macCurrentConnectionModeSnapshot() throws -> (mode: String, layers: [String
     return (mode, presets[index].layers)
 }
 
-@discardableResult func macApplyLoadedConnectionMode(_ root: [String: Any]) throws -> String {
-    let mode = root["mode"] as? String ?? "smart-auto"
-    if let name = macCustomPresetName(in: mode) {
-        guard let layers = root["custom_layers"] as? [String], !layers.isEmpty else {
-            throw RouterVPNOrderedNodes.issue("This saved CUSTOM profile has no captured layers. Select its original preset and update the profile.")
-        }
-        var presets = try MacConnectionCustomPreset.catalog(UserDefaults.standard.data(forKey: macConnectionCustomPresetsKey))
-        let preset = MacConnectionCustomPreset(name: name, layers: layers)
-        if let index = try MacConnectionCustomPreset.target(name, in: presets) {
-            presets[index] = preset
-        } else {
-            presets.append(preset)
-            presets.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        }
-        UserDefaults.standard.set(try JSONEncoder().encode(presets), forKey: macConnectionCustomPresetsKey)
-    }
-    UserDefaults.standard.set(mode, forKey: macConnectionModeKey)
-    return mode
-}
-
 private func macMutationBusy(_ api: ProductAPI) -> Bool {
     if MacViaEntryCandidateReservation.shared.active { return true }
     do {
@@ -281,16 +261,6 @@ private final class MacConnectionProfileControls: NSObject {
         return (true, entry, exit, exitMode, owner.multihopExecutionChoice(), entryMode)
     }
 
-    private func applyLoadedMultihop(_ root: [String: Any]) throws {
-        guard let owner else {
-            throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 6, userInfo: [NSLocalizedDescriptionKey: "Reopen Settings from the current Router VPN window."])
-        }
-        try owner.requireMutationIdle("loading a connection profile")
-        let selection = try owner.validatedLoadedConnectionProfileSelection(root)
-        try macApplyLoadedConnectionMode(root)
-        owner.adoptLoadedConnectionProfileSelection(selection)
-    }
-
     private func write(path: String, updating: Bool) throws -> [String: Any] {
         try requireIdle(updating ? "updating a connection profile" : "adding a connection profile")
         let clean = name.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -325,6 +295,7 @@ private final class MacConnectionProfileControls: NSObject {
 
     @objc private func loadProfile() {
         do {
+            try owner?.recoverCoordinatedProfileLoad()
             try requireIdle("loading a connection profile")
             let id = try selectedID()
             guard let owner else {
@@ -335,7 +306,7 @@ private final class MacConnectionProfileControls: NSObject {
                 throw RouterVPNOrderedNodes.issue("Refresh the profile list before loading its saved mode.")
             }
             let rootJSON = try owner.connectionProfilePOST("/api/connection-profile/setup/load", body: ["id": id, "expected_mode": mode], transport: api)
-            try applyLoadedMultihop(rootJSON)
+            // The coordinated Load already persisted and verified the native path and mode.
             let loaded = rootJSON["profile"] as? [String: Any]
             status.stringValue = "Loaded \(loaded?["name"] as? String ?? "profile") • node \(rootJSON["selected_node_id"] as? String ?? "") • mode \(rootJSON["mode"] as? String ?? "smart-auto") • exact multihop graph restored."
             owner.refreshAll(); owner.refreshUnifiedModeMenu(preferred: rootJSON["mode"] as? String); owner.refreshUnifiedChrome(); owner.refreshUnifiedTelemetry()

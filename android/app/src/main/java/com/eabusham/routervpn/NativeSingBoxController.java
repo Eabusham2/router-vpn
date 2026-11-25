@@ -19,10 +19,8 @@ import java.nio.ByteBuffer;
 import io.nekohasekai.libbox.Libbox;
 import java.security.SecureRandom;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 
 /** Prepares bounded app-private libbox sessions; no large configs cross Binder. */
 final class NativeSingBoxController {
@@ -36,15 +34,6 @@ final class NativeSingBoxController {
     private static final int MAX_PROFILE_FILE = 8 * 1024 * 1024;
     private static final int MAX_PROFILE_TOTAL = 32 * 1024 * 1024;
     private static final SecureRandom RANDOM = new SecureRandom();
-    private static final Map<String,String> KNOWN_TLS_NAMES = new HashMap<>();
-    static {
-        KNOWN_TLS_NAMES.put("1.1.1.1", "cloudflare-dns.com"); KNOWN_TLS_NAMES.put("1.0.0.1", "cloudflare-dns.com");
-        KNOWN_TLS_NAMES.put("2606:4700:4700::1111", "cloudflare-dns.com"); KNOWN_TLS_NAMES.put("2606:4700:4700::1001", "cloudflare-dns.com");
-        KNOWN_TLS_NAMES.put("8.8.8.8", "dns.google"); KNOWN_TLS_NAMES.put("8.8.4.4", "dns.google");
-        KNOWN_TLS_NAMES.put("2001:4860:4860::8888", "dns.google"); KNOWN_TLS_NAMES.put("2001:4860:4860::8844", "dns.google");
-        KNOWN_TLS_NAMES.put("9.9.9.9", "dns.quad9.net"); KNOWN_TLS_NAMES.put("149.112.112.112", "dns.quad9.net"); KNOWN_TLS_NAMES.put("2620:fe::fe", "dns.quad9.net");
-    }
-
     static final class ModeInfo {
         final String id;
         final String name;
@@ -476,7 +465,9 @@ final class NativeSingBoxController {
         else if ("doh3".equals(s.mode)) { s.protocol="h3";if(s.port<=0)s.port=443; }
         else { if("doh".equals(s.protocol))s.protocol="https";else if("dot".equals(s.protocol))s.protocol="tls";else if("doh3".equals(s.protocol))s.protocol="h3"; if(s.port<=0)s.port=("https".equals(s.protocol)||"h3".equals(s.protocol))?443:"tls".equals(s.protocol)?853:53; }
         if(s.host.isEmpty()) throw new IllegalStateException("Selected DNS host is empty.");
-        if(s.serverName.isEmpty()) { String known=KNOWN_TLS_NAMES.get(s.host); if(known!=null)s.serverName=known; else if(s.host.indexOf(':')<0 && hasLetter(s.host))s.serverName=s.host; }
+        if ("tls".equals(s.protocol) || "https".equals(s.protocol) || "h3".equals(s.protocol)) {
+            s.serverName = AndroidDNSResolverCatalog.tlsServerName(s.host, s.serverName);
+        }
         if(s.path.isEmpty())s.path="/dns-query";
         return s;
     }
@@ -486,7 +477,6 @@ final class NativeSingBoxController {
         try { return AndroidNumericAddress.parse(value) != null; }
         catch (Exception invalid) { return false; }
     }
-    private static boolean hasLetter(String value){for(int i=0;i<value.length();i++)if(Character.isLetter(value.charAt(i)))return true;return false;}
     private static String chooseDnsDetour(JSONObject config) {
         for (String candidate:new String[]{"proxy","tcp-stack","ss-hop","outer"}) {
             for (String group:new String[]{"outbounds","endpoints"}) {

@@ -33,6 +33,10 @@ func (a *app) beginNodeBoundOperation() (func(), error) {
 		a.operationMu.Unlock()
 		return nil, errControllerClosing
 	}
+	if err := a.guardProfileLoadPendingContext(context.Background()); err != nil {
+		a.operationMu.Unlock()
+		return nil, err
+	}
 	if err := a.guardDesktopProtectionOffPending(); err != nil {
 		a.operationMu.Unlock()
 		return nil, err
@@ -56,6 +60,11 @@ func (a *app) beginProtectionAwareMutationOperation(r *http.Request, allowOffRet
 	a.mu.Unlock()
 	if closing {
 		return nil, errControllerClosing
+	}
+	// Internal callers inherit no general exemption from a durable UI Load.
+	// Only the coordinator's exact private permit may validate its own plan.
+	if err := a.guardProfileLoadPendingContext(r.Context()); err != nil {
+		return nil, err
 	}
 	if hasInternalMutationContext(r) && !allowOffRetry {
 		if err := a.guardSessionDNSStopPending(r.Context()); err != nil {
@@ -95,6 +104,10 @@ func (a *app) beginProtectionAwareMutationOperation(r *http.Request, allowOffRet
 		}
 	}
 	if err := guardViaEntryDecisionContext(r.Context(), a); err != nil {
+		a.operationMu.Unlock()
+		return nil, err
+	}
+	if err := a.guardProfileLoadPendingContext(r.Context()); err != nil {
 		a.operationMu.Unlock()
 		return nil, err
 	}
@@ -152,6 +165,10 @@ func (a *app) beginConnectionTransactionContext(caller context.Context) (context
 	}
 	if !a.operationMu.TryLock() {
 		return nil, nil, errors.New("another Router VPN connection or settings transaction is already in progress")
+	}
+	if err := a.guardProfileLoadPendingContext(caller); err != nil {
+		a.operationMu.Unlock()
+		return nil, nil, err
 	}
 	if err := desktopnetwork.LockContext(caller, &a.mu); err != nil {
 		a.operationMu.Unlock()

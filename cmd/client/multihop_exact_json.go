@@ -25,8 +25,18 @@ func decodeRelayControlJSONBounded(data []byte, out any, limit int) error {
 // Internal private files have their own explicit bounds. The relay entry point
 // above still accepts only its original proof and capability limits.
 func decodePrivateControlJSONBounded(data []byte, out any, limit int) error {
+	if limit <= 0 || limit > 1<<20 {
+		return errors.New("relay control response must be bounded unambiguous JSON")
+	}
+	return decodeExactJSONObjectBounded(data, out, limit)
+}
+
+// Private Router profile files use their separate 4 MiB limit. Reuse the same
+// duplicate-member, depth and exact typed-decoding checks without increasing
+// any network control-message limit.
+func decodeExactJSONObjectBounded(data []byte, out any, limit int) error {
 	bad := errors.New("relay control response must be bounded unambiguous JSON")
-	if limit <= 0 || limit > 1<<20 || len(data) == 0 || len(data) > limit || !utf8.Valid(data) {
+	if limit <= 0 || limit > maxPrivateStoreBytes || len(data) == 0 || len(data) > limit || !utf8.Valid(data) {
 		return bad
 	}
 	scan := json.NewDecoder(bytes.NewReader(data))

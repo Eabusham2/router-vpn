@@ -3,9 +3,10 @@
 #include <errno.h>
 #include <glib/gstdio.h>
 #include <unistd.h>
+#include "routervpn-profile-load-store-v1.inc"
 
 typedef enum {
-    LINUX_CUSTOM_SAVE, LINUX_CUSTOM_DELETE, LINUX_CUSTOM_CHECK_RESTORE, LINUX_CUSTOM_RESTORE
+    LINUX_CUSTOM_SAVE, LINUX_CUSTOM_DELETE, LINUX_CUSTOM_CHECK_RESTORE
 } LinuxCustomWriteV18;
 
 static gboolean linux_custom_name_valid_v18(const char *name, gboolean allow_colon) {
@@ -45,22 +46,11 @@ static gboolean linux_custom_target_v18(GKeyFile *key, const char *editing, cons
 
 static gboolean linux_custom_publish_v18(const char *editing, const char *name,
                                          const char *layers, LinuxCustomWriteV18 action, GError **error) {
-    char *path = linux_unified_preset_path_v8();
-    GKeyFile *key = g_key_file_new();
+    g_auto(LinuxLoadFile) file = {.directory = -1};
+    if (!linux_load_open(&file, FALSE, error)) return FALSE;
+    GKeyFile *key = file.key;
     gboolean ok = FALSE;
     gboolean deleting = action == LINUX_CUSTOM_DELETE;
-    struct stat st;
-    gboolean exists = g_lstat(path, &st) == 0;
-    if (exists) {
-        if (!S_ISREG(st.st_mode) || st.st_uid != getuid() || st.st_size > 512 * 1024) {
-            g_set_error_literal(error, G_FILE_ERROR, G_FILE_ERROR_INVAL, "CUSTOM store is not an owned regular file.");
-            goto done;
-        }
-        if (!g_key_file_load_from_file(key, path, G_KEY_FILE_KEEP_COMMENTS, error)) goto done;
-    } else if (errno != ENOENT) {
-        g_set_error_literal(error, G_FILE_ERROR, G_FILE_ERROR_FAILED, "Cannot inspect CUSTOM store.");
-        goto done;
-    }
     if (editing) {
         g_autofree char *source = g_strconcat("preset:", editing, NULL);
         if (!g_key_file_has_group(key, source)) {
@@ -69,12 +59,8 @@ static gboolean linux_custom_publish_v18(const char *editing, const char *name,
         }
     }
     if (!deleting && !linux_custom_target_v18(key, editing, name,
-            action == LINUX_CUSTOM_CHECK_RESTORE || action == LINUX_CUSTOM_RESTORE, error)) goto done;
+            action == LINUX_CUSTOM_CHECK_RESTORE, error)) goto done;
     if (action == LINUX_CUSTOM_CHECK_RESTORE) { ok = TRUE; goto done; }
-    if (exists && g_chmod(path, 0600) != 0) {
-        g_set_error_literal(error, G_FILE_ERROR, G_FILE_ERROR_ACCES, "Cannot protect CUSTOM store permissions.");
-        goto done;
-    }
     if (editing != NULL && (deleting || g_strcmp0(editing, name) != 0)) {
         char *group = g_strconcat("preset:", editing, NULL);
         g_key_file_remove_group(key, group, NULL);
@@ -92,17 +78,8 @@ static gboolean linux_custom_publish_v18(const char *editing, const char *name,
         g_key_file_set_string(key, "state", "selected_mode", mode);
         g_free(group); g_free(mode);
     }
-    gsize length = 0;
-    char *data = g_key_file_to_data(key, &length, error);
-    if (data != NULL) {
-        /* Also fsync a newly created file; do not start a connection after a
-         * failed or unconfirmed write. GLib 2.66+ is present on build targets. */
-        ok = g_file_set_contents_full(path, data, (gssize)length,
-            G_FILE_SET_CONTENTS_CONSISTENT | G_FILE_SET_CONTENTS_DURABLE, 0600, error);
-        g_free(data);
-    }
+    ok = linux_load_write(&file, error);
 done:
-    g_key_file_unref(key); g_free(path);
     return ok;
 }
 

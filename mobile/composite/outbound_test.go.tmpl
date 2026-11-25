@@ -252,6 +252,69 @@ func TestNativeCompositeCloseCancelsPendingAndLateDials(t *testing.T) {
 	}
 }
 
+type compositeFailingCloseConn struct {
+	net.Conn
+	err error
+}
+
+func (c compositeFailingCloseConn) Close() error {
+	return errors.Join(c.Conn.Close(), c.err)
+}
+
+func TestNativeCompositeRetainsFailureAfterOwnerCancellationReleasedSocket(t *testing.T) {
+	for _, network := range []string{"tcp", "udp"} {
+		t.Run(network, func(t *testing.T) {
+			owner, _, tcp, udp := setup(t, "max")
+			failure := errors.New("owned " + network + " close failed")
+			tcp.stream = func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+				client, peer := net.Pipe()
+				t.Cleanup(func() { _ = peer.Close() })
+				return compositeFailingCloseConn{client, failure}, nil
+			}
+			udp.packet = func(context.Context, M.Socksaddr) (net.PacketConn, error) {
+				packet := newEchoPacket()
+				packet.closeErr = failure
+				return packet, nil
+			}
+			conn, err := owner.DialContext(context.Background(), network, M.ParseSocksaddr("192.0.2.10:53"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Model the cancellation worker winning the race before the registry
+			// snapshot. Closing the published wrapper joins its exact retirement.
+			owner.cancel()
+			if err := conn.Close(); !errors.Is(err, failure) {
+				t.Fatal("underlying transport did not return the sentinel", err)
+			}
+			for i := 0; i < 2; i++ {
+				if err := owner.Close(); !errors.Is(err, failure) {
+					t.Fatal("native teardown lost the previously retired transport failure", err)
+				}
+			}
+		})
+	}
+}
+
+func TestNativeCompositeLiveOwnerDoesNotAdoptCallerCloseFailure(t *testing.T) {
+	owner, _, _, udp := setup(t, "max")
+	failure := errors.New("caller closed its own socket")
+	udp.packet = func(context.Context, M.Socksaddr) (net.PacketConn, error) {
+		packet := newEchoPacket()
+		packet.closeErr = failure
+		return packet, nil
+	}
+	conn, err := owner.ListenPacket(context.Background(), M.ParseSocksaddr("192.0.2.10:53"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); !errors.Is(err, failure) {
+		t.Fatal("caller lost its own transport failure", err)
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatal("healthy native owner retained a caller's teardown failure", err)
+	}
+}
+
 func TestNativeCompositeCancellationAndCloseErrorAreRetained(t *testing.T) {
 	owner, _, _, udp := setup(t, "max")
 	failure := errors.New("owned packet close failed")

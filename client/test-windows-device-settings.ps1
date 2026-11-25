@@ -314,6 +314,7 @@ $Composed=[ScriptBlock]::Create($ProductSource).Ast
     function GetUnifiedModeID{return $data.saved}
     function GetUnifiedPresets{return $data.modes}
     function SaveUnifiedModeID([string]$Value){$data.saved=$Value}
+    function Invoke-RouterVPNPreferenceBatch($LegacyDirectory,[scriptblock]$Action){& $Action}
     function SaveUnifiedPresets($Values){$data.modes=@($Values)}
     function Assert-RouterVPNMutationIdle([string]$Reason){}
     function Api([string]$Path,[int]$Timeout){

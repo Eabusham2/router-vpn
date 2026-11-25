@@ -280,11 +280,11 @@ def execute(core, target, tags, env, runner):
             if raw.count(b'package main\n') != 1:
                 raise ValueError('Unexpected original worker package')
             projected = raw.replace(b'package main\n', b'package routervpnamnezia_test\n', 1)
-            target = Path(name).stem+'_test.go'
-            file = workspace/target
+            test_filename = Path(name).stem+'_test.go'
+            file = workspace/test_filename
             file.write_bytes(projected)
             worker_tests[file] = projected
-            replacement[str(core/'protocol/routervpnamnezia'/target)] = str(file)
+            replacement[str(core/'protocol/routervpnamnezia'/test_filename)] = str(file)
         overlay.write_text(json.dumps({'Replace': replacement}))
         original_overlay = overlay.read_bytes()
         base = ['go', 'test', '-c', '-race', '-p=1', '-mod=readonly', '-tags='+tags, '-ldflags=-checklinkname=0']

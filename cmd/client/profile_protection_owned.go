@@ -266,7 +266,7 @@ func (a *app) persistCapturedProtectionOff(ctx context.Context, slot *desktopNod
 	if err := ctx.Err(); err != nil {
 		return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, err)
 	}
-	want, err := json.MarshalIndent(a.profiles, "", "  ")
+	want, err := a.marshalPrivateProfilesLocked()
 	if err != nil {
 		return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, err)
 	}
@@ -299,7 +299,7 @@ func (a *app) persistProtectionOffProfilesLocked(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("protection Off save omitted its original caller")
 	}
-	raw, err := json.MarshalIndent(a.profiles, "", "  ")
+	raw, err := a.marshalPrivateProfilesLocked()
 	if err != nil {
 		return err
 	}
@@ -336,7 +336,7 @@ func (a *app) captureRecoveredOffProfileContext(ctx context.Context, slot *deskt
 	if err != nil || profileStartupSettingsToken(updated) != capture.resultRevision {
 		return errors.Join(err, errors.New("recovered Off cannot reproduce its accepted result profile"))
 	}
-	want, err := json.MarshalIndent(a.profiles, "", "  ")
+	want, err := a.marshalPrivateProfilesLocked()
 	if err != nil {
 		return err
 	}

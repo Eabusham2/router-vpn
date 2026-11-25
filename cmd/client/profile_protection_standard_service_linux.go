@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -223,7 +222,7 @@ func (a *app) persistStandardServiceProtectionOff(ctx context.Context, profileID
 	if !found {
 		return common.RouterProfile{}, errDesktopProtectionOffUnsaved
 	}
-	want, err := json.MarshalIndent(a.profiles, "", "  ")
+	want, err := a.marshalPrivateProfilesLocked()
 	if err != nil {
 		return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, err)
 	}

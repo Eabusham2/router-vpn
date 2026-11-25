@@ -1,5 +1,6 @@
 ﻿param(
     [string]$Root = (Split-Path $PSScriptRoot -Parent),
+    [switch]$TransactionOnly,
     [ValidateSet('shipping','capture-two-modes','load-fallback','connect-fallback','entry-capture-fallback','entry-load-fallback','entry-connect-fallback','startup-deadline','ordered-drop-middle','ordered-execution-capture','ordered-execution-connect','ordered-final-owner','ordered-capability','ordered-source','ordered-locked-source','setup-expectation','setup-current-receipt','setup-response-source','setup-response-order','setup-load-inventory','setup-refresh-retirement','setup-uncertain-owner')][string]$Mutation = 'shipping'
 )
 $ErrorActionPreference='Stop'
@@ -68,12 +69,12 @@ try{
     ProfileStage 'composition-ready'
 
     $Helpers=''
-    foreach($Name in @('global:Get-RouterVPNCurrentModeSnapshot','global:Set-RouterVPNLoadedModeSnapshot','global:Get-RouterVPNSetupGraphIDs','global:Get-RouterVPNSetupViewKey','global:Get-RouterVPNSetupCapture','global:Confirm-RouterVPNSetupResponse','global:Invoke-RouterVPNConnectionSetup','global:Get-RouterVPNVisibleConnectionSnapshot','global:Apply-RouterVPNLoadedConnectionSnapshot','global:Get-RouterVPNOrderedValue','global:Test-RouterVPNOrderedPrefixMode','global:Copy-RouterVPNOrderedNodes','global:New-RouterVPNOrderedConnectPayload','global:Get-RouterVPNOrderedConnectionSnapshot','global:Set-RouterVPNLoadedOrderedSnapshot')){
+    foreach($Name in @('global:Get-RouterVPNCurrentModeSnapshot','global:Get-RouterVPNLoadedPresetText','global:Invoke-RouterVPNLoadPhase','global:New-RouterVPNPreferencePostImage','global:Get-RouterVPNLoadDisplay','global:Restore-RouterVPNLoadDisplay','global:Set-RouterVPNPreparedDisplay','global:Complete-RouterVPNProfileRecovery','global:Invoke-RouterVPNPreparedProfileLoad','global:Repair-RouterVPNProfileLoad','global:Set-RouterVPNLoadedModeSnapshot','global:Get-RouterVPNSetupGraphIDs','global:Get-RouterVPNSetupViewKey','global:Get-RouterVPNSetupCapture','global:Confirm-RouterVPNSetupResponse','global:Invoke-RouterVPNConnectionSetup','global:Get-RouterVPNVisibleConnectionSnapshot','global:Apply-RouterVPNLoadedConnectionSnapshot','global:Get-RouterVPNOrderedValue','global:Test-RouterVPNOrderedPrefixMode','global:Copy-RouterVPNOrderedNodes','global:New-RouterVPNOrderedConnectPayload','global:Get-RouterVPNOrderedConnectionSnapshot','global:Set-RouterVPNLoadedOrderedSnapshot')){
         # Type and storage boundaries only; all selection and payload logic is
         # taken unchanged from the functions loaded by the shipping launcher.
         $Helpers+=(ShippingFunction $ProfileSettingsSource $Name).Replace('[System.Windows.Window]','[object]').Replace('$PSScriptRoot','$FixtureStateRoot')+"`n"
     }
-    $Connect=(ShippingFunction $ProductSource 'UnifiedConnect')
+    $Connect=(ShippingFunction $ProductSource 'UnifiedConnect').Replace('$PSScriptRoot','$FixtureStateRoot')
     $Choice=(ShippingFunction $ProductSource 'MultihopExitModeChoice')+"`n"+(ShippingFunction $ProductSource 'MultihopEntryModeChoice')+"`n"+(ShippingFunction $ProductSource 'UnifiedMultihopStartupTimeout')
     switch($Mutation){
         'capture-two-modes'{$Helpers=ReplaceOnce $Helpers '$result.multihop_exit_mode=[string]$exitMode.SelectedItem.Tag' '$result.multihop_exit_mode=if($exitMode.SelectedIndex-eq1){''hysteria2''}else{''shadowsocks''}'}
@@ -96,7 +97,7 @@ try{
         'setup-response-order'{$Helpers=ReplaceOnce $Helpers "if(`$null-eq`$nodes-or`$null-eq`$expectedNodes-or@(`$nodes).Count-ne@(`$expectedNodes).Count-or(@(`$nodes.id)-join',')-cne(@(`$expectedNodes.id)-join',')-or(@(`$nodes.mode)-join',')-cne(@(`$expectedNodes.mode)-join','))" 'if($false)'}
         'setup-load-inventory'{$Helpers=ReplaceOnce $Helpers 'if($Loading-or[string](Get-RouterVPNOrderedValue $control[0]' 'if($false-or[string](Get-RouterVPNOrderedValue $control[0]'}
         'setup-refresh-retirement'{$Helpers=ReplaceOnce $Helpers '[void](CancelUnifiedRefreshAsync)' '[void]0'}
-        'setup-uncertain-owner'{$Helpers=ReplaceOnce $Helpers '{$selected.SelectedValue=$null}' '{[void]0}'}
+        'setup-uncertain-owner'{$Helpers=ReplaceOnce $Helpers 'if($null-ne$Display){Restore-RouterVPNLoadDisplay $Display}' 'if($false){Restore-RouterVPNLoadDisplay $Display}'}
     }
     . ([ScriptBlock]::Create($Helpers))
     . ([ScriptBlock]::Create($Choice))
@@ -106,7 +107,8 @@ try{
     . ([ScriptBlock]::Create($BodyAssignments[0].Extent.Text))
     $AddCallback=ShippingCallback $ProfileSettingsSource '$profileAdd'
     $UpdateCallback=ShippingCallback $ProfileSettingsSource '$profileUpdate'
-    $LoadCallback=ShippingCallback $ProfileSettingsSource '$profileLoad'
+    $loadHandler=(ShippingCallback $ProfileSettingsSource '$profileLoad').ToString().Replace('$PSScriptRoot','$FixtureStateRoot')
+    $LoadCallback=[ScriptBlock]::Create($loadHandler)
     ProfileStage 'callbacks-extracted'
 
     Add-Type -TypeDefinition @'
@@ -162,15 +164,41 @@ public sealed class ProfileModeOwner {
     Check ($profileStatus.Text.StartsWith('Load failed: A different saved CUSTOM preset') -and $script:Requests.Count -eq 0 -and $script:Retirements -eq 0) 'a colliding profile reached the controller before validation'
     $script:Loaded=$null
 
+    $script:Revision=[uint64]0;$script:Tx=$null;$script:Tombstone=$false
     function global:Invoke-RestMethod {
         param($Uri,$Method,$ContentType,$Body,$TimeoutSec)
         Check ($Method-ceq'Post'-and$ContentType-ceq'application/json') 'Profile callback changed HTTP operation'
-        Check ($Uri-in@(($BaseUrl+'/api/connection-profile/setup/save'),($BaseUrl+'/api/connection-profile/setup/update'),($BaseUrl+'/api/connection-profile/setup/load'))) 'Unexpected endpoint or automatic connection'
+        $Payload=$Body|ConvertFrom-Json
+        if($Uri -match '/setup/load/(status|cancel|abort|commit|finish)$'){
+            $phase=$Matches[1]
+            if($TransactionOnly -and $null-ne$script:PhaseHook){&$script:PhaseHook $phase 'before' $Payload}
+            $mine=$null-ne$script:Tx -and $script:Tx.operation_id -ceq $Payload.operation_id
+            if($phase -ceq 'status' -and (-not $mine -or ($TransactionOnly -and $script:Absent))){
+                return [pscustomobject]@{ok=$true;revision=[string]$script:Revision;transaction=[pscustomobject]@{operation_id=$Payload.operation_id;state='absent';finished=$false};snapshot=$null}
+            }
+            if($phase -ceq 'cancel' -and -not $mine){
+                if($Payload.expected_revision -cne [string]$script:Revision){
+                    return [pscustomobject]@{ok=$true;revision=[string]$script:Revision;transaction=[pscustomobject]@{operation_id=$Payload.operation_id;state='superseded';finished=$true};snapshot=$null}
+                }
+                $script:Revision++;$script:Tombstone=$true
+                $script:Tx=[pscustomobject]@{operation_id=$Payload.operation_id;generation=[guid]::NewGuid().ToString('N');receipt_sha256=('c'*64);state='aborted';finished=$false}
+            }
+            Check ($script:Tx.operation_id -ceq $Payload.operation_id) 'Transaction changed its original operation'
+            if($phase -cnotin @('status','cancel') -or (Get-RouterVPNOrderedValue $Payload 'generation')){
+                Check ($Payload.generation -ceq $script:Tx.generation -and $Payload.receipt_sha256 -ceq $script:Tx.receipt_sha256) 'Transaction changed its generation or receipt'
+            }
+            if($phase -ceq 'abort'){$script:Tx.state='aborted'}
+            if($phase -ceq 'commit'){$script:Tx.state='committed'}
+            if($phase -ceq 'finish'){$script:Tx.finished=$true}
+            if($TransactionOnly -and $null-ne$script:PhaseHook){&$script:PhaseHook $phase 'after' $Payload}
+            return [pscustomobject]@{ok=$true;revision=[string]$script:Revision;transaction=$script:Tx;snapshot=$(if(-not $script:Tombstone){$script:Loaded})}
+        }
+        Check ($Uri-in@(($BaseUrl+'/api/connection-profile/setup/save'),($BaseUrl+'/api/connection-profile/setup/update'),($BaseUrl+'/api/connection-profile/setup/load/prepare'))) 'Unexpected endpoint or automatic connection'
         $Payload=$Body|ConvertFrom-Json
         [void]$script:Requests.Add([pscustomobject]@{Uri=$Uri;Body=$Payload})
         Check ($Payload.expected_selected_node_id-ceq$RouterCombo.SelectedValue-and$null-ne$Payload.expected_profile_tokens) 'Setup action omitted its original selected node/source expectations'
         Check (@($Payload.expected_profile_tokens.PSObject.Properties).Count-gt0) 'Setup action discarded its original source inventory'
-        if($Uri.EndsWith('/load')){
+        if($Uri.EndsWith('/prepare')){
             Check ([string]::Equals([string]$Payload.expected_mode,[string]$script:Loaded.mode)) 'Load lost the displayed CUSTOM name precondition'
             $current=@($RouterCombo.Tag.profiles|Where-Object{$_.id-ceq$RouterCombo.SelectedValue})[0]
             $expectedIDs=@($RouterCombo.SelectedValue)
@@ -182,15 +210,34 @@ public sealed class ProfileModeOwner {
             $expectedIDs=@($expectedIDs|Sort-Object -Unique)
             Check ((@($Payload.expected_profile_tokens.PSObject.Properties.Name|Sort-Object)-join',')-ceq($expectedIDs-join',')) 'Load discarded an original saved selection source'
         }
-        if($Uri.EndsWith('/load')){$reply=$script:Loaded|ConvertTo-Json -Depth 16|ConvertFrom-Json}
+        if($Uri.EndsWith('/prepare')){$reply=$script:Loaded|ConvertTo-Json -Depth 16|ConvertFrom-Json}
         else{
             $reply=$Payload|ConvertTo-Json -Depth 16|ConvertFrom-Json
             $reply|Add-Member -NotePropertyName profile -NotePropertyValue ([pscustomobject]@{name=$Payload.name;mode=$Payload.mode})
             $reply|Add-Member -NotePropertyName selected_node_id -NotePropertyValue $Payload.expected_selected_node_id
             $reply|Add-Member -NotePropertyName profile_tokens -NotePropertyValue $Payload.expected_profile_tokens
         }
+        if($Uri.EndsWith('/prepare')){
+            if($TransactionOnly -and $null-ne$script:PhaseHook){&$script:PhaseHook 'prepare' 'before' $Payload}
+            Check ($Payload.operation_id -cmatch '\A[0-9a-f]{32}\z') 'Prepare lacks an operation owner'
+            Check ($Payload.expected_revision -ceq [string]$script:Revision) 'Prepare lost its initial backend revision'
+            $script:Revision++;$script:Tombstone=$false
+            $script:Tx=[pscustomobject]@{operation_id=$Payload.operation_id;generation=[guid]::NewGuid().ToString('N');receipt_sha256=('f'*64);state='prepared';finished=$false}
+        }
+        if($Uri.EndsWith('/prepare')){
+            if($null-eq$reply.PSObject.Properties['multihop_nodes']){$reply|Add-Member -NotePropertyName multihop_nodes -NotePropertyValue $null}
+            foreach($pairField in @('multihop_entry_id','multihop_exit_id','multihop_entry_mode','multihop_exit_mode')){
+                if($null-eq$reply.PSObject.Properties[$pairField]){$reply|Add-Member -NotePropertyName $pairField -NotePropertyValue ''}
+            }
+            if($null-eq$reply.PSObject.Properties['multihop_execution']){$reply|Add-Member -NotePropertyName multihop_execution -NotePropertyValue 'local'}
+            if($null-eq(Get-RouterVPNOrderedValue $reply 'profile')){$reply|Add-Member -NotePropertyName profile -NotePropertyValue ([pscustomobject]@{})}
+            $reply.profile|Add-Member -NotePropertyName id -NotePropertyValue $Payload.id -Force
+            if($null-eq(Get-RouterVPNOrderedValue $reply.profile 'name')){$reply.profile|Add-Member -NotePropertyName name -NotePropertyValue 'Saved profile'}
+            if($null-eq(Get-RouterVPNOrderedValue $reply.profile 'mode')){$reply.profile|Add-Member -NotePropertyName mode -NotePropertyValue $reply.mode}
+        }
         if($null-ne$script:ReplyTransform){$reply=&$script:ReplyTransform $reply}
         if($null-ne$script:BeforeReply){&$script:BeforeReply}
+        if($Uri.EndsWith('/prepare')){return [pscustomobject]@{ok=$true;revision=[string]$script:Revision;transaction=$script:Tx;snapshot=$reply}}
         return $reply
     }
     function VerifyBody($Body,[string]$Mode,[string]$Execution,[bool]$Updating,[string]$EntryMode){
@@ -202,6 +249,10 @@ public sealed class ProfileModeOwner {
         Check ($Body.multihop_entry_mode-ceq$EntryMode) 'Snapshot replaced the selected entry mode'
         Check ($Body.mode-ceq'custom:Saved layers'-and(@($Body.custom_layers)-join',')-ceq'wg,pq') 'Snapshot changed the mode or CUSTOM layers'
         if($Updating){Check ($Body.id-ceq'saved-profile') 'Update changed the saved profile identity'}
+    }
+    if($TransactionOnly){
+        . (Join-Path $Client 'test-windows-profile-load-recovery.ps1')
+        return
     }
     ProfileStage 'pair-matrix-start'
     for($m=0;$m-lt$ExpectedModes.Count;$m++){
@@ -280,6 +331,8 @@ public sealed class ProfileModeOwner {
     foreach($BadEntry in @('stale-mode','WG','wg ', 'auto','OpenVPN','WireGuard','amneziawg ')){
         $script:Loaded.multihop_exit_mode=$ExpectedModes[0];$script:Loaded.multihop_entry_mode=$BadEntry
         & $LoadCallback
+        Check ($profileStatus.Text.StartsWith('Load failed:') -and $script:Tx.state -ceq 'aborted') 'Unsupported prepared mode did not roll back'
+        Apply-RouterVPNLoadedConnectionSnapshot $Owner $script:Loaded
         Check ($null-eq$MultihopEntryModeCombo.SelectedItem) 'Unsupported loaded entry silently became a valid mode'
         $Rejected=$false;try{[void](MultihopEntryModeChoice)}catch{$Rejected=$true}
         Check $Rejected 'Invalid loaded entry accepted by shipping Connect'
@@ -300,6 +353,8 @@ public sealed class ProfileModeOwner {
     foreach($Invalid in @('stale-mode','',$null)){
         $MultihopExitModeCombo.SelectedIndex=0;$script:Loaded.multihop_exit_mode=$Invalid
         & $LoadCallback
+        Check ($profileStatus.Text.StartsWith('Load failed:') -and $script:Tx.state -ceq 'aborted') 'Unsupported prepared mode did not roll back'
+        Apply-RouterVPNLoadedConnectionSnapshot $Owner $script:Loaded
         Check ($null-eq$MultihopExitModeCombo.SelectedItem) 'Unsupported loaded mode silently became a valid exit'
         $Rejected=$false;try{[void](MultihopExitModeChoice)}catch{$Rejected=$true}
         Check $Rejected 'Missing exit mode accepted by the shipping Connect selector'
@@ -368,7 +423,7 @@ public sealed class ProfileModeOwner {
         $script:Loaded|Add-Member -NotePropertyName profile -NotePropertyValue ([pscustomobject]@{name='Ordered saved profile';mode=$finalMode})
         $chainButton.Tag=$null;$ordered.IsChecked=$false;$toggle.IsChecked=$false;$script:ConnectBody=$null
         &$LoadCallback
-        Check ($null-eq$script:ConnectBody-and$ordered.IsChecked-and$toggle.IsChecked) 'Ordered Load connected or lost its enabled choice'
+        Check ($null-eq$script:ConnectBody-and$ordered.IsChecked-and$toggle.IsChecked) ('Ordered Load connected or lost its enabled choice: '+$profileStatus.Text)
         Check ($chainButton.Tag.control_id-ceq$control-and@($chainButton.Tag.nodes).Count-eq$nodeCount-and(@($chainButton.Tag.nodes.id)-join',')-ceq(@($nodes.id)-join',')) 'Ordered Load lost a middle or selected final node'
         Check ((@($chainButton.Tag.nodes.mode)-join',')-ceq(@($nodes.mode)-join',')) 'Ordered Load replaced selected WG/AWG modes'
         UnifiedConnect;$body=$script:ConnectBody
@@ -472,16 +527,19 @@ public sealed class ProfileModeOwner {
     Check (@($chainButton.Tag.nodes).Count-eq2-and(Get-RouterVPNOrderedValue $chainButton.Tag.profile_tokens $nodes[0].id)-ceq('a'*64)) 'Load lost its finalized graph or source tokens'
     $profileName.Text='Save loaded target';&$AddCallback
     Check ($profileStatus.Text.StartsWith('Added ')-and$script:Requests[-1].Body.expected_selected_node_id-ceq$nodes[1].id-and(Get-RouterVPNOrderedValue $script:Requests[-1].Body.expected_profile_tokens $nodes[0].id)-ceq('a'*64)) 'The next setup action recaptured stale pre-Load source tokens'
-    foreach($fault in @('timeout','missing-response-source')){
+    foreach($fault in @('timeout','missing-response-source','unrepresentable-pair')){
         $RouterCombo.Tag=$originalStore|ConvertTo-Json -Depth 32|ConvertFrom-Json;$RouterCombo.SelectedValue=$control
         $chainButton.Tag=$originalDraft|ConvertTo-Json -Depth 16|ConvertFrom-Json;$ordered.IsChecked=$true;$toggle.IsChecked=$true
         $script:Loaded=$originalLoaded|ConvertTo-Json -Depth 16|ConvertFrom-Json
         if($fault-ceq'timeout'){$script:BeforeReply={throw 'Captured Load response timed out'}}
-        else{$script:ReplyTransform={param($reply)$reply.profile_tokens.PSObject.Properties.Remove($nodes[0].id);return $reply}}
-        $before=$script:LoadedCallbacks;&$LoadCallback
-        Check ($profileStatus.Text.StartsWith('Load failed:')-and$script:LoadedCallbacks-eq$before-and[string]::IsNullOrEmpty([string]$RouterCombo.SelectedValue)) 'Uncertain Load retained the old selected-node authority'
-        $script:BeforeReply=$null;$script:ReplyTransform=$null;$before=$script:Requests.Count;&$AddCallback
-        Check ($script:Requests.Count-eq$before) 'Uncertain Load authorized a later setup write without a fresh catalog'
+        elseif($fault-ceq'missing-response-source'){$script:ReplyTransform={param($reply)$reply.profile_tokens.PSObject.Properties.Remove($nodes[0].id);return $reply}}
+        else{
+            $script:Loaded=[pscustomobject]@{mode='auto';selected_node_id=$nodes[1].id;profile_tokens=$targetTokens;multihop_enabled=$true;multihop_entry_id=$nodes[0].id;multihop_exit_id=$nodes[1].id;multihop_entry_mode='wg';multihop_exit_mode='not-displayable';multihop_execution='local'}
+        }
+        $before=$script:LoadedCallbacks;$priorTag=$RouterCombo.Tag;$priorDraft=$chainButton.Tag;&$LoadCallback
+        Check ($profileStatus.Text.StartsWith('Load failed:')-and$script:LoadedCallbacks -eq $before -and $script:Tx.state -ceq 'aborted' -and $script:Tx.finished) 'Failed prepared Load did not complete its rollback'
+        Check ($RouterCombo.SelectedValue -ceq $control -and [object]::ReferenceEquals($RouterCombo.Tag,$priorTag) -and [object]::ReferenceEquals($chainButton.Tag,$priorDraft)) 'Failed prepared Load changed the previous selected-node authority'
+        $script:BeforeReply=$null;$script:ReplyTransform=$null
     }
     $RouterCombo.Tag=$originalStore;$RouterCombo.SelectedValue=$control;$chainButton.Tag=$originalDraft;$script:Loaded=$originalLoaded
     foreach($bad in @(@(),@([pscustomobject]@{id='final';mode='shadowsocks'}),@($nodes+$nodes[0]),@([pscustomobject]@{id='same';mode='wg'},[pscustomobject]@{id='same';mode='shadowsocks'}),@([pscustomobject]@{id='wrong final';mode='wg'},[pscustomobject]@{id='final';mode='shadowsocks'}),@([pscustomobject]@{id='entry';mode='WG'},[pscustomobject]@{id='final';mode='shadowsocks'}),@([pscustomobject]@{id='entry';mode='wg'},[pscustomobject]@{id='another';mode='shadowsocks'}))){

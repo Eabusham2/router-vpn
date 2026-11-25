@@ -212,7 +212,7 @@ def main():
         for name,content in stubs.items():
             target=src/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(content)
         app=src/'com/eabusham/routervpn';app.mkdir(parents=True,exist_ok=True)
-        for name in ('AndroidNodeStore','AndroidProfileSelection','AndroidTelemetryIO','AndroidRouterDNSRetest'):
+        for name in ('AndroidNodeStore','AndroidProfileSelection','AndroidTelemetryIO','AndroidRouterDNSRetest','AndroidNumericAddress','AndroidDNSResolverCatalog'):
             shutil.copyfile(JAVA/(name+'.java'),app/(name+'.java'))
         # Observe the actual source-check/publication boundary without changing
         # shipping code; this exact hook is only in the disposable Java projection.

@@ -107,8 +107,8 @@ func (s *linuxStandardService) loadProfilesContext(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var store common.RouterProfileStore
-	if err = decodeRelayControlJSON(body, &store); err != nil {
+	store, load, err := decodePrivateProfiles(body)
+	if err != nil {
 		return err
 	}
 	for i := range store.Profiles {
@@ -121,6 +121,7 @@ func (s *linuxStandardService) loadProfilesContext(ctx context.Context) error {
 		return err
 	}
 	s.app.profiles = store
+	s.app.profileLoad = load
 	s.app.mu.Unlock()
 	return ctx.Err()
 }
@@ -301,6 +302,9 @@ func (s *linuxStandardService) startPreparedMode(ctx context.Context, peer *linu
 		}
 	}
 	if err := s.loadProfilesContext(ctx); err != nil {
+		return err
+	}
+	if err := s.app.guardProfileLoadPendingContext(ctx); err != nil {
 		return err
 	}
 	if err := desktopnetwork.LockContext(ctx, &s.app.mu); err != nil {

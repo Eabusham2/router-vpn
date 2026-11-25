@@ -138,6 +138,7 @@ def windows_editor(shell):
 def windows(shell):
     command = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                str(ROOT / "client/test-windows-connection-profile-modes.ps1")]
+    run(command + ["-TransactionOnly"], observation="profile:coordinated-recovery")
     setup_witnesses = {
         "setup-expectation": "Setup action discarded its original source inventory",
         "ordered-execution-capture": "Ordered profile borrowed an unrelated logical mode or execution",
@@ -148,7 +149,7 @@ def windows(shell):
         "setup-response-order": "Malformed setup reply was adopted: reordered-members",
         "setup-load-inventory": "Load discarded an original saved selection source",
         "setup-refresh-retirement": "Setup kept its pending catalog refresh",
-        "setup-uncertain-owner": "Uncertain Load retained the old selected-node authority",
+        "setup-uncertain-owner": "Failed prepared Load changed the previous selected-node authority",
     }
     for mutation in ("shipping", "capture-two-modes", "load-fallback", "connect-fallback", "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback", "startup-deadline", "ordered-drop-middle", "ordered-execution-capture", "ordered-execution-connect", "ordered-final-owner", "ordered-capability", "ordered-source", "ordered-locked-source", "setup-expectation", "setup-current-receipt", "setup-response-source", "setup-response-order", "setup-load-inventory", "setup-refresh-retirement", "setup-uncertain-owner"):
         run(command + ["-Mutation", mutation], negative=mutation != "shipping",
@@ -207,7 +208,47 @@ import CoreFoundation
         check(path.hasPrefix("/api/nodes?sort=") && !nodeReplies.isEmpty, "unexpected node catalog request")
         return nodeReplies.removeFirst()
     }
-    func request(_ path: String, method: String = "GET", body: [String: Any]? = nil, timeout: TimeInterval) throws -> Data {
+    var loadOwner = "", loadState = "absent", loadFinished = false, loadRevision = UInt64(0)
+    var loadStages = [String]()
+    func loadReply(_ operation: String, snapshot: [String:Any]? = nil) throws -> Data {
+        let absent = operation != loadOwner || loadState == "absent"
+        var tx: [String:Any] = ["operation_id":operation,"state":absent ? "absent" : loadState,"finished":absent ? false : loadFinished]
+        if !absent { tx["generation"] = String(repeating:"c",count:32); tx["receipt_sha256"] = String(repeating:"b",count:64) }
+        var result: Any = NSNull()
+        if var fields = snapshot ?? (absent ? nil : loaded) {
+            // The controller's canonical snapshot uses JSON null for no ordered
+            // path, including legacy entry/exit pairs. An empty array is invalid.
+            let defaults: [String: Any] = ["multihop_nodes": NSNull(), "multihop_enabled": false,
+                "multihop_execution": "local", "multihop_entry_id": "", "multihop_exit_id": "",
+                "multihop_entry_mode": "", "multihop_exit_mode": ""]
+            for (key, value) in defaults where fields[key] == nil || fields[key] is NSNull { fields[key] = value }
+            result = fields
+        }
+        return try JSONSerialization.data(withJSONObject:["ok":true,"revision":String(loadRevision),"transaction":tx,"snapshot":result])
+    }
+    func request(_ wirePath: String, method: String = "GET", body: [String: Any]? = nil, timeout: TimeInterval) throws -> Data {
+        var path = wirePath
+        if path.hasPrefix(MacProfileLoadTransaction.base) {
+            let stage = String(path.dropFirst(MacProfileLoadTransaction.base.count)), op = body?["operation_id"] as? String ?? ""
+            check(MacProfileLoadTransaction.token(op,count:32), "missing operation owner")
+            loadStages.append(stage)
+            if stage == "status" {
+                if op == loadOwner && !loadFinished && (failLoad || malformedLoad) { throw RouterVPNOrderedNodes.issue("unavailable status") }
+                return try loadReply(op)
+            }
+            if stage != "prepare" {
+                check(op == loadOwner && body?["generation"] as? String == String(repeating:"c",count:32) && body?["receipt_sha256"] as? String == String(repeating:"b",count:64), "stale ownership at controller")
+                if stage == "commit" { loadState="committed" }
+                else if stage == "abort" { loadState="aborted" }
+                else if stage == "finish" { check(["committed","aborted"].contains(loadState), "premature finish"); loadFinished=true }
+                else { throw RouterVPNOrderedNodes.issue("unexpected Load stage") }
+                return try loadReply(op)
+            }
+            check(loadState == "absent" || loadFinished, "second Load bypassed unresolved controller owner")
+            check(body?["expected_revision"] as? String == String(loadRevision), "Load ignored its original controller revision")
+            loadRevision += 1; loadOwner=op; loadState="prepared"; loadFinished=false
+            path = "/api/connection-profile/setup/load"
+        } else { check(path != "/api/connection-profile/setup/load", "UI issued a legacy single-step load") }
         if method == "GET" {
             check(path == "/api/multihop/status" && !hopReplies.isEmpty, "unexpected hop catalog request")
             return try JSONSerialization.data(withJSONObject: hopReplies.removeFirst())
@@ -236,6 +277,7 @@ import CoreFoundation
             if let setupResponse { result = setupResponse(result) }
             afterSetup?(path)
         }
+        if wirePath == MacProfileLoadTransaction.base + "prepare" { return try loadReply(loadOwner,snapshot:result) }
         return try JSONSerialization.data(withJSONObject: result)
     }
 }
@@ -257,7 +299,7 @@ var checks = 0
 SWIFT_PRODUCT = r'''
 @MainActor final class FixtureLiveOwner {var mutations:Set<UUID>=[];var generation=UUID(),mapGeneration=UUID()}
 @MainActor final class ProductWindowController {
-    let liveTelemetryDelivery=FixtureLiveOwner();func clearLiveHTTPS(){}
+    let liveTelemetryDelivery=FixtureLiveOwner();func clearLiveHTTPS(){};func refreshStatus(){}
     let routerPopup = Popup(), multihopEntryPopup = Popup(), multihopExitPopup = Popup()
     let nodePopup = Popup(), externalEntryPopup = Popup(), nodeSortPopup = Popup(), basePopup = Popup()
     let multihopExitModePopup = Popup(), multihopExecutionPopup = Popup(), multihopEntryModePopup = Popup()
@@ -290,6 +332,18 @@ SWIFT_PRODUCT = r'''
     }
     var candidatesOpened = 0
     func unifiedEntryCandidatesChanged() { candidatesOpened += 1 }
+    // Independently exercise the two checked local projection stages on fixture
+    // receipts. The actual profile Load callbacks above/below also cross every
+    // prepare, commit and finish stage on the recording controller.
+    func applyLoadedConnectionProfile(_ value: [String:Any]) throws {
+        try requireMutationIdle("previewing the prepared connection profile")
+        let target = try validatedLoadedConnectionProfileSelection(value)
+        let previous = try MacProfileLoadTransaction.Local(defaults:fixtureDefaults,selection:captureConnectionProfileSelection())
+        let next = try previous.projected(snapshot:value,selection:target)
+        try next.install(in:fixtureDefaults,from:previous,allowingPartial:false)
+        try adoptCoordinatedProfileSelection(target)
+        refreshAll(); refreshUnifiedModeMenu(preferred:next.mode);refreshUnifiedChrome()
+    }
     PRODUCT_METHODS
 }
 @MainActor final class Settings {
@@ -298,6 +352,7 @@ SWIFT_PRODUCT = r'''
     var busy = false
     func syncMutationState() -> Bool { busy }
     func refresh() {}
+    func applyLoadedMultihop(_ value: [String:Any]) throws { try owner!.applyLoadedConnectionProfile(value) }
     SETTINGS_METHODS
 }
 '''
@@ -319,6 +374,27 @@ let selectedID = "private-node", entryID = "entry_private", exitID = "exit_priva
 let expectedEntries = ["", "wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "ss-v2ray", "split", "max", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "openvpn"]
 check(RouterVPNNodeEntryModes.choices.map { $0.id } == expectedEntries, "entry mode catalog changed or reduced")
 let sourceTokens = [selectedID: String(repeating: "a", count: 64), entryID: String(repeating: "b", count: 64), exitID: String(repeating: "c", count: 64)]
+// Exercise the actual receipt and AppKit validator for both non-ordered
+// wire shapes alongside an explicit malformed ordered-path control.
+do {
+    let api = ProductAPI(), operation = String(repeating: "e", count: 32)
+    api.loadOwner = operation; api.loadState = "prepared"; api.loadRevision = 1
+    for pair in [false, true] {
+        var fields: [String: Any] = ["selected_node_id": selectedID, "mode": "wg",
+            "profile": ["mode": "wg"], "profile_tokens": pair ? sourceTokens : [selectedID: sourceTokens[selectedID]!]]
+        if pair {
+            fields["multihop_enabled"] = true; fields["multihop_entry_id"] = entryID; fields["multihop_exit_id"] = exitID
+            fields["multihop_entry_mode"] = "wg"; fields["multihop_exit_mode"] = "shadowsocks"
+        }
+        let receipt = try MacProfileLoadTransaction.Reply(api.loadReply(operation, snapshot: fields), operation: operation)
+        var snapshot = receipt.snapshot!
+        let path = try owner.validatedLoadedConnectionProfileSelection(snapshot)
+        check(snapshot["multihop_nodes"] is NSNull && path.orderedNodes.isEmpty && path.multihopEnabled == pair &&
+              path.exitID == (pair ? exitID : "") && path.execution == "local", "canonical direct or pair Load lost its saved path")
+        snapshot["multihop_nodes"] = [[String: String]]()
+        rejects({ _ = try owner.validatedLoadedConnectionProfileSelection(snapshot) }, "empty ordered path was accepted as an absent path")
+    }
+}
 @MainActor func catalogRows(_ ids: [String], tokens: [String: String] = sourceTokens) -> [[String: Any]] {
     ids.map { ["id": $0, "name": "Same display name", "node_kind": "router-vpn", "profile_token": tokens[$0] ?? String(repeating: "d", count: 64)] }
 }
@@ -391,7 +467,7 @@ for (m, mode) in expectedModes.enumerated() {
         count = settings.api.calls.count
         fixtureDefaults.removeObject(forKey: macConnectionCustomPresetsKey)
         settings.loadProfile()
-        check(settings.api.calls.count == count + 1 && settings.status.stringValue.hasPrefix("Loaded "), "actual Settings Load callback failed or connected")
+        check(settings.api.calls.count == count + 1 && settings.status.stringValue.hasPrefix("Loaded ") && settings.api.loadStages.suffix(3) == ["prepare","commit","finish"], "actual Settings Load callback failed or connected")
         check(toggle.state == .on, "Settings Load lost the multihop toggle")
         count = settings.api.calls.count
         settings.updateProfile()
@@ -1510,7 +1586,7 @@ for manager in [true, false] {
     api.loaded = setupLoaded(rows, tokens: original.profileTokens)
     api.setupResponse = { value in var value = value; var tokens = value["profile_tokens"] as! [String: String]; tokens["unrelated"] = String(repeating: "c", count: 64); value["profile_tokens"] = tokens; return value }
     rejects({ try setupAction(manager, "load") }, "Load accepted unrelated response source receipts")
-    check(owner.routerPopup.indexOfSelectedItem == -1 && owner.connectionProfileCatalogSelectedID.isEmpty, "invalid Load retained resolved prior authority")
+    check(owner.captureConnectionProfileSelection() == original && api.loadState == "aborted" && api.loadFinished, "invalid prepared Load failed to restore the original selected authority")
 }
 _ = setupRows()
 let staleBody = try owner.connectionProfileSnapshot(name: "Original On choice", id: nil)
@@ -1679,10 +1755,21 @@ rejects({ try settings.applyLoadedMultihop(busyPayload) }, "active path accepted
 let candidatePosts = settings.api.calls.count; settings.addProfile(); settings.updateProfile()
 check(settings.api.calls.count == candidatePosts, "candidate-owned path accepted Settings Add/Update")
 MacViaEntryCandidateReservation.shared.active = false
-settings.api.afterLoad = { owner.api.busy = true }
-settings.loadProfile()
-check(settings.status.stringValue.hasPrefix("Load failed:") && owner.routerPopup.indexOfSelectedItem == -1 && owner.connectionProfileCatalogSelectedID.isEmpty, "session beginning after HTTP Load retained stale UI authority")
-settings.api.afterLoad = nil; owner.api.busy = false
+for manager in [true, false] {
+    let previousBusyLoad = owner.captureConnectionProfileSelection()
+    let api = manager ? owner.api : settings.api
+    api.loaded = busyPayload
+    api.afterLoad = { owner.api.busy = true }
+    if manager {
+        rejects({ _ = try owner.connectionProfilePOST("/api/connection-profile/setup/load", body:["id":"saved-profile","expected_mode":busyPayload["mode"] as! String]) },
+            "session beginning after manager prepare permitted Load")
+    } else {
+        settings.loadProfile()
+        check(settings.status.stringValue.hasPrefix("Load failed:"), "session beginning after Settings prepare permitted Load")
+    }
+    check(api.loadState == "aborted" && api.loadFinished && previousBusyLoad == owner.captureConnectionProfileSelection(), "session beginning after HTTP Load retained stale UI authority")
+    api.afterLoad = nil; owner.api.busy = false
+}
 choose(6, 2); owner.recordVisibleConnectionProfileSelection()
 for malformed in ["missing map", "wrong token"] {
     var invalid = busyPayload
@@ -1701,11 +1788,20 @@ for manager in [true, false] {
         if manager {
             rejects({ let payload = try owner.connectionProfilePOST("/api/connection-profile/setup/load", body: ["id": "saved-profile", "expected_mode": (owner.api.loaded["mode"] as? String ?? "smart-auto")]); try owner.applyLoadedConnectionProfile(payload) }, "uncertain manager Load succeeded")
         } else { settings.loadProfile(); check(settings.status.stringValue.hasPrefix("Load failed:"), "uncertain Settings Load succeeded") }
-        check(owner.captureConnectionProfileSelection() == previous && owner.connectionProfileSelectionGeneration != generation && owner.routerPopup.indexOfSelectedItem == -1 && owner.connectionProfileCatalogSelectedID.isEmpty, "uncertain Load retained old resolved node authority")
+        check(owner.captureConnectionProfileSelection() == previous && owner.connectionProfileSelectionGeneration != generation && MacProfileLoadTransaction.Store.standard.pending, "uncertain Load retained old resolved node authority")
         rejects({ _ = try owner.connectionProfileSnapshot(name: "uncertain Load", id: nil) }, "uncertain Load authorized a profile write")
         owner.api.busy = true; owner.multihopEntryPopup.selectItem(at: 0); owner.connectionProfileEntryChanged()
-        check(owner.routerPopup.indexOfSelectedItem == -1 && owner.connectionProfileCatalogSelectedID.isEmpty, "blocked UI edit reauthorized an uncertain Load")
+        check(MacProfileLoadTransaction.Store.standard.pending, "blocked UI edit reauthorized an uncertain Load")
         owner.api.busy = false; api.failLoad = false; api.malformedLoad = false
+        let store = MacProfileLoadTransaction.Store.standard
+        try store.locked {
+            if let pending = try store.read() {
+                _ = try MacProfileLoadTransaction.recover(pending, store:store, defaults:fixtureDefaults,
+                    send:{ stage,fields in try api.request(MacProfileLoadTransaction.base+stage,method:"POST",body:fields,timeout:15) },
+                    checkPath:owner.requireCoordinatedProfilePath, adopt:owner.adoptCoordinatedProfileSelection)
+            }
+        }
+        check(!store.pending, "uncertain Load failed to release the original owner after recovery")
     }
 }
 
@@ -2046,13 +2142,17 @@ def swift_source():
     assert '"$PROFILE_SRC"' in build and '"$SETTINGS_SRC"' in build
     for endpoint in ("save", "update"):
         assert f'connectionProfilePOST("/api/connection-profile/setup/{endpoint}", body: connectionProfileSnapshot(' in profiles
-    assert 'try applyLoadedConnectionProfile(payload)' in profiles
+    assert 'refreshUnifiedModeMenu(preferred: payload["mode"] as? String)' in profiles
+    assert 'MacProfileLoadTransaction.load(body: request' in profiles
     assert 'body: ["id": id, "expected_mode": profile.mode]' in profiles
     assert 'popup.lastItem?.representedObject = ["id": id, "name": profileName, "mode": mode]' in settings
     catalog = block(product, "enum RouterVPNNodeExitModes {") + "\n" + block(product, "enum RouterVPNNodeEntryModes {") + "\n" + block(product, "enum RouterVPNMultihopStartup {")
     declarations = profiles[profiles.index("private let macConnectionModeKey"):profiles.index("private struct MacConnectionProfileList")]
     declarations += block(profiles, "struct MacConnectionCustomPreset:")
-    for marker in ("func macCurrentConnectionModeSnapshot(", "@discardableResult func macApplyLoadedConnectionMode("):
+    transaction = read("client/macos/RouterVPNProfileLoadTransaction.swift")
+    transaction = transaction.replace('FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]', 'FileManager.default.temporaryDirectory.appendingPathComponent("routervpn-profile-load-fixture-" + String(ProcessInfo.processInfo.processIdentifier))')
+    declarations += "\n" + transaction + "\n"
+    for marker in ("func macCurrentConnectionModeSnapshot(",):
         declarations += "\n@MainActor " + block(settings, marker)
     product_methods = block(product, "    func multihopExecutionChoice(")
     product_methods += "\n" + profiles[profiles.index("extension ProductWindowController {\n") + len("extension ProductWindowController {\n"):profiles.index("    @objc func manageConnectionProfiles()")]
@@ -2065,11 +2165,11 @@ def swift_source():
         product_methods += "\n" + block(telemetry,marker)
     for marker in ("    func refreshAll()", "    func refreshProfiles()", "    func refreshProfiles(order:", "    func refreshAdvanced()", "    @objc func multihopExecutionChanged()"):
         product_methods += "\n" + block(product, marker)
-    for marker in ("    func connectionProfileSnapshot(", "    func connectionProfilePOST(", "    private func applyLoadedConnectionProfile("):
+    for marker in ("    func connectionProfileSnapshot(", "    func connectionProfilePOST("):
         product_methods += "\n" + block(profiles, marker)
     settings_methods = "\n".join(block(settings, marker) for marker in (
         "    private func requireIdle(", "    private func selectedID(",
-        "    private func currentMultihopSnapshot(", "    private func applyLoadedMultihop(",
+        "    private func currentMultihopSnapshot(",
         "    private func write(", "    @objc private func addProfile(",
         "    @objc private func updateProfile(", "    @objc private func loadProfile(",
     ))
@@ -2087,7 +2187,7 @@ def swift_source():
     methods = methods.replace("@objc ", "").replace("private func ", "func ")
     # Rename only the queue boundary so Swift does not apply its special
     # DispatchQueue.global inference to the deterministic value-only scheduler.
-    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + editor + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES).replace("ORDERED_TESTS", SWIFT_ORDERED).replace("SETUP_TESTS", SWIFT_SETUP).replace("CONNECT_EXECUTION_TESTS", SWIFT_CONNECT_EXECUTION + SWIFT_SOCKS_EXECUTION + SWIFT_OPENVPN_EXECUTION + SWIFT_HOSTNAME_EXECUTION + SWIFT_HYSTERIA_EXECUTION + SWIFT_PAIRED_SS_EXECUTION)).replace("UserDefaults.standard", "fixtureDefaults").replace("DispatchQueue", "DeferredQueue")
+    return (SWIFT_BOUNDARIES + catalog + "\n" + declarations + methods + editor + SWIFT_TEST.replace("RACE_TESTS", SWIFT_RACES).replace("ORDERED_TESTS", SWIFT_ORDERED).replace("SETUP_TESTS", SWIFT_SETUP).replace("CONNECT_EXECUTION_TESTS", SWIFT_CONNECT_EXECUTION + SWIFT_SOCKS_EXECUTION + SWIFT_OPENVPN_EXECUTION + SWIFT_HOSTNAME_EXECUTION + SWIFT_HYSTERIA_EXECUTION + SWIFT_PAIRED_SS_EXECUTION)).replace("UserDefaults.standard", "fixtureDefaults").replace("defaults: .standard", "defaults: fixtureDefaults").replace("verify(in: .standard)", "verify(in: fixtureDefaults)").replace("DispatchQueue", "DeferredQueue")
 
 
 SWIFT_HOSTNAME_EXECUTION = r'''
@@ -2182,11 +2282,10 @@ def macos(directory):
         "first-node-fallback": replace_once(source,
             'let actual = tokens[id], validConnectionProfileToken(actual) else { return -1 }',
             'let actual = tokens[id], validConnectionProfileToken(actual) else { return 0 }'),
-        "post-response-manager-idle": replace_once(source,
-            '        try requireMutationIdle("loading a connection profile")\n', ''),
-        "post-response-settings-idle": replace_once(source,
-            '        try owner.requireMutationIdle("loading a connection profile")\n        let selection =',
-            '        let selection ='),
+        "post-response-manager-idle": replace_once(source, 'try self.requireMutationIdle("adopting the prepared connection profile")',
+            'if transport != nil { try self.requireMutationIdle("adopting the prepared connection profile") }'),
+        "post-response-settings-idle": replace_once(source, 'try self.requireMutationIdle("adopting the prepared connection profile")',
+            'if transport == nil { try self.requireMutationIdle("adopting the prepared connection profile") }'),
         "ordered-drop-middle": replace_once(source, '"multihop_nodes": selectedPath.orderedNodes',
             '"multihop_nodes": [selectedPath.orderedNodes.first!, selectedPath.orderedNodes.last!]'),
         "ordered-final-owner": replace_once(source, 'rows.last?["id"] == control', 'true'),
@@ -2306,6 +2405,8 @@ def macos(directory):
         run(["swiftc", "-swift-version", "6", "-module-cache-path", str(directory / "swift-module-cache"), str(path), "-o", str(binary)])
         run([str(binary)], negative=name != "shipping", witness=(execution_variants.get(name) or setup_variants.get(name) or final_variants.get(name) or socks_variants.get(name) or connect_variants.get(name) or imported_execution_variants.get(name) or (None, None, None))[2])
         if name != "shipping": print("PASS causal AppKit " + name, flush=True)
+    from test_appkit_profile_load_transaction import main as test_durable_load
+    test_durable_load()
     print(f"AppKit capture, refresh ownership, relink and post-response idle negatives: {len(variants) - 1} rejected")
 
 
