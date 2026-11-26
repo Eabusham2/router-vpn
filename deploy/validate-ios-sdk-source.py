@@ -110,7 +110,7 @@ def regular(path):
         raise ValueError("Original iOS artifact is absent or redirected: "+path.name)
     return path
 
-def contained(root,relative):
+def contained(root,relative,*,resolve=False):
     root=Path(root).resolve(strict=True);relative=Path(relative)
     if relative.is_absolute() or not relative.parts or ".." in relative.parts:
         raise ValueError("SDK slice escaped its original framework")
@@ -119,7 +119,7 @@ def contained(root,relative):
     except OSError as error:raise ValueError("Original SDK slice is missing") from error
     if resolved!=root and root not in resolved.parents:
         raise ValueError("SDK slice is redirected outside its framework")
-    return path
+    return resolved if resolve else path
 
 def tree_snapshot(root):
     root=Path(root).resolve(strict=True)
@@ -188,11 +188,14 @@ def framework_slices(root):
             raise ValueError("Native SDK platform architecture changed")
         identities.add(identity);platforms.add(variant)
         location=contained(root,Path(identity)/(item.get("LibraryPath") or "Libbox.framework"))
-        if not location.is_dir() or location.name!="Libbox.framework":
+        if not location.is_dir() or location.name!="Libbox.framework" or location.resolve(strict=True)!=location:
             raise ValueError("Original gomobile framework layout changed")
-        binary=regular(contained(root,location.relative_to(root)/"Libbox"))
-        header=regular(contained(root,location.relative_to(root)/"Headers/Libbox.objc.h"))
-        module=regular(contained(root,location.relative_to(root)/"Modules/module.modulemap"))
+        # Pinned gomobile writes Versions/A and public aliases through
+        # Versions/Current. Resolve only inside this exact slice framework;
+        # another slice or an external artifact cannot supply these members.
+        binary=regular(contained(location,"Libbox",resolve=True))
+        header=regular(contained(location,"Headers/Libbox.objc.h",resolve=True))
+        module=regular(contained(location,"Modules/module.modulemap",resolve=True))
         out.append({"identity":identity,"variant":variant,"architectures":sorted(arches),"binary":binary,"header":header,"module":module})
     if platforms!={"","simulator"}:raise ValueError("Original iOS and simulator slices are required")
     return out
