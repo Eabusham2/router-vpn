@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"router-vpn/internal/desktopnetwork"
 )
 
 // Called only by the actual terminal controller drain, under operationMu,
@@ -130,6 +132,24 @@ func (a *app) retireNativeNodeForShutdownContext(ctx context.Context) error {
 		return err
 	}
 	if selected == nil {
+		// A failed SMART restoration can publish its diagnostic phase after
+		// the original command has already joined. Only completed terminal
+		// retirement may clear that stale phase; ordinary Stop has permanently
+		// lost admission now, and Always protection must remain retained.
+		if err := parent.observeCurrent(ctx, true); err != nil {
+			return err
+		}
+		if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+			return err
+		}
+		defer a.mu.Unlock()
+		if !a.closing || a.localController != controller || controller.nodeParent != parent ||
+			a.connectionContext != operation || command != nil || a.cmd != command {
+			return errors.New("Linux shutdown cannot clear a replacement failed presentation")
+		}
+		if !a.state.Connected && a.state.Mode == "off" && a.state.RuntimeMode == "" && a.state.Phase == "failed" {
+			a.state.Phase = "off"
+		}
 		return nil
 	}
 	if err := selected.enter(ctx); err != nil {
