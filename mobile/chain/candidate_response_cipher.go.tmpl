@@ -58,7 +58,7 @@ func openNativeCandidateHysteria2(ctx context.Context, request *NodeChainCandida
 		return nil, errCandidateHysteria2
 	}
 	owned, cancel := context.WithCancel(ctx)
-	dialer := &candidateHysteria2Dialer{request: request, endpoint: endpoint, ctx: owned}
+	dialer := &candidatePacketDialer{request: request, endpoint: endpoint, ctx: owned}
 	tlsConfig, err := boxtls.NewClient(owned, logger.NOP(), options.Server, *options.TLS)
 	if err != nil {
 		cancel()
@@ -153,17 +153,46 @@ func (c *candidateHysteria2Connection) Close() error {
 	return c.err
 }
 
-type candidateHysteria2Dialer struct {
+type candidatePacketDialer struct {
 	request  *NodeChainCandidatePacketRequest
 	endpoint string
 	ctx      context.Context
 	mu       sync.Mutex
 	closing  bool
 	opening  sync.WaitGroup
-	sockets  []*candidateHysteria2Socket
+	sockets  []*candidatePacketSocket
 }
 
-func (d *candidateHysteria2Dialer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+// The native WG/AWG factory can reuse this exact socket scope without exposing
+// a default dialer, listener, unwrap or syscall path. Its request still owns
+// every address and original-prefix decision.
+type NativeCandidatePacketDialer struct{ owned *candidatePacketDialer }
+
+func NewNativeCandidatePacketDialer(ctx context.Context, request *NodeChainCandidatePacketRequest, reader NodeChainEngine, chain *NodeChain) (*NativeCandidatePacketDialer, error) {
+	_, _, endpoint, err := request.Read(ctx, reader, chain)
+	if err != nil || !NodeChainPrefixMode(request.response.PacketMode) {
+		return nil, errors.New("packet candidate lost its original endpoint owner")
+	}
+	return &NativeCandidatePacketDialer{&candidatePacketDialer{request: request, endpoint: endpoint, ctx: ctx}}, nil
+}
+
+func (d *NativeCandidatePacketDialer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	return d.owned.DialContext(ctx, network, destination)
+}
+func (d *NativeCandidatePacketDialer) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	return d.owned.ListenPacket(ctx, destination)
+}
+func (d *NativeCandidatePacketDialer) BeginClose() { d.owned.beginClose() }
+func (d *NativeCandidatePacketDialer) Join() error { return d.owned.join() }
+
+// The endpoint factory joins its private-stream opens before Join, just as
+// the packet dialer joins each admitted physical open. Both kinds of late
+// result must close their exact socket even when accompanied by an error.
+func (d *NativeCandidatePacketDialer) OwnConnection(ctx context.Context, connection net.Conn, err error) (net.Conn, error) {
+	return d.owned.own(ctx, connection, err)
+}
+
+func (d *candidatePacketDialer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
 	if ctx == nil || ctx.Err() != nil || d.ctx.Err() != nil || network != "udp" || destination.String() != d.endpoint {
 		return nil, errCandidateHysteria2
 	}
@@ -176,10 +205,14 @@ func (d *candidateHysteria2Dialer) DialContext(ctx context.Context, network stri
 	d.mu.Unlock()
 	defer d.opening.Done()
 	raw, err := d.request.dial(ctx)
+	return d.own(ctx, raw, err)
+}
+
+func (d *candidatePacketDialer) own(ctx context.Context, raw net.Conn, err error) (net.Conn, error) {
 	if raw == nil {
 		return nil, errors.Join(err, errCandidateHysteria2)
 	}
-	socket := &candidateHysteria2Socket{Conn: raw, ctx: d.ctx}
+	socket := &candidatePacketSocket{Conn: raw, ctx: d.ctx}
 	d.mu.Lock()
 	d.sockets = append(d.sockets, socket)
 	closing := d.closing
@@ -191,23 +224,23 @@ func (d *candidateHysteria2Dialer) DialContext(ctx context.Context, network stri
 	return socket, nil
 }
 
-func (*candidateHysteria2Dialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+func (*candidatePacketDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
 	return nil, errCandidateHysteria2
 }
 
-func (d *candidateHysteria2Dialer) beginClose() {
+func (d *candidatePacketDialer) beginClose() {
 	d.mu.Lock()
 	d.closing = true
 	d.mu.Unlock()
 }
 
-func (d *candidateHysteria2Dialer) join() error {
+func (d *candidatePacketDialer) join() error {
 	d.beginClose()
 	// The client join precedes this call, so no additional offer can enter.
 	// Already admitted original native opens still own their late sockets.
 	d.opening.Wait()
 	d.mu.Lock()
-	sockets := append([]*candidateHysteria2Socket(nil), d.sockets...)
+	sockets := append([]*candidatePacketSocket(nil), d.sockets...)
 	d.mu.Unlock()
 	var failure error
 	for _, socket := range sockets {
@@ -219,7 +252,7 @@ func (d *candidateHysteria2Dialer) join() error {
 // The private client sees no unwrap/syscall escape around this socket owner.
 // Close prevents new work, closes the original native socket, and joins every
 // entered read, write and deadline call before the measurement hold can end.
-type candidateHysteria2Socket struct {
+type candidatePacketSocket struct {
 	net.Conn
 	ctx     context.Context
 	mu      sync.Mutex
@@ -229,7 +262,7 @@ type candidateHysteria2Socket struct {
 	err     error
 }
 
-func (s *candidateHysteria2Socket) begin() error {
+func (s *candidatePacketSocket) begin() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closing || s.ctx.Err() != nil {
@@ -238,42 +271,42 @@ func (s *candidateHysteria2Socket) begin() error {
 	s.io.Add(1)
 	return nil
 }
-func (s *candidateHysteria2Socket) Read(p []byte) (int, error) {
+func (s *candidatePacketSocket) Read(p []byte) (int, error) {
 	if err := s.begin(); err != nil {
 		return 0, err
 	}
 	defer s.io.Done()
 	return s.Conn.Read(p)
 }
-func (s *candidateHysteria2Socket) Write(p []byte) (int, error) {
+func (s *candidatePacketSocket) Write(p []byte) (int, error) {
 	if err := s.begin(); err != nil {
 		return 0, err
 	}
 	defer s.io.Done()
 	return s.Conn.Write(p)
 }
-func (s *candidateHysteria2Socket) SetDeadline(t time.Time) error {
+func (s *candidatePacketSocket) SetDeadline(t time.Time) error {
 	if err := s.begin(); err != nil {
 		return err
 	}
 	defer s.io.Done()
 	return s.Conn.SetDeadline(t)
 }
-func (s *candidateHysteria2Socket) SetReadDeadline(t time.Time) error {
+func (s *candidatePacketSocket) SetReadDeadline(t time.Time) error {
 	if err := s.begin(); err != nil {
 		return err
 	}
 	defer s.io.Done()
 	return s.Conn.SetReadDeadline(t)
 }
-func (s *candidateHysteria2Socket) SetWriteDeadline(t time.Time) error {
+func (s *candidatePacketSocket) SetWriteDeadline(t time.Time) error {
 	if err := s.begin(); err != nil {
 		return err
 	}
 	defer s.io.Done()
 	return s.Conn.SetWriteDeadline(t)
 }
-func (s *candidateHysteria2Socket) Close() error {
+func (s *candidatePacketSocket) Close() error {
 	s.once.Do(func() {
 		s.mu.Lock()
 		s.closing = true

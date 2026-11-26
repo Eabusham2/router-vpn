@@ -71,7 +71,10 @@ import Libbox
             connectedLocal && !selectedExecution && original.selectionExecution == "local" &&
             prefixes.indices.contains(position) && prefixes[position].connectedFinalResponse(in: prefixes)
         let hysteria2Response = prefixes.indices.contains(position) && prefixes[position].hysteria2Response
+        let packetResponse = connectedLocal && !selectedExecution && original.selectionExecution == "local" &&
+            prefixes.indices.contains(position) && prefixes[position].packetSuccessorResponse && prefixes[position].supported(in: prefixes)
         guard !hysteria2Response || connectedLocal && !selectedExecution && finalResponse else { throw IOSNodeCandidateCapture.issue() }
+        guard !packetResponse || !retainFinal && position < original.members.count - 2 else { throw IOSNodeCandidateCapture.issue() }
         guard !selectedExecution || ["server", "auto"].contains(original.selectionExecution),
               selectedExecution || !original.requiresIndependentPrefix || original.selectionExecution == "local",
               original.members.indices.contains(position),
@@ -91,7 +94,7 @@ import Libbox
             guard let found else { throw IOSNodeCandidateCapture.issue() }; return found
         }
         let candidate = try source(candidateID)
-        let pairedMode = hysteria2Response ? "hysteria2" : "shadowsocks"
+        let pairedMode = prefixes[position].candidate_mode ?? "shadowsocks"
         guard try IOSNodeCandidateCapture.member(profile: candidate.profile, files: candidate.files, mode: pairedMode) == measuredInput else { throw IOSNodeCandidateCapture.issue() }
         let publicResponse = selectedPublic || !selectedExecution && prefixes[position].metric == "routed-public-candidate-response"
         if publicResponse {
@@ -109,8 +112,14 @@ import Libbox
                   !original.members.contains(where: { $0.id == candidateID || $0.profile["node_proof_id"] as? String == proof }) else { throw IOSNodeCandidateCapture.issue() }
         }
         if !publicResponse && (selectedResponse || !selectedExecution && prefixes[position].metric == "routed-candidate-response") {
-            let supported = hysteria2Response ? LibboxRouterNodeChainHysteria2CandidateInputSupported(measuredInput) :
-                LibboxRouterNodeChainCandidateInputSupportedForMeasurement(measuredInput, "routed-candidate-response")
+            let supported: Bool
+            if packetResponse, case .ordinary(let captured) = original {
+                supported = pairedMode == original.members[position + 1].mode &&
+                    LibboxRouterNodeChainPacketSuccessorCandidateFitsSource(captured.plan, Int32(position), measuredInput)
+            } else {
+                supported = hysteria2Response ? LibboxRouterNodeChainHysteria2CandidateInputSupported(measuredInput) :
+                    LibboxRouterNodeChainCandidateInputSupportedForMeasurement(measuredInput, "routed-candidate-response")
+            }
             guard supported else {
                 throw IOSNodeCandidateCapture.issue()
             }
@@ -132,7 +141,7 @@ import Libbox
         var selected = original.members.map { (id: $0.id, mode: $0.mode) }
         let response = selectedResponse || !selectedExecution && prefixes[position].metric == "routed-candidate-response"
         guard !retainFinal || response || publicResponse else { throw IOSNodeCandidateCapture.issue() }
-        let insertStream = publicResponse || response && (retainFinal || replacement < selected.count - 1)
+        let insertStream = !packetResponse && (publicResponse || response && (retainFinal || replacement < selected.count - 1))
         if insertStream {
             guard execution == "local" || selectedResponse && ["server", "auto"].contains(execution), selected.count < IOSMultihopNodeSelection.physicalTraversalDepth,
                   publicResponse ? candidate.profile["node_kind"] as? String == "external" && candidateMode == "shadowsocks" : candidate.profile["node_kind"] as? String == "router-vpn" && candidate.profile["external"] == nil,

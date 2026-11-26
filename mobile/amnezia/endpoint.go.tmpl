@@ -65,6 +65,16 @@ func NewEndpoint(ctx context.Context, router adapter.Router, logger log.ContextL
 	}
 	return newEndpoint(ctx, router, logger, tag, options, owned, manager.InterfaceFinder())
 }
+
+// NewCandidateEndpoint retains the actual pinned AWG implementation while
+// permitting only a caller-owned packet dialer and no router/listener owner.
+func NewCandidateEndpoint(ctx context.Context, logger log.ContextLogger, options Options, owned N.Dialer) (*Endpoint, error) {
+	if options.Detour != "" || options.System || options.ListenPort != 0 || len(options.Peers) != 1 {
+		return nil, errors.New("candidate AWG requires its exact userspace peer")
+	}
+	return newEndpoint(ctx, nil, logger, "routervpn-packet-candidate", options, owned, nil)
+}
+
 func newEndpoint(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options Options, owned N.Dialer, finder control.InterfaceFinder) (*Endpoint, error) {
 	if ctx == nil || owned == nil {
 		return nil, errors.New("native AWG requires a protected dialer")

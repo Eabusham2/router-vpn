@@ -2059,17 +2059,22 @@ final class RouterVPNLibboxEngine {
     }
     func candidateMeasurementRequest(operation: String, request: String, session: String,
                                      ownerRequest: String, prefix: String, candidate: String) -> Data? {
-        func reply(_ value: [String: Any]) -> Data? {
-            guard let data = try? JSONSerialization.data(withJSONObject: value), data.count <= 131072 else { return nil }
+        func reply(_ value: [String: Any], binding: RouterVPNNodeCandidateSession? = nil) -> Data? {
+            var result = value
+            if let binding { result.merge(binding.responseFields) { _, bound in bound } }
+            guard let data = try? JSONSerialization.data(withJSONObject: result), data.count <= 131072 else { return nil }
             return data
         }
         if operation == "candidate-close" {
             guard session == settingsEpoch, request == ownerRequest, prefix.isEmpty, candidate.isEmpty else { return nil }
+            ownershipLock.lock()
+            let captured = nodeCandidate?.request == ownerRequest ? nodeCandidate : nil
+            ownershipLock.unlock()
             let drained = RouterVPNNodeCandidateRegistry.shared.close(epoch: session, request: ownerRequest)
             if drained {
                 ownershipLock.lock(); if nodeCandidate?.request == ownerRequest { nodeCandidate = nil }; ownershipLock.unlock()
             }
-            return reply(["session_id": session, "owner_request": ownerRequest, "request_id": request, "closed": drained])
+            return reply(["session_id": session, "owner_request": ownerRequest, "request_id": request, "closed": drained], binding: captured)
         }
         ownershipLock.lock()
         let plan = nodeChain, delivery = nodeChainDelivery, socks = nodeChainSOCKS, connect = nodeChainCONNECT, execution = nodeChainExecution
@@ -2127,7 +2132,7 @@ final class RouterVPNLibboxEngine {
                 if temporaryMeasurement {
                     localPrefixes = localPrefixes.map { original in
                         var prefix = original
-                        if prefix.hysteria2Response { prefix.measurement = nil; prefix.candidate_mode = nil }
+                        if prefix.hysteria2Response || prefix.packetSuccessorResponse { prefix.measurement = nil; prefix.candidate_mode = nil }
                         return prefix
                     }
                 }
@@ -2147,6 +2152,9 @@ final class RouterVPNLibboxEngine {
             guard current else { return nil }
             var value: [String: Any] = ["session_id": settingsEpoch, "request_id": request, "mtu_session_id": mtuSession,
                 "source_sha256": sourceSHA256, "config_sha256": configSHA256, "proofs": safe]
+            if localPrefixes.contains(where: \.packetSuccessorResponse) {
+                value["response_source_nodes"] = members.map { IOSNodeCandidateResponseNode(id: $0.id, mode: $0.mode).object }
+            }
             value.merge(selectedFields) { _, selected in selected }
             return reply(value)
         }
@@ -2172,12 +2180,24 @@ final class RouterVPNLibboxEngine {
             if temporaryMeasurement, let source = originalSource,
                let inventory = try? JSONSerialization.jsonObject(with: source.inventory.data) as? [String: Any],
                inventory["response_mode"] != nil { return nil }
+            var responseMode: String?
+            var responseSourceNodes: [IOSNodeCandidateResponseNode]?
+            if let source = originalSource,
+               let inventory = try? JSONSerialization.jsonObject(with: source.inventory.data) as? [String: Any],
+               let mode = inventory["response_mode"] as? String, IOSMultihopNodeSelection.supportsNativePrefix(mode) {
+                guard !temporaryMeasurement, let plan,
+                      LibboxRouterNodeChainConnectedPacketSuccessorCandidateMode(plan, position) == mode,
+                      let original = try? IOSNodeChainCapture(plan: plan) else { return nil }
+                responseMode = mode
+                responseSourceNodes = original.members.map { IOSNodeCandidateResponseNode(id: $0.id, mode: $0.mode) }
+            }
             ownershipLock.lock()
             var captured = nodeCandidate
             if captured == nil, currentLocked(),
                let source = originalSource {
                 let proposed = RouterVPNNodeCandidateSession(owner: nativeOwner, server: owned, prefix: position,
-                    epoch: settingsEpoch, source: source, publication: IOSCandidateCatalogPublication.shared, current: { [weak self] in
+                    epoch: settingsEpoch, source: source, publication: IOSCandidateCatalogPublication.shared,
+                    responseMode: responseMode, responseSourceNodes: responseSourceNodes, current: { [weak self] in
                         guard let self else { return false }
                         self.ownershipLock.lock(); defer { self.ownershipLock.unlock() }
                         return self.nodeChain === plan && self.nodeChainDelivery === delivery && self.nodeChainSOCKS === socks &&
@@ -2187,10 +2207,11 @@ final class RouterVPNLibboxEngine {
                 if RouterVPNNodeCandidateRegistry.shared.retain(proposed) { nodeCandidate = proposed; captured = proposed }
             }
             ownershipLock.unlock()
-            guard let captured, captured.request == ownerRequest, captured.matches(owner: nativeOwner, server: owned) else { return nil }
+            guard let captured, captured.request == ownerRequest, captured.matches(owner: nativeOwner, server: owned),
+                  captured.responseMode == responseMode, captured.responseSourceNodes == responseSourceNodes else { return nil }
             do {
                 let metadata = try captured.open()
-                return reply(["session_id": session, "owner_request": ownerRequest, "request_id": request, "metadata": metadata])
+                return reply(["session_id": session, "owner_request": ownerRequest, "request_id": request, "metadata": metadata], binding: captured)
             } catch { return nil } // Registry retains failed factory until exact Close joins.
         }
         ownershipLock.lock(); let captured = nodeCandidate; ownershipLock.unlock()
@@ -2200,7 +2221,7 @@ final class RouterVPNLibboxEngine {
                 guard request == ownerRequest, let offset = Int32(candidate), offset > 0, candidate == String(offset),
                       !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
                 let page = try captured.metadataPage(offset)
-                return reply(["session_id": session, "owner_request": ownerRequest, "request_id": request, "metadata": page])
+                return reply(["session_id": session, "owner_request": ownerRequest, "request_id": request, "metadata": page], binding: captured)
             }
             let raw: String
             if operation == "candidate-start" {
@@ -2210,7 +2231,7 @@ final class RouterVPNLibboxEngine {
             else if operation == "candidate-cancel", candidate.isEmpty { captured.cancel(request: request); raw = try captured.status(request: request) }
             else { return nil }
             guard raw.utf8.count <= 65536 else { return nil }
-            return reply(["session_id": session, "owner_request": ownerRequest, "request_id": request, "status": raw])
+            return reply(["session_id": session, "owner_request": ownerRequest, "request_id": request, "status": raw], binding: captured)
         } catch { return nil }
     }
 

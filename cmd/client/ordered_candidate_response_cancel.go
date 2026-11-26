@@ -8,6 +8,7 @@ import (
 
 	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/hopmeasure"
+	"router-vpn/internal/mobilemultihop"
 )
 
 // A connected cancellation retains only the original public view identities.
@@ -20,6 +21,7 @@ type orderedCandidateResponseAdmission struct {
 	owners              []string
 	selected, requested string
 	measurement         string
+	candidateMode       string
 	created             time.Time
 	started             bool
 	drained             bool
@@ -37,7 +39,7 @@ func rememberOrderedCandidateResponseViewLocked(c *viaEntryControl, view *ordere
 		c.orderedResponseViews = map[string]*orderedCandidateResponseAdmission{}
 	}
 	c.orderedResponseViews[view.token] = &orderedCandidateResponseAdmission{
-		token: view.token, position: view.position, epoch: view.responseEpoch, measurement: candidateViewMetric(view.prefixes, view.position),
+		token: view.token, position: view.position, epoch: view.responseEpoch, candidateMode: view.candidateMode, measurement: candidateViewMetric(view.prefixes, view.position),
 		owners: slices.Clone(view.responseOwners), requested: view.responseRequested, selected: view.responseSelected, nodes: slices.Clone(view.responseNodes), created: time.Now(), drained: true,
 	}
 	return nil
@@ -151,6 +153,12 @@ func writeOrderedCandidateResponseCancel(w http.ResponseWriter, c *viaEntryContr
 	}
 	if admission.measurement == hopmeasure.CandidatePublicResponseMeasurement {
 		response["measurement"] = admission.measurement
+	}
+	if mobilemultihop.NodeChainPrefixMode(admission.candidateMode) {
+		response["candidate_mode"] = admission.candidateMode
+		for _, field := range []string{"requested_execution", "required_selected_execution", "selected_execution", "selection_epoch"} {
+			delete(response, field)
+		}
 	}
 	publishSelectedResponseSource(response, admission.measurement, admission.nodes)
 	if len(admission.owners) > 0 {

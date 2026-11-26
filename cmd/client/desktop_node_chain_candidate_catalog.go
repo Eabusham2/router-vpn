@@ -167,8 +167,8 @@ func captureDesktopCandidateSourceProfiles(ctx context.Context, a *app, launch *
 		seen[profile.ID] = true
 	}
 	result := &desktopNodeChainCandidateCatalog{serverResponse: candidateServerRequested(ctx), app: a, launch: launch, revision: revision, profiles: map[string]string{}}
-	if scope == orderedCandidateSavedCompleteScope && desktopConnectedHysteria2Candidate(launch, position) {
-		result.candidateMode = "hysteria2"
+	if scope == orderedCandidateSavedCompleteScope {
+		result.candidateMode = desktopConnectedCandidateMode(launch, position)
 	}
 	capture := &desktopNodeChainCapture{root: launch.root}
 	// Pin each original asset directory before and after compilation, including
@@ -176,7 +176,7 @@ func captureDesktopCandidateSourceProfiles(ctx context.Context, a *app, launch *
 	// revive a previously measured catalog through an unchanged content hash.
 	for _, p := range profiles {
 		if result.candidateMode != "" && (p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || p.StartLayer != "" && p.StartLayer != "off") {
-			return nil, errors.New("Hysteria2 candidate response requires an original paired node with Start Layer off")
+			return nil, errors.New("authenticated candidate response requires an original paired node with Start Layer off")
 		}
 		switch p.StartLayer {
 		case "", "off":
@@ -192,7 +192,11 @@ func captureDesktopCandidateSourceProfiles(ctx context.Context, a *app, launch *
 			if result.candidateMode != "" {
 				candidateMode = result.candidateMode
 			}
-			for _, mode := range []string{"wg", candidateMode} {
+			modes := []string{"wg"}
+			if candidateMode != "wg" {
+				modes = append(modes, candidateMode)
+			}
+			for _, mode := range modes {
 				dir, err := nativeGeneratedDir(launch.root, p.ID, mode)
 				if err != nil {
 					return nil, err
@@ -223,10 +227,14 @@ func captureDesktopCandidateSourceProfiles(ctx context.Context, a *app, launch *
 		var input string
 		var parsed *mobilemultihop.NodeChainCandidateInput
 		var err error
-		if result.candidateMode == "hysteria2" {
-			input, _, _, err = capture.compileMember(ctx, desktopNodeChainMember{Profile: p, Mode: "hysteria2"}, &total, nil)
+		if result.candidateMode != "" {
+			input, _, _, err = capture.compileMember(ctx, desktopNodeChainMember{Profile: p, Mode: result.candidateMode}, &total, nil)
 			if err == nil {
-				parsed, err = mobilemultihop.ParseNodeChainHysteria2CandidateInput(input)
+				if result.candidateMode == "hysteria2" {
+					parsed, err = mobilemultihop.ParseNodeChainHysteria2CandidateInput(input)
+				} else {
+					parsed, err = mobilemultihop.ParseNodeChainPacketSuccessorCandidateInput(input, result.candidateMode)
+				}
 			}
 		} else if p.NodeKind == "external" && desktopNodeChainImported(p, "shadowsocks") {
 			input, parsed, err = compileDesktopOriginalImportedCandidate(ctx, p)
@@ -310,7 +318,7 @@ func captureDesktopCandidateViewSource(ctx context.Context, a *app, launch *desk
 	}
 	if slices.ContainsFunc(members[position+1:], sameNode) {
 		execution := desktopNodeChainLaunchExecution(launch)
-		if desktopConnectedHysteria2Candidate(launch, position) || catalogMetric(position) == hopmeasure.CandidatePublicResponseMeasurement || execution != nil && (execution.preparation.SupportsCompareLocalResponseCandidate(position) || candidateServerRequested(ctx) && execution.preparation.SupportsServerResponseCandidate(position)) {
+		if desktopConnectedCandidateMode(launch, position) != "" || catalogMetric(position) == hopmeasure.CandidatePublicResponseMeasurement || execution != nil && (execution.preparation.SupportsCompareLocalResponseCandidate(position) || candidateServerRequested(ctx) && execution.preparation.SupportsServerResponseCandidate(position)) {
 			return nil, errors.New("candidate duplicates a retained route member")
 		}
 	}
@@ -326,6 +334,15 @@ func captureDesktopCandidateViewSource(ctx context.Context, a *app, launch *desk
 	if part.candidateMode == "hysteria2" {
 		if metric != hopmeasure.CandidatePrivateResponseMeasurement || !mobilemultihop.NodeChainHysteria2CandidateInputSupported(inventory.Inputs[0]) {
 			return nil, errors.New("candidate has no original authenticated Hysteria2 response source")
+		}
+	} else if mobilemultihop.NodeChainPrefixMode(part.candidateMode) {
+		if metric != hopmeasure.CandidatePrivateResponseMeasurement || !mobilemultihop.NodeChainPacketSuccessorCandidateInputSupported(inventory.Inputs[0], part.candidateMode) {
+			return nil, errors.New("candidate has no original authenticated packet response source")
+		}
+		// Check the full active graph's derived peer identities before adding
+		// this row. One aliased saved profile must not poison other choices.
+		if err := part.sealSourcePlan(ctx, position, scope); err != nil {
+			return nil, err
 		}
 	} else if metric == "" || desktopCandidateResponseMetric(metric) && !mobilemultihop.NodeChainCandidateInputSupportedForMeasurement(inventory.Inputs[0], metric) {
 		return nil, errors.New("candidate has no attributable response through the selected prefix")

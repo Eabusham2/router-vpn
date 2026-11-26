@@ -3,6 +3,7 @@ package com.eabusham.routervpn;
 import android.content.Context;
 import io.nekohasekai.libbox.CommandServer;
 import io.nekohasekai.libbox.Libbox;
+import io.nekohasekai.libbox.RouterNodeChain;
 import io.nekohasekai.libbox.RouterNodeChainCandidateCatalog;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -59,7 +60,20 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
     private static String connectedResponseMode(AndroidNodeChainSession session,int position) throws Exception {
         if(session==null||session.candidatePrefix!=null||session.execution!=null||session.temporaryMeasurement()||!"local".equals(session.source.execution)
                 ||session.capture.plan==null||!session.capture.ownsSource(session.source))return "";
+        String mode=Libbox.routerNodeChainConnectedPacketSuccessorCandidateMode(session.capture.plan,position);
+        if(packetMode(mode))return mode;
         return Libbox.routerNodeChainSupportsConnectedHysteria2FinalCandidate(session.capture.plan,position)?"hysteria2":"";
+    }
+
+    static boolean packetMode(String mode) {
+        return java.util.List.of("wg","awg2-fast","awg2-strong").contains(mode);
+    }
+    boolean connectedPacketResponse() throws Exception {
+        AndroidNodeChainSession retained=session;
+        if(!packetMode(responseMode)||retained==null||prefix<0||prefix>=originalSource.members.size()-2
+                ||!"routed-candidate-response".equals(measurement))return false;
+        requireCurrent();
+        return responseMode.equals(connectedResponseMode(retained,prefix));
     }
 
     boolean connectedFinalResponse() throws Exception {
@@ -81,7 +95,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         this(context,session,prefix,true);
     }
     AndroidNodeCandidateCatalog(Context context,AndroidNodeChainSession session,int prefix,boolean connected)throws Exception {
-        this(context,source(session),prefix,candidateMeasurement(session,prefix,connected),connected?connectedResponseMode(session,prefix):"");
+        this(context,source(session),prefix,candidateMeasurement(session,prefix,connected),connected?connectedResponseMode(session,prefix):"",session.capture.plan);
         bind(session);
     }
     /** Capture the immutable saved inventory before permission or a native
@@ -91,18 +105,20 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         String metric=java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(source.modes.get(prefix))?"routed-tcp-connect":
                 AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,source.execution)
                         ? (source.members.get(source.members.size()-1).imported ? "routed-public-candidate-response" : "routed-candidate-response") : "";
-        return new AndroidNodeCandidateCatalog(context,source,prefix,metric,"");
+        return new AndroidNodeCandidateCatalog(context,source,prefix,metric,"",null);
     }
     private static AndroidNodeStore.ChainCapture source(AndroidNodeChainSession session) {
         if(session==null)throw new IllegalStateException("The original ordered path is missing.");return session.source;
     }
-    private AndroidNodeCandidateCatalog(Context context,AndroidNodeStore.ChainCapture source,int prefix,String metric,String responseMode)throws Exception {
+    private AndroidNodeCandidateCatalog(Context context,AndroidNodeStore.ChainCapture source,int prefix,String metric,String responseMode,RouterNodeChain originalPlan)throws Exception {
         originalSource=source;this.prefix=prefix;
         if(source==null||prefix<0||prefix>=source.members.size())throw new IllegalStateException("The original saved packet prefix is missing.");
         source.requireCurrent();
         measurement=metric;this.responseMode=responseMode;
-        if(!responseMode.isEmpty()&&(!"hysteria2".equals(responseMode)||!"local".equals(source.execution)||!"routed-candidate-response".equals(metric)
-                ||prefix!=source.members.size()-2))throw new IllegalStateException("The response carrier requires its original connected final position.");
+        if(!responseMode.isEmpty()&&(!"local".equals(source.execution)||!"routed-candidate-response".equals(metric)
+                ||!("hysteria2".equals(responseMode)&&prefix==source.members.size()-2
+                    ||packetMode(responseMode)&&originalPlan!=null&&prefix<source.members.size()-2&&responseMode.equals(source.modes.get(prefix+1)))))
+            throw new IllegalStateException("The response carrier requires its original connected successor position.");
         boolean publicResponse="routed-public-candidate-response".equals(metric);
         if(publicResponse && (!java.util.List.of("local","server","auto").contains(source.execution) || !source.members.get(source.members.size()-1).imported))throw new IllegalStateException("A public exit response requires the original imported exit.");
         if(!publicResponse&&!"routed-candidate-response".equals(metric)&&!"routed-tcp-connect".equals(metric))throw new IllegalStateException("This prefix has no supported candidate measurement; no score is available.");
@@ -135,7 +151,9 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
                     AndroidNodeChainCapture.requireLiteralImportedSS(candidate);
                 }
                 input=AndroidNodeChainCapture.memberInput(candidate,measuredMode(candidate),profile);
-                boolean supported="hysteria2".equals(responseMode)?Libbox.routerNodeChainHysteria2CandidateInputSupported(input):
+                boolean supported=packetMode(responseMode)?Libbox.routerNodeChainPacketSuccessorCandidateInputSupported(input,responseMode)
+                        &&Libbox.routerNodeChainPacketSuccessorCandidateFitsSource(originalPlan,prefix,input):
+                        "hysteria2".equals(responseMode)?Libbox.routerNodeChainHysteria2CandidateInputSupported(input):
                         publicResponse||"routed-candidate-response".equals(measurement)?Libbox.routerNodeChainCandidateInputSupportedForMeasurement(input,measurement):Libbox.routerNodeChainCandidateInputSupported(input);
                 if(!supported)throw new IllegalStateException("Unsupported original candidate source");
                 // The native validator retains the chosen paired response
@@ -166,7 +184,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
             }
             if(index!=eligible.length())throw new IllegalStateException("The verified catalog replaced an original imported candidate.");
         }else {
-            if(inputs.length()==0)throw new IllegalStateException("No saved candidate supports this prefix measurement. A private response requires a paired "+("hysteria2".equals(responseMode)?"Hysteria2":"Shadowsocks2022")+" candidate with Start Layer off.");
+            if(inputs.length()==0)throw new IllegalStateException("No saved candidate supports this prefix measurement. A private response requires a paired "+(packetMode(responseMode)?"WireGuard or AmneziaWG":"hysteria2".equals(responseMode)?"Hysteria2":"Shadowsocks2022")+" candidate with Start Layer off.");
             inventory=offered;
         }
         rows=java.util.Collections.unmodifiableList(captured);
@@ -182,7 +200,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
     }
     String measuredMode(AndroidNodeStore.ChainSource source)throws Exception {
         if(responseMode.isEmpty())return candidateMode(source);
-        if(source.imported||!"hysteria2".equals(responseMode))throw new IllegalStateException("This response requires an original paired Hysteria2 candidate.");
+        if(source.imported||!("hysteria2".equals(responseMode)||packetMode(responseMode)))throw new IllegalStateException("This response requires its original paired candidate transport.");
         return responseMode;
     }
     synchronized void bind(AndroidNodeChainSession original)throws Exception {

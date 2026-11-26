@@ -184,8 +184,8 @@ func (a *app) saveOrderedCandidateProfile(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), 409)
 		return
 	}
-	if job.view.candidateMode != "" && !desktopConnectedHysteria2Candidate(job.catalog.launch, job.view.position) {
-		http.Error(w, "original Hysteria2 candidate owner changed", 409)
+	if job.view.candidateMode != "" && desktopConnectedCandidateMode(job.catalog.launch, job.view.position) != job.view.candidateMode {
+		http.Error(w, "original authenticated candidate owner changed", 409)
 		return
 	}
 	control, nodes, err := orderedCandidateProposalForExecutionWithMode(job.view.identity.Ordered.launch.chain.selection.Nodes, job.view.position, candidate, profiles, requested, job.view.candidateMode)
@@ -258,10 +258,13 @@ func (a *app) saveOrderedCandidateProfile(w http.ResponseWriter, r *http.Request
 	job.accepted = false // one explicit save per receipt, no duplicate retries
 	response := map[string]any{"ok": true, "profile_id": record.ID, "profile_name": record.Name, "proposed_path": nodes, "active_path_changed": false, "note": "Saved for the next connection. Disconnect before loading this complete profile."}
 	job.view.addResponseSource(response)
-	if job.view.candidateMode == "hysteria2" {
+	if job.view.candidateMode != "" {
 		response["request_id"], response["candidate_id"], response["view_token"] = q.RequestID, q.CandidateID, job.view.token
 		response["prefix_position"], response["measurement"] = job.view.position, hopmeasure.CandidatePrivateResponseMeasurement
 		response["proposal_action"] = "save-final-profile"
+		if mobilemultihop.NodeChainPrefixMode(job.view.candidateMode) {
+			response["proposal_action"] = "save-intermediate-profile"
+		}
 	}
 	if candidateViewMetric(job.view.prefixes, job.view.position) == hopmeasure.CandidatePublicResponseMeasurement {
 		response["request_id"], response["candidate_id"], response["view_token"] = q.RequestID, q.CandidateID, job.view.token

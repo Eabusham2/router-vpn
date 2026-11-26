@@ -72,7 +72,7 @@ func desktopCandidateMetricForIntent(launch *desktopNodeLaunch, position int, se
 	if position > 7 && !privateSelected && !publicSelected && (launch.chain.execution != nil || launch.chain.policy == nil || launch.chain.policy.OriginalChain().ExtendedLocalNodeCount() <= position+1) {
 		return ""
 	}
-	if desktopConnectedHysteria2Candidate(launch, position) {
+	if desktopConnectedCandidateMode(launch, position) != "" {
 		return hopmeasure.CandidatePrivateResponseMeasurement
 	}
 	if mobilemultihop.NodeChainPrefixMode(launch.chain.selection.Nodes[position].Mode) {
@@ -111,10 +111,15 @@ func desktopCandidateMetricForIntent(launch *desktopNodeLaunch, position int, se
 
 // Source classification selects the candidate protocol. The live catalog and
 // native operation separately retain and verify the original connected owner.
-func desktopConnectedHysteria2Candidate(launch *desktopNodeLaunch, position int) bool {
-	return launch != nil && launch.command != nil && launch.chain != nil &&
-		launch.chain.preparation == nil && launch.chain.execution == nil && launch.chain.policy != nil &&
-		launch.chain.policy.OriginalChain().SupportsConnectedHysteria2FinalCandidate(position)
+func desktopConnectedCandidateMode(launch *desktopNodeLaunch, position int) string {
+	if launch == nil || launch.command == nil || launch.chain == nil || launch.chain.preparation != nil || launch.chain.execution != nil || launch.chain.policy == nil {
+		return ""
+	}
+	original := launch.chain.policy.OriginalChain()
+	if original.SupportsConnectedHysteria2FinalCandidate(position) {
+		return "hysteria2"
+	}
+	return original.ConnectedPacketSuccessorCandidateMode(position)
 }
 
 func orderedPrefixChoice(position int, n desktopNodeChainMember, metric string) orderedCandidatePrefix {
@@ -200,8 +205,9 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view := &orderedCandidateView{token: hex.EncodeToString(nonce), capture: capture, expires: time.Now().Add(120 * time.Second), position: position, identity: identity}
-	if desktopConnectedHysteria2Candidate(identity.Ordered.launch, position) {
-		view.candidateMode = "hysteria2"
+	view.candidateMode = desktopConnectedCandidateMode(identity.Ordered.launch, position)
+	if mobilemultihop.NodeChainPrefixMode(view.candidateMode) {
+		view.responseNodes = originalCandidateResponseNodes(identity.Ordered.launch.chain.selection)
 	}
 	members := identity.Ordered.launch.chain.selection.Nodes
 	requested, err := orderedCandidateRequestedExecution(identity.Ordered.launch)
@@ -289,6 +295,8 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		note = "50 authenticated private agent responses through the selected prefix and paired candidate. Saving creates a profile for the next connection."
 		if view.candidateMode == "hysteria2" {
 			note = "50 authenticated Hysteria2 responses through the original connected prefix. Saving replaces only the final node in a profile for the next connection."
+		} else if mobilemultihop.NodeChainPrefixMode(view.candidateMode) {
+			note = "50 authenticated private agent responses through the original prefix and a WireGuard or AmneziaWG candidate tunnel. Saving replaces that intermediate node while retaining the complete suffix for the next connection."
 		}
 	} else if metric == hopmeasure.CandidatePublicResponseMeasurement {
 		note = "50 HTTPS responses after TLS through the selected prefix and the imported candidate. Every response verifies the candidate's recorded public exit IP. Save retains the original suffix and public final in a separate next-connection profile."
@@ -401,8 +409,8 @@ func orderedCandidateProposalForExecution(members []desktopNodeChainMember, posi
 
 func orderedCandidateProposalForExecutionWithMode(members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile, requested, candidateMode string) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var control common.RouterProfile
-	if candidateMode != "" && (candidateMode != "hysteria2" || !desktopHysteria2FinalResponseMembers(members, requested, position, candidate)) {
-		return control, nil, errors.New("candidate response changed its original final protocol or path")
+	if candidateMode != "" && !desktopConnectedResponseMembers(members, requested, position, candidate, candidateMode) {
+		return control, nil, errors.New("candidate response changed its original protocol or path")
 	}
 	publicResponse := desktopPublicCandidateMembers(members, requested, position) && desktopNodeChainImportedExecutionMiddle(candidate)
 	typedFinal := desktopTypedFinalResponseMembers(members, requested, position)

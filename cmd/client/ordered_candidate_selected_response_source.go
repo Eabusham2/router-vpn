@@ -141,6 +141,9 @@ func (view *orderedCandidateView) addResponseSource(response map[string]any) {
 	}
 	publishSelectedResponseSource(response, candidateViewMetric(view.prefixes, view.position), view.responseNodes)
 	response["view_token"], response["prefix_position"] = view.token, view.position
+	if mobilemultihop.NodeChainPrefixMode(view.candidateMode) {
+		return
+	}
 	response["requested_execution"], response["required_selected_execution"] = "auto", "local"
 	selected := "local"
 	if len(view.responseOwners) > 0 {

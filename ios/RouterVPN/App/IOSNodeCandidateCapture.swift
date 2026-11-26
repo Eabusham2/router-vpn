@@ -36,9 +36,12 @@ import Libbox
               proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }), (2...8).contains(proofs.count) || IOSMultihopNodeSelection.extendedOriginalModes(proofs.map(\.mode), execution: "local") else { throw issue() }
         let publicResponse = proofs[prefixPosition].metric == "routed-public-candidate-response"
         let hysteria2Response = proofs[prefixPosition].hysteria2Response
-        guard !hysteria2Response || !selectedResponse else { throw issue() }
-        let candidateMode = hysteria2Response ? "hysteria2" : "shadowsocks"
-        let completeSource = publicResponse || selectedResponse || hysteria2Response
+        let packetResponse = proofs[prefixPosition].packetSuccessorResponse
+        guard !(hysteria2Response || packetResponse) || !selectedResponse else { throw issue() }
+        let candidateMode = proofs[prefixPosition].candidate_mode ?? "shadowsocks"
+        let packetPlan = packetResponse ? try packetSourcePlan(originalLaunch, proofs: proofs, position: prefixPosition, mode: candidateMode) : nil
+        defer { if let packetPlan { try? packetPlan.close() } }
+        let completeSource = publicResponse || selectedResponse || hysteria2Response || packetResponse
         let excludedMembers = proofs.prefix(completeSource ? proofs.count : prefixPosition + 1)
         let excluded = Set(excludedMembers.map(\.profile_id))
         let paired = Set(excludedMembers.map(\.node_id).filter { !$0.isEmpty })
@@ -78,12 +81,15 @@ import Libbox
                 var input = "", reason = "This saved transport or Start Layer cannot supply this measurement"
                 do {
                     input = try member(profile: profile, files: files, mode: candidateMode)
-                    if hysteria2Response {
+                    if packetResponse {
+                        guard let packetPlan, LibboxRouterNodeChainPacketSuccessorCandidateInputSupported(input, candidateMode),
+                              LibboxRouterNodeChainPacketSuccessorCandidateFitsSource(packetPlan, Int32(prefixPosition), input) else { throw issue() }
+                    } else if hysteria2Response {
                         guard LibboxRouterNodeChainHysteria2CandidateInputSupported(input) else { throw issue() }
                     } else {
                         guard LibboxRouterNodeChainCandidateInputSupported(input) else { throw issue() }
                     }
-                    if !hysteria2Response && (publicResponse || proofs[prefixPosition].metric == "routed-candidate-response") {
+                    if !hysteria2Response && !packetResponse && (publicResponse || proofs[prefixPosition].metric == "routed-candidate-response") {
                         guard LibboxRouterNodeChainCandidateInputSupportedForMeasurement(input, proofs[prefixPosition].metric) else { throw issue() }
                     }
                     reason = ""; inputs.append(input)
@@ -93,7 +99,7 @@ import Libbox
         }
         guard originals.isEmpty, !inputs.isEmpty else { throw issue() }
         var offered: [String: Any] = ["schema": 1, "revision": stamp.revision, "inputs": inputs]
-        if hysteria2Response { offered["response_mode"] = "hysteria2" }
+        if hysteria2Response || packetResponse { offered["response_mode"] = candidateMode }
         let inventory = try JSONSerialization.data(withJSONObject: offered, options: [.sortedKeys])
         guard inventory.count <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw issue() }
         guard publicResponse else { return (inventory, rows) }
@@ -120,12 +126,12 @@ import Libbox
         })
     }
     static func member(profile: [String: Any], files: [String: [String: String]], mode: String = "shadowsocks") throws -> String {
-        guard ["shadowsocks", "hysteria2"].contains(mode) else { throw issue() }
+        guard ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(mode) else { throw issue() }
         guard profile["start_layer"] == nil || profile["start_layer"] is String else { throw issue() }
         let layer = profile["start_layer"] as? String ?? "off"
         guard ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(layer),
               profile["node_kind"] as? String != "external" || layer.isEmpty || layer == "off" else { throw issue() }
-        guard mode != "hysteria2" || profile["node_kind"] as? String == "router-vpn" && (layer.isEmpty || layer == "off") else { throw issue() }
+        guard mode == "shadowsocks" || profile["node_kind"] as? String == "router-vpn" && (layer.isEmpty || layer == "off") else { throw issue() }
         var failure: NSError?
         let result: String?
         if profile["node_kind"] as? String == "external" {
@@ -151,6 +157,23 @@ import Libbox
             result = LibboxRouterNodeChainMemberInput(mode, try json(original), try json(profile), "", bootstrap, &failure)
         }
         guard let result, !result.isEmpty, failure == nil else { throw failure ?? issue() }; return result
+    }
+    private static func packetSourcePlan(_ input: Data?, proofs: [IOSNodeCandidatePrefix], position: Int, mode: String) throws -> LibboxRouterNodeChain {
+        guard let input, input.count <= IOSNodeChainCapture.maximumInputBytes,
+              let launch = try JSONSerialization.jsonObject(with: input) as? [String: Any],
+              launch["schema"] as? Int == 1, launch["execution"] as? String == "local" else { throw issue() }
+        let source = launch.filter { ["schema", "execution", "nodes", "identity_sources"].contains($0.key) }
+        let data = try JSONSerialization.data(withJSONObject: source, options: [.sortedKeys])
+        var failure: NSError?
+        guard let plan = LibboxNewRouterNodeChain(String(decoding: data, as: UTF8.self), &failure), failure == nil else { throw failure ?? issue() }
+        do {
+            let original = try IOSNodeChainCapture(plan: plan)
+            guard original.sourceSHA256 == launch["source_sha256"] as? String,
+                  original.configSHA256 == launch["config_sha256"] as? String,
+                  IOSNodeCandidateOriginalCapture.ordinary(original).connectedCandidatePrefixes == proofs,
+                  LibboxRouterNodeChainConnectedPacketSuccessorCandidateMode(plan, Int32(position)) == mode else { throw issue() }
+            return plan
+        } catch { try? plan.close(); throw error }
     }
     static func issue() -> NSError { NSError(domain: "RouterVPN.CandidateCapture", code: 1, userInfo: [NSLocalizedDescriptionKey: "The saved sources or selected prefix cannot supply a current candidate inventory."]) }
 }

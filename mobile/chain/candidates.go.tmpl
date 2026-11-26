@@ -344,6 +344,33 @@ func RouterNodeChainHysteria2CandidateInputSupported(input string) bool {
 	return mobilemultihop.NodeChainHysteria2CandidateInputSupported(input)
 }
 
+func RouterNodeChainPacketSuccessorCandidateInputSupported(input, mode string) bool {
+	return mobilemultihop.NodeChainPacketSuccessorCandidateInputSupported(input, mode)
+}
+
+func RouterNodeChainConnectedPacketSuccessorCandidateMode(plan *RouterNodeChain, position int32) string {
+	if plan == nil || plan.self != plan || plan.chain == nil {
+		return ""
+	}
+	return plan.chain.ConnectedPacketSuccessorCandidateMode(int(position))
+}
+
+// A row can be offered only if its actual keys and complete replacement path
+// fit this original source. This socket-free check grants no connected owner.
+func RouterNodeChainPacketSuccessorCandidateFitsSource(plan *RouterNodeChain, position int32, input string) bool {
+	mode := RouterNodeChainConnectedPacketSuccessorCandidateMode(plan, position)
+	if mode == "" || len(input) == 0 || len(input) > mobilemultihop.NodeChainInputLimit {
+		return false
+	}
+	inventory, err := json.Marshal(mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: "packet-candidate-row-preflight", Inputs: []string{input}, ResponseMode: mode})
+	if err != nil {
+		return false
+	}
+	_, err = plan.chain.NewCandidatePlan(int(position), string(inventory))
+	clear(inventory)
+	return err == nil
+}
+
 func RouterNodeChainSupportsConnectedHysteria2FinalCandidate(plan *RouterNodeChain, position int32) bool {
 	return plan != nil && plan.self == plan && plan.chain != nil && plan.chain.SupportsConnectedHysteria2FinalCandidate(int(position))
 }

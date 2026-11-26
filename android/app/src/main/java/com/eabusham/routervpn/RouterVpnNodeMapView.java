@@ -363,8 +363,19 @@ final class RouterVpnNodeMapView extends View {
             float worldTop=Math.min(value.outer.bottom,value.button.bottom+dp(8));
             value.world=new RectF(value.outer.left,worldTop,value.outer.right,value.outer.bottom);
         }
+        value.world=fitWorld(value.world);
         value.empty=textBlock(EMPTY_LABEL,text,value.world.width()-dp(12),value.world.height(),3,Layout.Alignment.ALIGN_CENTER);
         cachedLayout=value;return value;
+    }
+
+    private static RectF fitWorld(RectF available){
+        // The stored geography spans 360 degrees of longitude and 180 of
+        // latitude. Keep one scale in both directions, including the same
+        // letterboxed viewport used by routes, markers and touch selection.
+        float width=Math.max(0,Math.min(available.width(),available.height()*2f));
+        float halfWidth=width/2f,halfHeight=width/4f;
+        return new RectF(available.centerX()-halfWidth,available.centerY()-halfHeight,
+                available.centerX()+halfWidth,available.centerY()+halfHeight);
     }
 
     private StaticLayout textBlock(String value,TextPaint paint,float width,float height,int maximumLines,Layout.Alignment alignment){

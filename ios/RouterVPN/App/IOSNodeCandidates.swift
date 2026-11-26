@@ -18,6 +18,8 @@ private final class IOSCandidateReply: @unchecked Sendable {
     struct Envelope: Decodable {
         let session_id: String, owner_request: String, request_id: String
         let metadata: String?, status: String?, closed: Bool?
+        let candidate_mode: String?
+        let response_source_nodes: [IOSNodeCandidateResponseNode]?
     }
     struct Progress: Decodable {
         let request_id: String; let complete: Bool; let drained: Bool
@@ -29,11 +31,23 @@ private final class IOSCandidateReply: @unchecked Sendable {
     private let send: Send
     private let recovered: @MainActor () -> Bool
     private let pause: @MainActor () async -> Void
+    private let responseMode: String?
+    private let responseSourceNodes: [IOSNodeCandidateResponseNode]?
     private var cancelled = false, observationActive = false
-    init(epoch: String, owner: String, send: @escaping Send, recovered: @escaping @MainActor () -> Bool,
+    init(epoch: String, owner: String, responseMode: String? = nil, responseSourceNodes: [IOSNodeCandidateResponseNode]? = nil,
+         send: @escaping Send, recovered: @escaping @MainActor () -> Bool,
          pause: @escaping @MainActor () async -> Void = { try? await Task.sleep(for: .milliseconds(250)) }) throws {
-        guard UUID(uuidString: epoch) != nil, IOSCandidateCatalogPublication.validRequest(owner) else { throw IOSNodeCandidateResult.issue() }
+        let responseNodes = responseSourceNodes ?? []
+        let extendedPacket = responseMode == "wg" &&
+            IOSMultihopNodeSelection.extendedPairedModes(responseNodes.map(\.mode), execution: "local") &&
+            responseNodes.allSatisfy({ !$0.id.isEmpty && $0.kind == "router-vpn" }) &&
+            Set(responseNodes.map(\.id)).count == responseNodes.count
+        guard UUID(uuidString: epoch) != nil, IOSCandidateCatalogPublication.validRequest(owner),
+              (responseMode == nil && responseSourceNodes == nil) ||
+                IOSMultihopNodeSelection.supportsNativePrefix(responseMode ?? "") &&
+                    ((3...IOSMultihopNodeSelection.maximumNodes).contains(responseNodes.count) || extendedPacket) else { throw IOSNodeCandidateResult.issue() }
         self.epoch = epoch; self.owner = owner; self.send = send; self.recovered = recovered; self.pause = pause
+        self.responseMode = responseMode; self.responseSourceNodes = responseSourceNodes
     }
     func cancel() { cancelled = true }
     private func reply(_ operation: String, request: String, candidate: String = "", prefix: String = "", deadline: TimeInterval? = nil) async throws -> Envelope {
@@ -41,6 +55,10 @@ private final class IOSCandidateReply: @unchecked Sendable {
         guard raw.count <= 131072 else { throw IOSNodeCandidateResult.issue() }
         let value = try JSONDecoder().decode(Envelope.self, from: raw)
         guard value.session_id == epoch, value.owner_request == owner, value.request_id == request else { throw IOSNodeCandidateResult.issue() }
+        // The protected close receipt survives the retired native owner. It
+        // grants no score or proposal authority when a Close reply was lost.
+        if operation == "candidate-close", value.closed == true, value.candidate_mode == nil, value.response_source_nodes == nil { return value }
+        guard value.candidate_mode == responseMode, value.response_source_nodes == responseSourceNodes else { throw IOSNodeCandidateResult.issue() }
         return value
     }
     func open(prefix: Int, inventoryBytes: Int = IOSCandidateCatalogPublication.maximumInventoryBytes,
@@ -117,6 +135,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         let requested_execution: String?, execution: String?
         let candidate_positions: [Int]?
         let proposal_source_sha256: String?, proposal_config_sha256: String?
+        let response_source_nodes: [IOSNodeCandidateResponseNode]?
         var eligiblePrefixes: [IOSNodeCandidatePrefix] {
             proofs.filter { prefix in
                 if prefix.metric == "routed-public-candidate-response", requested_execution == nil {
@@ -184,6 +203,12 @@ private final class IOSCandidateReply: @unchecked Sendable {
         guard info.request_id == request, UUID(uuidString: info.session_id) != nil, info.mtu_session_id == binding.session,
               IOSCandidateCatalogPublication.isDigest(info.source_sha256), IOSCandidateCatalogPublication.isDigest(info.config_sha256),
               (2...8).contains(info.proofs.count) || info.proofs.count == binding.identity.hopMeasurementRows && IOSMultihopNodeSelection.extendedOriginalModes(info.proofs.map(\.mode), execution: info.requested_execution ?? "local"), info.proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }) else { throw IOSNodeCandidateResult.issue() }
+        let packetPrefixes = info.proofs.filter(\.packetSuccessorResponse)
+        if !packetPrefixes.isEmpty {
+            guard info.requested_execution == nil, info.execution == nil,
+                  packetPrefixes.allSatisfy({ $0.supported(in: info.proofs) }),
+                  info.response_source_nodes == info.proofs.map({ IOSNodeCandidateResponseNode(id: $0.profile_id, mode: $0.mode) }) else { throw IOSNodeCandidateResult.issue() }
+        } else if info.response_source_nodes != nil { throw IOSNodeCandidateResult.issue() }
         if let original = binding.identity.nodeChainExecutionSource {
             guard binding.identity.nodeChainSource == nil,
                   let launch = try JSONSerialization.jsonObject(with: original) as? [String: Any],
@@ -298,7 +323,10 @@ private final class IOSCandidateReply: @unchecked Sendable {
                     }
                     let capture = try IOSNodeCandidateCapture.make(request: owner, prefixPosition: position, proofs: info.proofs,
                         chainSource: info.source_sha256, chainConfig: info.config_sha256, selectedResponse: selectedResponse, originalLaunch: filterLaunch)
+                    let packetResponse = capture.prefix.packetSuccessorResponse
                     let owned = try IOSNodeCandidateTransaction(epoch: info.session_id, owner: owner,
+                        responseMode: packetResponse ? capture.prefix.candidate_mode : nil,
+                        responseSourceNodes: packetResponse ? info.response_source_nodes : nil,
                         send: { op, request, candidate, prefix, deadline in
                             try await self.send(binding.connection, operation: op, request: request, epoch: info.session_id,
                                 owner: owner, candidate: candidate, prefix: prefix, deadline: deadline)

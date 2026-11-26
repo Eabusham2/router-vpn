@@ -773,16 +773,66 @@ function TestOrderedCandidateHysteriaCatalog($Value,[int]$Position){
  for($i=0;$i -le $Position;$i++){
   $metric=ExternalComparisonValue $Value.prefixes[$i] 'measurement'
   if($i -eq $Position){if($metric -cne 'routed-candidate-response'){return $false}}
-  elseif($null -ne $metric -and $metric -cne 'routed-tcp-connect'){return $false}
+  elseif($null -ne $metric -and $metric -cnotin @('routed-tcp-connect','routed-candidate-response')){return $false}
  }
  return $true
+}
+function TestOrderedCandidatePacketEnvelope($Value,[int]$Position){
+ $fields=if($Value -is [Collections.IDictionary]){$Value.Keys}else{$Value.PSObject.Properties.Name}
+ $mode=ExternalComparisonValue $Value 'candidate_mode';$nodes=ExternalComparisonValue $Value 'response_source_nodes'
+ if($mode -cnotin @('wg','awg2-fast','awg2-strong') -or (ExternalComparisonValue $Value 'measurement') -cne 'routed-candidate-response' -or
+    (OrderedCandidateNumber $Value 'prefix_position') -ne $Position -or $nodes -isnot [array] -or $nodes.Count -lt 3 -or $nodes.Count -gt 96 -or $Position -lt 0 -or $Position -gt $nodes.Count-3){return $false}
+ if('requested_execution' -cin $fields -and (ExternalComparisonValue $Value 'requested_execution') -cne 'local'){return $false}
+ foreach($field in @('scope','origin','selected_execution','selection_epoch','required_selected_execution','response_executions','public_response_source_nodes','external_final')){if($field -cin $fields){return $false}}
+ $ids=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+ for($i=0;$i -lt $nodes.Count;$i++){
+  $node=$nodes[$i];$keys=if($node -is [Collections.IDictionary]){$node.Keys}else{$node.PSObject.Properties.Name}
+  if(@($keys).Count -ne 3 -or 'id' -cnotin $keys -or 'mode' -cnotin $keys -or 'kind' -cnotin $keys -or $node.id -isnot [string] -or $node.id -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or $node.kind -cne 'router-vpn' -or -not $ids.Add($node.id)){return $false}
+  if($i -eq $nodes.Count-1){if($node.mode -cnotin @('shadowsocks','hysteria2') -or ($nodes.Count -gt 8 -and $node.mode -cne 'shadowsocks')){return $false}}
+  elseif($node.mode -cnotin @('wg','awg2-fast','awg2-strong') -or ($nodes.Count -gt 8 -and $node.mode -cne 'wg')){return $false}
+ }
+ return $nodes[$Position+1].mode -ceq $mode
+}
+function TestOrderedCandidatePacketPath($View,$Choice,$Path,[int]$Position){
+ if(-not(TestOrderedCandidatePacketEnvelope $View $Position)){return $false}
+ $nodes=$View.response_source_nodes;$id=ExternalComparisonValue $Choice 'id'
+ if($Path -isnot [array] -or $Path.Count -ne $nodes.Count -or $Choice.kind -cne 'router-vpn' -or $id -isnot [string] -or
+    $id -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or $id -cin @($nodes | ForEach-Object {$_.id}) -or
+    (ExternalComparisonValue $Choice 'proposal_action') -cne 'save-intermediate-profile'){return $false}
+ $fields=if($Choice -is [Collections.IDictionary]){$Choice.Keys}else{$Choice.PSObject.Properties.Name}
+ if('draft_action' -cin $fields -or 'draft_path' -cin $fields){return $false}
+ for($i=0;$i -lt $nodes.Count;$i++){
+  $node=$Path[$i];$keys=if($node -is [Collections.IDictionary]){$node.Keys}else{$node.PSObject.Properties.Name}
+  if(@($keys).Count -ne 2 -or 'id' -cnotin $keys -or 'mode' -cnotin $keys){return $false}
+  if($i -eq $Position+1){if($node.id -cne $id -or $node.mode -cne $View.candidate_mode){return $false}}
+  elseif($node.id -cne $nodes[$i].id -or $node.mode -cne $nodes[$i].mode){return $false}
+ }
+ return $true
+}
+function TestOrderedCandidatePacketCatalog($Value,[int]$Position){
+ if(-not(TestOrderedCandidatePacketEnvelope $Value $Position) -or (OrderedCandidateNumber $Value 'schema') -ne 1 -or (OrderedCandidateNumber $Value 'samples') -ne 50){return $false}
+ $choices=$Value.candidates;$prefixes=$Value.prefixes;$nodes=$Value.response_source_nodes
+ if($choices -isnot [array] -or $choices.Count -eq 0 -or $prefixes -isnot [array] -or $prefixes.Count -ne $nodes.Count-1){return $false}
+ $ids=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+ foreach($choice in $choices){if(-not(TestOrderedCandidatePacketPath $Value $choice (ExternalComparisonValue $choice 'proposed_path') $Position) -or -not $ids.Add($choice.id)){return $false}}
+ for($i=0;$i -lt $prefixes.Count;$i++){
+  $prefix=$prefixes[$i];$metric=ExternalComparisonValue $prefix 'measurement'
+  if((OrderedCandidateNumber $prefix 'position') -ne $i -or $prefix.id -cne $nodes[$i].id -or $prefix.mode -cne $nodes[$i].mode){return $false}
+  if($i -eq $Position){if($metric -cne 'routed-candidate-response'){return $false}}
+  elseif($null -ne $metric -and $metric -cnotin @('routed-tcp-connect','routed-candidate-response')){return $false}
+ }
+ return $true
+}
+function TestOrderedCandidateConnectedCatalog($Value,[int]$Position){
+ if((ExternalComparisonValue $Value 'candidate_mode') -ceq 'hysteria2'){return TestOrderedCandidateHysteriaCatalog $Value $Position}
+ return TestOrderedCandidatePacketCatalog $Value $Position
 }
 function OrderedCandidateViewMetric($S,$View){
  $metric=ExternalComparisonValue $View 'measurement'
  if($metric -cnotin @('routed-tcp-connect','routed-candidate-response','routed-public-candidate-response')){return ''}
  $fields=if($View -is [Collections.IDictionary]){$View.Keys}else{$View.PSObject.Properties.Name}
  if('candidate_mode' -cin $fields){
-  if(-not [bool](ExternalComparisonValue $S 'SavedPath') -and $null -eq (ExternalComparisonValue $S 'Draft') -and (TestOrderedCandidateHysteriaCatalog $View $S.Position)){return $metric}
+  if(-not [bool](ExternalComparisonValue $S 'SavedPath') -and $null -eq (ExternalComparisonValue $S 'Draft') -and (TestOrderedCandidateConnectedCatalog $View $S.Position)){return $metric}
   return ''
  }
  $prefix=@($View.prefixes | Where-Object {(OrderedCandidateNumber $_ 'position') -eq $S.Position})
@@ -983,10 +1033,25 @@ function StartOrderedCandidateRequest($S,[string]$Phase,[string]$Path,$Body=$nul
 function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
  $priorMode=ExternalComparisonValue (ExternalComparisonValue $S 'View') 'candidate_mode'
  $modeFields=if($Value -is [Collections.IDictionary]){$Value.Keys}else{$Value.PSObject.Properties.Name}
+ $packetMode=(ExternalComparisonValue $Value 'candidate_mode') -cin @('wg','awg2-fast','awg2-strong') -or ($Phase -cne 'catalog' -and $priorMode -cin @('wg','awg2-fast','awg2-strong'))
  if('candidate_mode' -cin $modeFields -or ($Phase -cne 'catalog' -and $null -ne $priorMode)){
-  if([bool](ExternalComparisonValue $S 'SavedPath') -or $null -ne (ExternalComparisonValue $S 'Draft')){throw 'Hysteria2 candidate responses require the original connected Local path.'}
+  if([bool](ExternalComparisonValue $S 'SavedPath') -or $null -ne (ExternalComparisonValue $S 'Draft')){throw 'These candidate responses require the original connected Local path.'}
   if($Phase -ceq 'catalog'){
-   if(-not(TestOrderedCandidateHysteriaCatalog $Value $S.Position)){throw 'The Hysteria2 candidate catalog changed its original packet prefix or final mode.'}
+   if(-not(TestOrderedCandidateConnectedCatalog $Value $S.Position)){throw 'The candidate catalog changed its original route or protocol.'}
+  }elseif($packetMode){
+   if($Value.candidate_mode -cne $priorMode -or -not(TestOrderedCandidatePacketEnvelope $Value $S.Position) -or -not(TestOrderedCandidatePacketEnvelope $S.View $S.Position) -or
+      $Value.view_token -cne $S.View.view_token -or $Value.request_id -cne $S.RequestID -or $Value.response_source_nodes.Count -ne $S.View.response_source_nodes.Count){throw 'The packet candidate response belongs to another captured path.'}
+   for($i=0;$i -lt $Value.response_source_nodes.Count;$i++){foreach($key in @('id','mode','kind')){if($Value.response_source_nodes[$i].$key -cne $S.View.response_source_nodes[$i].$key){throw 'The packet candidate changed an original member.'}}}
+   if($Phase -ceq 'save'){
+    $choices=@($S.View.candidates | Where-Object {$_.id -ceq $S.ChoiceID})
+    if($choices.Count -ne 1 -or $Value.candidate_id -cne $S.ChoiceID -or $Value.proposal_action -cne 'save-intermediate-profile' -or
+       $Value.active_path_changed -isnot [bool] -or $Value.active_path_changed -or -not(TestOrderedCandidatePacketPath $S.View $choices[0] (ExternalComparisonValue $Value 'proposed_path') $S.Position)){throw 'The saved packet candidate changed the retained suffix or protocol.'}
+   }elseif($Phase -ceq 'cancel'){
+    $started=ExternalComparisonValue $Value 'started';$before=ExternalComparisonValue $Value 'admission_cancelled'
+    if($started -isnot [bool] -or $before -isnot [bool] -or $started -eq $before -or ($before -and (ExternalComparisonValue $S 'SavedAdmitted')) -or $Value.results -isnot [array] -or $Value.results.Count -ne 0 -or ($null -ne (ExternalComparisonValue $Value 'saved_profile_id') -and (ExternalComparisonValue $Value 'saved_profile_id') -cne '')){throw 'The packet candidate cancellation is still pending.'}
+    foreach($field in @('ok','cancelled','drained')){$flag=ExternalComparisonValue $Value $field;if($flag -isnot [bool] -or -not $flag){throw 'Packet candidate cleanup was not confirmed.'}}
+    foreach($field in @('running','accepted','reviewing','cleanup_pending','active_path_changed')){$flag=ExternalComparisonValue $Value $field;if($flag -isnot [bool] -or $flag){throw 'Packet candidate work or review remains active.'}}
+   }elseif($Phase -cin @('run','poll')){$S.SavedAdmitted=$true}
   }elseif($Phase -cne 'cancel' -or 'candidate_mode' -cin $modeFields){
    if($priorMode -cne 'hysteria2' -or -not(TestOrderedCandidateHysteriaEnvelope $Value $S.Position) -or
       $Value.view_token -cne $S.View.view_token -or $Value.request_id -cne $S.RequestID){throw 'The Hysteria2 response belongs to another captured path.'}
@@ -1000,6 +1065,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
  }
  $source=ExternalComparisonValue $Value 'response_source_nodes'
  $expected=ExternalComparisonValue (ExternalComparisonValue $S 'View') 'response_source_nodes'
+ if($packetMode){$source=$null;$expected=$null}
  $fields=if($Value -is [Collections.IDictionary]){$Value.Keys}else{$Value.PSObject.Properties.Name}
  $owners=ExternalComparisonValue $Value 'response_executions'
  $prior=ExternalComparisonValue $S 'View';$originalOwners=ExternalComparisonValue $prior 'response_executions'
@@ -1127,7 +1193,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
    foreach($row in $S.Rows){if($metric -ceq 'routed-public-candidate-response' -or @((ExternalComparisonValue $row.Choice 'proposed_path')|Where-Object{$null-ne$_}).Count-ge3 -or (TestOrderedCandidateDraftInsertion $S $row.Choice (ExternalComparisonValue $row.Choice 'draft_path'))){[void]$S.Table.SelectedItems.Add($row)}}
    $S.AutoRun=$S.Table.SelectedItems.Count-gt0
   }
-  $S.SavedProfileID='';$S.Status.Text=if((OrderedCandidateScope $S)-ceq'draft-complete-selected'){'Test the complete draft temporarily. Choose a measured hop after the route closes.'}elseif([bool](ExternalComparisonValue $S 'SavedPrefix')){'Test only the selected saved prefix. It must return to Disconnected before future-profile choices appear.'}elseif($SavedPath){'Test the complete saved Local path temporarily. It must return to Disconnected before future-profile choices appear.'}elseif((ExternalComparisonValue $Value 'candidate_mode') -ceq 'hysteria2'){'Measure 50 authenticated Hysteria2 responses through the connected Local prefix. Saving replaces only the final node and preserves Hysteria2 for the next connection.'}elseif($metric -ceq 'routed-candidate-response'){'Measure 50 authenticated private-agent responses through the captured prefix and each eligible paired candidate.'}elseif($metric -ceq 'routed-public-candidate-response'){'Measure 50 HTTPS responses after TLS through each candidate and verify its expected public exit IP.'}else{'Select candidates, then test 50 TCP handshakes through this connected prefix.'};return
+  $S.SavedProfileID='';$S.Status.Text=if((OrderedCandidateScope $S)-ceq'draft-complete-selected'){'Test the complete draft temporarily. Choose a measured hop after the route closes.'}elseif([bool](ExternalComparisonValue $S 'SavedPrefix')){'Test only the selected saved prefix. It must return to Disconnected before future-profile choices appear.'}elseif($SavedPath){'Test the complete saved Local path temporarily. It must return to Disconnected before future-profile choices appear.'}elseif((ExternalComparisonValue $Value 'candidate_mode') -ceq 'hysteria2'){'Measure 50 authenticated Hysteria2 responses through the connected Local prefix. Saving replaces only the final node and preserves Hysteria2 for the next connection.'}elseif((ExternalComparisonValue $Value 'candidate_mode') -cin @('wg','awg2-fast','awg2-strong')){'Measure 50 authenticated responses through a candidate tunnel. Saving replaces this intermediate node and keeps the complete remaining route.'}elseif($metric -ceq 'routed-candidate-response'){'Measure 50 authenticated private-agent responses through the captured prefix and each eligible paired candidate.'}elseif($metric -ceq 'routed-public-candidate-response'){'Measure 50 HTTPS responses after TLS through each candidate and verify its expected public exit IP.'}else{'Select candidates, then test 50 TCP handshakes through this connected prefix.'};return
  }
  if($SavedPath){
   if(-not(OrderedCandidateSavedEnvelope $S $Value)){throw 'The response changed its original saved-path purpose or prefix.'}

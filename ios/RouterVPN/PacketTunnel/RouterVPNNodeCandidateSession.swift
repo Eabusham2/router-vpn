@@ -55,6 +55,12 @@ enum RouterVPNNodeCandidateHandle {
 /// before Open so delayed provider messages cannot create unowned work.
 final class RouterVPNNodeCandidateSession: NSObject, LibboxRouterNodeChainCandidateCatalogProtocol, @unchecked Sendable {
     let epoch: String, request: String
+    let responseMode: String?
+    let responseSourceNodes: [IOSNodeCandidateResponseNode]?
+    var responseFields: [String: Any] {
+        guard let responseMode, let responseSourceNodes else { return [:] }
+        return ["candidate_mode": responseMode, "response_source_nodes": responseSourceNodes.map(\.object)]
+    }
     private let owner: RouterVPNNodeCandidateOwner
     private let server: LibboxCommandServer
     private let prefix: Int32
@@ -74,9 +80,11 @@ final class RouterVPNNodeCandidateSession: NSObject, LibboxRouterNodeChainCandid
     }
     init(owner: RouterVPNNodeCandidateOwner, server: LibboxCommandServer, prefix: Int32,
          epoch: String, source: IOSCandidateCatalogPublication.Capture,
-         publication: IOSCandidateCatalogPublication = .shared, current: @escaping () -> Bool) {
+         publication: IOSCandidateCatalogPublication = .shared, responseMode: String? = nil,
+         responseSourceNodes: [IOSNodeCandidateResponseNode]? = nil, current: @escaping () -> Bool) {
         self.owner = owner; self.server = server; self.prefix = prefix; self.epoch = epoch
         self.source = source; self.request = source.request; self.currentOwner = current; self.publication = publication
+        self.responseMode = responseMode; self.responseSourceNodes = responseSourceNodes
     }
     func matches(owner: RouterVPNNodeCandidateOwner) -> Bool { self.owner.matches(owner) }
     func matches(owner: RouterVPNNodeCandidateOwner, server: LibboxCommandServer) -> Bool {

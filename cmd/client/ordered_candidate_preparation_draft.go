@@ -75,6 +75,27 @@ func desktopHysteria2FinalResponseMembers(members []desktopNodeChainMember, exec
 	return true
 }
 
+// Packet candidates replace one original successor and preserve the complete
+// suffix. The native parser also checks the actual peer keys and source closure.
+func desktopConnectedResponseMembers(members []desktopNodeChainMember, execution string, position int, candidate common.RouterProfile, mode string) bool {
+	if mode == "hysteria2" {
+		return desktopHysteria2FinalResponseMembers(members, execution, position, candidate)
+	}
+	if !mobilemultihop.NodeChainPrefixMode(mode) || execution != "local" || len(members) < 3 || len(members) > mobilemultihop.NodeChainMaximumNodes && (mode != "wg" || !common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members))) || position < 0 || position > len(members)-3 || members[position+1].Mode != mode ||
+		candidate.External != nil || candidate.NodeKind != "" && candidate.NodeKind != "router-vpn" || candidate.StartLayer != "" && candidate.StartLayer != "off" {
+		return false
+	}
+	for i, member := range members {
+		if member.Profile.External != nil || member.Profile.NodeKind != "" && member.Profile.NodeKind != "router-vpn" || member.Profile.StartLayer != "" && member.Profile.StartLayer != "off" || member.Profile.ID == candidate.ID || candidate.NodeProofID != "" && member.Profile.NodeProofID == candidate.NodeProofID {
+			return false
+		}
+		if i < len(members)-1 && !mobilemultihop.NodeChainPrefixMode(member.Mode) || i == len(members)-1 && member.Mode != "shadowsocks" && member.Mode != "hysteria2" {
+			return false
+		}
+	}
+	return true
+}
+
 // Adoption requires a fresh native receipt from the originally selected trial.
 func desktopSelectedResponseProposal(members []desktopNodeChainMember, execution string, position int, candidate common.RouterProfile) bool {
 	if (execution != "auto" && execution != "server") || len(members) < 3 || candidate.External != nil {
@@ -120,8 +141,8 @@ func orderedResponseProfileWithMode(ctx context.Context, root, execution string,
 	publicResponse := desktopPublicCandidateMembers(members, execution, position) && desktopNodeChainImportedExecutionMiddle(candidate)
 	typedFinal := desktopTypedFinalResponseMembers(members, execution, position)
 	if candidateMode != "" {
-		if candidateMode != "hysteria2" || !desktopHysteria2FinalResponseMembers(members, execution, position, candidate) {
-			return empty, nil, "", errors.New("this response cannot replace the original Hysteria2 final")
+		if !desktopConnectedResponseMembers(members, execution, position, candidate, candidateMode) {
+			return empty, nil, "", errors.New("this response cannot replace the original successor")
 		}
 	} else if !publicResponse && (execution != "local" && !desktopSelectedResponseProposal(members, execution, position, candidate) || position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" && !typedFinal) {
 		return empty, nil, "", errors.New("this measurement has no complete supported stream path")

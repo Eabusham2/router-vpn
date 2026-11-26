@@ -34,7 +34,7 @@ func candidateInventoryResponseMode(inventory string) (string, error) {
 		return "", nil
 	}
 	var mode string
-	if json.Unmarshal(header.ResponseMode, &mode) != nil || mode != "hysteria2" {
+	if json.Unmarshal(header.ResponseMode, &mode) != nil || mode != "hysteria2" && !NodeChainPrefixMode(mode) {
 		return "", nodeChainCandidatePreparationError
 	}
 	return mode, nil
@@ -120,7 +120,7 @@ func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multi
 	}
 	measurement := c.CandidatePrefixMeasurement(position)
 	if responseMode != "" {
-		if responseMode != "hysteria2" || multiple != nil || connectedFinalResponse || !c.SupportsConnectedHysteria2FinalCandidate(position) {
+		if multiple != nil || connectedFinalResponse || !c.connectedCandidateResponseMode(position, responseMode) {
 			return nil, nodeChainCandidatePreparationError
 		}
 		measurement = hopmeasure.CandidatePrivateResponseMeasurement
@@ -172,6 +172,9 @@ func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multi
 			if responseMode == "hysteria2" {
 				response, err = parseCandidateHysteria2ResponseSource(input)
 				target, proof = response.Target, response.NodeID
+			} else if NodeChainPrefixMode(responseMode) {
+				response, err = parseCandidatePacketResponseSource(input, responseMode)
+				target, proof = response.Target, response.NodeID
 			} else {
 				target, proof, err = nodeChainCandidateTarget(input)
 			}
@@ -186,6 +189,11 @@ func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multi
 		}
 		if err != nil || ids[target.ID] || proof != "" && proofs[proof] {
 			return nil, errors.Join(err, errors.New("candidate source duplicates or changes the captured prefix inventory"))
+		}
+		if NodeChainPrefixMode(responseMode) {
+			if err := c.validatePacketSuccessorCandidate(position, input, &response); err != nil {
+				return nil, err
+			}
 		}
 		ids[target.ID] = true
 		if proof != "" {
@@ -218,7 +226,9 @@ func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multi
 	if connectedFinalResponse {
 		domain += "/connected-original-final-response"
 	}
-	if responseMode != "" {
+	if NodeChainPrefixMode(responseMode) {
+		domain += "/connected-original-" + responseMode + "-packet-successor-response"
+	} else if responseMode != "" {
 		domain += "/connected-original-" + responseMode + "-final-response"
 	}
 	if plan.measurement != "" {
@@ -276,6 +286,26 @@ func ParseNodeChainHysteria2CandidateInput(input string) (*NodeChainCandidateInp
 
 func NodeChainHysteria2CandidateInputSupported(input string) bool {
 	_, err := ParseNodeChainHysteria2CandidateInput(input)
+	return err == nil
+}
+
+func ParseNodeChainPacketSuccessorCandidateInput(input, mode string) (*NodeChainCandidateInput, error) {
+	if len(input) == 0 || len(input) > NodeChainInputLimit || !NodeChainPrefixMode(mode) {
+		return nil, nodeChainError
+	}
+	response, err := parseCandidatePacketResponseSource(input, mode)
+	if err != nil {
+		return nil, err
+	}
+	captured := &NodeChainCandidateInput{input: input, proof: response.NodeID, target: response.Target,
+		originalInput: input, originalProof: response.NodeID, originalTarget: response.Target,
+		responseMode: mode, originalResponseMode: mode, response: response, originalResponse: response}
+	captured.self = captured
+	return captured, nil
+}
+
+func NodeChainPacketSuccessorCandidateInputSupported(input, mode string) bool {
+	_, err := ParseNodeChainPacketSuccessorCandidateInput(input, mode)
 	return err == nil
 }
 
@@ -506,7 +536,7 @@ func (p *NodeChainCandidatePlan) validate() error {
 	if p.connectedFinalResponse && (p.multiple != nil || p.measurement != hopmeasure.CandidatePrivateResponseMeasurement || !p.chain.connectedFinalResponsePrefix(p.prefix.Position)) {
 		return nodeChainCandidatePreparationError
 	}
-	if p.responseMode != "" && (p.responseMode != "hysteria2" || p.connectedFinalResponse || p.multiple != nil || p.measurement != hopmeasure.CandidatePrivateResponseMeasurement || !p.chain.SupportsConnectedHysteria2FinalCandidate(p.prefix.Position)) {
+	if p.responseMode != "" && (p.connectedFinalResponse || p.multiple != nil || p.measurement != hopmeasure.CandidatePrivateResponseMeasurement || !p.chain.connectedCandidateResponseMode(p.prefix.Position, p.responseMode)) {
 		return nodeChainCandidatePreparationError
 	}
 	if p.multiple == nil && p.chain.importedNodes != nil && !p.connectedFinalResponse || p.multiple != nil && !p.multiple.currentValidated(p.chain) {
@@ -541,6 +571,11 @@ func (p *NodeChainCandidatePlan) NewMeasurementContext(ctx context.Context, owne
 	if p.responseMode != "" {
 		if _, ok := reader.(NodeChainCandidatePacketEngine); !ok {
 			return nil, errors.New("candidate response has no original Local packet carrier")
+		}
+	}
+	if NodeChainPrefixMode(p.responseMode) {
+		if _, ok := reader.(NodeChainCandidatePacketEndpointEngine); !ok {
+			return nil, errors.New("candidate response has no original Local packet endpoint factory")
 		}
 	}
 	engine := &nodeChainCandidateEngine{plan: p, owner: owner, active: active, identity: identity, reader: reader}
