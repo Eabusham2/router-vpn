@@ -729,7 +729,16 @@ for (count, entryMode, entryLayer) in publicPaths + layeredPaths {
     var editor = try RouterVPNOrderedNodeDraft(selection:initial,generation:UUID(),catalog:profiles)
     try editor.chooseExternalExit(ids.last!)
     for id in ids.dropFirst().dropLast() { try editor.add(id) }
-    try editor.chooseMode(entryMode,at:0)
+    let entryPicker = OrderedEditor(editor)
+    entryPicker.path.selectItem(at: 0); entryPicker.selectedHopChanged()
+    check(entryPicker.transport.items.compactMap { $0.representedObject as? String } == RouterVPNOrderedNodes.prefixModes,
+          "external entry picker lost its exact three paired transports")
+    entryPicker.transport.selectItem(at: RouterVPNOrderedNodes.prefixModes.firstIndex(of: entryMode)!)
+    entryPicker.transportChanged(); editor = entryPicker.draft
+    check(editor.nodes.first?["id"] == ids[0] && editor.nodes.first?["mode"] == entryMode,
+          "external entry callback replaced its identity or selected transport")
+    rejects({ try editor.remove(0) }, "external entry was removable")
+    rejects({ try editor.move(0, by: 1) }, "external entry was movable")
     rejects({ try editor.chooseMode("shadowsocks",at:0) },"external final replaced the paired entry with a stream")
     rejects({ try editor.chooseMode("wg",at:1) },"external final replaced an imported stream with a paired mode")
     rejects({ try editor.chooseMode("shadowsocks",at:count) },"external final accepted a missing editor row")
