@@ -14,19 +14,15 @@ installable or grant Network Extension entitlements.
 
 ## Build artifacts
 
-The authoritative release candidate builds the real unsigned re-signable IPA in:
+The manual release workflow builds the real unsigned re-signable IPA after
+routine CI succeeds for the same source commit:
 
 ```text
-.github/workflows/release-candidate.yml
+.github/workflows/build-all.yml
 ```
 
-The reusable native client workflow also produces the same IPA member in:
-
-```text
-.github/workflows/client-apps-ci.yml
-```
-
-Dedicated compiler/runtime diagnostics live in `ios-native-compile-smoke.yml` and `ios-libbox-engine.yml`. The produced native member is:
+The iOS job compiles the native runtime, app and PacketTunnel before packaging.
+The produced native member is:
 
 ```text
 RouterVPN-native-unsigned-resignable.ipa

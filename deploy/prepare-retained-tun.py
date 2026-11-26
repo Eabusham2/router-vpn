@@ -65,13 +65,12 @@ def verify(vendor):
     if manager.is_symlink() or not manager.is_file() or manager.read_text() not in (expected, checked_close(expected)):
         raise ValueError('Native manager lost its complete retained lifecycle projection.')
     records[MANAGER] = hashlib.sha256(manager.read_bytes()).hexdigest()
-    for source, target in (('manager.go.tmpl', 'routervpn_mtu.go'), (), ()):
-        template = ROOT / 'mobile/mtu' / source
-        path = manager.parent / target
-        if template.is_symlink() or path.is_symlink() or not path.is_file() or path.read_bytes() != template.read_bytes():
-            raise ValueError('Native manager lost its captured transaction source: ' + target)
-        records[path.relative_to(vendor).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
-        records['gate/' + template.relative_to(ROOT).as_posix()] = hashlib.sha256(template.read_bytes()).hexdigest()
+    template = ROOT / 'mobile/mtu/manager.go.tmpl'
+    path = manager.parent / 'routervpn_mtu.go'
+    if template.is_symlink() or path.is_symlink() or not path.is_file() or path.read_bytes() != template.read_bytes():
+        raise ValueError('Native manager lost its captured transaction source: ' + path.name)
+    records[path.relative_to(vendor).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    records['gate/' + template.relative_to(ROOT).as_posix()] = hashlib.sha256(template.read_bytes()).hexdigest()
     observation = vendor / OBSERVATION_TARGET
     if OBSERVATION_TEMPLATE.is_symlink() or observation.is_symlink() or not observation.is_file() or observation.read_bytes() != OBSERVATION_TEMPLATE.read_bytes():
         raise ValueError('Native manager lost its original caller observation helper.')

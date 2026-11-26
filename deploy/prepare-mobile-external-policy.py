@@ -119,14 +119,25 @@ def prepare(vendor, *, mobile=True):
         path = vendor / relative
         if path.is_symlink(): raise ValueError('linked native selection context')
         path.write_bytes((ROOT/'mobile/externalpolicy'/(name+'.tmpl')).read_bytes())
-    for name in ('box.go',):
-        template=ROOT/'mobile/externalpolicy'/(name+'.tmpl')
     if mobile:
         (vendor/'routervpn_tor_comparison_capture.go').write_bytes((ROOT/'mobile/externalpolicy/tor_comparison.go.tmpl').read_bytes())
         for name in ('external', 'tor'):
             (vendor/'experimental/libbox'/('routervpn_mtu_'+name+'.go')).write_bytes((ROOT/'mobile/mtu'/(name+'.go.tmpl')).read_bytes())
-    for source, target in (('lease_cleanup.go', 'routervpn_external_lease_cleanup.go'), (), ('measurement.go', 'routervpn_external_measurement.go'), (), ('tor_measurement.go', 'routervpn_tor_measurement.go'), ('dns_measurement.go', 'routervpn_dns_measurement.go'), (), ('dns_dial.go', 'routervpn_dns_dial.go'), (), ('mtu.go', 'routervpn_external_mtu.go'), (), (), (), ('tor_mtu.go', 'routervpn_tor_mtu.go'), ('tor_padding.go', 'routervpn_tor_padding_capture.go'), ()):
-        (vendor/target).write_bytes((ROOT/'mobile/externalpolicy'/(source+'.tmpl')).read_bytes())
+    for source, target in (
+        ('box.go', 'routervpn_external_policy.go'),
+        ('lease_cleanup.go', 'routervpn_external_lease_cleanup.go'),
+        ('measurement.go', 'routervpn_external_measurement.go'),
+        ('tor_measurement.go', 'routervpn_tor_measurement.go'),
+        ('dns_measurement.go', 'routervpn_dns_measurement.go'),
+        ('dns_dial.go', 'routervpn_dns_dial.go'),
+        ('mtu.go', 'routervpn_external_mtu.go'),
+        ('tor_mtu.go', 'routervpn_tor_mtu.go'),
+        ('tor_padding.go', 'routervpn_tor_padding_capture.go'),
+    ):
+        path = vendor / target
+        if path.is_symlink():
+            raise ValueError('Linked native external proof source: ' + target)
+        path.write_bytes((ROOT/'mobile/externalpolicy'/(source+'.tmpl')).read_bytes())
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)

@@ -47,8 +47,6 @@ OPENVPN_SHA=$(python3 "$ROOT/../deploy/prepare-mobile-openvpn.py" --digest)
 MULTIHOP_SHA=$(python3 "$ROOT/../deploy/prepare-mobile-multihop.py" --digest)
 OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$MULTIHOP_SHA")
 OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$TOR_SOURCE_SHA")
-# Native graph evidence is tied to the actual Java builder/policy inputs, not
-# only the Go core. Changing a host graph invalidates the cached AAR proof.
 EXPECTED_STAMP="$COMMIT+$LIBXRAY_COMMIT+$XRAY_CORE_VERSION+$GO_TOOLCHAIN+$XRAY_POLICY_SHA+$NATIVE_XRAY_SHA"
 
 require_typed_candidate_prefix_api() {
@@ -396,20 +394,8 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
   }
   gofmt -w experimental/libbox/routervpn_xray_bridge.go
   python3 "$ROOT/../deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"
-  # This Linux gate runs real pinned Tor, the shipping Cgo owner and actual PT
-  # workers in the same prepared Libbox module before cross-platform linkage.
-  if [[ $(uname -s) == Linux ]]; then
-    TOR_HOST_PACKAGE="$ROOT/.vendor/tor-host-test"
-    python3 "$ROOT/../deploy/build-mobile-tor-package.py" --platform host-test --output "$TOR_HOST_PACKAGE" --source-cache "$TOR_SOURCE_CACHE"
-    TOR_GATE_PARENT=$(mktemp -d "$ROOT/.vendor/tor-outbound-proof.XXXXXX")
-    # Run the shipping Swift profile compiler against these same real engines.
-    # Linux CI includes Swift; this must not use the unavailable macOS C stub.
-  fi
-  # Install only the verified C dependency into the existing Go module after
-  # host graph gates, before the sole gomobile build of the combined runtime.
+  # Link the verified Android Tor package into the combined mobile runtime.
   python3 "$ROOT/../deploy/prepare-mobile-torpack.py" "$VENDOR" --native-package "$TOR_PACKAGE"
-  # Recheck the actual Android-only Xray import after every host preparation.
-  # Host tests cannot detect a lowered Go directive on that platform-only edge.
   go_retry run ./cmd/internal/build_libbox -target android
 )
 

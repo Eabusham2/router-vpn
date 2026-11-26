@@ -68,8 +68,7 @@ def prepare(sing, xray):
             continue  # Parent-only composition test; native tests use the actual prepared cores.
         (policy/source.name).write_bytes(source.read_bytes())
     target=sing/'protocol/routervpnxray';target.mkdir(parents=True,exist_ok=True)
-    for src,dst in [('outbound.go.tmpl', 'outbound.go'), (), (), (), (), ()]:
-        (target/dst).write_bytes((ROOT/'mobile/applexray'/src).read_bytes())
+    (target/'outbound.go').write_bytes((ROOT/'mobile/applexray/outbound.go.tmpl').read_bytes())
     for folder,template in [('shadowsocks','start_layer_ss_fixture.go.tmpl'),('routervpnwhitening','start_layer_whitening_fixture.go.tmpl')]:
         fixture=sing/'protocol'/folder/'routervpn_start_layer_fixture.go'
         fixture.parent.mkdir(parents=True,exist_ok=True)
