@@ -189,6 +189,9 @@ func routerVPNRunLinuxCommand() error {
 		select {
 		case <-owner.started:
 			if owner.startErr != nil {
+				// Report the failed startup even when safe retirement must retain
+				// its original owner and wait for an explicit cleanup retry.
+				log.Error(owner.startErr)
 				_, closeErr := routerVPNRetireOriginalCommand(signals, os.Interrupt, C.FatalStopTimeout, owner.retire, routerVPNCommandCleanupIncomplete)
 				return E.Errors(owner.startErr, closeErr)
 			}

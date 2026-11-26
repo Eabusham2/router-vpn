@@ -322,17 +322,17 @@ func routervpnLinuxStringAttribute(value []byte, wanted string) bool {
 	return bytes.Equal(value, []byte(wanted+"\x00"))
 }
 
-// An installed default route has an unspecified /0 destination. The address
-// validator deliberately rejects unspecified interface/peer addresses, so it
-// cannot identify this original route call. Only the exact well-formed default
-// prefix takes this separate path; address validation stays unchanged.
+// Unspecified addresses are valid network bases for default and split routes
+// such as 0.0.0.0/1 and ::/1. Only a contiguous network mask with the matching
+// address width takes this route-only path. Unspecified host/interface/peer
+// addresses remain rejected by the unchanged address validator.
 func routervpnLinuxRoutePrefix(value *net.IPNet) (netip.Prefix, bool) {
 	if value != nil {
 		address, valid := netip.AddrFromSlice(value.IP)
 		bits, size := value.Mask.Size()
 		address = address.Unmap()
-		if valid && address.IsUnspecified() && bits == 0 && size == address.BitLen() {
-			return netip.PrefixFrom(address, 0), true
+		if valid && address.IsUnspecified() && size == address.BitLen() && bits >= 0 && bits < size {
+			return netip.PrefixFrom(address, bits), true
 		}
 	}
 	return routervpnLinuxIPPrefix(value)
