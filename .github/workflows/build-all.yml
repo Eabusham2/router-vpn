@@ -312,6 +312,13 @@ jobs:
             $root=(Get-ChildItem -LiteralPath $extract -Directory|Select-Object -First 1).FullName
             $name=if($family -eq 'Windows'){'RouterVPN.exe'}else{'RouterVPNPortable.exe'}
             $dataRoot=if($family -eq 'Windows'){$root}else{Join-Path $root 'Data'}
+            # The installed-family package requires the same private-root setup as its installer.
+            if($family -eq 'Windows'){
+              $aclHelper=Join-Path $root 'client/Protect-RouterVPN-Windows-PrivateRoot.ps1'
+              $aclItem=Get-Item -LiteralPath $aclHelper -Force
+              if($aclItem.PSIsContainer-or($aclItem.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0){throw 'Packaged Windows private-root helper is not a regular file'}
+              & $aclHelper -Root $root -TraceSetup | Out-Host
+            }
             $evidence=Join-Path $env:RUNNER_TEMP "routervpn-ui/$family"
             [void][IO.Directory]::CreateDirectory($evidence)
             $stdout=Join-Path $evidence 'launcher.stdout.log'

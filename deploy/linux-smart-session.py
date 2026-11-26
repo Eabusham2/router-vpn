@@ -6,6 +6,7 @@ import pwd
 import re
 import select
 import signal
+import stat
 import subprocess
 import sys
 import termios
@@ -44,6 +45,14 @@ def record_failure(directory, error):
             json.dump(record, stream)
     except Exception:
         pass
+
+
+def close_diagnostic(stream):
+    try:
+        if stream is not None:
+            stream.close()
+    except Exception:
+        pass  # Diagnostic close cannot replace authorization or retirement errors.
 
 
 def answer_password(terminal, password, deadline):
@@ -102,9 +111,29 @@ def main(directory):
         frame = json.loads((directory / "frame").read_bytes())
         os.write(writer, json.dumps(frame).encode() + b"\n")
         stage(directory, "controller-pkexec-start")
-        controller = subprocess.Popen(
-            ["/usr/bin/pkexec", "--disable-internal-agent", "/opt/router-vpn-client/router-vpn-client",
-             "--linux-owned-controller"], stdin=read_pipe, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Native startup/retirement diagnostics remain private to this original
+        # login. A failed diagnostic open must not alter authorization or cleanup.
+        diagnostics = None
+        try:
+            descriptor = os.open(directory / "controller-stderr",
+                                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            diagnostics = os.fdopen(descriptor, "wb", buffering=0)
+            os.fchmod(diagnostics.fileno(), 0o600)
+            info = os.fstat(diagnostics.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or
+                    stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+                close_diagnostic(diagnostics)
+                diagnostics = None
+        except OSError:
+            close_diagnostic(diagnostics)
+            diagnostics = None
+        try:
+            controller = subprocess.Popen(
+                ["/usr/bin/pkexec", "--disable-internal-agent", "/opt/router-vpn-client/router-vpn-client",
+                 "--linux-owned-controller"], stdin=read_pipe, stdout=subprocess.DEVNULL,
+                stderr=diagnostics if diagnostics is not None else subprocess.DEVNULL)
+        finally:
+            close_diagnostic(diagnostics)
         os.close(read_pipe)
         stage(directory, "policykit-password-input")
         password = (directory / "password").read_bytes().strip()

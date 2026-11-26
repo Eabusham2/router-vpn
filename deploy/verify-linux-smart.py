@@ -3,6 +3,7 @@
 import concurrent.futures
 import errno
 import fcntl
+import functools
 import hashlib
 import hmac
 import http.client
@@ -65,12 +66,110 @@ def wait_for(check, description, timeout=30):
     raise RuntimeError("Timed out waiting for " + description)
 
 
+@functools.lru_cache(maxsize=1)
+def diagnostic_markers():
+    # Only checked-in fixed error text may reach the public qualification log.
+    # Runtime strings (paths, credentials, captures and prompts) are never echoed.
+    paths = set()
+    for directory, pattern in (
+        ("cmd/client", "*.go"), ("internal/linuxprocess", "*.go"),
+        ("internal/linuxprotection", "*.go"), ("internal/mobiletor", "*linux*.go"),
+        ("internal/mobilemultihop", "desktop*.go"), ("mobile/desktop", "*.tmpl"),
+    ):
+        paths.update((REPO / directory).glob(pattern))
+    markers = {}
+    expression = re.compile(r'(?:errors\.New|fmt\.Errorf|E\.New)\(\s*("(?:[^"\\]|\\.)*")')
+    for path in sorted(paths):
+        if path.name.endswith("_test.go"):
+            continue
+        text = path.read_text()
+        for match in expression.finditer(text):
+            try:
+                fixed = json.loads(match[1]).split("%", 1)[0].strip()
+            except ValueError:
+                continue
+            if not 12 <= len(fixed) <= 240 or "\n" in fixed or not fixed.isascii():
+                continue
+            source = str(path.relative_to(REPO)) + ":" + str(text.count("\n", 0, match.start()) + 1)
+            markers.setdefault(fixed, []).append(source)
+    for fixed in ("context deadline exceeded", "context canceled", "permission denied",
+                  "operation not permitted", "no such file or directory", "connection refused",
+                  "i/o timeout", "unexpected EOF", "EOF", "set routes:", "add route"):
+        markers.setdefault(fixed, []).append("fixed system/runtime error")
+    return markers
+
+
+def diagnostic_error(value):
+    if not isinstance(value, str):
+        return {"markers": ["non-text error"], "type": type(value).__name__}
+    encoded = value.encode("utf-8", errors="replace")
+    sample = value[:65536]
+    result = {"bytes": len(encoded), "sha256": hashlib.sha256(encoded).hexdigest()}
+    try:
+        found = [(sample.find(marker), -len(marker), marker, sources)
+                 for marker, sources in diagnostic_markers().items() if marker in sample]
+        accepted = []
+        for start, _, marker, sources in sorted(found):
+            if any(start >= prior[0] and start + len(marker) <= prior[0] + len(prior[1])
+                   for prior in accepted):
+                continue
+            accepted.append((start, marker, sources))
+            if len(accepted) == 8:
+                break
+        result["markers"] = [{"text": marker, "source": sources[:3]} for _, marker, sources in accepted]
+        if not accepted:
+            result["markers"] = ["unclassified"]
+    except Exception as error:
+        result["markers"] = ["classification unavailable"]
+        result["classification_error_type"] = type(error).__name__
+    if len(value) > len(sample):
+        result["sample_truncated"] = True
+    return result
+
+
+def private_stderr_diagnostic(path, owner):
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != owner or
+                    stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+                return {"error": "diagnostic ownership, mode or file type changed"}
+            first = stream.read(128 << 10)
+            samples = [{"offset": 0, "summary": diagnostic_error(first.decode("utf-8", errors="replace"))}]
+            if info.st_size > len(first):
+                offset = max(len(first), info.st_size - (64 << 10))
+                stream.seek(offset)
+                samples.append({"offset": offset, "summary": diagnostic_error(
+                    stream.read(64 << 10).decode("utf-8", errors="replace"))})
+            return {"file_bytes": info.st_size, "samples": samples}
+    except FileNotFoundError:
+        return {"present": False}
+    except OSError as error:
+        return {"error": "diagnostic read failed", "errno": error.errno}
+
+
+def native_stage(data, directory):
+    # This is only a diagnostic view of an already-observed exact engine child.
+    # Never serialize the captured source, selected DNS, token or original error.
+    result = {"pid": data["pid"], "ready": "ready" in data}
+    mode = data.get("mode")
+    if isinstance(mode, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,31}", mode):
+        result["mode"] = mode
+    result["runtime_files"] = {name: (directory / name).is_file()
+        for name in ("capture.json", "node-source.json", "sing-box.json",
+                     "node-ready.json", "node-mtu-status.json")}
+    ready = data.get("ready")
+    if isinstance(ready, dict):
+        result["ready_numbers"] = {key: ready[key] for key in
+            ("schema", "interface_index", "mtu", "proved_at", "cover_services")
+            if type(ready.get(key)) is int}
+    return result
+
+
 def attempt_summary(result):
     # The controller's errors may embed private capture material. Report only
     # known diagnostic text and never echo the original error or response body.
-    markers = ("could not capture the proved predecessor", "Linux Speed Lab path lost its captured native readiness",
-               "Linux Connect lost its freshly activated retained path", "context deadline exceeded", "context canceled",
-               "Linux Node original control retained an unresolved protocol failure")
     rows = result.get("attempts", []) if isinstance(result, dict) else []
     summary = []
     for row in rows[:32] if isinstance(rows, list) else ():
@@ -82,7 +181,7 @@ def attempt_summary(result):
         error = row.get("error", "")
         item = {"mode": mode, "action": action, "success": row.get("success") is True}
         if not item["success"]:
-            item["error"] = [value for value in markers if isinstance(error, str) and value in error] or ["other"]
+            item["error"] = diagnostic_error(error)
         summary.append(item)
     return summary
 
@@ -167,7 +266,8 @@ def controller(work, user, password):
 
     def diagnostics():
         try:
-            records = {"openvt_exit": launch.poll()}
+            records = {"openvt_exit": launch.poll(),
+                       "controller_stderr": private_stderr_diagnostic(session / "controller-stderr", uid)}
             for label, path, owner in (("login", login_log, 0), ("session_failure", session / "failure", uid),
                                        ("session_stage", session / "stage", uid)):
                 try:
@@ -364,6 +464,7 @@ def qualify(work, user, password, peer_ns, source, candidate, policy, layer, suc
             with (work / "nft.events").open("wb") as log:
                 monitor = subprocess.Popen(["stdbuf", "-oL", "nft", "-nn", "monitor"], stdout=log)
                 result = None
+                observed_stages = {}
                 try:
                     # A harmless table marker establishes monitor subscription before SMART.
                     marker = "qualification_monitor"
@@ -388,6 +489,10 @@ def qualify(work, user, password, peer_ns, source, candidate, policy, layer, suc
                                     # A child may retire between /proc enumeration and TUN readback.
                                     continue
                                 key = data["session"]
+                                try:
+                                    observed_stages[data["pid"]] = native_stage(data, directory)
+                                except Exception:
+                                    pass  # Diagnostics cannot replace the original qualification failure.
                                 if key not in sessions or "ready" not in sessions[key]:
                                     sessions[key] = data
                                 if data["mode"] == source and first is None and "ready" in data:
@@ -451,8 +556,13 @@ def qualify(work, user, password, peer_ns, source, candidate, policy, layer, suc
                         raise RuntimeError("Kernel nftables monitor stopped early")
                     check_guard_history(work / "nft.events", first["session"], final["session"])
                 except Exception as error:
-                    if result is not None:
-                        error.add_note("Observed SMART attempts: " + json.dumps(attempt_summary(result)))
+                    try:
+                        error.add_note("Observed native startup stages: " + json.dumps(
+                            list(observed_stages.values())[:32], ensure_ascii=True))
+                        if result is not None:
+                            error.add_note("Observed SMART attempts: " + json.dumps(attempt_summary(result)))
+                    except Exception:
+                        pass  # Preserve the first failure even if diagnostics cannot be recorded.
                     raise
                 finally:
                     monitor.terminate()

@@ -90,7 +90,13 @@ func (m *RouterNodeChainCandidatePreparation) OriginalSourceSHA256() string {
 	return m.prep.OriginalSourceSHA256()
 }
 func (m *RouterNodeChainCandidatePreparation) CaptureSHA256() string { return m.prep.CaptureSHA256() }
-func (m *RouterNodeChainCandidatePreparation) Metadata() string      { return m.MetadataPage(0) }
+func (m *RouterNodeChainCandidatePreparation) CandidateMode() string {
+	if m == nil || m.prep == nil {
+		return ""
+	}
+	return m.prep.CandidateMode()
+}
+func (m *RouterNodeChainCandidatePreparation) Metadata() string { return m.MetadataPage(0) }
 func (m *RouterNodeChainCandidatePreparation) MetadataPage(offset int32) string {
 	if m == nil || m.prep == nil {
 		return ""

@@ -1463,7 +1463,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         transport.setAccessibilityLabel("Selected node transport")
         transport.target = self; transport.action = #selector(transportChanged); root.addArrangedSubview(transport)
         let move = NSStackView(); move.orientation = .horizontal; move.spacing = 8
-        for (title, action) in [("Move up", #selector(moveUp)), ("Move down", #selector(moveDown)), ("Remove hop", #selector(removeHop))] { move.addArrangedSubview(NSButton(title: title, target: self, action: action)) }
+        for (title, action) in [("Move up", #selector(moveSelectedHopUp)), ("Move down", #selector(moveSelectedHopDown)), ("Remove hop", #selector(removeHop))] { move.addArrangedSubview(NSButton(title: title, target: self, action: action)) }
         move.addArrangedSubview(NSButton(title: "Measure next hop…", target: self, action: #selector(measureNext)))
         root.addArrangedSubview(move)
         candidates.menu?.delegate = self
@@ -1519,8 +1519,8 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         do { let index = path.indexOfSelectedItem; try draft.move(index, by: offset); render(selected: index + offset) }
         catch { status.stringValue = error.localizedDescription }
     }
-    @objc private func moveUp() { move(-1) }
-    @objc private func moveDown() { move(1) }
+    @objc private func moveSelectedHopUp() { move(-1) }
+    @objc private func moveSelectedHopDown() { move(1) }
     @objc private func removeHop() {
         do { let index = path.indexOfSelectedItem; try draft.remove(index); render(selected: index) }
         catch { status.stringValue = error.localizedDescription }
