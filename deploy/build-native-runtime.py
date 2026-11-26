@@ -17,6 +17,7 @@ import json
 import os
 import platform
 import re
+import select
 import shlex
 import shutil
 import socket
@@ -658,6 +659,33 @@ def prepare_native_sources(source, xray, env):
     POLICY.AMNEZIA.verify(source)
 
 
+def relay_awg_smoke_datagrams(transports, host, finished):
+    # Both AWG userspace endpoints dial out. Each role gets its own relay
+    # socket so a native BindUpdate can change its ephemeral source port.
+    peers = [None, None]
+    pending = [[], []]
+    while not finished.is_set():
+        readable, _, _ = select.select(transports, [], [], 0.2)
+        for transport in readable:
+            try:
+                payload, source = transport.recvfrom(65535)
+            except (ConnectionResetError, ConnectionRefusedError):
+                continue
+            if source[0] != host:
+                continue
+            role = transports.index(transport)
+            peers[role] = source
+            for packet in pending[role]:
+                transport.sendto(packet, source)
+            pending[role].clear()
+            other = 1 - role
+            if peers[other] is not None:
+                transports[other].sendto(payload, peers[other])
+            elif len(pending[other]) < 129:
+                # The native sender permits a 129-datagram handshake group.
+                pending[other].append(payload)
+
+
 def smoke_protocols(binary, env):
     """Exercise the built host engine locally, without host routes or TUN.
 
@@ -756,30 +784,6 @@ def smoke_protocols(binary, env):
                     process.kill()
                     process.wait(timeout=5)
 
-        def relay_datagrams(transport, finished):
-            # Both shipping AWG endpoints own connected client binds. Relay
-            # their opaque UDP datagrams; the real AWG devices authenticate,
-            # encrypt, obfuscate and route every inner packet themselves.
-            peers, pending = [], None
-            while not finished.is_set():
-                try:
-                    payload, source = transport.recvfrom(65535)
-                except (socket.timeout, ConnectionResetError, ConnectionRefusedError):
-                    continue
-                if source[0] != target_host:
-                    continue
-                if source not in peers:
-                    if len(peers) == 2:
-                        continue
-                    peers.append(source)
-                if len(peers) == 1:
-                    pending = payload
-                else:
-                    transport.sendto(payload, peers[1-peers.index(source)])
-                    if pending is not None:
-                        transport.sendto(pending, peers[1])
-                        pending = None
-
         try:
             for protocol in ('socks', 'http', 'https', 'shadowsocks', 'hysteria2', 'naive-h2', 'naive-h3', 'wireguard', 'openvpn-tcp', 'openvpn-udp', 'amneziawg', 'reality-vision'):
                 upstream_port, proxy_port = port(socket.SOCK_DGRAM if protocol in ('hysteria2', 'naive-h3', 'wireguard', 'openvpn-udp', 'amneziawg') else socket.SOCK_STREAM), port()
@@ -825,7 +829,7 @@ def smoke_protocols(binary, env):
                                     'mtu': 1280, 'address': ['198.18.0.'+str(index+1)+'/32'],
                                     'private_key': pairs[index]['PrivateKey'], 'peers': [peer]}
                         if protocol == 'amneziawg':
-                            peer.update(address=target_host, port=upstream_port, persistent_keepalive_interval=1)
+                            peer.update(address=target_host, persistent_keepalive_interval=1)
                             endpoint['amnezia'] = {'jc': '2', 'jmin': '32', 'jmax': '64', 's1': '16', 's2': '32',
                                                    's3': '16', 's4': '16', 'h1': '101', 'h2': '102', 'h3': '103', 'h4': '104'}
                         elif index == 0:
@@ -862,14 +866,17 @@ def smoke_protocols(binary, env):
                                     'publicKey': pair['PublicKey'], 'shortId': short_id}}}]}
                     configurations[1]['outbounds'] = [{'type': 'routervpn-xray', 'tag': 'selected',
                                                       'mode': protocol, 'config_json': json.dumps(xray)}]
-                processes, logs, relay = [], [], None
+                processes, logs, relay_sockets = [], [], []
                 relay_done, relay_worker = threading.Event(), None
                 try:
                     if protocol == 'amneziawg':
-                        relay = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                        relay.bind((target_host, upstream_port))
-                        relay.settimeout(0.2)
-                        relay_worker = threading.Thread(target=relay_datagrams, args=(relay, relay_done), daemon=True)
+                        for configuration in configurations:
+                            relay = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                            relay_sockets.append(relay)
+                            relay.bind((target_host, 0))
+                            configuration['endpoints'][0]['peers'][0]['port'] = relay.getsockname()[1]
+                        relay_worker = threading.Thread(target=relay_awg_smoke_datagrams,
+                                                        args=(relay_sockets, target_host, relay_done), daemon=True)
                         relay_worker.start()
                     for role, configuration in zip(('server', 'client'), configurations):
                         config_path, log_path = work/(protocol+'-'+role+'.json'), work/(protocol+'-'+role+'.log')
@@ -914,7 +921,7 @@ def smoke_protocols(binary, env):
                     relay_done.set()
                     if relay_worker is not None:
                         relay_worker.join(timeout=2)
-                    if relay is not None:
+                    for relay in relay_sockets:
                         relay.close()
                     if relay_worker is not None and relay_worker.is_alive():
                         raise RuntimeError('Native AWG relay did not stop')

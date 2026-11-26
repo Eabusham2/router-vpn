@@ -12,12 +12,7 @@ server/portainer-current.yaml
 
 is the reproducible image-only production **template/baseline**. It is not the deploy target for a newer `main` commit merely because its filename says `current`.
 
-For production, choose one verified exact `main` SHA and require both its normal release gates and these same-SHA workflows to succeed:
-
-```text
-Publish ARM64 Portainer images
-Exact-SHA production compose
-```
+For production, choose one verified exact `main` SHA. Require its normal release gates to pass, including the **Build and publish ARM64 images** and **Materialize exact-head production compose** jobs in the manual [Router VPN Release workflow](../.github/workflows/build-all.yml).
 
 Then download the `RouterVPN-production-compose-<sha>` artifact, verify the included `.sha256`, and verify all Router VPN custom image tags plus `ROUTER_VPN_GITHUB_SHA` equal that exact SHA. Use the generated `RouterVPN-Portainer-<sha>.yaml` as the Portainer stack definition. Full contract: `docs/PRODUCTION-RELEASE.md`.
 
