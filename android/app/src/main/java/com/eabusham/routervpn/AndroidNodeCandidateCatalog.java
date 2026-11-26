@@ -39,15 +39,17 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         if("local".equals(original.selectionExecution)) {
             if(original.socks!=null)return original.socks.plan.candidatePrefixMeasurement(position);
             if(original.connect!=null)return original.connect.plan.candidatePrefixMeasurement(position);
+            if(original.plan!=null)return Libbox.routerNodeChainConnectedCandidatePrefixMeasurement(original.plan,position);
         }
         if(original.plan==null||!AndroidNodeChainCapture.responsePrefix(source.members,source.modes,position,original.selectionExecution))return "";
         return Libbox.routerNodeChainCandidatePrefixMeasurement(original.plan,position);
     }
 
-    boolean connectedTypedResponse() throws Exception {
+    boolean connectedFinalResponse() throws Exception {
         AndroidNodeChainSession retained=session;
         if(retained==null||retained.candidatePrefix!=null||retained.execution!=null||executionOwner!=null
-                ||!(retained.capture.socks!=null||retained.capture.connect!=null)
+                ||!(retained.capture.socks!=null||retained.capture.connect!=null||retained.capture.openVPN
+                    ||retained.capture.plan!=null&&retained.capture.plan.hasImportedEntry())
                 ||prefix!=originalSource.members.size()-2||!"routed-candidate-response".equals(measurement))return false;
         requireCurrent();
         return "routed-candidate-response".equals(candidateMeasurement(retained.capture,originalSource,prefix));

@@ -203,7 +203,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
             guard info.requested_execution == nil, info.execution == nil, info.candidate_positions == nil,
                   info.proposal_source_sha256 == nil, info.proposal_config_sha256 == nil else { throw IOSNodeCandidateResult.issue() }
             if IOSMultihopNodeSelection.extendedMixedPacketCount(info.proofs.map(\.mode), execution: "local") > 0 ||
-               info.proofs.contains(where: { $0.typedImportedResponse }) ||
+               info.proofs.contains(where: { $0.typedImportedResponse || $0.connectedFinalResponse(in: info.proofs) }) ||
                info.proofs.contains(where: { $0.metric == "routed-public-candidate-response" }) ||
                binding.identity.nodeChainSource.flatMap({ (try? JSONSerialization.jsonObject(with: $0) as? [String: Any])?["schema"] as? Int }) == 8 ||
                info.proofs.contains(where: { ($0.position >= IOSMultihopNodeSelection.maximumNodes - 1 || !$0.node_id.isEmpty) && $0.metric == "routed-candidate-response" }) {

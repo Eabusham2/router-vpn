@@ -27,6 +27,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -658,7 +659,7 @@ def prepare_native_sources(source, xray, env):
 
 
 def smoke_protocols(binary, env):
-    """Exercise the built host engine over loopback, without host routes or TUN.
+    """Exercise the built host engine locally, without host routes or TUN.
 
     One actual HTTPS exchange traverses each selected proxy. Stopping its
     server must make a fresh exchange fail while the target remains reachable.
@@ -689,10 +690,25 @@ def smoke_protocols(binary, env):
             def log_message(self, *_args):
                 pass
 
-        target = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Target)
+        class TargetServer(http.server.ThreadingHTTPServer):
+            def get_request(self):
+                stream, address = super().get_request()
+                stream.settimeout(3)
+                try:
+                    return server_tls.wrap_socket(stream, server_side=True), address
+                except Exception:
+                    stream.close()
+                    raise
+
+        # Userspace VPN stacks reject inner loopback packets. Find this host's
+        # routed address without sending a datagram; the target stays on this
+        # host, and the exact same address remains reachable by the control.
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
+            route.connect(('192.0.2.1', 9))
+            target_host = route.getsockname()[0]
         server_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         server_tls.load_cert_chain(certificate, key)
-        target.socket = server_tls.wrap_socket(target.socket, server_side=True)
+        target = TargetServer((target_host, 0), Target)
         worker = threading.Thread(target=target.serve_forever, daemon=True)
         worker.start()
         client_tls = ssl.create_default_context(cafile=str(certificate))
@@ -708,12 +724,12 @@ def smoke_protocols(binary, env):
             return value
 
         def exchange(proxy_port=None):
-            with socket.create_connection(('127.0.0.1', proxy_port or target_port), timeout=3) as stream:
+            with socket.create_connection(('127.0.0.1' if proxy_port is not None else target_host, proxy_port or target_port), timeout=3) as stream:
                 if proxy_port is not None:
                     stream.sendall(b'\x05\x01\x00')
                     if exact(stream, 2) != b'\x05\x00':
                         raise ConnectionError('Native SOCKS negotiation failed')
-                    stream.sendall(b'\x05\x01\x00\x01'+socket.inet_aton('127.0.0.1')+struct.pack('!H', target_port))
+                    stream.sendall(b'\x05\x01\x00\x01'+socket.inet_aton(target_host)+struct.pack('!H', target_port))
                     reply = exact(stream, 4)
                     if reply[:3] != b'\x05\x00\x00' or reply[3] not in (1, 3, 4):
                         raise ConnectionError('Selected native protocol did not connect')
@@ -740,9 +756,33 @@ def smoke_protocols(binary, env):
                     process.kill()
                     process.wait(timeout=5)
 
+        def relay_datagrams(transport, finished):
+            # Both shipping AWG endpoints own connected client binds. Relay
+            # their opaque UDP datagrams; the real AWG devices authenticate,
+            # encrypt, obfuscate and route every inner packet themselves.
+            peers, pending = [], None
+            while not finished.is_set():
+                try:
+                    payload, source = transport.recvfrom(65535)
+                except (socket.timeout, ConnectionResetError, ConnectionRefusedError):
+                    continue
+                if source[0] != target_host:
+                    continue
+                if source not in peers:
+                    if len(peers) == 2:
+                        continue
+                    peers.append(source)
+                if len(peers) == 1:
+                    pending = payload
+                else:
+                    transport.sendto(payload, peers[1-peers.index(source)])
+                    if pending is not None:
+                        transport.sendto(pending, peers[1])
+                        pending = None
+
         try:
-            for protocol in ('socks', 'http', 'https', 'shadowsocks', 'hysteria2'):
-                upstream_port, proxy_port = port(socket.SOCK_DGRAM if protocol == 'hysteria2' else socket.SOCK_STREAM), port()
+            for protocol in ('socks', 'http', 'https', 'shadowsocks', 'hysteria2', 'wireguard', 'openvpn-tcp', 'openvpn-udp', 'amneziawg', 'reality-vision'):
+                upstream_port, proxy_port = port(socket.SOCK_DGRAM if protocol in ('hysteria2', 'wireguard', 'openvpn-udp', 'amneziawg') else socket.SOCK_STREAM), port()
                 while upstream_port == proxy_port:
                     proxy_port = port()
                 kind = 'http' if protocol == 'https' else protocol
@@ -755,7 +795,7 @@ def smoke_protocols(binary, env):
                 elif protocol == 'shadowsocks':
                     inbound.update(method='2022-blake3-aes-256-gcm', password=password)
                     outbound.update(method=inbound['method'], password=password)
-                else:
+                elif protocol == 'hysteria2':
                     inbound['users'] = [{'name': 'smoke', 'password': password}]
                     outbound['password'] = password
                     inbound['obfs'] = outbound['obfs'] = {'type': 'salamander', 'password': password}
@@ -766,8 +806,61 @@ def smoke_protocols(binary, env):
                     {'inbounds': [inbound], 'outbounds': [{'type': 'direct', 'tag': 'target'}], 'route': {'final': 'target'}},
                     {'inbounds': [{'type': 'socks', 'listen': '127.0.0.1', 'listen_port': proxy_port}], 'outbounds': [outbound], 'route': {'final': 'selected'}},
                 )
-                processes, logs = [], []
+                if protocol in ('wireguard', 'amneziawg'):
+                    pairs = [dict(line.split(': ', 1) for line in run([binary, 'generate', 'wg-keypair'], env=env, timeout=10).splitlines()) for _ in range(2)]
+                    for index, configuration in enumerate(configurations):
+                        peer = {'public_key': pairs[1-index]['PublicKey'], 'allowed_ips': ['0.0.0.0/0', '::/0']}
+                        endpoint = {'type': 'wireguard' if protocol == 'wireguard' else 'routervpn-amneziawg',
+                                    'tag': 'server' if index == 0 else 'selected', 'system': False,
+                                    'mtu': 1280, 'address': ['198.18.0.'+str(index+1)+'/32'],
+                                    'private_key': pairs[index]['PrivateKey'], 'peers': [peer]}
+                        if protocol == 'amneziawg':
+                            peer.update(address=target_host, port=upstream_port, persistent_keepalive_interval=1)
+                            endpoint['amnezia'] = {'jc': '2', 'jmin': '32', 'jmax': '64', 's1': '16', 's2': '32',
+                                                   's3': '16', 's4': '16', 'h1': '101', 'h2': '102', 'h3': '103', 'h4': '104'}
+                        elif index == 0:
+                            endpoint['listen_port'] = upstream_port
+                        else:
+                            peer.update(address='127.0.0.1', port=upstream_port)
+                        configuration.pop('inbounds' if index == 0 else 'outbounds')
+                        configuration['endpoints'] = [endpoint]
+                elif protocol.startswith('openvpn-'):
+                    shared = {'system': False, 'mtu': 1280, 'network': protocol[8:], 'data_ciphers': ['AES-256-GCM']}
+                    configurations[0]['endpoints'] = [{**shared, 'type': 'openvpn-server', 'tag': 'server',
+                        'listen': '127.0.0.1', 'listen_port': upstream_port, 'address': ['198.18.0.1/24'], 'topology': 'subnet',
+                        'users': [{'username': 'smoke', 'password': password}], 'tls': {
+                            'certificate_path': str(certificate), 'key_path': str(key), 'verify_client_certificate': 'none'}}]
+                    configurations[1]['endpoints'] = [{**shared, 'type': 'openvpn-client', 'tag': 'selected',
+                        'server': '127.0.0.1', 'server_port': upstream_port, 'username': 'smoke', 'password': password,
+                        'tls': {'certificate_path': str(certificate), 'server_name': 'localhost', 'remote_certificate_tls': 'server'}}]
+                    configurations[0].pop('inbounds')
+                    configurations[1].pop('outbounds')
+                elif protocol == 'reality-vision':
+                    pair = dict(line.split(': ', 1) for line in run([binary, 'generate', 'reality-keypair'], env=env, timeout=10).splitlines())
+                    identity, short_id, flow = str(uuid.uuid4()), os.urandom(8).hex(), 'xtls-rprx-vision'
+                    inbound.update(type='vless', listen=target_host, users=[{'name': 'smoke', 'uuid': identity, 'flow': flow}],
+                                   tls={'enabled': True, 'server_name': 'localhost', 'reality': {'enabled': True,
+                                        'handshake': {'server': target_host, 'server_port': target_port},
+                                        'private_key': pair['PrivateKey'], 'short_id': [short_id]}})
+                    xray = {'inbounds': [{'listen': '127.0.0.1', 'port': proxy_port, 'protocol': 'socks',
+                                         'settings': {'auth': 'noauth', 'udp': True}}],
+                            'outbounds': [{'tag': 'proxy', 'protocol': 'vless', 'settings': {'vnext': [{
+                                'address': target_host, 'port': upstream_port,
+                                'users': [{'id': identity, 'flow': flow, 'encryption': 'none'}]}]},
+                                'streamSettings': {'network': 'raw', 'security': 'reality', 'realitySettings': {
+                                    'serverName': 'localhost', 'fingerprint': 'chrome',
+                                    'publicKey': pair['PublicKey'], 'shortId': short_id}}}]}
+                    configurations[1]['outbounds'] = [{'type': 'routervpn-xray', 'tag': 'selected',
+                                                      'mode': protocol, 'config_json': json.dumps(xray)}]
+                processes, logs, relay = [], [], None
+                relay_done, relay_worker = threading.Event(), None
                 try:
+                    if protocol == 'amneziawg':
+                        relay = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                        relay.bind((target_host, upstream_port))
+                        relay.settimeout(0.2)
+                        relay_worker = threading.Thread(target=relay_datagrams, args=(relay, relay_done), daemon=True)
+                        relay_worker.start()
                     for role, configuration in zip(('server', 'client'), configurations):
                         config_path, log_path = work/(protocol+'-'+role+'.json'), work/(protocol+'-'+role+'.log')
                         configuration['log'] = {'level': 'error', 'timestamp': False}
@@ -808,6 +901,13 @@ def smoke_protocols(binary, env):
                         stop(process)
                     for log in logs:
                         log.close()
+                    relay_done.set()
+                    if relay_worker is not None:
+                        relay_worker.join(timeout=2)
+                    if relay is not None:
+                        relay.close()
+                    if relay_worker is not None and relay_worker.is_alive():
+                        raise RuntimeError('Native AWG relay did not stop')
         finally:
             target.shutdown(); target.server_close(); worker.join(timeout=5)
             if worker.is_alive():

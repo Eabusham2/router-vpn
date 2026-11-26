@@ -64,19 +64,25 @@ func (m *RouterNodeChain) newCandidateMeasurementContext(ctx context.Context, se
 	if deadline, bounded := ctx.Deadline(); bounded && deadline.Before(prepareDeadline) {
 		prepareDeadline = deadline
 	}
-	plan, err := m.chain.NewCandidatePlan(position, inventory)
+	state := m.state.Load()
+	if state == nil || state.chain == nil || state.revoked.Load() {
+		return nil, errors.New("candidate measurement has no original proved source")
+	}
+	// The live proof controller owns the exact imported registry. The dormant
+	// launch plan has matching bytes but cannot substitute for that owner.
+	plan, err := state.chain.NewCandidatePlan(position, inventory)
 	if err != nil {
 		return nil, err
 	}
 	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
 		return nil, err
 	}
-	if m.server != server || m.candidate.Load() != nil || m.healthyContext(ctx) != nil {
+	if m.server != server || m.state.Load() != state || state.revoked.Load() || m.candidate.Load() != nil || m.healthyContext(ctx) != nil {
 		m.mu.Unlock()
 		return nil, errors.New("candidate measurement changed its native server, catalog or proof")
 	}
 	digest := sha256.Sum256([]byte(inventory))
-	candidate := &RouterNodeChainCandidateMeasurement{owner: m, state: m.state.Load(), plan: plan, catalog: catalog, inventorySHA: hex.EncodeToString(digest[:]), prepareDeadline: prepareDeadline}
+	candidate := &RouterNodeChainCandidateMeasurement{owner: m, state: state, plan: plan, catalog: catalog, inventorySHA: hex.EncodeToString(digest[:]), prepareDeadline: prepareDeadline}
 	candidate.self = candidate
 	m.candidate.Store(candidate)
 	m.mu.Unlock()
@@ -335,24 +341,37 @@ func RouterNodeChainCandidateInputSupported(input string) bool {
 }
 
 func RouterNodeChainCandidatePrefixMeasurement(plan *RouterNodeChain, position int32) string {
-    if plan == nil || plan.self != plan || plan.chain == nil {return ""}
-    return plan.chain.CandidatePrefixMeasurement(int(position))
+	if plan == nil || plan.self != plan || plan.chain == nil {
+		return ""
+	}
+	return plan.chain.CandidatePrefixMeasurement(int(position))
+}
+
+func RouterNodeChainConnectedCandidatePrefixMeasurement(plan *RouterNodeChain, position int32) string {
+	if plan == nil || plan.self != plan || plan.chain == nil {
+		return ""
+	}
+	return plan.chain.ConnectedCandidatePrefixMeasurement(int(position))
 }
 
 // Retain only independent original imported candidates for one Local public prefix.
 func RouterNodeChainFilterPublicCandidateInventory(source string, position int32, inventory string) (string, error) {
-    return mobilemultihop.FilterNodeChainPublicCandidateInventory(source, int(position), inventory)
+	return mobilemultihop.FilterNodeChainPublicCandidateInventory(source, int(position), inventory)
 }
 
 func RouterNodeChainCandidateInputSupportedForMeasurement(input, measurement string) bool {
-    return mobilemultihop.NodeChainCandidateInputSupportedForMeasurement(input,measurement)
+	return mobilemultihop.NodeChainCandidateInputSupportedForMeasurement(input, measurement)
 }
 
 // Compare a prepared public prefix row to its complete original native owner.
 func RouterNodeChainCandidatePrefixProof(plan *RouterNodeChain, position int32) string {
-    if plan==nil || plan.self!=plan || plan.chain==nil || plan.chain.CandidatePrefixMeasurement(int(position))=="" {return ""}
-    proofs:=plan.chain.ProofInventory()
-    raw,err:=json.Marshal(proofs[position])
-    if err!=nil {return ""}
-    return string(raw)
+	if plan == nil || plan.self != plan || plan.chain == nil || plan.chain.CandidatePrefixMeasurement(int(position)) == "" {
+		return ""
+	}
+	proofs := plan.chain.ProofInventory()
+	raw, err := json.Marshal(proofs[position])
+	if err != nil {
+		return ""
+	}
+	return string(raw)
 }

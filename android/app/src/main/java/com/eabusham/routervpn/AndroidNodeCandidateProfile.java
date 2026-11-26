@@ -63,13 +63,13 @@ final class AndroidNodeCandidateProfile {
         if(original==null||replacement<1||replacement>=original.members.size()||original.members.size()!=original.modes.size())
             throw new IllegalStateException("The measured prefix has no original next-hop position.");
         execution=original.execution;
-        boolean typedResponse=authority==null&&catalog.connectedTypedResponse();
-        if(typedResponse&&(retainFinal||replacement!=original.members.size()-1))
-            throw new IllegalStateException("The imported SOCKS or CONNECT hop must remain immediately before the replacement final node.");
+        boolean finalResponse=authority==null&&catalog.connectedFinalResponse();
+        if(finalResponse&&(retainFinal||replacement!=original.members.size()-1))
+            throw new IllegalStateException("The captured imported prefix must remain immediately before the replacement final node.");
         boolean insert=response&&(publicResponse || retainFinal || replacement<original.members.size()-1);
         if(response){
             if(candidate.imported!=publicResponse || original.members.get(original.members.size()-1).imported!=publicResponse || !"shadowsocks".equals(candidateMode)
-                    ||!(typedResponse||AndroidNodeChainCapture.responsePrefix(original.members,original.modes,catalog.prefix,execution)))
+                    ||!(finalResponse||AndroidNodeChainCapture.responsePrefix(original.members,original.modes,catalog.prefix,execution)))
                 throw new IllegalStateException("The authenticated response lost its original stream or paired candidate.");
             if(publicResponse) AndroidNodeChainCapture.requireLiteralImportedSS(candidate);
             if (!"local".equals(execution)) {

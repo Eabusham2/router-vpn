@@ -72,6 +72,39 @@ func (c *NodeChain) CandidatePrefixMeasurement(position int) string {
 	return c.candidatePrefixMeasurementValidated(position)
 }
 
+// ConnectedCandidatePrefixMeasurement also describes the final replacement
+// response available through a proved original OpenVPN or imported-entry
+// prefix. It does not grant a temporary prefix graph or selected Server route.
+func (c *NodeChain) ConnectedCandidatePrefixMeasurement(position int) string {
+	if c == nil || c.validateCapture() != nil {
+		return ""
+	}
+	if c.connectedFinalResponsePrefix(position) {
+		return hopmeasure.CandidatePrivateResponseMeasurement
+	}
+	return c.candidatePrefixMeasurementValidated(position)
+}
+
+// The complete source has already been validated. Both families retain a
+// private SS final and may only replace that final; their imported prefix is
+// owned by the live complete graph, never reconstructed for measurement.
+func (c *NodeChain) connectedFinalResponsePrefix(position int) bool {
+	if c == nil || len(c.nodes) < 3 || len(c.nodes) > NodeChainMaximumNodes ||
+		position != len(c.nodes)-2 || c.nodes[position] != nil ||
+		c.nodes[len(c.nodes)-1] == nil || c.proofs[len(c.proofs)-1].Mode != "shadowsocks" ||
+		c.proofs[len(c.proofs)-1].StartLayer != "off" {
+		return false
+	}
+	proof := c.proofs[position]
+	if proof.NodeKind != "external" || proof.Kind != "public-path" || proof.StartLayer != "off" {
+		return false
+	}
+	if c.openVPNMiddle != nil {
+		return proof.Mode == "openvpn" && c.openVPNOwners != nil
+	}
+	return c.HasImportedEntry() && position == 1 && proof.Mode == "shadowsocks"
+}
+
 // The complete capture has already validated each source and proof, including
 // the independent private identities attached to the schema-six stream route.
 func (c *NodeChain) pairedCandidateStream(position int) bool {

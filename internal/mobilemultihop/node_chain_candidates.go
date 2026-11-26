@@ -31,19 +31,20 @@ type NodeChainCandidateOwner interface {
 }
 
 type NodeChainCandidatePlan struct {
-	chain           *NodeChain
-	multiple        *nodeChainCandidateMultipleOriginal
-	multipleSeal    *nodeChainMultipleCandidatePlanSeal
-	metadataPages   *nodeChainCandidateMetadataCache
-	inventory       string
-	revision        string
-	prefix          NodeChainProof
-	targets         []hopmeasure.CandidateTarget
-	measurement     string
-	responses       []candidateResponseSource
-	publicResponses []candidatePublicResponseSource
-	capture         string
-	seal            string
+	chain                  *NodeChain
+	multiple               *nodeChainCandidateMultipleOriginal
+	multipleSeal           *nodeChainMultipleCandidatePlanSeal
+	metadataPages          *nodeChainCandidateMetadataCache
+	inventory              string
+	revision               string
+	prefix                 NodeChainProof
+	targets                []hopmeasure.CandidateTarget
+	measurement            string
+	connectedFinalResponse bool
+	responses              []candidateResponseSource
+	publicResponses        []candidatePublicResponseSource
+	capture                string
+	seal                   string
 }
 
 func (c *NodeChain) NewCandidatePlan(position int, inventory string) (*NodeChainCandidatePlan, error) {
@@ -51,6 +52,9 @@ func (c *NodeChain) NewCandidatePlan(position int, inventory string) (*NodeChain
 	// route. NewMeasurementContext separately requires that same full chain's
 	// fresh native owner and complete private/public/DNS readiness. Temporary
 	// closed-prefix preparations retain their distinct admission and lifetime.
+	if c != nil && c.validateCapture() == nil && c.connectedFinalResponsePrefix(position) {
+		return c.newCandidatePlanInputs(position, inventory, nil, nil, true)
+	}
 	if c != nil && (c.HasExternalFinal() || c.importedNodes != nil && len(c.nodes) > NodeChainMaximumNodes && c.ExtendedLocalNodeCount() == len(c.nodes) || c.importedNodes != nil && c.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement) {
 		return c.NewMultipleImportedCandidatePlan(position, inventory)
 	}
@@ -68,6 +72,9 @@ func (c *NodeChain) newPacketCandidatePlanOwned(position int, inventory string, 
 // NewCandidatePlanFromInputs uses an original parse result only when its exact
 // source bytes occur at the same ordinal in the full original inventory.
 func (c *NodeChain) NewCandidatePlanFromInputs(position int, inventory string, inputs []*NodeChainCandidateInput) (*NodeChainCandidatePlan, error) {
+	if c != nil && c.validateCapture() == nil && c.connectedFinalResponsePrefix(position) {
+		return c.newCandidatePlanInputs(position, inventory, nil, inputs, true)
+	}
 	var multiple *nodeChainCandidateMultipleOriginal
 	if c != nil && (c.HasExternalFinal() || c.importedNodes != nil && len(c.nodes) > NodeChainMaximumNodes && c.ExtendedLocalNodeCount() == len(c.nodes) || c.importedNodes != nil && c.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement) {
 		var err error
@@ -79,25 +86,35 @@ func (c *NodeChain) NewCandidatePlanFromInputs(position int, inventory string, i
 	return c.newPacketCandidatePlanInputs(position, inventory, multiple, inputs)
 }
 func (c *NodeChain) newPacketCandidatePlanInputs(position int, inventory string, multiple *nodeChainCandidateMultipleOriginal, inputs []*NodeChainCandidateInput) (*NodeChainCandidatePlan, error) {
+	return c.newCandidatePlanInputs(position, inventory, multiple, inputs, false)
+}
+
+func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multiple *nodeChainCandidateMultipleOriginal, inputs []*NodeChainCandidateInput, connectedFinalResponse bool) (*NodeChainCandidatePlan, error) {
 	measurement := c.CandidatePrefixMeasurement(position)
+	if connectedFinalResponse {
+		if multiple != nil || measurement != "" || c.ConnectedCandidatePrefixMeasurement(position) != hopmeasure.CandidatePrivateResponseMeasurement {
+			return nil, nodeChainCandidatePreparationError
+		}
+		measurement = hopmeasure.CandidatePrivateResponseMeasurement
+	}
 	if measurement == "" {
 		return nil, errors.New("candidate requires a captured packet prefix or a qualified routed response path")
 	}
-	if multiple == nil && c.importedNodes != nil || multiple != nil && !multiple.currentValidated(c) {
+	if multiple == nil && c.importedNodes != nil && !connectedFinalResponse || multiple != nil && !multiple.currentValidated(c) {
 		return nil, nodeChainCandidatePreparationError
 	}
-	// A later saved OpenVPN member is only source provenance for a temporary
-	// prefix preparation. The selected position must precede it; neither that
-	// member nor the final becomes a candidate route or a TCP timing target.
-	// A connected typed SOCKS/CONNECT owner can instead retain its imported
-	// prefix for an authenticated candidate response. Its dormant preparation
-	// still has no imported native owner and remains packet-prefix only.
+	// A temporary prefix stops before its saved OpenVPN, SOCKS or CONNECT hop.
+	// Only the connected original owner may carry an authenticated response
+	// through those imported hops or the captured imported-entry SS route.
+	// Neither admission turns an imported UDP transport into a TCP timing
+	// target or grants a dormant preparation its native owner.
 	var record NodeChainCandidateInventory
 	if exactJSON([]byte(inventory), &record, NodeChainInputLimit) != nil || record.Schema != 1 ||
 		!nodeChainIdentityText(record.Revision) || len(record.Inputs) == 0 {
 		return nil, errors.New("candidate timing requires the complete original source inventory")
 	}
 	plan := &NodeChainCandidatePlan{metadataPages: &nodeChainCandidateMetadataCache{}, chain: c, multiple: multiple, inventory: inventory, revision: record.Revision, prefix: c.proofs[position]}
+	plan.connectedFinalResponse = connectedFinalResponse
 	if measurement != hopmeasure.CandidateTCPMeasurement {
 		plan.measurement = measurement
 	}
@@ -152,6 +169,9 @@ func (c *NodeChain) newPacketCandidatePlanInputs(position int, inventory string,
 		}
 	}
 	domain := nodeChainMultipleCandidateDomain(multiple)
+	if connectedFinalResponse {
+		domain += "/connected-original-final-response"
+	}
 	if plan.measurement != "" {
 		domain += "/" + plan.measurement
 	}
@@ -383,6 +403,9 @@ func (p *NodeChainCandidatePlan) digest() string {
 	if p.publicResponses != nil {
 		fields = append(fields, p.publicResponses)
 	}
+	if p.connectedFinalResponse {
+		fields = append(fields, true)
+	}
 	if p.multiple != nil {
 		fields = append(fields, p.multiple.digest())
 	}
@@ -396,7 +419,10 @@ func (p *NodeChainCandidatePlan) validate() error {
 		p.prefix.Position < 0 || p.prefix.Position >= len(p.chain.proofs) || p.prefix != p.chain.proofs[p.prefix.Position] {
 		return errors.New("candidate plan changed its sealed original capture")
 	}
-	if p.multiple == nil && p.chain.importedNodes != nil || p.multiple != nil && !p.multiple.currentValidated(p.chain) {
+	if p.connectedFinalResponse && (p.multiple != nil || p.measurement != hopmeasure.CandidatePrivateResponseMeasurement || !p.chain.connectedFinalResponsePrefix(p.prefix.Position)) {
+		return nodeChainCandidatePreparationError
+	}
+	if p.multiple == nil && p.chain.importedNodes != nil && !p.connectedFinalResponse || p.multiple != nil && !p.multiple.currentValidated(p.chain) {
 		return nodeChainCandidatePreparationError
 	}
 	return nil
@@ -414,7 +440,7 @@ func (p *NodeChainCandidatePlan) NewMeasurementContext(ctx context.Context, owne
 	}
 	active, err := owner.MeasurementChainContext(ctx)
 	if err != nil || active == nil || active.SourceSHA256() != p.chain.SourceSHA256() || active.ConfigSHA256() != p.chain.ConfigSHA256() ||
-		p.multiple != nil && active != p.chain {
+		(p.multiple != nil || p.connectedFinalResponse) && active != p.chain {
 		return nil, errors.Join(err, hopmeasure.ErrStale)
 	}
 	if err := active.HealthyContext(ctx); err != nil {

@@ -66,13 +66,13 @@ import Libbox
     private static func compileCaptured(original: IOSNodeCandidateOriginalCapture, records: [String: Data], position: Int,
             candidateID: String, measuredInput: String, selectedExecution: Bool, multipleImported: Bool = false, selectedResponse: Bool = false, selectedPublic: Bool = false, retainFinal: Bool = false, connectedLocal: Bool = false) throws -> Self {
         let prefixes = connectedLocal ? original.connectedCandidatePrefixes : original.candidatePrefixes
-        let typedResponse = connectedLocal && !selectedExecution && original.requiresIndependentPrefix &&
-            prefixes.indices.contains(position) && prefixes[position].typedImportedResponse && prefixes[position].supported(in: prefixes)
+        let finalResponse = connectedLocal && !selectedExecution && original.selectionExecution == "local" &&
+            prefixes.indices.contains(position) && prefixes[position].connectedFinalResponse(in: prefixes)
         guard !selectedExecution || ["server", "auto"].contains(original.selectionExecution),
               selectedExecution || !original.requiresIndependentPrefix || original.selectionExecution == "local",
               original.members.indices.contains(position),
-              typedResponse || position < original.members.count - (original.requiresIndependentPrefix && !selectedExecution ? 2 : 1),
-              !typedResponse || !retainFinal && position == original.members.count - 2,
+              finalResponse || position < original.members.count - (original.requiresIndependentPrefix && !selectedExecution ? 2 : 1),
+              !finalResponse || !retainFinal && position == original.members.count - 2,
               selectedResponse || multipleImported || !selectedExecution && ["routed-candidate-response", "routed-public-candidate-response"].contains(prefixes[position].metric) || original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
               !measuredInput.isEmpty else { throw IOSNodeCandidateCapture.issue() }
         func source(_ id: String) throws -> (root: [String: Any], profile: [String: Any], files: [String: [String: String]]) {
