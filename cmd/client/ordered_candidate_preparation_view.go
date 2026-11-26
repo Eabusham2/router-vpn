@@ -115,6 +115,10 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 			view.responseNodes = originalCandidateResponseNodes(selection)
 		}
 	}
+	if e := launch.chain.execution; e != nil && len(view.responseOwners) == 0 && e.preparation.Execution() == "auto" && e.preparation.SupportsSelectedFinalResponseCandidate(position) {
+		view.responseOwners = []string{"local"}
+		view.responseNodes = originalCandidateResponseNodes(selection)
+	}
 	catalogMetric := desktopCandidateCatalogMetric(launch, candidateServerRequested(ctx))
 	if draft != nil && draft.Execution == "auto" && len(view.responseOwners) == 0 && catalogMetric(position) == hopmeasure.CandidatePublicResponseMeasurement {
 		view.responseOwners = []string{"local"}

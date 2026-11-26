@@ -45,18 +45,30 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         return Libbox.routerNodeChainCandidatePrefixMeasurement(original.plan,position);
     }
 
+    static String candidateMeasurement(AndroidNodeChainSession session,int position) throws Exception {
+        AndroidNodeStore.ChainCapture source=source(session);
+        if(!session.capture.ownsSource(source)||position<0||position>=source.modes.size())return "";
+        io.nekohasekai.libbox.RouterNodeChainExecution owner=session.candidateExecutionOwner();
+        if(owner!=null&&owner.supportsSelectedFinalResponseCandidate(position))return "routed-candidate-response";
+        return candidateMeasurement(session.capture,source,position);
+    }
+
     boolean connectedFinalResponse() throws Exception {
         AndroidNodeChainSession retained=session;
-        if(retained==null||retained.candidatePrefix!=null||retained.execution!=null||executionOwner!=null
-                ||!(retained.capture.socks!=null||retained.capture.connect!=null||retained.capture.openVPN
-                    ||retained.capture.plan!=null&&retained.capture.plan.hasImportedEntry())
+        if(retained==null||retained.candidatePrefix!=null
                 ||prefix!=originalSource.members.size()-2||!"routed-candidate-response".equals(measurement))return false;
         requireCurrent();
+        if(executionOwner!=null) {
+            selectedPrefixID();
+            return executionOwner.supportsSelectedFinalResponseCandidate(prefix);
+        }
+        if(retained.execution!=null||!(retained.capture.socks!=null||retained.capture.connect!=null||retained.capture.openVPN
+                ||retained.capture.plan!=null&&retained.capture.plan.hasImportedEntry()))return false;
         return "routed-candidate-response".equals(candidateMeasurement(retained.capture,originalSource,prefix));
     }
 
     AndroidNodeCandidateCatalog(Context context,AndroidNodeChainSession session,int prefix)throws Exception {
-        this(context,source(session),prefix,candidateMeasurement(session.capture,source(session),prefix));
+        this(context,source(session),prefix,candidateMeasurement(session,prefix));
         bind(session);
     }
     /** Capture the immutable saved inventory before permission or a native
@@ -164,8 +176,9 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
     String selectedPrefixID() throws Exception {
         if (session == null || executionOwner == null || session.source != originalSource
                 || session.candidateExecutionOwner() != executionOwner || session.candidateServer() != server
-                || !session.capture.ownsSelectedCandidatePrefix(originalSource, prefix))
-            throw new IllegalStateException("This selected route has no retained packet stop at the requested position.");
+                || !(session.capture.ownsSelectedCandidatePrefix(originalSource, prefix)
+                    || "routed-candidate-response".equals(measurement) && executionOwner.supportsSelectedFinalResponseCandidate(prefix)))
+            throw new IllegalStateException("This selected route has no retained candidate prefix at the requested position.");
         if (!"routed-tcp-connect".equals(measurement) && (!originalSource.execution.equals(executionOwner.requestedExecution())
                 || !AndroidNodeChainCapture.selectedResponseWinner(originalSource.execution, executionOwner.execution())))
             throw new IllegalStateException("This response requires the original active Server or Compare selection.");

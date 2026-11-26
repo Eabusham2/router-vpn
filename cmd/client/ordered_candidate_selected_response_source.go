@@ -93,7 +93,13 @@ func desktopCompareLocalPrivateResponseMembers(members []desktopNodeChainMember,
 }
 
 func orderedCandidateResponseSourceNodes(selection multihopSelection, execution string, position int) []orderedCandidateResponseSourceNode {
-	if selection.Native == nil || selection.Native.chain == nil || selection.Native.chain.chain == nil ||
+	if selection.Native == nil || selection.Native.chain == nil {
+		return nil
+	}
+	if execution == "auto" && desktopTypedFinalResponseMembers(selection.Nodes, execution, position) {
+		return originalCandidateResponseNodes(selection)
+	}
+	if selection.Native.chain.chain == nil ||
 		!desktopCompareLocalPrivateResponseMembers(selection.Nodes, execution, position) {
 		return nil
 	}

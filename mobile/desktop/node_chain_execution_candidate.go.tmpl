@@ -276,9 +276,10 @@ func (m *routerVPNDesktopExecutionMeasurement) newSelectedCandidate(ctx context.
 	if op.inputCurrent(ctx) != nil {
 		return op, routerVPNExternalFailure
 	}
-	// These selected typed proxy sources prove a physical packet entry. Their
-	// downstream positions have no selected packet-candidate capability.
-	if q.Position != 0 && (m.owner.prep.RequiresSOCKSExecutionObserver() || m.owner.prep.RequiresCONNECTExecutionObserver()) {
+	// Typed downstream routes admit only the source-classified final response;
+	// they never acquire the packet entry's connect-only capability.
+	if q.Position != 0 && (m.owner.prep.RequiresSOCKSExecutionObserver() || m.owner.prep.RequiresCONNECTExecutionObserver()) &&
+		!m.owner.prep.SupportsSelectedFinalResponseCandidate(q.Position) {
 		return op, routerVPNExternalFailure
 	}
 	localResponse := m.owner.prep.SupportsCompareLocalResponseCandidate(q.Position)

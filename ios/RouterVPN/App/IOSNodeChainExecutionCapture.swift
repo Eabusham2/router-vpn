@@ -154,6 +154,8 @@ final class IOSNodeChainExecutionCapture {
     var candidateResponseMetric: String { isExternalFinal ? "routed-public-candidate-response" : "routed-candidate-response" }
     func responsePositions(for winner: String) -> [Int] {
         guard (requested == "auto" && winner == "local") || (["server", "auto"].contains(requested) && winner == "server") else { return [] }
+        let finalPrefix = members.count - 2
+        if plan.supportsSelectedFinalResponseCandidate(Int32(finalPrefix)) { return [finalPrefix] }
         if case .externalFinal(let capture) = local {
             guard capture.sourceSchema == 8, (3...IOSMultihopNodeSelection.physicalTraversalDepth).contains(members.count) else { return [] }
             return Array(1..<(members.count - 1))

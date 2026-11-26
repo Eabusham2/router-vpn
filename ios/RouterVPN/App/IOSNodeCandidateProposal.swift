@@ -60,13 +60,15 @@ import Libbox
         }
         return try compileCaptured(original: original, records: records, position: position,
             candidateID: candidateID, measuredInput: measuredInput, selectedExecution: true, multipleImported: execution.isMultipleImported,
-            selectedResponse: execution.responsePositions(for: winner).contains(position), selectedPublic: execution.isExternalFinal && position > 0, retainFinal: retainFinal)
+            selectedResponse: execution.responsePositions(for: winner).contains(position), selectedPublic: execution.isExternalFinal && position > 0,
+            selectedFinalResponse: execution.plan.supportsSelectedFinalResponseCandidate(Int32(position)), retainFinal: retainFinal)
     }
 
     private static func compileCaptured(original: IOSNodeCandidateOriginalCapture, records: [String: Data], position: Int,
-            candidateID: String, measuredInput: String, selectedExecution: Bool, multipleImported: Bool = false, selectedResponse: Bool = false, selectedPublic: Bool = false, retainFinal: Bool = false, connectedLocal: Bool = false) throws -> Self {
+            candidateID: String, measuredInput: String, selectedExecution: Bool, multipleImported: Bool = false, selectedResponse: Bool = false, selectedPublic: Bool = false, selectedFinalResponse: Bool = false, retainFinal: Bool = false, connectedLocal: Bool = false) throws -> Self {
         let prefixes = connectedLocal ? original.connectedCandidatePrefixes : original.candidatePrefixes
-        let finalResponse = connectedLocal && !selectedExecution && original.selectionExecution == "local" &&
+        let finalResponse = selectedExecution && selectedResponse && selectedFinalResponse ||
+            connectedLocal && !selectedExecution && original.selectionExecution == "local" &&
             prefixes.indices.contains(position) && prefixes[position].connectedFinalResponse(in: prefixes)
         guard !selectedExecution || ["server", "auto"].contains(original.selectionExecution),
               selectedExecution || !original.requiresIndependentPrefix || original.selectionExecution == "local",

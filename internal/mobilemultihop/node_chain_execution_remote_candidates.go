@@ -83,6 +83,8 @@ func (r *NodeChainExecutionRuntime) remoteCandidatePlanContext(ctx context.Conte
 				return nil, nodeChainExecutionError
 			}
 			packet, err = original.NewMultipleImportedCandidatePlan(position, inventory)
+		} else if r.projection.preparation.selectedFinalResponsePrefix(position) {
+			packet, err = original.NewCandidatePlan(position, inventory)
 		} else {
 			packet, err = original.newPacketCandidatePlan(position, inventory)
 		}
@@ -389,6 +391,9 @@ func remoteCandidateDeadline(ctx context.Context, lease time.Time) time.Time {
 func (p *NodeChainExecutionPreparation) SupportsServerResponseCandidate(position int) bool {
 	if p == nil || p.validateCapture() != nil || (p.Execution() != "server" && p.Execution() != "auto") {
 		return false
+	}
+	if p.selectedFinalResponsePrefix(position) {
+		return true
 	}
 	if p.multiple == nil {
 		return p.local.compareLocalResponsePrefix(position)

@@ -578,7 +578,9 @@ function ShowExternalComparison{
 
 function TestOrderedCandidateResponseSource($S,$Value,$Expected=$null){
  $rows=ExternalComparisonValue $Value 'response_source_nodes';$position=$S.Position
- if((OrderedCandidateNumber $Value 'prefix_position') -ne $position -or $rows -isnot [array] -or $rows.Count -lt $(if($null -ne (ExternalComparisonValue $Value 'response_executions')){3}else{4}) -or $rows.Count -gt 96 -or $position -lt 1 -or $position -gt $rows.Count-2 -or ($position -lt $rows.Count-2 -and $rows.Count -ge 96)){return $false}
+ if((OrderedCandidateNumber $Value 'prefix_position') -ne $position -or $rows -isnot [array] -or $rows.Count -lt 3 -or $rows.Count -gt 96 -or $position -lt 1 -or $position -gt $rows.Count-2 -or ($position -lt $rows.Count-2 -and $rows.Count -ge 96)){return $false}
+ $typed=$null -ne (ExternalComparisonValue $Value 'response_executions') -and $rows.Count -le 8 -and $position -eq $rows.Count-2 -and [string](ExternalComparisonValue $rows[$position] 'mode') -cin @('socks5','http-connect','https-connect','openvpn')
+ if(-not $typed -and $rows.Count -lt $(if($null -ne (ExternalComparisonValue $Value 'response_executions')){3}else{4})){return $false}
  $draft=ExternalComparisonValue $S 'Draft'
  if($null -ne $Expected -and ($Expected -isnot [array] -or $Expected.Count -ne $rows.Count)){return $false}
  if($null -ne $draft -and (($draft.execution -cne 'auto' -and ($draft.execution -cne 'server' -or $null -eq (ExternalComparisonValue $Value 'response_executions'))) -or $draft.nodes.Count -ne $rows.Count)){return $false}
@@ -587,12 +589,17 @@ function TestOrderedCandidateResponseSource($S,$Value,$Expected=$null){
   $row=$rows[$i];if($null -eq $row){return $false}
   $keys=if($row -is [Collections.IDictionary]){$row.Keys}else{$row.PSObject.Properties.Name}
   $kind=$row.kind
-  if($i -eq 0 -or $i -eq $rows.Count-1){if($kind -cne 'router-vpn'){return $false}}
-  elseif($kind -ceq 'router-vpn'){
-   if($i -lt 2){return $false}
-  }elseif($kind -cne 'external'){return $false}
   $mode=$row.mode
-  if(($i -eq 0 -and $mode -cnotin @('wg','awg2-fast','awg2-strong')) -or ($i -gt 0 -and $mode -cne 'shadowsocks')){return $false}
+  if($typed){
+   if(($i -lt $position -and ($kind -cne 'router-vpn' -or $mode -cnotin @('wg','awg2-fast','awg2-strong'))) -or
+      ($i -eq $position -and $kind -cne 'external') -or ($i -gt $position -and ($kind -cne 'router-vpn' -or $mode -cne 'shadowsocks'))){return $false}
+  }else{
+   if($i -eq 0 -or $i -eq $rows.Count-1){if($kind -cne 'router-vpn'){return $false}}
+   elseif($kind -ceq 'router-vpn'){
+    if($i -lt 2){return $false}
+   }elseif($kind -cne 'external'){return $false}
+   if(($i -eq 0 -and $mode -cnotin @('wg','awg2-fast','awg2-strong')) -or ($i -gt 0 -and $mode -cne 'shadowsocks')){return $false}
+  }
   if(@($keys).Count -ne 3 -or $row.id -isnot [string] -or $row.id -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or -not $ids.Add($row.id) -or $kind -isnot [string]){return $false}
   if($null -ne $draft){
    $node=$draft.nodes[$i];$keys=if($node -is [Collections.IDictionary]){$node.Keys}else{$node.PSObject.Properties.Name}
@@ -748,7 +755,7 @@ function OrderedCandidateViewMetric($S,$View){
   return $metric
  }elseif($metric -ceq 'routed-tcp-connect'){
   if($prefix[0].mode -cin @('wg','awg2-fast','awg2-strong') -and ($null -eq $offer -or $offer -ceq $metric)){return $metric}
- }elseif($S.Position -gt 0 -and $prefix[0].mode -ceq 'shadowsocks' -and $offer -ceq $metric -and
+ }elseif($S.Position -gt 0 -and $prefix[0].mode -cin @('shadowsocks','socks5','http-connect','https-connect','openvpn') -and $offer -ceq $metric -and
           (((OrderedCandidateScope $S) -cne 'draft-complete-selected' -and
           [string](ExternalComparisonValue $View 'requested_execution') -cin @('','local') -and
           [string](ExternalComparisonValue $View 'selected_execution') -cin @('','local')) -or (TestOrderedCandidateLocalResponse $S $View))){
@@ -773,6 +780,7 @@ function TestOrderedCandidateDraftInsertion($S,$Choice,$Path,$View=$null){
     $Choice.id -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or $Path -isnot [array]){return $false}
  $nodes=@($draft.nodes);$at=$S.Position+1
  if($nodes.Count -ge 96 -or $at -lt 2 -or $at -ge $nodes.Count -or $Path.Count -ne $nodes.Count+1){return $false}
+ if($nodes[$S.Position].mode -cin @('socks5','http-connect','https-connect','openvpn')){return $false}
  if($draft.execution -ceq 'auto' -and $nodes.Count -gt 3){
   if(-not (TestOrderedCandidateResponseSource $S $view)){return $false}
  }
@@ -987,7 +995,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
  if($Phase -eq 'catalog' -and $null -ne $source){
   $prefix=@($Value.prefixes|Where-Object {(OrderedCandidateNumber $_ 'position') -eq $S.Position})
   if(-not(TestOrderedCandidateLocalResponse $S $Value) -or $Value.measurement -cne 'routed-candidate-response' -or $prefix.Count -ne 1 -or
-     $prefix[0].id -cne $Value.response_source_nodes[$S.Position].id -or $prefix[0].mode -cne 'shadowsocks'){throw 'The private response differs from its captured prefix.'}
+     $prefix[0].id -cne $Value.response_source_nodes[$S.Position].id -or $prefix[0].mode -cne $Value.response_source_nodes[$S.Position].mode){throw 'The private response differs from its captured prefix.'}
   foreach($choice in $Value.candidates){
    $fields=if($choice -is [Collections.IDictionary]){$choice.Keys}else{$choice.PSObject.Properties.Name}
    if('proposed_path' -cin $fields -or 'proposal_action' -cin $fields){

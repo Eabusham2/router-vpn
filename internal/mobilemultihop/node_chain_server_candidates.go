@@ -2,8 +2,8 @@ package mobilemultihop
 
 import "router-vpn/internal/multihoprelay"
 
-// NodeChainServerCandidateTarget is a connect-only target compiled from the
-// original private server policy. It is not a proof exception or a front route.
+// NodeChainServerCandidateTarget is a bounded handshake or challenge target
+// compiled from the original private server policy. It is not a proof exception.
 // Native admission still needs the original worker, operation and live endpoint.
 type NodeChainServerCandidateTarget struct {
 	publicOriginal *nodeChainServerPublicCandidateTarget
@@ -11,6 +11,9 @@ type NodeChainServerCandidateTarget struct {
 	policy         *NodeChainServerPolicy
 	node           *NodeProfile
 	stream         *nodeChainImportedMember
+	socks          *nodeChainSOCKSMember
+	connect        *nodeChainCONNECTMember
+	openvpn        *nodeChainOpenVPNMember
 	capture        multihoprelay.NodeChainCandidateCapture
 	tag            string
 }
@@ -40,6 +43,9 @@ func (p *NodeChainServerPolicy) originalCandidateTarget(c multihoprelay.NodeChai
 	}
 	node := p.nodes[index]
 	var stream *nodeChainImportedMember
+	var socks *nodeChainSOCKSMember
+	var connect *nodeChainCONNECTMember
+	var openvpn *nodeChainOpenVPNMember
 	if c.Request.Schema == 3 {
 		if !p.descriptor.PublicCandidateResponsePrefix(c.Request.Position) || p.externalFinal == nil {
 			return nil, nodeChainServerError
@@ -53,12 +59,35 @@ func (p *NodeChainServerPolicy) originalCandidateTarget(c multihoprelay.NodeChai
 			return nil, nodeChainServerError
 		}
 		if c.Member.NodeKind == "external" {
-			if p.multiple != nil {
-				stream = p.multiple.members[index]
-			} else {
-				stream = p.importedMiddle
+			if node != nil {
+				return nil, nodeChainServerError
 			}
-			if node != nil || stream == nil || stream.source != c.Member.SourceSHA256 || stream.hostname != nil {
+			switch c.Member.Mode {
+			case "socks5":
+				socks = p.socksMiddle
+				if p.socks == nil || p.socks.middle != socks || socks == nil || socks.source != c.Member.SourceSHA256 {
+					return nil, nodeChainServerError
+				}
+			case "http-connect", "https-connect":
+				connect = p.connectMiddle
+				if p.connect == nil || p.connect.middle != connect || connect == nil || connect.source != c.Member.SourceSHA256 {
+					return nil, nodeChainServerError
+				}
+			case "openvpn":
+				openvpn = p.openvpnMiddle
+				if p.openvpn == nil || p.openvpn.middle != openvpn || openvpn == nil || openvpn.source != c.Member.SourceSHA256 {
+					return nil, nodeChainServerError
+				}
+			case "shadowsocks":
+				if p.multiple != nil {
+					stream = p.multiple.members[index]
+				} else {
+					stream = p.importedMiddle
+				}
+				if stream == nil || stream.source != c.Member.SourceSHA256 || stream.hostname != nil {
+					return nil, nodeChainServerError
+				}
+			default:
 				return nil, nodeChainServerError
 			}
 		} else if node == nil || node.mode != "shadowsocks" || node.source != c.Member.SourceSHA256 {
@@ -73,13 +102,14 @@ func (p *NodeChainServerPolicy) originalCandidateTarget(c multihoprelay.NodeChai
 	if !policy.AllowsDestination("tcp", c.Request.Address) {
 		return nil, nodeChainServerError
 	}
-	target := &NodeChainServerCandidateTarget{policy: p, node: node, stream: stream, capture: c.Clone(), tag: p.proofs[index].Tag}
+	target := &NodeChainServerCandidateTarget{policy: p, node: node, stream: stream, socks: socks, connect: connect, openvpn: openvpn, capture: c.Clone(), tag: p.proofs[index].Tag}
 	target.self = target
 	return target, nil
 }
 
-// Read returns only the exact original packet tag and literal TCP destination.
-// The receiver must perform connect-and-close; this grants no payload forwarding.
+// Read returns only the exact original prefix tag and literal TCP destination.
+// The worker admits a handshake or its registered authenticated challenge,
+// never arbitrary application forwarding.
 func (t *NodeChainServerCandidateTarget) Read(p *NodeChainServerPolicy, c multihoprelay.NodeChainCandidateCapture) (string, string, error) {
 	if t == nil || t.self != t || p == nil || p != t.policy {
 		return "", "", nodeChainServerError
@@ -93,7 +123,8 @@ func (t *NodeChainServerCandidateTarget) Read(p *NodeChainServerPolicy, c multih
 		return "", "", nodeChainServerError
 	}
 	fresh, err := p.originalCandidateTarget(c)
-	if err != nil || fresh.node != t.node || fresh.stream != t.stream || fresh.tag != t.tag || t.tag == "" {
+	if err != nil || fresh.node != t.node || fresh.stream != t.stream || fresh.socks != t.socks ||
+		fresh.connect != t.connect || fresh.openvpn != t.openvpn || fresh.tag != t.tag || t.tag == "" {
 		return "", "", nodeChainServerError
 	}
 	return t.tag, t.capture.Request.Address, nil

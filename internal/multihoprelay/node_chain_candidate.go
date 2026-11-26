@@ -67,8 +67,19 @@ func (q NodeChainCandidateRequest) validateCandidateFields() error {
 	if (q.Schema == 3) != (q.Lease.Schema == 8) || q.Schema == 3 && q.Position >= len(q.Lease.Users) {
 		return errNodeChainCandidate
 	}
-	if q.Schema == 2 && (q.Lease.Schema != 2 && q.Lease.Schema != 6 || q.Position >= len(q.Lease.Users)) {
-		return errNodeChainCandidate
+	if q.Schema == 2 {
+		if q.Position >= len(q.Lease.Users) {
+			return errNodeChainCandidate
+		}
+		switch q.Lease.Schema {
+		case 2, 6:
+		case 3, 4, 5:
+			if q.Position != len(q.Lease.Users)-1 {
+				return errNodeChainCandidate
+			}
+		default:
+			return errNodeChainCandidate
+		}
 	}
 	for _, user := range q.Lease.Users {
 		if q.Password == user.Password {
@@ -146,12 +157,26 @@ func (c NodeChainCandidateCapture) Validate() error {
 // CandidateResponsePrefix is only descriptive. The server worker must additionally
 // hold the original suffix outbound and independently provisioned candidate.
 func (s NodeChainDescriptor) CandidateResponsePrefix(position int) bool {
-	if (s.Schema != 2 && s.Schema != 6) || position < 1 || position >= len(s.Members) || s.Validate() != nil {
+	if position < 1 || position >= len(s.Members) || s.Validate() != nil {
 		return false
 	}
 	m := s.Members[position-1]
-	return m.Mode == "shadowsocks" && m.StartLayer == "off" &&
-		(m.NodeKind == "external" && m.ProofKind == "public-path" || s.PrivateStreamAt(position))
+	switch s.Schema {
+	case 2, 6:
+		return m.Mode == "shadowsocks" && m.StartLayer == "off" &&
+			(m.NodeKind == "external" && m.ProofKind == "public-path" || s.PrivateStreamAt(position))
+	case 3, 4, 5:
+		last := s.Members[len(s.Members)-1]
+		if position != len(s.Members)-1 || m.NodeKind != "external" || m.ProofKind != "public-path" ||
+			m.StartLayer != "off" || last.Mode != "shadowsocks" || last.StartLayer != "off" {
+			return false
+		}
+		return s.Schema == 3 && m.Mode == "socks5" ||
+			s.Schema == 4 && (m.Mode == "http-connect" || m.Mode == "https-connect") ||
+			s.Schema == 5 && m.Mode == "openvpn"
+	default:
+		return false
+	}
 }
 
 // Only a public intermediate prefix of the original public-final lease can

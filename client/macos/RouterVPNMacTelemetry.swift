@@ -1131,8 +1131,8 @@ private final class RouterVPNMacFastestController: NSWindowController, NSWindowD
     }
 }
 
-// Original completion timestamps survive every UI refresh. These timings prove
-// TCP reachability through a captured prefix, not candidate authentication.
+// Original completion timestamps survive every UI refresh. Candidate results
+// retain their exact captured source and selected owner.
 private enum RouterVPNOrderedCandidateDisplay {
     static func number(_ value: [String: Any], _ key: String) -> Double? {
         guard let n = value[key] as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite else { return nil }; return n.doubleValue
@@ -1147,20 +1147,29 @@ private enum RouterVPNOrderedCandidateDisplay {
         guard ["saved-complete-local","saved-prefix-local","draft-complete-selected"].contains(scope), value["scope"] as? String == scope else { return false }
         return scope != "saved-prefix-local" || (falseFlag(value,"application_open") && falseFlag(value,"dns_open") && value["proof_scope"] as? String == "selected-prefix")
     }
+    static func typedFinalResponseSource(_ rows: [[String:String]], position: Int) -> Bool {
+        guard (3...8).contains(rows.count), position == rows.count - 2,
+              rows[position]["kind"] == "external", ["socks5","http-connect","https-connect","openvpn"].contains(rows[position]["mode"] ?? ""),
+              rows.last?["kind"] == "router-vpn", rows.last?["mode"] == "shadowsocks" else { return false }
+        return rows.prefix(position).allSatisfy {
+            $0["kind"] == "router-vpn" && ["wg","awg2-fast","awg2-strong"].contains($0["mode"] ?? "")
+        }
+    }
     static func responseSource(_ value: [String: Any], position: Int, draft: [String: Any]?) -> [[String: String]]? {
         guard let rows = value["response_source_nodes"] as? [[String: String]], ((value.keys.contains("response_executions") ? 3 : 4)...96).contains(rows.count),
               number(value,"prefix_position") == Double(position),
               position >= 1, position <= rows.count - 2, position == rows.count - 2 || rows.count < 96 else { return nil }
+        let typedFinal = value.keys.contains("response_executions") && typedFinalResponseSource(rows,position:position)
         var ids = Set<String>()
         for (i, row) in rows.enumerated() {
             let boundary = i == 0 || i == rows.count - 1
             let paired = row["kind"] == "router-vpn"
-            if !boundary && paired {
+            if !typedFinal && !boundary && paired {
                 guard i >= 2 else { return nil }
             }
             guard row.count == 3, let id = row["id"], (1...64).contains(id.utf8.count),
                   id.utf8.allSatisfy({ (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 95 }),
-                  ids.insert(id).inserted, (i == 0 ? ["wg", "awg2-fast", "awg2-strong"].contains(row["mode"] ?? "") : row["mode"] == "shadowsocks"),
+                  ids.insert(id).inserted, typedFinal || (i == 0 ? ["wg", "awg2-fast", "awg2-strong"].contains(row["mode"] ?? "") : row["mode"] == "shadowsocks"),
                   (boundary ? paired : paired || row["kind"] == "external") else { return nil }
         }
         if let draft {
@@ -1229,6 +1238,7 @@ private enum RouterVPNOrderedCandidateDisplay {
     }
     static func responseProposal(_ choice: [String:Any], source: [[String:String]], position: Int) -> Bool {
         guard choice["kind"] as? String == "router-vpn", let id = choice["id"] as? String, id.range(of: #"\A[A-Za-z0-9_-]{1,64}\z"#,options:.regularExpression) != nil,
+              source.indices.contains(position), source[position]["mode"] == "shadowsocks" || typedFinalResponseSource(source,position:position),
               !source.contains(where: { $0["id"] == id }), let proposal = choice["proposed_path"] as? [[String:String]] else { return false }
         let replacesFinal = position == source.count - 2
         guard choice["proposal_action"] as? String == (replacesFinal ? "save-final-profile" : "save-intermediate-profile") else { return false }
@@ -1337,6 +1347,7 @@ private enum RouterVPNOrderedCandidateDisplay {
               let id = choice["id"] as? String, id.range(of: #"\A[A-Za-z0-9_-]{1,64}\z"#,options:.regularExpression) != nil,
               let original = draft["nodes"] as? [[String:String]], original.count < 96,
               position >= 1, position + 1 < original.count, !original.contains(where: { $0["id"] == id }),
+              original[position]["mode"] == "shadowsocks",
               let path = choice["draft_path"] as? [[String:String]] else { return nil }
         if draft["execution"] as? String == "auto", original.count > 3 {
             guard responseSource(view,position:position,draft:draft) != nil else { return nil }
@@ -1368,10 +1379,22 @@ private enum RouterVPNOrderedCandidateDisplay {
                   }) else { return nil }
             return measurement
         case "routed-candidate-response":
-            guard prefixMetric == measurement, (1..<(96 - 1)).contains(position), mode == "shadowsocks", value["requested_execution"] == nil || value["requested_execution"] as? String == "local" || responseWinner(value,position: position,draft: draft),
+            guard prefixMetric == measurement, (1..<(96 - 1)).contains(position), value["requested_execution"] == nil || value["requested_execution"] as? String == "local" || responseWinner(value,position: position,draft: draft),
                   let id = selected[0]["id"] as? String, id.range(of: #"\A[A-Za-z0-9_-]{1,64}\z"#, options: .regularExpression) != nil,
                   let candidates = value["candidates"] as? [[String: Any]],
                   candidates.allSatisfy({ $0["kind"] as? String == "router-vpn" }) else { return nil }
+            if mode != "shadowsocks" {
+                guard ["socks5","http-connect","https-connect","openvpn"].contains(mode) else { return nil }
+                if value.keys.contains("response_source_nodes") || value.keys.contains("response_executions") {
+                    guard let source = responseSource(value,position:position,draft:draft), typedFinalResponseSource(source,position:position),
+                          source[position]["mode"] == mode, source[position]["id"] == id,
+                          responseWinner(value,position:position,draft:draft) else { return nil }
+                } else {
+                    guard draft == nil, value["scope"] as? String != "draft-complete-selected",
+                          value["requested_execution"] == nil || value["requested_execution"] as? String == "local",
+                          ["selected_execution","selection_epoch","required_selected_execution","public_response_source_nodes"].allSatisfy({ !value.keys.contains($0) }) else { return nil }
+                }
+            }
             if let draft {
                 guard draft["execution"] as? String == "local" || responseWinner(value,position: position,draft: draft), let nodes = draft["nodes"] as? [[String: String]],
                       nodes.indices.contains(position), position < nodes.count - 1, nodes[position]["id"] == id,
@@ -1670,7 +1693,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
                       let source = RouterVPNOrderedCandidateDisplay.responseSource(value,position:position,draft:draft),
                       RouterVPNOrderedCandidateDisplay.responseWinner(value,position:position,draft:draft),
                       let prefix = (value["prefixes"] as? [[String:Any]])?.filter({ RouterVPNOrderedCandidateDisplay.number($0,"position") == Double(position) }),
-                      prefix.count == 1, prefix[0]["id"] as? String == source[position]["id"], prefix[0]["mode"] as? String == "shadowsocks",
+                      prefix.count == 1, prefix[0]["id"] as? String == source[position]["id"], prefix[0]["mode"] as? String == source[position]["mode"],
                       candidates.allSatisfy({ choice in
                           if choice["proposed_path"] != nil || choice["proposal_action"] != nil {
                               return RouterVPNOrderedCandidateDisplay.responseProposal(choice,source:source,position:position)

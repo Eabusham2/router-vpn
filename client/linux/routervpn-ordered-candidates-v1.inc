@@ -30,11 +30,15 @@ static gboolean linux_oc_response_measurement(const char *measurement) {
 static gboolean linux_oc_packet_mode(const char *mode) {
     return !strcmp(mode,"wg") || !strcmp(mode,"awg2-fast") || !strcmp(mode,"awg2-strong");
 }
+static gboolean linux_oc_imported_response_mode(const char *mode) {
+    return !strcmp(mode,"socks5") || !strcmp(mode,"http-connect") || !strcmp(mode,"https-connect") || !strcmp(mode,"openvpn");
+}
 static const char*linux_oc_prefix_measurement(JsonObject*prefix){
     const char*mode=linux_ec_string(prefix,"mode"),*measurement=linux_ec_string(prefix,"measurement");
     if(linux_oc_packet_mode(mode))
         return !measurement[0]||!strcmp(measurement,"routed-tcp-connect")?"routed-tcp-connect":"";
     if(!strcmp(mode,"shadowsocks")&&linux_oc_response_measurement(measurement))return measurement;
+    if(linux_oc_imported_response_mode(mode)&&!strcmp(measurement,"routed-candidate-response"))return measurement;
     return "";
 }
 static JsonObject*linux_oc_root(JsonNode*n){return n&&JSON_NODE_HOLDS_OBJECT(n)?json_node_get_object(n):NULL;}
@@ -44,7 +48,9 @@ static gboolean linux_oc_response_id(const char *id) {
 static gboolean linux_oc_response_source(JsonObject *view, JsonObject *draft, int position) {
     JsonArray *rows = linux_ec_array(view,"response_source_nodes");
     guint count = rows ? json_array_get_length(rows) : 0;
-    if (linux_ec_number(view,"prefix_position") != position || count < (linux_ec_member(view,"response_executions") ? 3u : 4u) || count > 96 || position < 1 || position > (int)count-2 || (position < (int)count-2 && count == 96)) return FALSE;
+    if (linux_ec_number(view,"prefix_position") != position || count < 3 || count > 96 || position < 1 || position > (int)count-2 || (position < (int)count-2 && count == 96)) return FALSE;
+    gboolean typed=linux_ec_member(view,"response_executions") && count<=8 && position==(int)count-2 && linux_oc_imported_response_mode(linux_ec_string(linux_oc_root(json_array_get_element(rows,position)),"mode"));
+    if (!typed && count < (linux_ec_member(view,"response_executions") ? 3u : 4u)) return FALSE;
     JsonArray *nodes = linux_ec_array(draft,"nodes");
     if (draft && ((strcmp(linux_ec_string(draft,"execution"),"auto") && (!linux_ec_member(view,"response_executions") || strcmp(linux_ec_string(draft,"execution"),"server"))) || !nodes || json_array_get_length(nodes) != count)) return FALSE;
     g_autoptr(GHashTable) ids = g_hash_table_new(g_str_hash,g_str_equal);
@@ -52,13 +58,19 @@ static gboolean linux_oc_response_source(JsonObject *view, JsonObject *draft, in
         JsonObject *row = linux_oc_root(json_array_get_element(rows,i));
         const char *id = linux_ec_string(row,"id"), *mode = linux_ec_string(row,"mode");
         const char *kind = linux_ec_string(row,"kind");
-        if (i == 0 || i == count-1) {
-            if (strcmp(kind,"router-vpn")) return FALSE;
-        } else if (!strcmp(kind,"router-vpn")) {
-            if (i < 2) return FALSE;
-        } else if (strcmp(kind,"external")) return FALSE;
-        if (!row || json_object_get_size(row) != 3 || !linux_oc_response_id(id) || !g_hash_table_add(ids,(gpointer)id) ||
-            (i == 0 ? !linux_oc_packet_mode(mode) : strcmp(mode,"shadowsocks"))) return FALSE;
+        if (typed) {
+            if ((i<(guint)position && (strcmp(kind,"router-vpn") || !linux_oc_packet_mode(mode))) ||
+                (i==(guint)position && strcmp(kind,"external")) ||
+                (i>(guint)position && (strcmp(kind,"router-vpn") || strcmp(mode,"shadowsocks")))) return FALSE;
+        } else {
+            if (i == 0 || i == count-1) {
+                if (strcmp(kind,"router-vpn")) return FALSE;
+            } else if (!strcmp(kind,"router-vpn")) {
+                if (i < 2) return FALSE;
+            } else if (strcmp(kind,"external")) return FALSE;
+            if (i == 0 ? !linux_oc_packet_mode(mode) : strcmp(mode,"shadowsocks")) return FALSE;
+        }
+        if (!row || json_object_get_size(row) != 3 || !linux_oc_response_id(id) || !g_hash_table_add(ids,(gpointer)id)) return FALSE;
         if (draft) {
             JsonObject *node = linux_oc_root(json_array_get_element(nodes,i));
             if (!node || json_object_get_size(node)!=2 || strcmp(linux_ec_string(node,"id"),id) || strcmp(linux_ec_string(node,"mode"),mode)) return FALSE;
@@ -415,6 +427,7 @@ static JsonNode *linux_oc_response_draft_path(LinuxOrderedCandidates *s, JsonObj
         strcmp(linux_ec_string(choice,"draft_action"),"insert-measured-hop") || strcmp(linux_ec_string(choice,"kind"),"router-vpn") ||
         !linux_oc_response_id(id) || !path || count>=96 || s->position<1 || (guint)s->position+1>=count ||
         json_array_get_length(path)!=count+1) return NULL;
+    if (linux_oc_imported_response_mode(linux_ec_string(linux_oc_root(json_array_get_element(nodes,s->position)),"mode"))) return NULL;
     if (!strcmp(linux_ec_string(draft,"execution"),"auto")) {
         if (!linux_oc_response_draft(draft,s->position,view)) return NULL;
     } else if (strcmp(linux_ec_string(draft,"execution"),"local")) return NULL;

@@ -83,8 +83,24 @@ func desktopCandidateMetricForIntent(launch *desktopNodeLaunch, position int, se
 		}
 		return ""
 	}
+	connected := launch.command != nil && launch.chain.preparation == nil
+	if connected && launch.chain.socksPolicy != nil {
+		original, err := launch.chain.socksPolicy.NativeSource()
+		if err == nil {
+			return original.CandidatePrefixMeasurement(position)
+		}
+	}
+	if connected && launch.chain.connectPolicy != nil {
+		original, err := launch.chain.connectPolicy.NativeSource()
+		if err == nil {
+			return original.CandidatePrefixMeasurement(position)
+		}
+	}
 	if launch.chain.policy == nil {
 		return ""
+	}
+	if connected {
+		return launch.chain.policy.OriginalChain().ConnectedCandidatePrefixMeasurement(position)
 	}
 	return launch.chain.policy.OriginalChain().CandidatePrefixMeasurement(position)
 }
@@ -181,6 +197,9 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 	var owners []string
 	if e := identity.Ordered.launch.chain.execution; serverResponse && e != nil {
 		owners = candidateResponseExecutions(e.preparation, position)
+	}
+	if e := identity.Ordered.launch.chain.execution; e != nil && len(owners) == 0 && requested == "auto" && e.preparation.SupportsSelectedFinalResponseCandidate(position) {
+		owners = []string{"local"}
 	}
 	privateResponse := len(owners) > 0 || desktopCompareLocalPrivateResponseMembers(members, requested, position)
 	catalogMetric := desktopCandidateCatalogMetric(identity.Ordered.launch, serverResponse)
@@ -357,7 +376,8 @@ func orderedCandidateRequestedExecution(launch *desktopNodeLaunch) (string, erro
 func orderedCandidateProposalForExecution(members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile, requested string) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var control common.RouterProfile
 	publicResponse := desktopPublicCandidateMembers(members, requested, position) && desktopNodeChainImportedExecutionMiddle(candidate)
-	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !common.ExtendedAWGSelectedMultihopSelection(nodeChainSelectedReferences(members)) && !(requested == "local" && (common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)) || common.ExtendedMixedLocalPacketCount(nodeChainSelectedReferences(members)) > 0))) || position < 0 || position >= len(members)-1 || !(mobilemultihop.NodeChainPrefixMode(members[position].Mode) || publicResponse || (requested == "local" || desktopSelectedResponseProposal(members, requested, position, candidate)) && members[position].Mode == "shadowsocks" && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
+	typedFinal := desktopTypedFinalResponseMembers(members, requested, position)
+	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !common.ExtendedAWGSelectedMultihopSelection(nodeChainSelectedReferences(members)) && !(requested == "local" && (common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)) || common.ExtendedMixedLocalPacketCount(nodeChainSelectedReferences(members)) > 0))) || position < 0 || position >= len(members)-1 || !(mobilemultihop.NodeChainPrefixMode(members[position].Mode) || publicResponse || (requested == "local" || desktopSelectedResponseProposal(members, requested, position, candidate)) && (members[position].Mode == "shadowsocks" || typedFinal) && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
 		return control, nil, errors.New("candidate requires an original packet prefix")
 	}
 	if desktopNodeChainHasExternalFinal(members) && (!validDesktopOrderedExecution(requested) || position != 0 && !publicResponse || !desktopNodeChainImportedExecutionMiddle(candidate)) {

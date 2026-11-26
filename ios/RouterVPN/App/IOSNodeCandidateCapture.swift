@@ -49,9 +49,25 @@ import Libbox
                 guard let id = profile["id"] as? String, !id.isEmpty, seen.insert(id).inserted else { throw issue() }
                 if let original = originals.removeValue(forKey: id) {
                     let saved = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: profile))
-                    let layerAllowed = publicResponse && original.position == 0 ? IOSMultihopNodeSelection.supportsExternalExitEntry(saved) : [nil, "", "off"].contains(saved.startLayer)
+                    let layerAllowed: Bool
+                    if selectedResponse && proofs[prefixPosition].typedImportedResponse && original.position < prefixPosition &&
+                       IOSMultihopNodeSelection.supportsNativePrefix(original.mode) {
+                        _ = try IOSMultihopStartLayer.capture(profile: profile, profiles: files)
+                        layerAllowed = true
+                    } else {
+                        layerAllowed = publicResponse && original.position == 0 ? IOSMultihopNodeSelection.supportsExternalExitEntry(saved) : [nil, "", "off"].contains(saved.startLayer)
+                    }
+                    let importedAllowed: Bool
+                    if selectedResponse && proofs[prefixPosition].typedImportedResponse && original.position == prefixPosition {
+                        switch original.mode {
+                        case "socks5": importedAllowed = IOSImportedSOCKSSource.eligible(saved)
+                        case "http-connect", "https-connect": importedAllowed = saved.external?.protocolName == original.mode && IOSImportedCONNECTSource.eligible(saved)
+                        case "openvpn": importedAllowed = IOSImportedOpenVPNSource.eligible(saved)
+                        default: importedAllowed = false
+                        }
+                    } else { importedAllowed = IOSImportedShadowsocksSource.eligibleLiteral(saved) }
                     guard (saved.nodeProofID ?? "") == original.node_id, layerAllowed,
-                          original.node_id.isEmpty ? IOSImportedShadowsocksSource.eligibleLiteral(saved) :
+                          original.node_id.isEmpty ? importedAllowed :
                             saved.normalizedNodeKind == "router-vpn" && saved.external == nil else { throw issue() }
                 }
                 if excluded.contains(id) || (profile["node_proof_id"] as? String).map({ paired.contains($0) }) == true { continue }

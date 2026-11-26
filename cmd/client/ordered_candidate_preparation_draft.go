@@ -33,12 +33,36 @@ func (a *app) candidatePreparationNodesLocked(scope string, control common.Route
 	return append([]common.MultihopNodeSelection(nil), draft.Nodes...), nil
 }
 
+// This is a source-only proposal shape. The captured native classifier and
+// original selected receipt still authorize measurement and adoption.
+func desktopTypedFinalResponseMembers(members []desktopNodeChainMember, execution string, position int) bool {
+	if !validDesktopOrderedExecution(execution) || len(members) < 3 || len(members) > mobilemultihop.NodeChainMaximumNodes || position != len(members)-2 {
+		return false
+	}
+	for i, member := range members {
+		if i >= position && member.Profile.StartLayer != "" && member.Profile.StartLayer != "off" {
+			return false
+		}
+		if i == position {
+			if !desktopNodeChainSOCKSMiddle(member.Profile, member.Mode) && !desktopNodeChainCONNECTMiddle(member.Profile, member.Mode) && !desktopNodeChainOpenVPNMiddle(member.Profile, member.Mode) {
+				return false
+			}
+		} else if member.Profile.External != nil || i < position && !mobilemultihop.NodeChainPrefixMode(member.Mode) || i > position && member.Mode != "shadowsocks" {
+			return false
+		}
+	}
+	return true
+}
+
 // Adoption requires a fresh native receipt from the originally selected trial.
 func desktopSelectedResponseProposal(members []desktopNodeChainMember, execution string, position int, candidate common.RouterProfile) bool {
 	if (execution != "auto" && execution != "server") || len(members) < 3 || candidate.External != nil {
 		return false
 	}
-	if len(members) == 3 {
+	typedFinal := desktopTypedFinalResponseMembers(members, execution, position)
+	if typedFinal {
+		// The complete typed prefix is retained; only its final can change.
+	} else if len(members) == 3 {
 		if position != 1 || !mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[0].Profile.External != nil ||
 			members[1].Mode != "shadowsocks" || members[1].Profile.External == nil ||
 			members[2].Mode != "shadowsocks" || members[2].Profile.External != nil {
@@ -55,8 +79,8 @@ func desktopSelectedResponseProposal(members []desktopNodeChainMember, execution
 	} else if !desktopCompareLocalPrivateResponseMembers(members, "auto", position) {
 		return false
 	}
-	for _, m := range members {
-		if m.Profile.ID == candidate.ID || candidate.NodeProofID != "" && m.Profile.NodeProofID == candidate.NodeProofID || m.Profile.StartLayer != "" && m.Profile.StartLayer != "off" {
+	for i, m := range members {
+		if m.Profile.ID == candidate.ID || candidate.NodeProofID != "" && m.Profile.NodeProofID == candidate.NodeProofID || (!typedFinal || i >= position) && m.Profile.StartLayer != "" && m.Profile.StartLayer != "off" {
 			return false
 		}
 	}
@@ -69,7 +93,8 @@ func desktopSelectedResponseProposal(members []desktopNodeChainMember, execution
 func orderedResponseProfile(ctx context.Context, root, execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, string, error) {
 	var empty common.RouterProfile
 	publicResponse := desktopPublicCandidateMembers(members, execution, position) && desktopNodeChainImportedExecutionMiddle(candidate)
-	if !publicResponse && (execution != "local" && !desktopSelectedResponseProposal(members, execution, position, candidate) || position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks") {
+	typedFinal := desktopTypedFinalResponseMembers(members, execution, position)
+	if !publicResponse && (execution != "local" && !desktopSelectedResponseProposal(members, execution, position, candidate) || position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" && !typedFinal) {
 		return empty, nil, "", errors.New("this measurement has no complete supported stream path")
 	}
 	p, rows, err := orderedCandidateProposalForExecution(members, position, candidate, profiles, execution)
@@ -100,6 +125,9 @@ const orderedCandidateDraftInsertAction = "insert-measured-hop"
 // adoption; this preview cannot confer a selected-trial or measurement grant.
 func orderedResponseDraftProposal(ctx context.Context, root, execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var empty common.RouterProfile
+	if desktopTypedFinalResponseMembers(members, execution, position) {
+		return empty, nil, errors.New("this imported prefix can replace its final but cannot insert another hop")
+	}
 	publicResponse := desktopPublicCandidateMembers(members, execution, position) && desktopNodeChainImportedExecutionMiddle(candidate)
 	if !publicResponse && (execution != "local" && !desktopSelectedResponseProposal(members, execution, position, candidate) ||
 		position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks") {

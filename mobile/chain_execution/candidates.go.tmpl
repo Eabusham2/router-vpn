@@ -68,6 +68,13 @@ func RouterNodeChainExecutionNewCandidateMeasurement(owner *RouterNodeChainExecu
 	defer cancel()
 	return owner.newExecutionCandidateMeasurementContext(ctx, server, int(position), inventory, catalog)
 }
+
+// Source metadata only: the live candidate factory separately binds the
+// original selected winner, native owner, catalog and cleanup scope.
+func (m *RouterNodeChainExecution) SupportsSelectedFinalResponseCandidate(position int32) bool {
+	return m != nil && m.prep != nil && !m.retired.Load() && !m.closed.Load() &&
+		m.prep.SupportsSelectedFinalResponseCandidate(int(position))
+}
 func (m *RouterNodeChainExecution) newExecutionCandidateMeasurementContext(ctx context.Context, server *CommandServer, position int, inventory string, catalog RouterNodeChainCandidateCatalog) (*RouterNodeChainExecutionCandidateMeasurement, error) {
 	if m == nil || ctx == nil || ctx.Err() != nil || position < 0 || position >= mobilemultihop.NodeChainExtendedLocalMaximumNodes-1 || server == nil || catalog == nil {
 		return nil, errRouterNodeChainExecution

@@ -47,16 +47,23 @@ func (d *DesktopTypedEntryCandidateDescription) CaptureSHA256() string {
 	return d.capture
 }
 
-// DescribeDesktopTypedEntryCandidate compiles the original typed policy's
-// physical entry. The native child separately binds its own selected trial
-// and proof to a live candidate plan before issuing a measurement grant.
+// DescribeDesktopTypedEntryCandidate compiles public metadata for the original
+// typed policy's packet entry or authenticated final replacement. The native
+// child separately binds its selected trial and proof before issuing a grant.
 func (p *NodeChainExecutionPreparation) DescribeDesktopTypedEntryCandidate(socks *DesktopNodeChainSOCKSPolicy, connect *DesktopNodeChainCONNECTPolicy, position int, inventory string) (*DesktopTypedEntryCandidateDescription, error) {
-	if p == nil || position != 0 || (socks == nil) == (connect == nil) || p.validateCapture() != nil ||
+	if p == nil || (socks == nil) == (connect == nil) || p.validateCapture() != nil ||
+		position != 0 && !p.selectedFinalResponsePrefix(position) ||
 		socks != nil && (p.socks == nil || p.socks.desktop == nil || p.socks.desktop.original != socks || p.socks.local != p.local) ||
 		connect != nil && (p.connect == nil || p.connect.desktop == nil || p.connect.desktop.original != connect || p.connect.local != p.local) {
 		return nil, nodeChainExecutionError
 	}
-	plan, err := p.local.newPacketCandidatePlan(0, inventory)
+	var plan *NodeChainCandidatePlan
+	var err error
+	if position == 0 {
+		plan, err = p.local.newPacketCandidatePlan(0, inventory)
+	} else {
+		plan, err = p.local.NewCandidatePlan(position, inventory)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -97,6 +104,9 @@ func (p *NodeChainExecutionPreparation) SupportsCompareLocalResponseCandidate(po
 	if p == nil || p.validateCapture() != nil || p.Execution() != "auto" {
 		return false
 	}
+	if p.selectedFinalResponsePrefix(position) {
+		return true
+	}
 	if p.multiple != nil {
 		_, eligible := p.local.selectedStreamLayout()
 		finalPrefix := len(p.local.proofs) - 2
@@ -106,6 +116,38 @@ func (p *NodeChainExecutionPreparation) SupportsCompareLocalResponseCandidate(po
 			p.local.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement
 	}
 	return p.local.compareLocalResponsePrefix(position)
+}
+
+// SupportsSelectedFinalResponseCandidate describes only the existing typed
+// penultimate route. A live factory must still retain the winning Local or
+// Server trial; a saved proposal may replace its final, never insert a hop.
+func (p *NodeChainExecutionPreparation) SupportsSelectedFinalResponseCandidate(position int) bool {
+	return p != nil && p.validateCapture() == nil &&
+		(p.Execution() == "server" || p.Execution() == "auto") && p.selectedFinalResponsePrefix(position)
+}
+
+func (p *NodeChainExecutionPreparation) selectedFinalResponsePrefix(position int) bool {
+	if p == nil || p.local == nil || len(p.local.proofs) < 3 || len(p.local.proofs) > NodeChainMaximumNodes ||
+		position != len(p.local.proofs)-2 || p.local.proofs[len(p.local.proofs)-1].StartLayer != "off" {
+		return false
+	}
+	switch p.source.Schema {
+	case 3:
+		if p.socks == nil || p.socks.local != p.local || p.local.socksSource != p.socks.source {
+			return false
+		}
+	case 4:
+		if p.connect == nil || p.connect.local != p.local || p.local.connectSource != p.connect.source {
+			return false
+		}
+	case 5:
+		if p.openvpn == nil || p.openvpn.local != p.local || p.local.openVPNMiddle != p.openvpn.middle {
+			return false
+		}
+	default:
+		return false
+	}
+	return p.local.ConnectedCandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement
 }
 
 func (p *NodeChainExecutionPreparation) SupportsCompareLocalPublicResponseCandidate(position int) bool {
@@ -159,7 +201,7 @@ func (r *NodeChainExecutionRuntime) newExecutionCandidatePlanContext(ctx context
 		original := r.projection.policy.local
 		binding := r.projection.preparation.multiple
 		if binding == nil {
-			if !original.compareLocalResponsePrefix(position) {
+			if !r.projection.preparation.selectedFinalResponsePrefix(position) && !original.compareLocalResponsePrefix(position) {
 				return nil, nodeChainExecutionError
 			}
 		} else if original != binding.local || r.projection.policy.multiple != binding || original.importedNodes != binding.owners {
