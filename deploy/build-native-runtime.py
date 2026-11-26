@@ -719,14 +719,22 @@ def smoke_protocols(binary, env):
                 pass
 
         class TargetServer(http.server.ThreadingHTTPServer):
+            daemon_threads = False
+
             def get_request(self):
                 stream, address = super().get_request()
                 stream.settimeout(3)
+                return stream, address
+
+            def finish_request(self, stream, address):
+                # An abandoned native startup connection must not hold the
+                # accept loop while later exchanges spend their TLS budget.
                 try:
-                    return server_tls.wrap_socket(stream, server_side=True), address
-                except Exception:
-                    stream.close()
-                    raise
+                    secured = server_tls.wrap_socket(stream, server_side=True)
+                except OSError:
+                    return
+                with secured:
+                    super().finish_request(secured, address)
 
         # Userspace VPN stacks reject inner loopback packets. Find this host's
         # routed address without sending a datagram; the target stays on this
