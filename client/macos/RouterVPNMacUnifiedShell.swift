@@ -721,7 +721,7 @@ extension ProductWindowController {
         }
     }
 
-    private func findUnifiedView(_ id: String) -> NSView? {
+    func findUnifiedView(_ id: String) -> NSView? {
         guard let content = window?.contentView else { return nil }
         func walk(_ view: NSView) -> NSView? { if view.identifier?.rawValue == id { return view }; for child in view.subviews { if let found = walk(child) { return found } }; return nil }
         return walk(content)

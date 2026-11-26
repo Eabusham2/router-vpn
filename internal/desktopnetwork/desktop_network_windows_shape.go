@@ -41,7 +41,7 @@ func desktopWindowsLinkMTU(link Link, rows []desktopWindowsIPInterfaceShape) (Li
 		}
 		seen[row.Family] = true
 	}
-	link.MTU = int(uint64(^uint32(0)))
+	link.MTU = int(rows[0].MTU)
 	if link.MTU <= 0 {
 		return bad()
 	}

@@ -942,7 +942,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     }
 }
 
-func runProductSelfTest() -> Int32 {
+@MainActor func runProductSelfTest() -> Int32 {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
     app.finishLaunching()
@@ -987,8 +987,10 @@ func runProductSelfTest() -> Int32 {
     return 0
 }
 
-if CommandLine.arguments.contains("--self-test") { exit(runProductSelfTest()) }
-let productApp = NSApplication.shared
-let productDelegate = ProductDelegate()
-productApp.delegate = productDelegate
-productApp.run()
+MainActor.assumeIsolated {
+    if CommandLine.arguments.contains("--self-test") { exit(runProductSelfTest()) }
+    let productApp = NSApplication.shared
+    let productDelegate = ProductDelegate()
+    productApp.delegate = productDelegate
+    withExtendedLifetime(productDelegate) { productApp.run() }
+}

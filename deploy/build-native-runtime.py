@@ -670,7 +670,7 @@ def smoke_protocols(binary, env):
         certificate, key = work/'certificate.pem', work/'key.pem'
         certificate_config = work/'certificate.cnf'
         certificate_config.write_text('[req]\ndistinguished_name=subject\nprompt=no\nx509_extensions=server\n'
-                                      '[subject]\nCN=localhost\n[server]\nsubjectAltName=DNS:localhost\n'
+                                      '[subject]\nCN=localhost\n[server]\nsubjectAltName=DNS:localhost,DNS:routervpn-smoke.invalid\n'
                                       'basicConstraints=critical,CA:TRUE\nkeyUsage=critical,digitalSignature,keyCertSign\n'
                                       'extendedKeyUsage=serverAuth\n', encoding='ascii')
         run(['openssl', 'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256',
@@ -781,17 +781,24 @@ def smoke_protocols(binary, env):
                         pending = None
 
         try:
-            for protocol in ('socks', 'http', 'https', 'shadowsocks', 'hysteria2', 'wireguard', 'openvpn-tcp', 'openvpn-udp', 'amneziawg', 'reality-vision'):
-                upstream_port, proxy_port = port(socket.SOCK_DGRAM if protocol in ('hysteria2', 'wireguard', 'openvpn-udp', 'amneziawg') else socket.SOCK_STREAM), port()
+            for protocol in ('socks', 'http', 'https', 'shadowsocks', 'hysteria2', 'naive-h2', 'naive-h3', 'wireguard', 'openvpn-tcp', 'openvpn-udp', 'amneziawg', 'reality-vision'):
+                upstream_port, proxy_port = port(socket.SOCK_DGRAM if protocol in ('hysteria2', 'naive-h3', 'wireguard', 'openvpn-udp', 'amneziawg') else socket.SOCK_STREAM), port()
                 while upstream_port == proxy_port:
                     proxy_port = port()
-                kind = 'http' if protocol == 'https' else protocol
+                kind = 'http' if protocol == 'https' else 'naive' if protocol in ('naive-h2', 'naive-h3') else protocol
                 inbound = {'type': kind, 'listen': '127.0.0.1', 'listen_port': upstream_port}
                 outbound = {'type': kind, 'tag': 'selected', 'server': '127.0.0.1', 'server_port': upstream_port}
                 password = base64.b64encode(os.urandom(32)).decode('ascii')
                 if protocol in ('socks', 'http', 'https'):
                     inbound['users'] = [{'username': 'smoke', 'password': password}]
                     outbound.update(username='smoke', password=password)
+                elif protocol in ('naive-h2', 'naive-h3'):
+                    # The H3 peer has no TCP listener, so an H2 fallback cannot
+                    # satisfy its payload proof. Both use original TLS trust.
+                    inbound.update(network='udp' if protocol == 'naive-h3' else 'tcp',
+                                   users=[{'username': 'smoke', 'password': password}])
+                    outbound.update(username='smoke', password=password, quic=protocol == 'naive-h3',
+                                    udp_over_tcp={'enabled': True, 'version': 2})
                 elif protocol == 'shadowsocks':
                     inbound.update(method='2022-blake3-aes-256-gcm', password=password)
                     outbound.update(method=inbound['method'], password=password)
@@ -799,9 +806,12 @@ def smoke_protocols(binary, env):
                     inbound['users'] = [{'name': 'smoke', 'password': password}]
                     outbound['password'] = password
                     inbound['obfs'] = outbound['obfs'] = {'type': 'salamander', 'password': password}
-                if protocol in ('https', 'hysteria2'):
+                if protocol in ('https', 'hysteria2', 'naive-h2', 'naive-h3'):
                     inbound['tls'] = {'enabled': True, 'certificate_path': str(certificate), 'key_path': str(key)}
-                    outbound['tls'] = {'enabled': True, 'server_name': 'localhost', 'certificate_path': str(certificate)}
+                    # Chromium treats localhost specially. An ordinary DNS name
+                    # keeps Naive's TLS identity distinct from its captured IP.
+                    peer_name = 'routervpn-smoke.invalid' if kind == 'naive' else 'localhost'
+                    outbound['tls'] = {'enabled': True, 'server_name': peer_name, 'certificate_path': str(certificate)}
                 configurations = (
                     {'inbounds': [inbound], 'outbounds': [{'type': 'direct', 'tag': 'target'}], 'route': {'final': 'target'}},
                     {'inbounds': [{'type': 'socks', 'listen': '127.0.0.1', 'listen_port': proxy_port}], 'outbounds': [outbound], 'route': {'final': 'selected'}},

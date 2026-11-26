@@ -12,7 +12,7 @@ type Identity struct {
 }
 
 func (i Identity) Valid() bool {
-	return i.PID > 1 && i.PID < 1<<31 && i.StartSeconds != 0 && i.StartMicroseconds < 1000000 && i.UniqueID != 0 && i.IDVersion > 0 && i.CodeHash != [20]byte{}
+	return i.PID > 1 && int64(i.PID) < 1<<31 && i.StartSeconds != 0 && i.StartMicroseconds < 1000000 && i.UniqueID != 0 && i.IDVersion > 0 && i.CodeHash != [20]byte{}
 }
 
 func (i Identity) Matches(image Image) bool {
