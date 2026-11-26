@@ -103,7 +103,7 @@ func (a *RouterVPNResolvedAuthority) captureOriginal(ctx context.Context) error 
 	if err != nil {
 		return err
 	}
-	if err = r.captureDaemon(p); err != nil {
+	if err = r.captureDaemon(ctx, p); err != nil {
 		return err
 	}
 	if err = r.clear(p); err != nil {

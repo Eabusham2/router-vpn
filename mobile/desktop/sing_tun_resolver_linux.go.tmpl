@@ -4,6 +4,7 @@ package tun
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -76,6 +77,10 @@ type routerVPNLinuxResolver struct {
 	pending                                       *routerVPNResolverCall
 	wireFailure                                   error
 	unique                                        string
+	broker, originalBroker                        *os.File
+	brokerInfo                                    os.FileInfo
+	brokerPID                                     uint32
+	daemonFromPeer                                bool
 	daemon, originalDaemon                        *os.File
 	daemonInfo                                    os.FileInfo
 	proc, originalProc                            *os.File
@@ -189,9 +194,29 @@ func (r *routerVPNLinuxResolver) authenticate(ctx context.Context, transport *ne
 	if err = r.transport.SetDeadline(deadline); err != nil {
 		return err
 	}
+	method := dbus.AuthExternal(strconv.Itoa(os.Geteuid()))
+	probe, probeErr := r.brokerProbeAvailable()
+	if probeErr != nil {
+		return probeErr
+	}
 	cancelled := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() { _ = r.transport.SetDeadline(time.Now()); close(cancelled) })
-	err = r.connection.Auth([]dbus.Auth{dbus.AuthExternal(strconv.Itoa(os.Geteuid()))})
+	var captured *routerVPNResolverAuth
+	if probe {
+		captured = &routerVPNResolverAuth{auth: method, capture: func() error {
+			if err := r.captureAuthBroker(ctx); err != nil {
+				// No mutation has been issued. Close this exact authentication
+				// stream so a failed probe cannot enter godbus's message reader.
+				return errors.Join(err, r.transport.Close())
+			}
+			return nil
+		}}
+		method = captured
+	}
+	err = r.connection.Auth([]dbus.Auth{method})
+	if captured != nil {
+		err = errors.Join(err, captured.failure)
+	}
 	if err == nil {
 		err = r.connection.Hello()
 	}
@@ -445,6 +470,395 @@ func (r *routerVPNLinuxResolver) query(ctx context.Context, method string, args 
 	}
 	return r.join(ctx)
 }
+
+// godbus v5.2.2 calls FirstData after reading its initial REJECTED and
+// before writing AUTH or starting inWorker. This one-shot probe restores the
+// same waiting-for-AUTH state; normal EXTERNAL and FD negotiation stay in godbus.
+type routerVPNResolverAuth struct {
+	auth    dbus.Auth
+	capture func() error
+	once    sync.Once
+	failure error
+}
+
+func (a *routerVPNResolverAuth) FirstData() ([]byte, []byte, dbus.AuthStatus) {
+	a.once.Do(func() { a.failure = a.capture() })
+	if a.failure != nil {
+		return []byte("ROUTERVPN_CAPTURE_FAILED"), nil, dbus.AuthOk
+	}
+	return a.auth.FirstData()
+}
+func (a *routerVPNResolverAuth) HandleData(data []byte) ([]byte, dbus.AuthStatus) {
+	return a.auth.HandleData(data)
+}
+
+func resolverPIDFDProcessID(file *os.File) (uint32, error) {
+	if file == nil {
+		return 0, errors.New("resolver omitted original process descriptor")
+	}
+	raw, err := os.ReadFile("/proc/self/fdinfo/" + strconv.Itoa(int(file.Fd())))
+	if err != nil {
+		return 0, err
+	}
+	var pid uint64
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(line, "Pid:\t") {
+			if pid != 0 {
+				return 0, errors.New("resolver original pidfd has duplicate process identity")
+			}
+			pid, err = strconv.ParseUint(strings.TrimPrefix(line, "Pid:\t"), 10, 31)
+			if err != nil || pid == 0 {
+				return 0, errors.New("resolver original pidfd has no live procfs identity")
+			}
+		}
+	}
+	if pid == 0 {
+		return 0, errors.New("resolver credential is not a native process descriptor")
+	}
+	return uint32(pid), nil
+}
+func (r *routerVPNLinuxResolver) adoptBrokerDescriptor(file *os.File) (failure error) {
+	adopted := false
+	defer func() {
+		if !adopted {
+			failure = errors.Join(failure, file.Close())
+		}
+	}()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	retired, err := resolverPIDFDCurrent(file, file, info)
+	if err != nil || retired {
+		return errors.Join(errors.New("resolver authentication sender is not live"), err)
+	}
+	pid, err := resolverPIDFDProcessID(file)
+	if err != nil {
+		return err
+	}
+	if r.broker == nil {
+		r.broker, r.originalBroker, r.brokerInfo, r.brokerPID = file, file, info, pid
+		adopted = true
+		return nil
+	}
+	retired, err = resolverPIDFDCurrent(r.broker, r.originalBroker, r.brokerInfo)
+	if err != nil || retired || pid != r.brokerPID {
+		return errors.Join(errors.New("resolver authentication changed original sender"), err)
+	}
+	return nil
+}
+func (r *routerVPNLinuxResolver) brokerControlDescriptors(control []byte) (received int, failure error) {
+	for len(control) != 0 {
+		header, data, rest, err := unix.ParseOneSocketControlMessage(control)
+		if err != nil {
+			return received, errors.Join(failure, err)
+		}
+		control = rest
+		pidfd := header.Level == unix.SOL_SOCKET && header.Type == unix.SCM_PIDFD
+		rights := header.Level == unix.SOL_SOCKET && header.Type == unix.SCM_RIGHTS
+		if !pidfd && !rights {
+			failure = errors.Join(failure, errors.New("resolver authentication received unexpected control data"))
+			continue
+		}
+		if rights || len(data) != 4 {
+			failure = errors.Join(failure, errors.New("resolver authentication received unexpected descriptors"))
+		}
+		// Every descriptor delivered by the kernel is either retained exactly
+		// once or closed, including unexpected SCM_RIGHTS and truncated reads.
+		limit := len(data)
+		if pidfd && limit > 4 {
+			limit = 4
+		}
+		for offset := 0; offset+4 <= limit; offset += 4 {
+			fd := int(int32(binary.NativeEndian.Uint32(data[offset : offset+4])))
+			if fd < 0 {
+				failure = errors.Join(failure, errors.New("resolver authentication received invalid descriptor"))
+				continue
+			}
+			unix.CloseOnExec(fd)
+			file := os.NewFile(uintptr(fd), "original-resolver-auth-sender")
+			if pidfd && len(data) == 4 {
+				received++
+				failure = errors.Join(failure, r.adoptBrokerDescriptor(file))
+			} else {
+				failure = errors.Join(failure, file.Close())
+			}
+		}
+	}
+	return received, failure
+}
+func (r *routerVPNLinuxResolver) brokerAuthLine(ctx context.Context) (string, error) {
+	line := make([]byte, 0, 256)
+	buffer := make([]byte, 4096)
+	control := make([]byte, unix.CmsgSpace(4)*16)
+	for len(line) < len(buffer) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		n, controlN, flags, _, readErr := r.transport.ReadMsgUnix(buffer[:len(buffer)-len(line)], control)
+		received, controlErr := r.brokerControlDescriptors(control[:controlN])
+		if readErr != nil || controlErr != nil {
+			return "", errors.Join(readErr, controlErr)
+		}
+		if flags&(unix.MSG_CTRUNC|unix.MSG_TRUNC) != 0 {
+			return "", errors.New("resolver authentication control data was truncated")
+		}
+		if n == 0 || received == 0 {
+			return "", errors.New("resolver authentication omitted kernel sender capability")
+		}
+		line = append(line, buffer[:n]...)
+		if end := strings.Index(string(line), "\r\n"); end >= 0 {
+			if end+2 != len(line) {
+				return "", errors.New("resolver authentication returned an extra frame")
+			}
+			for _, b := range line[:end] {
+				if b < 0x20 || b > 0x7e {
+					return "", errors.New("resolver authentication frame is not ASCII")
+				}
+			}
+			return string(line[:end]), nil
+		}
+	}
+	return "", errors.New("resolver authentication frame exceeds original bound")
+}
+func (r *routerVPNLinuxResolver) brokerProbeAvailable() (bool, error) {
+	raw, err := r.transport.SyscallConn()
+	if err != nil {
+		return false, err
+	}
+	var option error
+	err = raw.Control(func(fd uintptr) {
+		_, option = unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_PASSPIDFD)
+	})
+	if err == nil && errors.Is(option, unix.ENOPROTOOPT) {
+		// This optional capture is needed only when the broker omits ProcessFD.
+		// A resolver-absent system or an actual received ProcessFD keeps its
+		// original admission; no numeric PID fallback is permitted.
+		return false, nil
+	}
+	return err == nil && option == nil, errors.Join(err, option)
+}
+func (r *routerVPNLinuxResolver) captureAuthBroker(ctx context.Context) (failure error) {
+	if err := r.transportCurrent(); err != nil {
+		return err
+	}
+	raw, err := r.transport.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var operation error
+	err = raw.Control(func(fd uintptr) {
+		var enabled int
+		enabled, operation = unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_PASSPIDFD)
+		if operation == nil && enabled != 0 {
+			operation = errors.New("resolver authentication inherited sender collection")
+		}
+		if operation == nil {
+			operation = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_PASSPIDFD, 1)
+		}
+	})
+	if err != nil || operation != nil {
+		return errors.Join(err, operation)
+	}
+	defer func() {
+		operation = nil
+		err := raw.Control(func(fd uintptr) { operation = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_PASSPIDFD, 0) })
+		failure = errors.Join(failure, err, operation)
+	}()
+	write := func(frame string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		n, err := r.transport.Write([]byte(frame))
+		if err == nil && n != len(frame) {
+			err = errors.New("resolver authentication frame was incomplete")
+		}
+		return err
+	}
+	// This deliberately omits an initial response. CANCEL is valid both after
+	// DATA and after OK, until BEGIN (D-Bus specification; dbus1.14.10 auth.c).
+	if err := write("AUTH EXTERNAL\r\n"); err != nil {
+		return err
+	}
+	first, err := r.brokerAuthLine(ctx)
+	if err != nil {
+		return err
+	}
+	if first != "DATA" && !strings.HasPrefix(first, "DATA ") && !strings.HasPrefix(first, "OK ") {
+		return errors.New("resolver authentication probe did not enter an expected state")
+	}
+	if err := write("CANCEL\r\n"); err != nil {
+		return err
+	}
+	last, err := r.brokerAuthLine(ctx)
+	if err != nil {
+		return err
+	}
+	if last != "REJECTED" && !strings.HasPrefix(last, "REJECTED ") {
+		return errors.New("resolver authentication probe did not restore original state")
+	}
+	retired, err := resolverPIDFDCurrent(r.broker, r.originalBroker, r.brokerInfo)
+	if err != nil || retired {
+		return errors.Join(errors.New("resolver authentication sender retired"), err)
+	}
+	return ctx.Err()
+}
+
+// The broker pidfd came from actual authentication bytes on this connection,
+// not SO_PEERPIDFD on a socket-activated listener. Compare credential numbers
+// only after proving that broker, caller and procfs use the same PID namespace.
+func (r *routerVPNLinuxResolver) brokerNamespacesCurrent() (failure error) {
+	retired, err := resolverPIDFDCurrent(r.broker, r.originalBroker, r.brokerInfo)
+	if err != nil || retired {
+		return errors.Join(errors.New("resolver original broker retired"), err)
+	}
+	pid, err := resolverPIDFDProcessID(r.broker)
+	if err != nil || pid != r.brokerPID {
+		return errors.Join(errors.New("resolver broker process identity changed"), err)
+	}
+	fd, err := unix.Open("/proc/"+strconv.FormatUint(uint64(pid), 10), unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	process := os.NewFile(uintptr(fd), "original-resolver-broker-proc")
+	defer func() { failure = errors.Join(failure, process.Close()) }()
+	for _, kind := range []string{"pid", "user"} {
+		ns, err := unix.Openat(fd, "ns/"+kind, unix.O_RDONLY|unix.O_CLOEXEC, 0)
+		if err != nil {
+			return err
+		}
+		file := os.NewFile(uintptr(ns), "original-resolver-broker-namespace")
+		info, statErr := file.Stat()
+		closeErr := file.Close()
+		self, selfErr := os.Stat("/proc/thread-self/ns/" + kind)
+		if statErr != nil || closeErr != nil || selfErr != nil || !os.SameFile(info, self) {
+			return errors.Join(errors.New("resolver broker and caller namespaces differ"), statErr, closeErr, selfErr)
+		}
+		if kind == "pid" {
+			init, err := os.Stat("/proc/1/ns/pid")
+			if err != nil || !os.SameFile(init, self) {
+				return errors.Join(errors.New("resolver procfs belongs to another PID namespace"), err)
+			}
+		}
+	}
+	retired, err = resolverPIDFDCurrent(r.broker, r.originalBroker, r.brokerInfo)
+	if err != nil || retired {
+		return errors.Join(errors.New("resolver broker retired during namespace capture"), err)
+	}
+	return nil
+}
+func routervpnResolverPeerPath(path string, uid uint32) error {
+	if path != "/run/systemd/resolve/io.systemd.Resolve" {
+		return errors.New("resolver peer path changed")
+	}
+	for current := filepath.Dir(path); ; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if err != nil {
+			return err
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || !info.IsDir() || info.Mode().Perm()&0022 != 0 ||
+			(stat.Uid != 0 && (current != "/run/systemd/resolve" || stat.Uid != uid)) {
+			return errors.New("resolver peer path has an untrusted ancestor")
+		}
+		if current == "/" {
+			return nil
+		}
+	}
+}
+func (r *routerVPNLinuxResolver) captureLegacyDaemon(ctx context.Context, credentials map[string]dbus.Variant) (file *os.File, failure error) {
+	pid, pidOK := credentials["ProcessID"].Value().(uint32)
+	uid, uidOK := credentials["UnixUserID"].Value().(uint32)
+	if !pidOK || !uidOK || pid == 0 || pid > 1<<31-1 {
+		return nil, errors.New("resolver legacy credentials omitted original peer identity")
+	}
+	if r.broker == nil {
+		return nil, errors.New("legacy system resolver requires original kernel broker sender capability")
+	}
+	if err := r.brokerNamespacesCurrent(); err != nil {
+		return nil, err
+	}
+	const path = "/run/systemd/resolve/io.systemd.Resolve"
+	if err := routervpnResolverPeerPath(path, uid); err != nil {
+		return nil, err
+	}
+	fd, err := unix.Open(path, unix.O_PATH|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := os.NewFile(uintptr(fd), "original-resolver-peer-endpoint")
+	var transport *net.UnixConn
+	defer func() {
+		if transport != nil {
+			failure = errors.Join(failure, transport.Close())
+		}
+		failure = errors.Join(failure, endpoint.Close())
+		if failure != nil && file != nil {
+			failure = errors.Join(failure, file.Close())
+			file = nil
+		}
+	}()
+	info, err := endpoint.Stat()
+	if err != nil {
+		return nil, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != uid || info.Mode()&os.ModeSocket == 0 {
+		return nil, errors.New("resolver peer endpoint does not match original credentials")
+	}
+	named, err := os.Lstat(path)
+	if err != nil || !os.SameFile(info, named) {
+		return nil, errors.Join(errors.New("resolver peer endpoint changed"), err)
+	}
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", "/proc/self/fd/"+strconv.Itoa(fd))
+	if err != nil {
+		return nil, err
+	}
+	var correct bool
+	transport, correct = conn.(*net.UnixConn)
+	if !correct {
+		return nil, errors.Join(errors.New("resolver peer is not an original Unix stream"), conn.Close())
+	}
+	raw, err := transport.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	var peer *unix.Ucred
+	var operation error
+	received := -1
+	err = raw.Control(func(fd uintptr) {
+		peer, operation = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
+		if operation == nil {
+			received, operation = unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_PEERPIDFD)
+		}
+	})
+	if received >= 0 {
+		unix.CloseOnExec(received)
+		file = os.NewFile(uintptr(received), "original-resolver-peer-process")
+	}
+	if err != nil || operation != nil {
+		return file, errors.Join(err, operation)
+	}
+	if file == nil || peer == nil || peer.Pid <= 0 || uint32(peer.Pid) != pid || peer.Uid != uid {
+		return file, errors.New("resolver peer does not match original unique-owner credentials")
+	}
+	pinned, err := resolverPIDFDProcessID(file)
+	if err != nil || pinned != pid {
+		return file, errors.Join(errors.New("resolver peer pidfd identity differs"), err)
+	}
+	named, err = os.Lstat(path)
+	if err != nil || !os.SameFile(info, named) {
+		return file, errors.Join(errors.New("resolver original peer endpoint was replaced"), err)
+	}
+	if err := r.brokerNamespacesCurrent(); err != nil {
+		return file, err
+	}
+	if err := r.namespaceCurrent(); err != nil {
+		return file, err
+	}
+	return file, ctx.Err()
+}
+
 func resolverPIDFDCurrent(file, original *os.File, info os.FileInfo) (bool, error) {
 	if file == nil || file != original || info == nil {
 		return false, errors.New("resolver lost original daemon pidfd")
@@ -478,23 +892,33 @@ func resolverPIDFDCurrent(file, original *os.File, info os.FileInfo) (bool, erro
 	})
 	return retired, errors.Join(err, failure)
 }
-func (r *routerVPNLinuxResolver) captureDaemon(p *routerVPNResolverCall) error {
+func (r *routerVPNLinuxResolver) captureDaemon(ctx context.Context, p *routerVPNResolverCall) error {
 	var credentials map[string]dbus.Variant
 	if err := p.call.Store(&credentials); err != nil {
 		return err
 	}
-	received, ok := credentials["ProcessFD"].Value().(dbus.UnixFD)
-	if !ok {
-		return errors.New("available system resolver does not expose an original ProcessFD credential")
-	}
-	r.wireMu.Lock()
-	file := p.fds[int(received)]
-	if file != nil {
-		p.adopted[int(received)] = true
-	}
-	r.wireMu.Unlock()
-	if file == nil {
-		return errors.New("resolver ProcessFD omitted its original received descriptor")
+	var file *os.File
+	if credential, present := credentials["ProcessFD"]; present {
+		received, ok := credential.Value().(dbus.UnixFD)
+		if !ok {
+			return errors.New("resolver ProcessFD credential has an invalid type")
+		}
+		r.wireMu.Lock()
+		file = p.fds[int(received)]
+		if file != nil {
+			p.adopted[int(received)] = true
+		}
+		r.wireMu.Unlock()
+		if file == nil {
+			return errors.New("resolver ProcessFD omitted its original received descriptor")
+		}
+	} else {
+		var err error
+		file, err = r.captureLegacyDaemon(ctx, credentials)
+		if err != nil {
+			return err
+		}
+		r.daemonFromPeer = true
 	}
 	r.daemon, r.originalDaemon = file, file
 	var err error
@@ -505,30 +929,13 @@ func (r *routerVPNLinuxResolver) captureDaemon(p *routerVPNResolverCall) error {
 	if retired, err := resolverPIDFDCurrent(r.daemon, r.originalDaemon, r.daemonInfo); err != nil || retired {
 		return errors.Join(errors.New("resolver original daemon is not live"), err)
 	}
-	// fdinfo's Pid is expressed in this same procfs mount's namespace.
-	// The broker's numeric ProcessID can use a different PID namespace and
-	// is never used to reconstruct authority or select a process directory.
-	raw, err := os.ReadFile("/proc/self/fdinfo/" + strconv.Itoa(int(file.Fd())))
+	// Select procfs only from the retained pidfd, never from broker ProcessID.
+	pid, err := resolverPIDFDProcessID(file)
 	if err != nil {
 		return err
 	}
-	var pid uint64
-	for _, line := range strings.Split(string(raw), "\n") {
-		if strings.HasPrefix(line, "Pid:\t") {
-			if pid != 0 {
-				return errors.New("resolver original pidfd has duplicate process identity")
-			}
-			pid, err = strconv.ParseUint(strings.TrimPrefix(line, "Pid:\t"), 10, 31)
-			if err != nil || pid == 0 {
-				return errors.New("resolver original pidfd has no live procfs identity")
-			}
-		}
-	}
-	if pid == 0 {
-		return errors.New("resolver ProcessFD is not a native process descriptor")
-	}
-	r.pid = uint32(pid)
-	fd, err := unix.Open("/proc/"+strconv.FormatUint(pid, 10), unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	r.pid = pid
+	fd, err := unix.Open("/proc/"+strconv.FormatUint(uint64(pid), 10), unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		return err
 	}
@@ -684,11 +1091,34 @@ func (t *NativeTun) routervpnLinuxResolverStart(ctx context.Context) (failure er
 	if err != nil {
 		return err
 	}
-	if err = r.captureDaemon(p); err != nil {
+	if err = r.captureDaemon(ctx, p); err != nil {
 		return err
 	}
 	if err = r.clear(p); err != nil {
 		return err
+	}
+	if r.daemonFromPeer {
+		// A fresh reply from this exact unique name closes the stale numeric
+		// credential window; a broker-generated error cannot satisfy join.
+		if err = r.daemonCurrent(); err != nil {
+			return err
+		}
+		if err = r.issue(ctx, r.unique, "/org/freedesktop/resolve1", "org.freedesktop.DBus.Peer.Ping", false); err != nil {
+			return err
+		}
+		p, err = r.join(ctx)
+		if err != nil {
+			return err
+		}
+		if p.kind != dbus.TypeMethodReply || len(p.call.Body) != 0 {
+			return errors.New("resolver peer omitted original liveness acknowledgement")
+		}
+		if err = r.clear(p); err != nil {
+			return err
+		}
+		if err = r.daemonCurrent(); err != nil {
+			return err
+		}
 	}
 	// The name may be released after capture; never redirect to its successor.
 	p, err = r.query(ctx, "GetNameOwner", "org.freedesktop.resolve1")
@@ -886,7 +1316,7 @@ func (t *NativeTun) routervpnLinuxResolverRetire(ctx context.Context) error {
 		file     **os.File
 		original *os.File
 		info     os.FileInfo
-	}{{&r.daemonImage, r.originalDaemonImage, r.daemonImageInfo}, {&r.daemonNamespace, r.originalDaemonNamespace, r.daemonNamespaceInfo}, {&r.proc, r.originalProc, r.procInfo}, {&r.daemon, r.originalDaemon, r.daemonInfo}, {&r.bus, r.originalBus, r.busInfo}, {&r.namespace, r.originalNamespace, r.namespaceInfo}} {
+	}{{&r.daemonImage, r.originalDaemonImage, r.daemonImageInfo}, {&r.daemonNamespace, r.originalDaemonNamespace, r.daemonNamespaceInfo}, {&r.proc, r.originalProc, r.procInfo}, {&r.daemon, r.originalDaemon, r.daemonInfo}, {&r.broker, r.originalBroker, r.brokerInfo}, {&r.bus, r.originalBus, r.busInfo}, {&r.namespace, r.originalNamespace, r.namespaceInfo}} {
 		if err := resolverCloseFile(item.file, item.original, item.info); err != nil {
 			return err
 		}

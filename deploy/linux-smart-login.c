@@ -1,12 +1,15 @@
 // Run the qualification user on openvt's foreground terminal under the stock login PAM service.
+#define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
 #include <pwd.h>
+#include <sched.h>
 #include <security/pam_appl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -90,6 +93,10 @@ int main(int argc, char **argv) {
 #define CHILD_STAGE(label, call) do { \
     if ((call) != 0) { report((label), 0, errno); _exit(1); } \
 } while (0)
+        // PAM's root parent retains the real host bus through close_session.
+        // Only this authenticated child receives the later isolated resolver mounts.
+        CHILD_STAGE("private-mount-namespace", unshare(CLONE_NEWNS));
+        CHILD_STAGE("private-mount-propagation", mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL));
         CHILD_STAGE("set-home", setenv("HOME", home, 1));
         CHILD_STAGE("set-user", setenv("USER", argv[1], 1));
         CHILD_STAGE("set-logname", setenv("LOGNAME", argv[1], 1));

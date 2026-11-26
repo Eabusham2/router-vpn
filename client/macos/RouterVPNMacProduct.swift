@@ -950,7 +950,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     guard let window = owner.window, let content = window.contentView else { return 2 }
     defer { owner.timer?.invalidate(); window.close() }
     window.orderFront(nil)
-    let primary = ["unified-connect", "unified-kill-switch", "unified-forward-master",
+    let primary = ["unified-connection-profiles", "unified-connect", "unified-kill-switch", "unified-forward-master",
                    "unified-multihop-toggle", "unified-settings", "unified-mode-popup", "unified-dns-popup"]
     for size in [NSSize(width: 720, height: 560), NSSize(width: 1050, height: 720)] {
         window.setContentSize(size)
@@ -967,6 +967,14 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
                   visible.width >= control.bounds.width - 1,
                   visible.height >= control.bounds.height - 1 else {
                 print("macOS layout self-test: clipped \(id) at \(Int(size.width))×\(Int(size.height))"); return 2
+            }
+            let shown = control.convert(visible, to: content)
+            for otherID in primary where otherID != id {
+                guard let other = owner.findUnifiedView(otherID), !other.isHidden else { continue }
+                let overlap = shown.intersection(other.convert(other.visibleRect, to: content))
+                guard overlap.isNull || overlap.width <= 1 || overlap.height <= 1 else {
+                    print("macOS layout self-test: overlapping \(id) / \(otherID) at \(Int(size.width))×\(Int(size.height))"); return 2
+                }
             }
         }
         if let connect = owner.findUnifiedView("unified-connect") { _ = connect.scrollToVisible(connect.bounds) }

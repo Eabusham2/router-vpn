@@ -304,6 +304,134 @@ jobs:
           ROUTERVPN_CAPTURE_SELF_TEST_LAYOUT: '1'
         run: |
           $ErrorActionPreference='Stop'
+          function Invoke-RouterVPNWindowsHostPreflight([string]$Root,[string]$Evidence) {
+            # Qualify the PS5 host/path boundary independently of App, whose native
+            # owner/pipe/WPF/WFP gates below remain unchanged.
+            $probe=$null;$probeCreated=$false;$probePin=$null;$hostPin=$null;$ownedWitness=$null;$retirementFailed=$false
+            $result=[ordered]@{schema=1;source=$env:GITHUB_SHA;scope='PowerShell host/path compatibility; no controller or VPN';cases=@()}
+            try{
+              Add-Type -TypeDefinition @'
+          using System;
+          using System.IO;
+          using System.Text;
+          using System.Threading.Tasks;
+          using System.Runtime.InteropServices;
+          using Microsoft.Win32.SafeHandles;
+          public static class RouterVPNHostProbe {
+            [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
+            static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle,StringBuilder path,uint size,uint flags);
+            public static string Canonical(SafeFileHandle handle) {
+              var text=new StringBuilder(32768); uint n=GetFinalPathNameByHandleW(handle,text,32768,1);
+              if(n==0||n>=32768) throw new InvalidOperationException("Probe volume capture failed");
+              return text.ToString();
+            }
+            public static async Task<string> ReadBounded(TextReader reader) {
+              var text=new StringBuilder(); var buffer=new char[1024]; int count;
+              while((count=await reader.ReadAsync(buffer,0,buffer.Length))!=0)
+                if(text.Length<8192) text.Append(buffer,0,Math.Min(count,8192-text.Length));
+              return text.ToString();
+            }
+          }
+          '@
+              $stem='routervpn-host-probe-'+[Guid]::NewGuid().ToString('N')
+              $probe=Join-Path $Root ($stem+'.ps1');$ownedWitness=Join-Path $Root ($stem+'.witness')
+              $probeSource=@'
+          $ErrorActionPreference='Stop'
+          [Console]::WriteLine('probe.entered=1')
+          [Console]::WriteLine('probe.version='+$PSVersionTable.PSVersion)
+          [Console]::WriteLine('probe.home_kind='+$(if($PSHOME.StartsWith('\\?\Volume{')){'volume-verbatim'}elseif($PSHOME.StartsWith('\\.\Volume{')){'volume-normalized'}else{'other'}))
+          [Console]::WriteLine('probe.cwd_original='+[String]::Equals([IO.Directory]::GetCurrentDirectory(),$env:HOMEVPN_ROOT,[StringComparison]::OrdinalIgnoreCase))
+          try{
+            $file=[IO.File]::Open([IO.Path]::Combine($env:HOMEVPN_ROOT,'__WITNESS__'),[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+            try{$file.WriteByte(82)}finally{$file.Dispose()}
+            [Console]::WriteLine('probe.write=1')
+          }catch{[Console]::WriteLine('probe.write_hresult='+$_.Exception.HResult)}
+          try{
+            $utility=[IO.Path]::Combine($PSHOME,'Modules','Microsoft.PowerShell.Utility','Microsoft.PowerShell.Utility.psd1')
+            $module=@(Microsoft.PowerShell.Core\Import-Module $utility -Scope Local -PassThru -ErrorAction Stop)
+            [Console]::WriteLine('probe.utility='+[int]($module.Count-eq1-and$null-ne$module[0].ExportedCmdlets['Add-Type']-and$null-ne$module[0].ExportedCmdlets['ConvertFrom-Json']))
+          }catch{[Console]::WriteLine('probe.utility_hresult='+$_.Exception.HResult)}
+          $tokens=$null;$errors=$null
+          [void][Management.Automation.Language.Parser]::ParseFile([IO.Path]::Combine($env:HOMEVPN_ROOT,'client','RouterVPN-Windows-App.ps1'),[ref]$tokens,[ref]$errors)
+          [Console]::WriteLine('probe.app_parser_errors='+$errors.Count)
+          '@
+              $probeSource=$probeSource.Replace('__WITNESS__',$stem+'.witness')
+              $bytes=[Text.Encoding]::ASCII.GetBytes($probeSource)
+              $writer=[IO.File]::Open($probe,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);$probeCreated=$true
+              try{$writer.Write($bytes,0,$bytes.Length)}finally{$writer.Dispose()}
+              $probePin=[IO.File]::Open($probe,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+              $system=[Environment]::SystemDirectory;$systemRoot=[IO.Path]::GetDirectoryName($system)
+              $hostPath=[IO.Path]::Combine($system,'WindowsPowerShell','v1.0','powershell.exe')
+              $hostPin=[IO.File]::Open($hostPath,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+              $canonical=[RouterVPNHostProbe]::Canonical($probePin.SafeFileHandle)
+              $hostCanonical=[RouterVPNHostProbe]::Canonical($hostPin.SafeFileHandle)
+              if(-not$canonical.StartsWith('\\?\Volume{')-or-not$hostCanonical.StartsWith('\\?\Volume{')){throw 'Probe did not retain original volume paths'}
+              $directory=[IO.Path]::GetDirectoryName($canonical);$nativeHost='\\.\'+$hostCanonical.Substring(4);$normalized='\\.\'+$canonical.Substring(4)
+              $result.app_sha256=(Get-FileHash -LiteralPath (Join-Path $Root 'client/RouterVPN-Windows-App.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()
+              $result.probe_sha256=(Get-FileHash -LiteralPath $probe -Algorithm SHA256).Hash.ToLowerInvariant()
+              $result.host_sha256=(Get-FileHash -LiteralPath $hostPath -Algorithm SHA256).Hash.ToLowerInvariant()
+              $local=[Environment]::GetFolderPath('LocalApplicationData')
+              $environment=@{SystemRoot=$systemRoot;windir=$systemRoot;PATH="$system;$systemRoot;"+[IO.Path]::GetDirectoryName($hostPath);PATHEXT='.COM;.EXE;.BAT;.CMD';USERPROFILE=[Environment]::GetFolderPath('UserProfile');PSModulePath=[IO.Path]::Combine($system,'WindowsPowerShell','v1.0','Modules');COMSPEC=[IO.Path]::Combine($system,'cmd.exe');OS='Windows_NT';APPDATA=[Environment]::GetFolderPath('ApplicationData');LOCALAPPDATA=$local;TEMP=[IO.Path]::Combine($local,'Temp');TMP=[IO.Path]::Combine($local,'Temp');HOMEVPN_ROOT=$directory;HOMEVPN_CLIENT_CONFIG=[IO.Path]::Combine($directory,'client.json');HOMEVPN_NATIVE_APP='windows-wpf-product';ROUTERVPN_CAPTURE_SELF_TEST_LAYOUT='1'}
+              $variants=@(
+                @{name='ordinary-file';image=$hostPath;directory=$Root;switch='-File';argument=$probe},
+                @{name='captured-host-command';image=$nativeHost;directory=$directory;switch='-Command';argument=$probeSource},
+                @{name='captured-host-canonical-file';image=$nativeHost;directory=$directory;switch='-File';argument=$canonical},
+                @{name='captured-host-normalized-file';image=$nativeHost;directory=$directory;switch='-File';argument=$normalized}
+              )
+              foreach($variant in $variants){
+                $info=[Diagnostics.ProcessStartInfo]::new();$info.FileName=$variant.image;$info.WorkingDirectory=$variant.directory
+                $info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.RedirectStandardInput=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
+                $info.Environment.Clear();foreach($key in $environment.Keys){$info.Environment[$key]=$environment[$key]}
+                foreach($arg in @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',$variant.switch,$variant.argument)){$info.ArgumentList.Add($arg)}
+                $child=[Diagnostics.Process]::new();$child.StartInfo=$info;$started=$false;$out=$null;$err=$null;$outReader=$null;$errReader=$null;$row=[ordered]@{variant=$variant.name;environment='launcher-reconstructed';timed_out=$false}
+                try{
+                  $started=$child.Start();if(-not$started){throw 'Host probe did not start'}
+                  $child.StandardInput.Close();$outReader=$child.StandardOutput;$errReader=$child.StandardError;$out=[RouterVPNHostProbe]::ReadBounded($outReader);$err=[RouterVPNHostProbe]::ReadBounded($errReader)
+                  if(-not$child.WaitForExit(20000)){$row.timed_out=$true;$child.Kill($true);if(-not$child.WaitForExit(5000)){throw 'Host probe did not join'}}
+                  if(-not[Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($out,$err),5000)){throw 'Host probe output did not join'}
+                  $stdout=$out.GetAwaiter().GetResult();$stderr=$err.GetAwaiter().GetResult();$row.exit_code=$child.ExitCode
+                  $row.fixed_output=@($stdout-split'\r?\n'|Where-Object{$_-cmatch'^probe\.(entered|version|home_kind|cwd_original|write|write_hresult|utility|utility_hresult|app_parser_errors)=[A-Za-z0-9.-]{1,64}$'})
+                  $row.stderr_sample_characters=$stderr.Length
+                  $sha=[Security.Cryptography.SHA256]::Create();try{$row.stderr_sample_sha256=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($stderr)))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
+                  $row.stderr_markers=@();foreach($marker in @('does not exist','cannot be loaded','Access is denied','is not recognized','not digitally signed','ParserError','FileNotFound','InvalidArgument')){if($stderr.Contains($marker)){$row.stderr_markers+=$marker}}
+                  $row.witness=$false
+                  if([IO.File]::Exists($ownedWitness)){
+                    $witness=[IO.File]::Open($ownedWitness,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+                    try{if($witness.Length-ne1-or$witness.ReadByte()-ne82){throw 'Unexpected probe witness'};$row.witness=$true}finally{$witness.Dispose()}
+                    [IO.File]::Delete($ownedWitness)
+                  }
+                }catch{$row.probe_error_type=$_.Exception.GetType().FullName}finally{
+                  $joined=-not$started
+                  try{if($started){if(-not$child.HasExited){$child.Kill($true)};$joined=$child.WaitForExit(5000)}}catch{}
+                  foreach($reader in @($outReader,$errReader)){if($null-ne$reader){try{$reader.Dispose()}catch{$row.reader_dispose_error_type=$_.Exception.GetType().FullName}}}
+                  $tasks=@($out,$err|Where-Object{$null-ne$_})
+                  if($tasks.Count){try{[void][Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]$tasks,5000)}catch{}}
+                  $readersJoined=@($tasks|Where-Object{-not$_.IsCompleted}).Count-eq0
+                  $row.process_joined=$joined;$row.readers_joined=$readersJoined
+                  if(-not$joined-or-not$readersJoined){
+                    $retirementFailed=$true
+                    $script:RouterVPNHostProbeRetained=@($child,$outReader,$errReader,$out,$err,$probePin,$hostPin)
+                  }else{$child.Dispose()}
+                }
+                $result.cases+=$row
+                if($retirementFailed){break}
+              }
+            }catch{$result.preflight_error_type=$_.Exception.GetType().FullName}finally{
+              if(-not$retirementFailed){
+                if($null-ne$probePin){$probePin.Dispose()};if($null-ne$hostPin){$hostPin.Dispose()}
+                if($probeCreated-and[IO.File]::Exists($probe)){[IO.File]::Delete($probe)}
+              }
+              if(-not$retirementFailed-and$probeCreated-and$null-ne$ownedWitness-and[IO.File]::Exists($ownedWitness)){
+                $item=Get-Item -LiteralPath $ownedWitness -Force
+                if(-not$item.PSIsContainer-and($item.Attributes-band[IO.FileAttributes]::ReparsePoint)-eq0-and$item.Length-eq1-and[IO.File]::ReadAllBytes($ownedWitness)[0]-eq82){[IO.File]::Delete($ownedWitness)}
+                else{$result.witness_cleanup_unproved=$true}
+              }
+              $json=$result|ConvertTo-Json -Depth 6 -Compress
+              [IO.File]::WriteAllText((Join-Path $Evidence 'windows-host-preflight.log'),$json,[Text.UTF8Encoding]::new($false))
+              Write-Host $json
+            }
+            if($retirementFailed){throw 'The owned PowerShell host preflight did not fully retire'}
+          }
           foreach($family in @('Windows','Portable-Windows')){
             $archive=(Get-ChildItem artifacts -Recurse -Filter "RouterVPN-$family-$env:ROUTER_VPN_ARCH.zip"|Select-Object -First 1).FullName
             if(-not $archive){throw "Missing $family package"}
@@ -321,6 +449,7 @@ jobs:
             }
             $evidence=Join-Path $env:RUNNER_TEMP "routervpn-ui/$family"
             [void][IO.Directory]::CreateDirectory($evidence)
+            if($family -eq 'Windows'){Invoke-RouterVPNWindowsHostPreflight -Root $root -Evidence $evidence}
             $stdout=Join-Path $evidence 'launcher.stdout.log'
             $stderr=Join-Path $evidence 'launcher.stderr.log'
             $p=Start-Process -FilePath (Join-Path $root $name) -ArgumentList '--self-test' -WorkingDirectory $root -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru

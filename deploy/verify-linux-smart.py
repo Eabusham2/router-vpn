@@ -232,6 +232,255 @@ def qualification_uid():
     return secrets.choice(available)
 
 
+
+@contextmanager
+def controller_resolver(work, pid, prove, retired):
+    """Own a real system bus/resolved pair in the proved controller's namespaces."""
+    record = {"schema": 1, "controller_pid": pid, "ready": False, "cleanup_complete": False,
+              "daemons": [], "mounts": []}
+    receipt = work / "resolver-receipt"
+    failure, processes, attempted = None, [], []
+    parent_mount = os.stat("/proc/self/ns/mnt")
+    parent_net = os.stat("/proc/self/ns/net")
+    identity = lambda info: [info.st_dev, info.st_ino]
+
+    def save():
+        private_write(receipt, record)
+
+    with ExitStack() as handles:
+        pidfd = os.pidfd_open(pid)
+        handles.callback(os.close, pidfd)
+        proc = os.open(f"/proc/{pid}", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        handles.callback(os.close, proc)
+        mount = os.open("ns/mnt", os.O_RDONLY, dir_fd=proc)
+        handles.callback(os.close, mount)
+        network = os.open("ns/net", os.O_RDONLY, dir_fd=proc)
+        handles.callback(os.close, network)
+        mount_identity, network_identity = identity(os.fstat(mount)), identity(os.fstat(network))
+        record.update(mount_namespace=mount_identity, network_namespace=network_identity)
+        if (mount_identity == identity(parent_mount) or
+                mount_identity == identity(os.stat("/proc/1/ns/mnt")) or
+                network_identity != identity(parent_net)):
+            raise RuntimeError("SMART resolver namespaces are not the original private controller view")
+
+        def current():
+            if (select.select([pidfd], [], [], 0)[0] or
+                    not os.path.samestat(os.stat("exe", dir_fd=proc), CLIENT.stat()) or
+                    identity(os.stat("ns/mnt", dir_fd=proc)) != mount_identity or
+                    identity(os.stat("ns/net", dir_fd=proc)) != network_identity or prove() != pid):
+                raise RuntimeError("SMART resolver lost its proved original controller")
+            # The login child made every inherited mount private before dropping UID.
+            with os.fdopen(os.open("mountinfo", os.O_RDONLY, dir_fd=proc)) as stream:
+                for line in stream:
+                    optional = line.split(" - ", 1)[0].split()[6:]
+                    if any(item.startswith(("shared:", "master:")) for item in optional):
+                        raise RuntimeError("SMART controller mount propagation is not private")
+
+        prefix = ["nsenter", "--mount=/proc/self/fd/" + str(mount),
+                  "--net=/proc/self/fd/" + str(network), "--"]
+        environment = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8",
+                       "SYSTEMD_LOG_TARGET": "console", "SYSTEMD_LOG_COLOR": "0"}
+
+        def inside(*args, timeout=5):
+            completed = subprocess.run(prefix + list(map(str, args)), pass_fds=(mount, network),
+                                       env=environment, capture_output=True, timeout=timeout)
+            if completed.returncode:
+                raise RuntimeError("SMART isolated resolver setup command failed: exit=" +
+                                   str(completed.returncode))
+            return completed.stdout.decode("utf-8")
+
+        layout_source = (
+            "import json,os\n"
+            "r={'mnt':[os.stat('/proc/self/ns/mnt').st_dev,os.stat('/proc/self/ns/mnt').st_ino],"
+            "'net':[os.stat('/proc/self/ns/net').st_dev,os.stat('/proc/self/ns/net').st_ino],"
+            "'mounts':{}}\n"
+            "for line in open('/proc/self/mountinfo'):\n"
+            " a,b=line.rstrip().split(' - ',1); a=a.split(); b=b.split()\n"
+            " if a[4] in ('/run/dbus','/run/systemd'):"
+            " r['mounts'][a[4]]={'id':int(a[0]),'type':b[0],'source':b[1]}\n"
+            "print(json.dumps(r))\n")
+
+        def layout():
+            value = json.loads(inside("/usr/bin/python3", "-I", "-c", layout_source))
+            if value["mnt"] != mount_identity or value["net"] != network_identity:
+                raise RuntimeError("SMART resolver entered a different namespace")
+            return value["mounts"]
+
+        def daemon_current(item):
+            process = item["process"]
+            if process.poll() is not None:
+                raise RuntimeError("SMART owned resolver daemon exited: " + item["name"])
+            try:
+                path = Path("/proc") / str(process.pid)
+                return (os.path.samestat((path / "exe").stat(), item["executable_info"]) and
+                        identity((path / "ns/mnt").stat()) == mount_identity and
+                        identity((path / "ns/net").stat()) == network_identity)
+            except FileNotFoundError:
+                return False
+
+        def start(name, executable, *arguments):
+            executable = executable.resolve(strict=True)
+            info = executable.stat()
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+                raise RuntimeError("SMART resolver executable is not a trusted installed file")
+            descriptor = os.open(work / (name + "-diagnostics"),
+                                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, "wb") as log:
+                process = subprocess.Popen(prefix + [str(executable), *arguments],
+                                           pass_fds=(mount, network), env=environment,
+                                           stdin=subprocess.DEVNULL, stdout=log, stderr=log)
+            item = {"name": name, "process": process, "executable": executable,
+                    "executable_info": info, "pidfd": None}
+            processes.append(item)  # Even a failed pidfd acquisition retains the exact Popen child.
+            item["pidfd"] = os.pidfd_open(process.pid)
+            handles.callback(os.close, item["pidfd"])
+            wait_for(lambda: daemon_current(item), "the original " + name + " daemon", 10)
+            entry = {"name": name, "pid": process.pid, "executable": str(executable),
+                     "executable_identity": identity(info),
+                     "mount_namespace": mount_identity, "network_namespace": network_identity,
+                     "joined": False}
+            item["receipt"] = entry
+            record["daemons"].append(entry)
+            save()
+            return item
+
+        def bus_call(member, *arguments):
+            return inside("busctl", "--system", "--timeout=2", "call", "org.freedesktop.DBus",
+                          "/org/freedesktop/DBus", "org.freedesktop.DBus", member, *arguments).strip()
+
+        try:
+            current()
+            for target in ("/run/dbus", "/run/systemd"):
+                source = "routervpn-smart-resolver-" + secrets.token_hex(12)
+                item = {"target": target, "source": source, "id": None, "unmounted": False}
+                attempted.append(item)
+                record["mounts"].append(item)
+                # Existing parent directories are hidden only in the child's private mount
+                # view. resolved itself creates/chowns its own runtime subdirectory.
+                inside("mount", "-t", "tmpfs", "-o", "mode=0755,size=8m,nosuid,nodev,noexec",
+                       source, target)
+                observed = layout().get(target)
+                if not observed or observed["type"] != "tmpfs" or observed["source"] != source:
+                    raise RuntimeError("SMART resolver mount did not retain its original identity")
+                item["id"] = observed["id"]
+                save()
+            bus = start("system-bus", Path("/usr/bin/dbus-daemon"), "--system", "--nofork", "--nopidfile")
+
+            def bus_ready():
+                if not daemon_current(bus):
+                    return False
+                try:
+                    return bool(re.fullmatch(r's "[0-9a-f]{32}"', bus_call("GetId")))
+                except RuntimeError:
+                    return False
+
+            wait_for(bus_ready, "the owned ordinary system bus", 10)
+            resolved = start("resolved", Path("/usr/lib/systemd/systemd-resolved"))
+
+            def resolved_ready():
+                if not daemon_current(bus) or not daemon_current(resolved):
+                    return False
+                try:
+                    owner = bus_call("GetNameOwner", "s", "org.freedesktop.resolve1")
+                    match = re.fullmatch(r's "(:[0-9]+\.[0-9]+)"', owner)
+                    if not match:
+                        return False
+                    actual = bus_call("GetConnectionUnixProcessID", "s", match[1])
+                    if actual != "u " + str(resolved["process"].pid):
+                        return False
+                    if bus_call("GetNameOwner", "s", "org.freedesktop.resolve1") != owner:
+                        return False
+                    record["resolver_unique_name"] = match[1]
+                    return True
+                except RuntimeError:
+                    return False
+
+            wait_for(resolved_ready, "the original resolved owner on the owned system bus", 15)
+            current()
+            record["ready"] = True
+            save()
+            print("SMART isolated resolver ready: " + json.dumps(record, sort_keys=True), flush=True)
+            yield record
+            for item in processes:
+                if not daemon_current(item):
+                    raise RuntimeError("SMART resolver daemon changed before controller retirement")
+        except BaseException as error:
+            failure = error
+            raise
+        finally:
+            errors = []
+            for item in reversed(processes):
+                process = item["process"]
+                try:
+                    if process.poll() is None:
+                        try:
+                            if item["pidfd"] is None:
+                                process.terminate()  # Exact, unreaped Popen child; no numeric-PID lookup.
+                            else:
+                                signal.pidfd_send_signal(item["pidfd"], signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass  # A just-exited original child must still be joined below.
+                        try:
+                            process.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            try:
+                                if item["pidfd"] is None:
+                                    process.kill()
+                                else:
+                                    signal.pidfd_send_signal(item["pidfd"], signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            process.wait(timeout=5)
+                            errors.append(item["name"] + " required forced termination")
+                    if item.get("receipt"):
+                        item["receipt"].update(joined=True, exit_code=process.returncode)
+                except BaseException as error:
+                    errors.append(item["name"] + " cleanup: " + type(error).__name__)
+            # Revealing the host paths is allowed only after both the exact
+            # controller and its real login/PAM parent have finished. On partial
+            # setup or failed retirement, the existing owned-namespace teardown
+            # destroys these mounts instead; a live owner never sees the host bus.
+            can_unmount = retired() and bool(select.select([pidfd], [], [], 0)[0])
+            retained_mounts = False
+            for item in reversed(attempted):
+                try:
+                    observed = layout().get(item["target"])
+                    if observed and observed["source"] == item["source"] and observed["type"] == "tmpfs":
+                        if item["id"] is not None and observed["id"] != item["id"]:
+                            raise RuntimeError("original resolver mount was replaced")
+                        if not can_unmount:
+                            item["retained_for_namespace_teardown"] = True
+                            retained_mounts = True
+                            continue
+                        inside("umount", item["target"])
+                        if layout().get(item["target"]) == observed:
+                            raise RuntimeError("original resolver mount remained after unmount")
+                        item["unmounted"] = True
+                    elif item["id"] is not None:
+                        raise RuntimeError("original resolver mount disappeared or was replaced")
+                except BaseException as error:
+                    errors.append(item["target"] + " cleanup: " + type(error).__name__)
+            if (not os.path.samestat(os.stat("/proc/self/ns/mnt"), parent_mount) or
+                    not os.path.samestat(os.stat("/proc/self/ns/net"), parent_net)):
+                errors.append("the qualification parent's original namespace changed")
+            if retained_mounts:
+                errors.append("private resolver mounts retained for original namespace teardown")
+            record["processes_joined"] = all(item["process"].poll() is not None for item in processes)
+            record["mounts_retained_for_namespace_teardown"] = retained_mounts
+            record["cleanup_complete"] = not errors and not retained_mounts
+            record["cleanup_errors"] = errors
+            try:
+                save()
+                print("SMART isolated resolver retirement: " + json.dumps(record, sort_keys=True), flush=True)
+            except BaseException as error:
+                errors.append("resolver receipt: " + type(error).__name__)
+            if errors:
+                cleanup_error = RuntimeError("SMART isolated resolver cleanup failed: " + "; ".join(errors))
+                if failure is None:
+                    raise cleanup_error
+                failure.add_note(str(cleanup_error))
+
+
 @contextmanager
 def controller(work, user, password):
     session = work / "session"
@@ -311,8 +560,11 @@ def controller(work, user, password):
         return pid
 
     failure = None
+    retirement_complete = False
+    resolver = ExitStack()
     try:
         pid = wait_for(prove, "active VT authorization and the original controller identity", 90)
+        resolver.enter_context(controller_resolver(work, pid, prove, lambda: retirement_complete))
         yield pid, {"Authorization": "Bearer " + token}
     except BaseException as error:
         failure = error
@@ -323,10 +575,22 @@ def controller(work, user, password):
             (session / "close").touch()
             if launch.wait(timeout=150) != 0 or not retired_login():
                 raise RuntimeError("The authenticated controller, PAM session or VT did not complete retirement: " + diagnostics())
+            retirement_complete = True
         except BaseException as error:
             if failure is None:
+                failure = error
                 raise
             failure.add_note("Session retirement also failed: " + type(error).__name__ + "; " + diagnostics())
+        finally:
+            # Keep the owned resolver alive until the original controller/PAM
+            # retirement attempt has joined. Failed cases still fail and the
+            # outer namespace cleanup retains its existing owned-process checks.
+            try:
+                resolver.close()
+            except BaseException as error:
+                if failure is None:
+                    raise
+                failure.add_note("Owned resolver retirement also failed: " + type(error).__name__)
 
 
 @contextmanager

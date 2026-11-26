@@ -12,19 +12,26 @@ extension ProductWindowController {
             for child in view.subviews { if let hit = find(child, id: id) { return hit } }
             return nil
         }
-        guard let sheet = find(content, id: "unified-sheet") else { return }
-        objc_setAssociatedObject(self, &connectionProfileChromeInstalledKey, true, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        func arrangedStack(containing child: NSView, in view: NSView) -> NSStackView? {
+            if let stack = view as? NSStackView, stack.arrangedSubviews.contains(where: { $0 === child }) { return stack }
+            for nested in view.subviews { if let hit = arrangedStack(containing: child, in: nested) { return hit } }
+            return nil
+        }
+        guard let kill = find(content, id: "unified-kill-switch"),
+              let primaryRow = arrangedStack(containing: kill, in: content),
+              let controls = arrangedStack(containing: primaryRow, in: content),
+              controls.orientation == .vertical,
+              let position = controls.arrangedSubviews.firstIndex(where: { $0 === primaryRow }) else { return }
         let profiles = NSButton(title: "Profiles", target: self, action: #selector(manageConnectionProfiles))
         profiles.identifier = NSUserInterfaceItemIdentifier("unified-connection-profiles")
         profiles.bezelStyle = .rounded
         profiles.controlSize = .small
         profiles.toolTip = "Add / Load / Update / Delete complete non-secret connection setups including the exact visible multihop graph. Loading never auto-connects."
         profiles.translatesAutoresizingMaskIntoConstraints = false
-        sheet.addSubview(profiles)
-        NSLayoutConstraint.activate([
-            profiles.leadingAnchor.constraint(equalTo: sheet.leadingAnchor, constant: 18),
-            profiles.topAnchor.constraint(equalTo: sheet.topAnchor, constant: 10),
-        ])
+        // Participate in the scroll document's measured layout. A floating
+        // sheet overlay covered Kill switch at both compact and normal sizes.
+        controls.insertArrangedSubview(profiles, at: position)
+        objc_setAssociatedObject(self, &connectionProfileChromeInstalledKey, true, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
 }
 
