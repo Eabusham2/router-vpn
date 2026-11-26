@@ -322,16 +322,16 @@ func routervpnLinuxStringAttribute(value []byte, wanted string) bool {
 	return bytes.Equal(value, []byte(wanted+"\x00"))
 }
 
-// Unspecified addresses are valid network bases for default and split routes
-// such as 0.0.0.0/1 and ::/1. Only a contiguous network mask with the matching
-// address width takes this route-only path. Unspecified host/interface/peer
-// addresses remain rejected by the unchanged address validator.
+// Default-route decomposition can use unspecified or multicast network bases,
+// such as 0.0.0.0/1, ::/1 and 224.0.0.0/3. Only a contiguous non-host network
+// mask with the matching address width takes this route-only path. Host,
+// interface and peer addresses keep the unchanged strict address validator.
 func routervpnLinuxRoutePrefix(value *net.IPNet) (netip.Prefix, bool) {
 	if value != nil {
 		address, valid := netip.AddrFromSlice(value.IP)
 		bits, size := value.Mask.Size()
 		address = address.Unmap()
-		if valid && address.IsUnspecified() && size == address.BitLen() && bits >= 0 && bits < size {
+		if valid && (address.IsUnspecified() || address.IsMulticast()) && size == address.BitLen() && bits >= 0 && bits < size {
 			return netip.PrefixFrom(address, bits), true
 		}
 	}

@@ -297,11 +297,28 @@ jobs:
             Expand-Archive $archive $extract -Force
             $root=(Get-ChildItem -LiteralPath $extract -Directory|Select-Object -First 1).FullName
             $name=if($family -eq 'Windows'){'RouterVPN.exe'}else{'RouterVPNPortable.exe'}
-            $p=Start-Process -FilePath (Join-Path $root $name) -ArgumentList '--self-test' -Wait -PassThru
-            if($p.ExitCode -ne 0){throw "Packaged $family self-test failed"}
             $dataRoot=if($family -eq 'Windows'){$root}else{Join-Path $root 'Data'}
             $evidence=Join-Path $env:RUNNER_TEMP "routervpn-ui/$family"
             [void][IO.Directory]::CreateDirectory($evidence)
+            $stdout=Join-Path $evidence 'launcher.stdout.log'
+            $stderr=Join-Path $evidence 'launcher.stderr.log'
+            $p=Start-Process -FilePath (Join-Path $root $name) -ArgumentList '--self-test' -WorkingDirectory $root -RedirectStandardOutput $stdout -RedirectStandardError $stderr -Wait -PassThru
+            $p.Refresh()
+            $exitCode=$p.ExitCode
+            Write-Host "Packaged $family self-test exit: $exitCode"
+            if($null-eq$exitCode-or$exitCode-ne0){
+              foreach($diagnostic in @($stdout,$stderr)){
+                if(Test-Path -LiteralPath $diagnostic -PathType Leaf){
+                  Write-Host ([IO.Path]::GetFileName($diagnostic))
+                  Get-Content -LiteralPath $diagnostic -Tail 60 | ForEach-Object { if($_.Length-gt1024){$_.Substring(0,1024)}else{$_} }
+                }
+              }
+              foreach($layout in @('windows-640x480.png','windows-1040x720.png')){
+                $image=Join-Path $dataRoot $layout
+                if(Test-Path -LiteralPath $image -PathType Leaf){Copy-Item -LiteralPath $image -Destination (Join-Path $evidence $layout)}
+              }
+              throw "Packaged $family self-test failed (exit $exitCode)"
+            }
             foreach($layout in @('windows-640x480.png','windows-1040x720.png')){
               $image=Join-Path $dataRoot $layout
               $bytes=[IO.File]::ReadAllBytes($image)
@@ -309,12 +326,15 @@ jobs:
               [IO.File]::Move($image,(Join-Path $evidence $layout))
             }
           }
-      - name: Save rendered Windows layouts
+      - name: Save rendered Windows layouts and launch diagnostics
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-Windows-layout-${{ matrix.arch }}-${{ github.sha }}
-          path: ${{ runner.temp }}/routervpn-ui/*/*.png
-          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/routervpn-ui/*/*.png
+            ${{ runner.temp }}/routervpn-ui/*/*.log
+          if-no-files-found: warn
           retention-days: 7
 
       - name: Execute packaged Windows WFP enforcement
@@ -689,6 +709,57 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  macos-intel-smoke:
+    name: macOS packaged Intel AppKit launch
+    needs: macos
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - uses: actions/download-artifact@v4
+        with:
+          name: RouterVPN-macOS-release-candidate
+          path: ${{ runner.temp }}/routervpn-macos-packaged
+      - name: Verify and launch the packaged Intel app
+        env:
+          ROUTERVPN_UI_EVIDENCE_DIR: '${{ runner.temp }}/routervpn-macos-intel-layout'
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          cd "$RUNNER_TEMP/routervpn-macos-packaged"
+          shasum -a 256 -c SHA256SUMS
+          mkdir -p "$RUNNER_TEMP/routervpn-macos-intel"
+          tar -xzf RouterVPN-darwin-amd64.tar.gz -C "$RUNNER_TEMP/routervpn-macos-intel"
+          package="$RUNNER_TEMP/routervpn-macos-intel/RouterVPN-darwin-amd64"
+          app="$package/RouterVPN.app/Contents/MacOS/RouterVPN"
+          test "$(lipo -archs "$app")" = x86_64
+          codesign --verify --deep --strict --verbose=2 "$package/RouterVPN.app"
+          python3 - "$package" <<'PYMACINTEL'
+          import json, os, subprocess, sys
+          from pathlib import Path
+          package = Path(sys.argv[1])
+          provenance = json.loads((package / 'ROUTER-VPN-SOURCE.json').read_text())
+          if (provenance.get('source_sha') != os.environ['GITHUB_SHA']
+                  or provenance.get('repository') != os.environ['GITHUB_REPOSITORY']
+                  or provenance.get('artifact_family') != 'macos-amd64'):
+              raise RuntimeError('Packaged Intel app does not belong to this exact repository/source')
+          executable = package / 'RouterVPN.app/Contents/MacOS/RouterVPN'
+          subprocess.run([str(executable), '--self-test'], cwd=package, check=True, timeout=90)
+          evidence = Path(os.environ['ROUTERVPN_UI_EVIDENCE_DIR'])
+          for name in ('macos-720x560.png', 'macos-1050x720.png'):
+              image = (evidence / name).read_bytes()
+              if len(image) < 33 or image[:8] != b'\x89PNG\r\n\x1a\n':
+                  raise RuntimeError('Packaged Intel app omitted its rendered ' + name)
+          PYMACINTEL
+      - name: Save rendered Intel macOS layouts
+        uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-macOS-layout-amd64-${{ github.sha }}
+          path: ${{ runner.temp }}/routervpn-macos-intel-layout/*.png
+          if-no-files-found: error
+          retention-days: 7
+
   linux:
     needs: native-runtimes
     name: Linux native GTK ${{ matrix.arch }}
@@ -749,7 +820,7 @@ jobs:
 
   aggregate:
     name: Aggregate one-SHA native release candidate
-    needs: [generic-builds, windows-native-smoke, android, ios, macos, linux]
+    needs: [generic-builds, windows-native-smoke, android, ios, macos, macos-intel-smoke, linux]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

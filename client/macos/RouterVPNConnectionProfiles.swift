@@ -1441,7 +1441,7 @@ extension ProductWindowController {
 // exact visible multihop entry/exit/exit transport; load never auto-connects; linked node secrets stay only in the private node store.
 
 final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
-    private weak var owner: ProductWindowController?
+    private weak var productOwner: ProductWindowController?
     private var draft: RouterVPNOrderedNodeDraft
     private var revision = UUID()
     private var openedRevision: UUID?
@@ -1451,7 +1451,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
     private let status = NSTextField(wrappingLabelWithString: "")
 
     init(owner: ProductWindowController, draft: RouterVPNOrderedNodeDraft) {
-        self.owner = owner; self.draft = draft
+        self.productOwner = owner; self.draft = draft
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 380), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "Ordered multihop"; window.minSize = NSSize(width: 580, height: 360); window.isReleasedWhenClosed = false
         super.init(window: window)
@@ -1541,7 +1541,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
     @objc private func measureNext() {
         do {
             let index = path.indexOfSelectedItem, original = revision
-            guard let owner, draft.canMeasure(after: index) else {
+            guard let owner = productOwner, draft.canMeasure(after: index) else {
                 throw RouterVPNOrderedNodes.issue("Choose a supported packet or Local Shadowsocks prefix to measure its candidates.")
             }
             let selection = try draft.selection()
@@ -1572,7 +1572,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         } catch { status.stringValue = error.localizedDescription }
     }
     @objc private func applyPath() {
-        do { guard let owner else { throw RouterVPNOrderedNodes.issue("Reopen the editor from the current Router VPN window.") }; try owner.applyOrderedNodeDraft(draft); close() }
+        do { guard let owner = productOwner else { throw RouterVPNOrderedNodes.issue("Reopen the editor from the current Router VPN window.") }; try owner.applyOrderedNodeDraft(draft); close() }
         catch { status.stringValue = error.localizedDescription }
     }
     @objc private func cancelEditing() { close() }
