@@ -16,6 +16,11 @@ targets:
   RouterVPN:
     type: application
     platform: iOS
+    info:
+      path: build/GeneratedInfo/RouterVPN.plist
+      properties:
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
     sources:
       - App
       - Resources
@@ -68,7 +73,6 @@ targets:
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Router VPN connects to your home VPN node on the local network to import its private profile and manage tunnel-only services.
         INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: Router VPN can show your real device location on the VPN map when you explicitly tap the location button. Location is not required for the VPN and is never inferred from your IP address.
-        INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
         INFOPLIST_KEY_RouterVPNSourceSHA: "$(ROUTER_VPN_SOURCE_SHA)"
         INFOPLIST_KEY_RouterVPNSourceRepository: "Eabusham2/router-vpn"
         INFOPLIST_KEY_RouterVPNArtifactFamily: "ios-app"
@@ -87,6 +91,14 @@ targets:
   RouterVPNPacketTunnel:
     type: app-extension
     platform: iOS
+    info:
+      path: build/GeneratedInfo/RouterVPNPacketTunnel.plist
+      properties:
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
     sources: [PacketTunnel, App/IOSSessionIdentity.swift, App/Models.swift, App/IOSHomeDNSPolicy.swift, App/IOSMultihopStartLayer.swift, App/IOSNativePQProfile.swift, App/IOSMultihopExecution.swift, App/IOSNodeChainCapture.swift, App/IOSImportedOpenVPNSource.swift, App/IOSNodeChainSOCKSCapture.swift, App/IOSNodeChainCONNECTCapture.swift, App/IOSNodeChainExecutionCapture.swift, App/IOSNodeChainProviderCapture.swift, App/IOSNodeCandidateOriginalCapture.swift, App/IOSNodeCandidatePrefixCapture.swift, App/IOSNodeCandidatePrefixProviderCapture.swift, App/IOSDNSRetirementReceipts.swift, App/IOSCandidateCatalogPublication.swift, App/IOSTelemetryProtocol.swift]
     preBuildScripts:
       - name: Build pinned wireguard-go bridge and Libbox bridge
@@ -122,9 +134,6 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.eabusham.routervpn.PacketTunnel
         CODE_SIGN_ENTITLEMENTS: Resources/PacketTunnel.entitlements
         INFOPLIST_KEY_CFBundleDisplayName: Router VPN Tunnel
-        INFOPLIST_KEY_NSExtension_NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
-        INFOPLIST_KEY_NSExtension_NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
-        INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking: YES
         INFOPLIST_KEY_RouterVPNSourceSHA: "$(ROUTER_VPN_SOURCE_SHA)"
         INFOPLIST_KEY_RouterVPNSourceRepository: "Eabusham2/router-vpn"
         INFOPLIST_KEY_RouterVPNArtifactFamily: "ios-packet-tunnel"

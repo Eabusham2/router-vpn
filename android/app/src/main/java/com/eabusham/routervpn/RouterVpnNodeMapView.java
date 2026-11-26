@@ -15,6 +15,10 @@ import android.location.LocationManager;
 import android.os.Bundle;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.text.Layout;
+import android.text.StaticLayout;
+import android.text.TextPaint;
+import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.view.View;
@@ -89,13 +93,14 @@ final class RouterVpnNodeMapView extends View {
     private boolean locationRequestPending;
     private boolean locationTouchStarted;
     private String locationState="LOCATE ME";
+    private MapLayout cachedLayout;
 
     RouterVpnNodeMapView(Context context){this(context,null);}
     RouterVpnNodeMapView(Context context,AttributeSet attrs){
         super(context,attrs);
         text.setTextSize(sp(12));secondary.setTextSize(sp(10));
         setMinimumHeight((int)dp(260));
-        setContentDescription("Router VPN globe. Your location is hidden.");
+        setContentDescription("Router VPN globe. Only real coordinates from linked profiles are shown. Your location is hidden until you choose Locate me.");
         setFocusable(true);
         setClickable(true);
         locationManager=(LocationManager)context.getSystemService(Context.LOCATION_SERVICE);
@@ -107,13 +112,18 @@ final class RouterVpnNodeMapView extends View {
     void setOnMarkerClickListener(OnMarkerClickListener listener){markerClickListener=listener;}
 
     @Override protected void onDraw(Canvas canvas){
-        super.onDraw(canvas);RectF world=worldRect();canvas.drawRoundRect(world,dp(18),dp(18),background);
+        super.onDraw(canvas);MapLayout layout=mapLayout();RectF world=layout.world;
+        canvas.drawRoundRect(layout.outer,dp(18),dp(18),background);
+        drawTextBlock(canvas,layout.title,layout.outer.left,layout.outer.top+(layout.button.height()-(layout.title==null?0:layout.title.getHeight()))/2);
+        drawLocationButton(canvas,layout);
+        drawTextBlock(canvas,layout.legend,layout.outer.left,layout.outer.bottom-(layout.legend==null?0:layout.legend.getHeight()));
+        if(world.width()<=0||world.height()<=0)return;
+        canvas.save();canvas.clipRect(world);
         RectF glow=new RectF(world.left+dp(4),world.top+dp(4),world.right-dp(4),world.bottom-dp(4));canvas.drawOval(glow,oceanGlow);
         for(int lon=-120;lon<=120;lon+=60){float x=xFor(lon,world);canvas.drawLine(x,world.top,x,world.bottom,lon==0?axis:grid);}
         for(int lat=-60;lat<=60;lat+=30){float y=yFor(lat,world);canvas.drawLine(world.left,y,world.right,y,lat==0?axis:grid);}
         land.draw(canvas,world);
-        text.setTextAlign(Paint.Align.LEFT);canvas.drawText("ROUTER VPN GLOBE",world.left+dp(12),world.top+dp(20),secondary);
-        drawLocationButton(canvas,world);
+        text.setTextAlign(Paint.Align.LEFT);
 
         if(orderedLive && frameOwner!=null && !frameOwner.getAsBoolean())orderedLive=false;
         boolean animate=false;
@@ -138,13 +148,13 @@ final class RouterVpnNodeMapView extends View {
             if(position>0&&ROLE_HOP.equals(marker.role))hopPin.setColor(routeColor(position,orderedPath.size()));
             if(marker.id.startsWith("external:")&&!ROLE_EXTERNAL.equals(marker.role))canvas.drawCircle(x,y,r+dp(2),externalPin);
             canvas.drawCircle(x,y,r,paintFor(marker.role));
-            canvas.drawText(marker.label(),x+r+dp(4),y-dp(4),text);
+            drawMarkerLabel(canvas,marker.label(),x,y,r,world);
         }
         if(validUserLocation()){
-            float x=xFor(userLocation.getLongitude(),world),y=yFor(userLocation.getLatitude(),world);canvas.drawCircle(x,y,dp(12),halo(userPin.getColor()));canvas.drawCircle(x,y,dp(7),userPin);canvas.drawText("YOU",x+dp(11),y-dp(5),text);
+            float x=xFor(userLocation.getLongitude(),world),y=yFor(userLocation.getLatitude(),world);canvas.drawCircle(x,y,dp(12),halo(userPin.getColor()));canvas.drawCircle(x,y,dp(7),userPin);drawMarkerLabel(canvas,"YOU",x,y,dp(7),world);
         }
-        if(markers.isEmpty()&&!validUserLocation()){text.setTextAlign(Paint.Align.CENTER);canvas.drawText("No real node coordinates in linked profiles",world.centerX(),world.centerY(),text);text.setTextAlign(Paint.Align.LEFT);}
-        secondary.setTextAlign(Paint.Align.LEFT);canvas.drawText("Only real coordinates • device location appears only after LOCATE ME",world.left+dp(12),world.bottom-dp(10),secondary);
+        if(markers.isEmpty()&&!validUserLocation())drawTextBlock(canvas,layout.empty,world.left+dp(6),world.centerY()-(layout.empty==null?0:layout.empty.getHeight())/2f);
+        canvas.restore();
     }
 
     private int routeColor(int position,int count){
@@ -181,13 +191,24 @@ final class RouterVpnNodeMapView extends View {
         }
     }
 
-    private void drawLocationButton(Canvas canvas,RectF world){
-        RectF button=locationButtonRect(world);canvas.drawRoundRect(button,dp(12),dp(12),locationButton);secondary.setTextAlign(Paint.Align.CENTER);String label=validUserLocation()?"YOU • HIDE":locationState;canvas.drawText(label,button.centerX(),button.centerY()+dp(3.5f),secondary);secondary.setTextAlign(Paint.Align.LEFT);
+    private void drawLocationButton(Canvas canvas,MapLayout layout){
+        RectF button=layout.button;canvas.drawRoundRect(button,dp(12),dp(12),locationButton);
+        drawTextBlock(canvas,layout.location,button.left+dp(10),button.centerY()-(layout.location==null?0:layout.location.getHeight())/2f);
+    }
+
+    private void drawMarkerLabel(Canvas canvas,String label,float x,float y,float radius,RectF world){
+        float gap=radius+dp(4),right=world.right-x-gap,left=x-gap-world.left;
+        boolean before=left>right;float width=Math.max(0,before?left:right);
+        if(width<dp(24)||world.height()<text.getFontSpacing())return;
+        CharSequence fitted=TextUtils.ellipsize(label,new TextPaint(text),width,TextUtils.TruncateAt.END);
+        float start=before?x-gap-text.measureText(fitted.toString()):x+gap;
+        float baseline=Math.max(world.top-text.ascent(),Math.min(y-dp(4),world.bottom-text.descent()));
+        canvas.drawText(fitted.toString(),start,baseline,text);
     }
 
     @Override public boolean onTouchEvent(MotionEvent event){
-        RectF world=worldRect();
-        boolean onLocation=locationButtonRect(world).contains(event.getX(),event.getY());
+        MapLayout layout=mapLayout();RectF world=layout.world;
+        boolean onLocation=layout.button.contains(event.getX(),event.getY());
         switch(event.getActionMasked()){
             case MotionEvent.ACTION_DOWN:
                 locationTouchStarted=onLocation;
@@ -205,7 +226,7 @@ final class RouterVpnNodeMapView extends View {
                 break;
             default: return true;
         }
-        if(markerClickListener==null||markers.isEmpty())return true;
+        if(markerClickListener==null||markers.isEmpty()||!world.contains(event.getX(),event.getY()))return true;
         Marker best=null;float bestDistance=Float.MAX_VALUE;
         for(Marker marker:markers){if(!valid(marker))continue;float dx=xFor(marker.longitude,world)-event.getX(),dy=yFor(marker.latitude,world)-event.getY(),distance=(float)Math.hypot(dx,dy);if(distance<bestDistance){bestDistance=distance;best=marker;}}
         if(best!=null&&bestDistance<=dp(34))markerClickListener.onMarkerClick(best);
@@ -293,12 +314,11 @@ final class RouterVpnNodeMapView extends View {
                 &&(!fix.hasAccuracy()||Float.isFinite(fix.getAccuracy())&&fix.getAccuracy()>=0&&fix.getAccuracy()<=MAX_LOCATION_ACCURACY_METERS);
     }
     private boolean validUserLocation(){return userLocation!=null&&hasLocationPermission()&&freshLocation(userLocation);}
-    private RectF locationButtonRect(RectF world){float w=dp(104),h=dp(28);return new RectF(world.right-w-dp(10),world.top+dp(8),world.right-dp(10),world.top+dp(8)+h);}
 
     private void refreshLocationControl(){
         String status = validUserLocation() ? "Your location is visible." :
                 "LOCATE ME".equals(locationState) ? "Your location is hidden." : locationState.toLowerCase(Locale.ROOT);
-        setContentDescription("Router VPN globe. " + status);
+        setContentDescription("Router VPN globe. Only real coordinates from linked profiles are shown. " + status);
         invalidate();
     }
 
@@ -314,7 +334,60 @@ final class RouterVpnNodeMapView extends View {
         else enableRealUserLocation();
         return true;
     }
-    private RectF worldRect(){float pad=dp(14);return new RectF(pad,pad,getWidth()-pad,getHeight()-pad);}
+    private static final class MapLayout {
+        int width,height;
+        String label;
+        RectF outer,button,world;
+        StaticLayout title,location,legend,empty;
+    }
+
+    private MapLayout mapLayout(){
+        String label=validUserLocation()?"YOU • HIDE":locationState;
+        if(cachedLayout!=null&&cachedLayout.width==getWidth()&&cachedLayout.height==getHeight()&&label.equals(cachedLayout.label))return cachedLayout;
+        MapLayout value=new MapLayout();value.width=getWidth();value.height=getHeight();value.label=label;
+        float padX=Math.min(dp(14),getWidth()/12f),padY=Math.min(dp(14),Math.max(0,(getHeight()-dp(48))/2f));
+        value.outer=new RectF(padX,padY,Math.max(padX,getWidth()-padX),Math.max(padY,getHeight()-padY));
+        float buttonWidth=Math.min(value.outer.width(),Math.max(dp(104),secondary.measureText(label)+dp(20)));
+        value.location=textBlock(label,secondary,buttonWidth-dp(20),value.outer.height()-dp(12),2,Layout.Alignment.ALIGN_CENTER);
+        float buttonHeight=Math.min(value.outer.height(),Math.max(dp(48),(value.location==null?0:value.location.getHeight())+dp(12)));
+        value.button=new RectF(value.outer.right-buttonWidth,value.outer.top,value.outer.right,value.outer.top+buttonHeight);
+        if(value.outer.height()<buttonHeight+dp(56)&&value.button.left-value.outer.left>dp(88)){
+            // In a shallow landscape map, place the action beside the globe
+            // instead of consuming its entire height with a text header.
+            value.world=new RectF(value.outer.left,value.outer.top,value.button.left-dp(8),value.outer.bottom);
+            value.empty=textBlock("No real node coordinates in linked profiles",text,value.world.width()-dp(12),value.world.height(),3,Layout.Alignment.ALIGN_CENTER);
+            cachedLayout=value;return value;
+        }
+        value.title=textBlock("ROUTER VPN GLOBE",secondary,value.outer.width()-buttonWidth-dp(8),buttonHeight,2,Layout.Alignment.ALIGN_NORMAL);
+        float worldTop=Math.min(value.outer.bottom,value.button.bottom+dp(8));
+        // A short landscape viewport keeps the location action usable. Extra
+        // explanatory text appears only when it leaves room for the real map;
+        // its full meaning remains in the accessibility description.
+        float legendBudget=value.outer.bottom-worldTop-Math.max(dp(60),text.getFontSpacing()*2)-dp(8);
+        value.legend=textBlock("Only real coordinates • device location appears only after LOCATE ME",secondary,value.outer.width(),legendBudget,3,Layout.Alignment.ALIGN_NORMAL);
+        float worldBottom=value.outer.bottom-(value.legend==null?0:value.legend.getHeight()+dp(8));
+        value.world=new RectF(value.outer.left,worldTop,value.outer.right,Math.max(worldTop,worldBottom));
+        value.empty=textBlock("No real node coordinates in linked profiles",text,value.world.width()-dp(12),value.world.height(),3,Layout.Alignment.ALIGN_CENTER);
+        cachedLayout=value;return value;
+    }
+
+    private StaticLayout textBlock(String value,Paint paint,float width,float height,int maximumLines,Layout.Alignment alignment){
+        if(width<dp(24)||height<=0)return null;
+        TextPaint measured=new TextPaint(paint);measured.setTextAlign(Paint.Align.LEFT);
+        int lines=Math.min(maximumLines,(int)(height/paint.getFontSpacing()));
+        while(lines>0){
+            StaticLayout block=StaticLayout.Builder.obtain(value,0,value.length(),measured,Math.max(1,(int)width))
+                    .setAlignment(alignment).setIncludePad(false).setEllipsize(TextUtils.TruncateAt.END).setMaxLines(lines).build();
+            if(block.getHeight()<=height)return block;
+            lines--;
+        }
+        return null;
+    }
+
+    private void drawTextBlock(Canvas canvas,StaticLayout layout,float x,float y){
+        if(layout==null)return;
+        canvas.save();canvas.translate(x,y);layout.draw(canvas);canvas.restore();
+    }
     private boolean valid(Marker m){return Double.isFinite(m.latitude)&&Double.isFinite(m.longitude)&&m.latitude>=-90&&m.latitude<=90&&m.longitude>=-180&&m.longitude<=180&&(m.explicitCoordinates||!(m.latitude==0&&m.longitude==0));}
     private float xFor(double lon,RectF world){return world.left+(float)((lon+180d)/360d)*world.width();}
     private float yFor(double lat,RectF world){return world.top+(float)((90d-lat)/180d)*world.height();}

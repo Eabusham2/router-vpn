@@ -209,6 +209,10 @@ public final class ProductActivity extends Activity {
             runOnUiThread(()->{
                 if(ticket!=startupCaptureTicket||isFinishing()||isDestroyed()){if(capture!=null)capture.cancel();return;}
                 startupCapturePending=false;
+                // onResume may have rendered the capture as pending. A cold
+                // launch without an eligible saved path must release that UI
+                // state even though no connection callback will follow.
+                refreshConnectionState();
                 if(epoch!=AndroidStartupPolicy.captureEpoch()){if(capture!=null)capture.cancel();return;}
                 if(error!=null){statusView.setText("Automatic startup stayed disconnected: "+safe(error));return;}
                 if(capture!=null){
