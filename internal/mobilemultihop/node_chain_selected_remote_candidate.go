@@ -9,6 +9,9 @@ func (r *NodeChainExecutionRuntime) NewSelectedRemoteCandidatePlanContext(ctx co
 	if r == nil || r.projection == nil || r.projection.preparation == nil {
 		return nil, nodeChainExecutionError
 	}
+	if r.projection.preparation.SupportsServerPublicResponseCandidate(position) {
+		return r.NewRemotePublicResponseCandidatePlanContext(ctx, position, inventory)
+	}
 	if r.projection.preparation.SupportsServerResponseCandidate(position) {
 		return r.NewRemoteResponseCandidatePlanContext(ctx, position, inventory)
 	}

@@ -68,7 +68,7 @@ struct IOSHopMeasurementStatus: Decodable {
         }
     }
 
-    func validateSelectedThroughput(ids: [String], winner: String, privateStreamPositions: Set<Int> = []) throws {
+    func validateSelectedThroughput(ids: [String], winner: String, privateStreamPositions: Set<Int> = [], externalFinal: Bool = false) throws {
         guard complete && drained && stage == "complete" && (failure ?? "").isEmpty else {
             guard results.isEmpty else { throw CancellationError() }
             return
@@ -76,7 +76,7 @@ struct IOSHopMeasurementStatus: Decodable {
         guard results.count == ids.count else { throw CancellationError() }
         for (position, result) in results.enumerated() {
             let entry = position == 0, final = position == ids.count - 1
-            let interior = !entry && !final && !privateStreamPositions.contains(position)
+            let interior = !entry && (!final || externalFinal) && !privateStreamPositions.contains(position)
             let label = "Cumulative \(winner) path through " + (interior ? "custom " : "") +
                 "node \(position + 1) of \(ids.count)" + (interior ? " → Cloudflare edge" : "")
             guard result.node_id == ids[position], result.role == (entry ? "entry" : final ? "exit" : "intermediate"),
@@ -338,7 +338,7 @@ private final class IOSHopReply: @unchecked Sendable {
                     self.transaction = owned
                     try await owned.run(validate: { status in
                         if let original, let selected = hop.ordered_execution {
-                            try status.validateSelectedThroughput(ids: original.ids, winner: selected.selected, privateStreamPositions: original.privateStreamPositions)
+                            try status.validateSelectedThroughput(ids: original.ids, winner: selected.selected, privateStreamPositions: original.privateStreamPositions, externalFinal: original.externalFinal)
                         } else if let localPath {
                             try status.validateLocalThroughput(path: localPath)
                         }

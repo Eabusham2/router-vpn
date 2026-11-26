@@ -49,7 +49,8 @@ import Libbox
                 guard let id = profile["id"] as? String, !id.isEmpty, seen.insert(id).inserted else { throw issue() }
                 if let original = originals.removeValue(forKey: id) {
                     let saved = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: profile))
-                    guard (saved.nodeProofID ?? "") == original.node_id, [nil, "", "off"].contains(saved.startLayer),
+                    let layerAllowed = publicResponse && original.position == 0 ? IOSMultihopNodeSelection.supportsExternalExitEntry(saved) : [nil, "", "off"].contains(saved.startLayer)
+                    guard (saved.nodeProofID ?? "") == original.node_id, layerAllowed,
                           original.node_id.isEmpty ? IOSImportedShadowsocksSource.eligibleLiteral(saved) :
                             saved.normalizedNodeKind == "router-vpn" && saved.external == nil else { throw issue() }
                 }

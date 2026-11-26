@@ -35,7 +35,7 @@ import Libbox
         let responses = retained.responsePositions(for: winner)
         let expected = retained.members.enumerated().map { position, member in
             IOSNodeCandidatePrefix(position: position, profile_id: member.id, node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode,
-                measurement: responses.contains(position) ? "routed-candidate-response" : nil)
+                measurement: responses.contains(position) ? retained.candidateResponseMetric : nil)
         }
         guard retained.sourceSHA256 == source, retained.configSHA256 == config,
               proofs == expected else { throw IOSNodeCandidateCapture.issue() }
@@ -54,17 +54,17 @@ import Libbox
         let original: IOSNodeCandidateOriginalCapture
         switch execution.local {
         case .ordinary(let value), .openvpn(let value): original = .ordinary(value)
-        case .multipleImported(let value): original = .ordinary(value)
+        case .multipleImported(let value), .externalFinal(let value): original = .ordinary(value)
         case .socks(let value): original = .socks(value)
         case .connect(let value): original = .connect(value)
         }
         return try compileCaptured(original: original, records: records, position: position,
             candidateID: candidateID, measuredInput: measuredInput, selectedExecution: true, multipleImported: execution.isMultipleImported,
-            selectedResponse: execution.responsePositions(for: winner).contains(position), retainFinal: retainFinal)
+            selectedResponse: execution.responsePositions(for: winner).contains(position), selectedPublic: execution.isExternalFinal && position > 0, retainFinal: retainFinal)
     }
 
     private static func compileCaptured(original: IOSNodeCandidateOriginalCapture, records: [String: Data], position: Int,
-            candidateID: String, measuredInput: String, selectedExecution: Bool, multipleImported: Bool = false, selectedResponse: Bool = false, retainFinal: Bool = false) throws -> Self {
+            candidateID: String, measuredInput: String, selectedExecution: Bool, multipleImported: Bool = false, selectedResponse: Bool = false, selectedPublic: Bool = false, retainFinal: Bool = false) throws -> Self {
         guard !selectedExecution || ["server", "auto"].contains(original.selectionExecution),
               selectedExecution || !original.requiresIndependentPrefix || original.selectionExecution == "local",
               original.members.indices.contains(position),
@@ -84,22 +84,22 @@ import Libbox
         }
         let candidate = try source(candidateID)
         guard try IOSNodeCandidateCapture.member(profile: candidate.profile, files: candidate.files) == measuredInput else { throw IOSNodeCandidateCapture.issue() }
-        let publicResponse = !selectedExecution && original.candidatePrefixes[position].metric == "routed-public-candidate-response"
+        let publicResponse = selectedPublic || !selectedExecution && original.candidatePrefixes[position].metric == "routed-public-candidate-response"
         if publicResponse {
             guard original.members.count < IOSMultihopNodeSelection.physicalTraversalDepth else {
                 throw NSError(domain: "RouterVPN.CandidateProposal", code: 3, userInfo: [NSLocalizedDescriptionKey:
                     "This route has 96 nodes. Remove a node before inserting the measured public candidate."])
             }
-            guard case .ordinary(let source) = original, source.sourceSchema == 8, source.selectionExecution == "local",
-                  original.candidatePrefixes[position].supported(in: original.candidatePrefixes),
+            guard case .ordinary(let source) = original, source.sourceSchema == 8, selectedPublic ? selectedExecution && selectedResponse : source.selectionExecution == "local",
+                  selectedPublic || original.candidatePrefixes[position].supported(in: original.candidatePrefixes),
                   !original.members.contains(where: { $0.id == candidateID }),
                   LibboxRouterNodeChainCandidateInputSupportedForMeasurement(measuredInput, "routed-public-candidate-response") else { throw IOSNodeCandidateCapture.issue() }
         }
-        if selectedResponse {
+        if selectedResponse && !publicResponse {
             guard let proof = candidate.profile["node_proof_id"] as? String, !proof.isEmpty,
                   !original.members.contains(where: { $0.id == candidateID || $0.profile["node_proof_id"] as? String == proof }) else { throw IOSNodeCandidateCapture.issue() }
         }
-        if selectedResponse || !selectedExecution && original.candidatePrefixes[position].metric == "routed-candidate-response" {
+        if !publicResponse && (selectedResponse || !selectedExecution && original.candidatePrefixes[position].metric == "routed-candidate-response") {
             guard LibboxRouterNodeChainCandidateInputSupportedForMeasurement(measuredInput, "routed-candidate-response") else {
                 throw IOSNodeCandidateCapture.issue()
             }

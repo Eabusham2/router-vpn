@@ -72,9 +72,10 @@ type multihopNodeSummary struct {
 type activeMultihopGraph struct {
 	// Copied when the proved graph is published. A later edit to a saved
 	// connection profile cannot change the route shown by a map observer.
-	orderedIDs [common.MultihopPhysicalTraversalDepth]string
-	Execution  string
-	// Only a sealed Local external-final source keeps its paired entry as
+	orderedIDs     [common.MultihopPhysicalTraversalDepth]string
+	selectedPublic *desktopNodeChainExecutionProof
+	Execution      string
+	// A sealed external-final source keeps its paired entry as
 	// control while the actual final has its own public exit identity.
 	ControlID     string
 	EntryID       string

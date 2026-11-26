@@ -157,7 +157,7 @@ func orderedCandidatePreparedAdmissionCancelResponse(control *viaEntryControl, o
 		response["requested_execution"] = admission.requested
 		response["origin"] = "editor-draft"
 		if len(admission.responseNodes) != 0 {
-			response["response_source_nodes"] = admission.responseNodes
+			publishSelectedResponseSource(response, metric, admission.responseNodes)
 			if len(admission.responseOwners) > 0 {
 				publishCandidateResponseOwners(response, admission.responseOwners, "")
 			} else {

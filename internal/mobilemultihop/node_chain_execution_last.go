@@ -10,6 +10,58 @@ import (
 )
 
 const nodeChainExecutionLastLimit = 16 << 10
+const nodeChainExtendedLastMaximum = 64 << 10
+
+// The durable record embeds each registered descriptor row. Its limit
+// follows the actual original inventory; small and ordinary records keep the
+// historical 16 KiB limit.
+func nodeChainLastLimit(schema, count int) int {
+	if (schema != 8 && schema != 6) || count <= NodeChainMaximumNodes || count > NodeChainExtendedLocalMaximumNodes {
+		return nodeChainExecutionLastLimit
+	}
+	return min(nodeChainExtendedLastMaximum, max(nodeChainExecutionLastLimit, 1024+640*count))
+}
+
+func (p *NodeChainExecutionPreparation) originalDeepPrivateFinalCount() int {
+	if p == nil || p.multiple == nil || p.validateCapture() != nil {
+		return 0
+	}
+	count := len(p.local.proofs)
+	privateMiddle, ok := p.local.selectedStreamLayout()
+	if !ok || privateMiddle != 0 || count <= NodeChainMaximumNodes || count > NodeChainExtendedLocalMaximumNodes {
+		return 0
+	}
+	return count
+}
+
+func (p *NodeChainExecutionPreparation) LastRecordLimit() int {
+	if p != nil && p.multiple != nil {
+		return nodeChainLastLimit(6, p.originalDeepPrivateFinalCount())
+	}
+	if p == nil || p.externalFinal == nil || p.validateCapture() != nil {
+		return nodeChainExecutionLastLimit
+	}
+	return nodeChainLastLimit(p.source.Schema, len(p.local.proofs))
+}
+
+// Only independently imported public intermediates followed by a paired private
+// exit can use the extended schema-six record. Descriptor.Validate also checks
+// every digest, expected address, unique identity, layer and original position.
+func nodeChainDescriptorLastLimit(d multihoprelay.NodeChainDescriptor) int {
+	if d.Schema == 6 {
+		n := len(d.Members)
+		if n <= multihoprelay.NodeChainMaximumMembers || n > multihoprelay.NodeChainExtendedMaximumMembers || d.ExternalFinal != nil ||
+			d.Members[n-1].NodeKind != "" || d.Members[n-1].ProofKind != "" || d.Members[n-1].Mode != "shadowsocks" || d.Members[n-1].StartLayer != "off" {
+			return nodeChainExecutionLastLimit
+		}
+		for _, m := range d.Members[:n-1] {
+			if m.NodeKind != "external" || m.ProofKind != "public-path" {
+				return nodeChainExecutionLastLimit
+			}
+		}
+	}
+	return nodeChainLastLimit(d.Schema, len(d.Members)+1)
+}
 
 // The durable record belongs in the app's private storage. It carries source
 // bindings and a concrete choice, never credentials, live proof, stop authority
@@ -64,7 +116,7 @@ func (l NodeChainExecutionLast) validate() error {
 		!nodeChainLastPrivateAddress(r.EntryHost) || !nodeChainLastPrivateAddress(r.Peer) || r.FirstPort < 1024 || r.LastPort > 65535 ||
 		r.LastPort < r.FirstPort || r.LastPort-r.FirstPort > 63 || r.Port < r.FirstPort || r.Port > r.LastPort ||
 		r.DesktopTargetOS != "" && r.DesktopTargetOS != "linux" && r.DesktopTargetOS != "windows" && r.DesktopTargetOS != "darwin" ||
-		!proofID.MatchString(r.Digest) || nodeChainExecutionLastDigest(r) != r.Digest || len(l.raw) > nodeChainExecutionLastLimit || string(canonical) != l.raw {
+		!proofID.MatchString(r.Digest) || nodeChainExecutionLastDigest(r) != r.Digest || len(l.raw) > nodeChainDescriptorLastLimit(r.Descriptor) || string(canonical) != l.raw {
 		return nodeChainExecutionError
 	}
 	return nil
@@ -102,6 +154,33 @@ func (l NodeChainExecutionLast) ValidatePreparation(preparation *NodeChainExecut
 		l.record.Descriptor.EntryNodeID != preparation.local.proofs[0].NodeID || l.record.Descriptor.EntryMode != preparation.local.proofs[0].Mode {
 		return nodeChainExecutionError
 	}
+	if preparation.externalFinal != nil && !preparation.externalFinal.matches(l.record.Descriptor) {
+		return nodeChainExecutionError
+	}
+	if len(l.raw) > nodeChainExecutionLastLimit && l.record.Descriptor.Schema == 6 {
+		d := l.record.Descriptor
+		if preparation.multiple == nil || preparation.source.Schema != 6 || d.DNSPolicySHA256 != preparation.dns.DNSPolicySHA256 || len(preparation.local.proofs) != len(d.Members)+1 {
+			return nodeChainExecutionError
+		}
+		for i, member := range d.Members {
+			position := i + 1
+			proof := preparation.local.proofs[position]
+			if member.Position != position || member.ProfileID != proof.ProfileID || member.Mode != proof.Mode || member.StartLayer != proof.StartLayer {
+				return nodeChainExecutionError
+			}
+			if position == len(d.Members) {
+				if proof.NodeID == "" || member.NodeID != proof.NodeID {
+					return nodeChainExecutionError
+				}
+				continue
+			}
+			original := preparation.local.importedSSMemberAt(position)
+			if original == nil || member.NodeKind != proof.NodeKind || member.ProofKind != proof.Kind ||
+				member.SourceSHA256 != original.source || member.SourceSHA256 != proof.SourceSHA256 || member.ExpectedPublicIP != original.selection.ExpectedPublicIP {
+				return nodeChainExecutionError
+			}
+		}
+	}
 	api, err := privateAPI(preparation.discovery.API)
 	if err != nil || api.Hostname() != l.record.EntryHost {
 		return nodeChainExecutionError
@@ -135,9 +214,31 @@ func ValidateStoredDesktopExecutionLast(raw, setting string) error {
 	return last.validate()
 }
 
+// ValidateStoredDesktopExternalFinalLast binds the selected registry to the
+// independently stored public roster before any original private source is read.
+func ValidateStoredDesktopExternalFinalLast(raw, setting, entryNodeID, layer string, ids, modes []string) error {
+	last, err := readNodeChainExecutionLast(raw)
+	if err != nil || last.validate() != nil || last.record.Setting != setting || last.record.DesktopTargetOS == "" || len(ids) < 3 || len(ids) != len(modes) {
+		return nodeChainExecutionError
+	}
+	d := last.record.Descriptor
+	if layer == "" {
+		layer = "off"
+	}
+	if d.Schema != 8 || d.ExternalFinal == nil || d.EntryID != ids[0] || d.EntryNodeID != entryNodeID || d.EntryMode != modes[0] || d.ExternalFinal.EntryStartLayer != layer || len(d.Members)+1 != len(ids) {
+		return nodeChainExecutionError
+	}
+	for i, member := range d.Members {
+		if member.ProfileID != ids[i+1] || member.Mode != modes[i+1] {
+			return nodeChainExecutionError
+		}
+	}
+	return nil
+}
+
 func readNodeChainExecutionLast(raw string) (NodeChainExecutionLast, error) {
 	var last NodeChainExecutionLast
-	if exactJSON([]byte(raw), &last.record, nodeChainExecutionLastLimit) != nil {
+	if exactJSON([]byte(raw), &last.record, nodeChainExtendedLastMaximum) != nil || len(raw) > nodeChainDescriptorLastLimit(last.record.Descriptor) {
 		return last, nodeChainExecutionError
 	}
 	last.raw = raw
@@ -145,6 +246,9 @@ func readNodeChainExecutionLast(raw string) (NodeChainExecutionLast, error) {
 }
 
 func ParseNodeChainExecutionLast(raw string, preparation *NodeChainExecutionPreparation) (NodeChainExecutionLast, error) {
+	if len(raw) > preparation.LastRecordLimit() {
+		return NodeChainExecutionLast{}, nodeChainExecutionError
+	}
 	last, err := readNodeChainExecutionLast(raw)
 	if err != nil {
 		return NodeChainExecutionLast{}, err
@@ -212,7 +316,22 @@ func (r *NodeChainExecutionRuntime) CaptureLastContext(ctx context.Context) (Nod
 	}
 	execution, target := r.progress.Execution, r.progress.Comparison.Target
 	r.mu.Unlock()
-	p := r.projection
+	last, err := r.projection.executionLastRecord(execution, target)
+	if err != nil {
+		return NodeChainExecutionLast{}, err
+	}
+	if err := r.current(ctx, trial, true); err != nil {
+		return NodeChainExecutionLast{}, err
+	}
+	if err := r.HealthyContext(ctx); err != nil {
+		return NodeChainExecutionLast{}, err
+	}
+	return last, nil
+}
+
+// Serialization alone confers no measurement or live owner. CaptureLastContext
+// separately guards this record with the actual selected trial on both sides.
+func (p *NodeChainExecutionProjection) executionLastRecord(execution, target string) (NodeChainExecutionLast, error) {
 	source := p.policy.source
 	descriptor := p.policy.Descriptor()
 	digest, err := descriptor.Digest()
@@ -241,12 +360,6 @@ func (r *NodeChainExecutionRuntime) CaptureLastContext(ctx context.Context) (Nod
 	}
 	last.raw = string(raw)
 	if err := last.validateProjection(p); err != nil {
-		return NodeChainExecutionLast{}, err
-	}
-	if err := r.current(ctx, trial, true); err != nil {
-		return NodeChainExecutionLast{}, err
-	}
-	if err := r.HealthyContext(ctx); err != nil {
 		return NodeChainExecutionLast{}, err
 	}
 	return last, nil

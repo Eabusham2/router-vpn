@@ -837,11 +837,15 @@ _NODE_CHAIN_CAPTURE_FIELDS = ('schema', 'family', 'profile_id', 'session_id', 's
 
 def _darwin_node_chain_capture(value):
     schema = value.get('schema') if type(value) is dict else None
-    fields = _NODE_CHAIN_CAPTURE_FIELDS + (('members_json', 'members_sha256') if schema in (3, 4) else ())
-    if schema == 4:
+    fields = _NODE_CHAIN_CAPTURE_FIELDS + (('members_json', 'members_sha256') if schema in (3, 4, 5) else ())
+    if schema in (4, 5):
         fields += ('control_profile_id',)
+        if 'entry_start_layer' in value or schema == 5:
+            if not _linux._darwin_external_entry_layer(value):
+                raise RuntimeError('macOS ordered baseline lost its captured entry Start Layer')
+            fields += ('entry_start_layer',)
     _darwin._baseline._fields(value, fields)
-    if (type(schema) is not int or schema not in (2, 3, 4)
+    if (type(schema) is not int or schema not in (2, 3, 4, 5)
             or type(value['family']) is not str or value['family'] not in _NODE_CHAIN_FAMILIES
             or type(value['home_lan_access']) is not bool
             or value['policy'] not in ('off', 'on-connect', 'always')
@@ -850,9 +854,9 @@ def _darwin_node_chain_capture(value):
                    for key in ('source_sha256', 'config_sha256'))):
         raise RuntimeError('macOS ordered baseline lost its exact complete policy capture')
     _linux.validate_profile_id(value['profile_id'], 'native ordered control profile id')
-    if schema == 4:
+    if schema in (4, 5):
         _linux.validate_profile_id(value['control_profile_id'], 'native ordered entry control profile id')
-    if schema in (3, 4):
+    if schema in (3, 4, 5):
         _darwin_node_chain_rows(value)
     return {key: value[key] for key in fields}
 
@@ -873,8 +877,8 @@ def _darwin_node_chain_rows(capture):
             or hashlib.sha256(('routervpn-ordered-protection-members-v1\n'+raw).encode('utf-8')).hexdigest() != digest):
         raise RuntimeError(fail)
     extended = len(rows) > 8
-    external_final = capture['schema'] == 4
-    if external_final and (not _linux._darwin_external_final_roles(capture['family'], rows)
+    external_final = capture['schema'] in (4, 5)
+    if external_final and (not _linux._darwin_external_final_roles(capture['schema'], capture['family'], rows)
             or capture['control_profile_id'] != rows[0][0]
             or capture['control_profile_id'] == capture['profile_id']):
         raise RuntimeError(fail)
@@ -922,7 +926,7 @@ def _darwin_node_chain_rows(capture):
 
 
 def _darwin_node_chain_control(capture):
-    return capture['control_profile_id'] if capture['schema'] == 4 else capture['profile_id']
+    return capture['control_profile_id'] if capture['schema'] in (4, 5) else capture['profile_id']
 
 
 def _darwin_node_chain_profile(profile, runtime_id, control_id, capture, store=None):
@@ -939,12 +943,13 @@ def _darwin_node_chain_profile(profile, runtime_id, control_id, capture, store=N
         if type(store) is not dict or type(store.get('profiles')) is not list:
             raise RuntimeError(fail)
         rows = _darwin_node_chain_rows(capture)
-        for row in rows:
+        for position, row in enumerate(rows):
             matches = [member for member in store['profiles'] if type(member) is dict and member.get('id') == row[0]]
             if len(matches) != 1:
                 raise RuntimeError(fail)
             member = matches[0]
-            if (len(rows) > 8 or capture['schema'] == 4) and (member.get('start_layer', '') or 'off') != 'off':
+            expected_layer = capture.get('entry_start_layer', 'off') if position == 0 else 'off'
+            if (len(rows) > 8 or capture['schema'] in (4, 5)) and (member.get('start_layer', '') or 'off') != expected_layer:
                 raise RuntimeError(fail)
             kind = member.get('node_kind', '') or 'router-vpn'
             if kind != row[2]:
@@ -1041,7 +1046,7 @@ def darwin_node_chain(action, value):
     root = _linux.root_dir()
     state = _linux.read_state(root)
     if action == 'apply':
-        if expected is not None or capture['schema'] not in (3, 4):
+        if expected is not None or capture['schema'] not in (3, 4, 5):
             raise RuntimeError('macOS ordered application requires original member policy capture')
         _darwin_node_chain_selected(root, capture)
         os.environ['HOMEVPN_PROFILE_ID'] = capture['profile_id']

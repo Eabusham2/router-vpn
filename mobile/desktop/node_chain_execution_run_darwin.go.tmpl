@@ -159,6 +159,16 @@ func routerVPNRunDarwinNodeChainExecution(parent context.Context, control *route
 		}
 		graph = socksConstruction.ctx
 	}
+	if control.prep.RequiresDesktopExternalFinalExecutionObserver() {
+		physical, readErr := control.prep.DesktopPhysicalPolicy()
+		if readErr != nil {
+			return readErr
+		}
+		graph, err = box.RouterVPNDesktopNodeExternalFinalExecutionContext(graph, control.prep, physical)
+		if err != nil {
+			return err
+		}
+	}
 	var multipleConstruction *routerVPNDesktopMultipleImportedExecutionConstruction
 	if control.multiplePolicy != nil {
 		multipleConstruction, err = routerVPNNewDesktopMultipleImportedExecutionConstruction(graph, control.prep)

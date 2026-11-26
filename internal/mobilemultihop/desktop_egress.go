@@ -118,8 +118,9 @@ func compiledPhysicalEgressWithCapturedTransports(configJSON string, networks []
 // The graph is private and immutable for the duration of a source observation.
 // Each proof traverses it with its own visited, active and socket sets.
 type capturedEgressGraph struct {
-	graph   map[string]any
-	connect nodeChainCapturedTransportProof
+	serverHome *NodeChainServerHomeDNS
+	graph      map[string]any
+	connect    nodeChainCapturedTransportProof
 }
 
 func parseCapturedEgressGraph(configJSON string, connect nodeChainCapturedTransportProof) (*capturedEgressGraph, error) {
@@ -138,7 +139,7 @@ func (g *capturedEgressGraph) physical(networks []string, desktop *externalDeskt
 	p := nodeEgressProjection{
 		nodes: map[string]map[string]any{}, resolvers: map[string]map[string]any{},
 		active: map[string]bool{}, visited: map[string]bool{}, tuples: map[PhysicalEgress]bool{},
-		desktop: desktop, dormantNaiveDNS: dormantNaiveDNS, connect: connect,
+		desktop: desktop, dormantNaiveDNS: dormantNaiveDNS, connect: connect, serverHome: g.serverHome,
 	}
 	for _, family := range []string{"endpoints", "outbounds"} {
 		rows, _ := graph[family].([]any)
@@ -192,6 +193,7 @@ func (g *capturedEgressGraph) physical(networks []string, desktop *externalDeskt
 }
 
 type nodeEgressProjection struct {
+	serverHome       *NodeChainServerHomeDNS
 	nodes, resolvers map[string]map[string]any
 	active, visited  map[string]bool
 	tuples           map[PhysicalEgress]bool
@@ -614,6 +616,9 @@ func (p *nodeEgressProjection) dns(tag string, bootstrap bool) error {
 			return nodePhysicalEgressError
 		}
 		port = value.(float64)
+	}
+	if detour == NodeChainServerEntryHomeTag {
+		return p.serverHome.physical(p, server, bootstrap, tag, host, network, port)
 	}
 	if p.desktop != nil {
 		if err := p.desktop.dns(tag, server, bootstrap, physical, int(port)); err != nil {

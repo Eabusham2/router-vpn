@@ -1,8 +1,8 @@
 package main
 
 import (
-	"context"
 	"errors"
+	"slices"
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
@@ -53,88 +53,6 @@ func desktopNodeChainControlProfile(members []desktopNodeChainMember) common.Rou
 	return members[len(members)-1].Profile
 }
 
-// Capture the final with the ordinary paired external compiler, retaining its
-// selected DNS and original entry. Only the bare final source and complete
-// capture enter the distinct ordered compiler; the two-node graph is not used.
-func (capture *desktopNodeChainCapture) compileExternalFinal(ctx context.Context, member desktopNodeChainMember, total *int) (string, string, string, error) {
-	bad := errors.New("ordered external final lost its original entry or complete source")
-	if capture == nil || ctx == nil || ctx.Err() != nil || total == nil ||
-		!desktopNodeChainHasExternalFinal(capture.members) || member.Mode != "shadowsocks" ||
-		liveMeasurementProfileToken(member.Profile) != liveMeasurementProfileToken(capture.members[len(capture.members)-1].Profile) || capture.endpoint == "" {
-		return "", "", "", bad
-	}
-	entry, err := startupSelectedCompilerProfile(ctx, capture.members[0].Profile)
-	if err != nil {
-		return "", "", "", err
-	}
-	mode := capture.members[0].Mode
-	readOwned := func(assetMode string) (map[string][]byte, error) {
-		files, err := readDesktopNodeAssets(capture.root, entry.ID, assetMode)
-		if err != nil {
-			return nil, err
-		}
-		digest := viaEntryAssetDigest(files)
-		for _, asset := range capture.assets {
-			if asset.id == entry.ID && asset.mode == assetMode && asset.digest == digest {
-				if entry.Endpoint == capture.endpoint {
-					return files, nil
-				}
-				frozen, err := freezeDesktopNodeAssets(files, entry.Endpoint, capture.endpoint)
-				clearViaEntryAssets(files)
-				return frozen, err
-			}
-		}
-		clearViaEntryAssets(files)
-		return nil, bad
-	}
-	files, err := readOwned(mode)
-	if err != nil {
-		return "", "", "", err
-	}
-	defer clearViaEntryAssets(files)
-	var start map[string][]byte
-	if entry.StartLayer != "" && entry.StartLayer != "off" {
-		start, err = readOwned("shadowsocks")
-		if err != nil {
-			return "", "", "", err
-		}
-		defer clearViaEntryAssets(start)
-	}
-	entry.Endpoint = capture.endpoint
-	profile, err := externalRuntimePolicy(member.Profile)
-	if err == nil {
-		profile, err = externalDNSPolicyForPath(profile, entry, false)
-	}
-	if err != nil {
-		return "", "", "", err
-	}
-	// These choices describe this captured operation, not a saved profile edit.
-	profile.MultihopEntryMode, profile.MultihopExecution = mode, "local"
-	exit, err := standardExitFromExternalProfile(profile)
-	if err != nil {
-		return "", "", "", err
-	}
-	launch, err := compileDesktopExternalCaptured(ctx, profile, entry, exit, false, "", files, start, nil)
-	if err != nil {
-		return "", "", "", err
-	}
-	defer func() {
-		clear(launch.config)
-		clear(launch.metadata)
-		clear(launch.external.source)
-		clear(launch.external.capture)
-	}()
-	input, err := mobilemultihop.NodeChainExternalFinalInput(string(launch.external.source), string(launch.external.capture))
-	if err != nil {
-		return "", "", "", err
-	}
-	*total += len(input)
-	if *total > mobilemultihop.NodeChainInputLimit {
-		return "", "", "", errors.New("ordered external final exceeds the complete source bound")
-	}
-	return input, launch.endpoint, "", nil
-}
-
 // Requests explicitly name the external-final family. This public shape alone
 // grants no source or runtime authority; linked identities are checked next.
 func desktopExternalFinalReferences(nodes []common.MultihopNodeSelection) bool {
@@ -166,4 +84,28 @@ func desktopNodeChainMetadataMatchesSelection(meta mobilemultihop.DesktopNodeCha
 	return entry.ProfileID == selection.Control.ID && entry.NodeID == selection.Control.NodeProofID && entry.NodeKind == "" && entry.Mode == selection.Nodes[0].Mode &&
 		final.ProfileID == selection.Exit.ID && final.NodeID == "" && final.NodeKind == "external" && final.Kind == "public-path" &&
 		final.Mode == "shadowsocks" && final.Tag == meta.FinalTag && meta.ExternalFinal.SourceSHA256 == final.SourceSHA256
+}
+
+// Selected execution routes applications through its selector. The final
+// public proof still belongs to the original Local hop and source.
+func (owner *desktopNodeChainLaunch) metadataMatchesSelection(meta mobilemultihop.DesktopNodeChainMetadata) bool {
+	if owner == nil {
+		return false
+	}
+	if owner.execution != nil && meta.ExternalFinal != nil {
+		e := owner.execution
+		if e.original != owner || meta.FinalTag != mobilemultihop.SelectorTag || !e.preparation.RequiresDesktopExternalFinalExecutionObserver() || owner.selection.Native == nil || owner.selection.Native.chain == nil {
+			return false
+		}
+		original, err := e.preparation.OriginalExternalFinalSource()
+		if err != nil || original != owner.selection.Native.chain.chain || original.SourceSHA256() != meta.OriginalSourceSHA256 {
+			return false
+		}
+		proofs := original.ProofInventory()
+		if len(proofs) < 3 || !slices.Equal(meta.Prefixes, proofs) {
+			return false
+		}
+		meta.FinalTag = proofs[len(proofs)-1].Tag
+	}
+	return desktopNodeChainMetadataMatchesSelection(meta, owner.selection)
 }

@@ -3,8 +3,15 @@ package main
 import (
 	"context"
 	"errors"
+	"net"
+	"net/netip"
 	"reflect"
 	"slices"
+
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing/common/control"
+	M "github.com/sagernet/sing/common/metadata"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
@@ -36,6 +43,10 @@ func newRouterVPNServerChainDNSOwners(ctx context.Context, n *routerVPNServerCha
 		retained: make(map[string]adapter.DNSTransport)}
 	r.original = r
 	r.capture.Destinations = slices.Clone(n.dnsCapture.Destinations)
+	if n.dnsCapture.EntryHome != nil {
+		h := *n.dnsCapture.EntryHome
+		r.capture.EntryHome = &h
+	}
 	for _, row := range options.Servers {
 		if row.Tag == "" || r.retained[row.Tag] != nil {
 			return nil, errRouterVPNServerChainDNSOwners
@@ -72,4 +83,199 @@ func (r *routerVPNServerChainDNSOwners) current(ctx context.Context, n *routerVP
 		return errRouterVPNServerChainDNSOwners
 	}
 	return nil
+}
+
+type routerVPNServerHomeDNSOutbound struct {
+	outbound.Adapter
+	owner   *routerVPNServerChain
+	capture mobilemultihop.NodeChainServerHomeDNS
+	route   routerVPNServerHomeRoute
+}
+
+type routerVPNServerHomeRoute struct {
+	gatewayName, interfaceName   string
+	gatewayIndex, interfaceIndex int
+	source                       netip.Addr
+}
+
+// Identify the actual paired gateway and the interface the kernel would use
+// for this one private DNS target. A connected UDP route query sends no query
+// or application data. Both source address and interface are subsequently
+// bound on each real resolver socket.
+func readRouterVPNServerHomeRoute(ctx context.Context, gateway string, destination netip.AddrPort) (routerVPNServerHomeRoute, error) {
+	var r routerVPNServerHomeRoute
+	if ctx == nil || ctx.Err() != nil || !destination.IsValid() || !destination.Addr().IsPrivate() {
+		return r, errRouterVPNServerChainDNSOwners
+	}
+	gw, err := netip.ParseAddr(gateway)
+	if err != nil || !gw.IsPrivate() || gw.Is4In6() {
+		return r, errRouterVPNServerChainDNSOwners
+	}
+	conn, err := (&net.Dialer{}).DialContext(ctx, "udp", destination.String())
+	if err != nil {
+		return r, err
+	}
+	local, err := netip.ParseAddrPort(conn.LocalAddr().String())
+	if closeErr := conn.Close(); err != nil || closeErr != nil || !local.Addr().IsPrivate() {
+		return r, errors.Join(errRouterVPNServerChainDNSOwners, err, closeErr)
+	}
+	r.source = local.Addr()
+	list, err := net.Interfaces()
+	if err != nil {
+		return r, err
+	}
+	var loop *net.Interface
+	localTarget := false
+	for _, i := range list {
+		if i.Flags&net.FlagUp == 0 {
+			continue
+		}
+		if i.Flags&net.FlagLoopback != 0 {
+			if loop != nil {
+				return r, errRouterVPNServerChainDNSOwners
+			}
+			original := i
+			loop = &original
+		}
+		addresses, err := i.Addrs()
+		if err != nil {
+			return r, err
+		}
+		for _, addr := range addresses {
+			prefix, err := netip.ParsePrefix(addr.String())
+			if err != nil {
+				continue
+			}
+			ip := prefix.Addr().Unmap()
+			if ip == gw {
+				if r.gatewayIndex != 0 && r.gatewayIndex != i.Index {
+					return r, errRouterVPNServerChainDNSOwners
+				}
+				r.gatewayIndex, r.gatewayName = i.Index, i.Name
+			}
+			if ip == r.source {
+				if r.interfaceIndex != 0 && r.interfaceIndex != i.Index {
+					return r, errRouterVPNServerChainDNSOwners
+				}
+				r.interfaceIndex, r.interfaceName = i.Index, i.Name
+			}
+			localTarget = localTarget || ip == destination.Addr()
+		}
+	}
+	if r.gatewayIndex <= 0 || r.interfaceIndex <= 0 || ctx.Err() != nil {
+		return r, errRouterVPNServerChainDNSOwners
+	}
+	if localTarget {
+		if loop == nil {
+			return r, errRouterVPNServerChainDNSOwners
+		}
+		r.interfaceIndex, r.interfaceName = loop.Index, loop.Name
+	}
+	return r, nil
+}
+
+func registerRouterVPNServerHomeDNS(ctx context.Context, n *routerVPNServerChain, registry *outbound.Registry) (context.Context, error) {
+	h := n.dnsCapture.EntryHome
+	if ctx == nil || ctx.Err() != nil || registry == nil || h == nil || n.capture.Source.Schema != 8 || n.capture.Source.ExternalFinal == nil || n.capture.Source.ExternalFinal.DNSOwner != "entry-home" || n.binding.SourceSHA256 != h.SourceSHA256 || len(n.dnsCapture.Destinations) != 1 || n.dnsCapture.Destinations[0] != (mobilemultihop.NodeChainServerDestination{Network: h.Network, Address: h.Address}) {
+		return nil, errRouterVPNServerChainDNSOwners
+	}
+	target, err := netip.ParseAddrPort(h.Address)
+	if err != nil {
+		return nil, err
+	}
+	route, err := readRouterVPNServerHomeRoute(ctx, n.capture.Host, target)
+	if err != nil {
+		return nil, err
+	}
+	registerRouterVPNServerHomeOptions(registry, *h, n, route)
+	return ctx, nil
+}
+
+func registerRouterVPNServerHomeOptions(registry *outbound.Registry, original mobilemultihop.NodeChainServerHomeDNS, n *routerVPNServerChain, route routerVPNServerHomeRoute) {
+	outbound.Register[mobilemultihop.NodeChainServerHomeDNS](registry, mobilemultihop.NodeChainServerEntryHomeTag, func(call context.Context, _ adapter.Router, _ log.ContextLogger, tag string, opts mobilemultihop.NodeChainServerHomeDNS) (adapter.Outbound, error) {
+		if call.Err() != nil || tag != mobilemultihop.NodeChainServerEntryHomeTag || opts != original {
+			return nil, errRouterVPNServerChainDNSOwners
+		}
+		return &routerVPNServerHomeDNSOutbound{Adapter: outbound.NewAdapter(mobilemultihop.NodeChainServerEntryHomeTag, tag, []string{original.Network}, nil), owner: n, capture: original, route: route}, nil
+	})
+}
+
+func (h *routerVPNServerHomeDNSOutbound) valid(ctx context.Context) bool {
+	return h != nil && h.owner != nil && h.owner.ctx != nil && h.owner.ctx.Err() == nil && ctx != nil && ctx.Err() == nil && h.owner.dnsCapture.EntryHome != nil && *h.owner.dnsCapture.EntryHome == h.capture && h.capture.SourceSHA256 == h.owner.binding.SourceSHA256 && h.owner.capture.Source.Schema == 8 && h.owner.capture.Source.ExternalFinal != nil && h.owner.capture.Source.ExternalFinal.DNSOwner == "entry-home" && h.route.gatewayIndex > 0 && h.route.interfaceIndex > 0
+}
+
+func (h *routerVPNServerHomeDNSOutbound) currentRoute(ctx context.Context) error {
+	if !h.valid(ctx) || h.owner.home != h {
+		return errRouterVPNServerChainDNSOwners
+	}
+	dest, err := netip.ParseAddrPort(h.capture.Address)
+	if err != nil {
+		return err
+	}
+	current, err := readRouterVPNServerHomeRoute(ctx, h.owner.capture.Host, dest)
+	if err != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err != nil || current != h.route {
+		h.owner.cancel()
+		return errors.Join(errRouterVPNServerChainDNSOwners, err)
+	}
+	return nil
+}
+
+func (h *routerVPNServerHomeDNSOutbound) dial(ctx context.Context, network string, target M.Socksaddr) (net.Conn, error) {
+	if !h.valid(ctx) || h.owner.home != h || network != h.capture.Network || target.Fqdn != "" || target.String() != h.capture.Address {
+		return nil, errRouterVPNServerChainDNSOwners
+	}
+	if err := h.currentRoute(ctx); err != nil {
+		return nil, err
+	}
+	var local net.Addr = &net.TCPAddr{IP: h.route.source.AsSlice()}
+	if network == "udp" {
+		local = &net.UDPAddr{IP: h.route.source.AsSlice()}
+	}
+	d := net.Dialer{LocalAddr: local, Control: control.BindToInterface(nil, h.route.interfaceName, h.route.interfaceIndex)}
+	call, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(h.owner.ctx, cancel)
+	defer func() { stop(); cancel() }()
+	conn, err := d.DialContext(call, network, target.String())
+	if err != nil {
+		return nil, err
+	}
+	if !h.valid(call) {
+		return nil, errors.Join(errRouterVPNServerChainDNSOwners, conn.Close())
+	}
+	return conn, nil
+}
+func (h *routerVPNServerHomeDNSOutbound) DialContext(ctx context.Context, network string, target M.Socksaddr) (net.Conn, error) {
+	conn, err := h.dial(ctx, network, target)
+	if err != nil {
+		return nil, err
+	}
+	return h.owner.trackConnection(conn), nil
+}
+
+// The native UDP resolver receives a connected packet socket. Even a faulty
+// caller cannot redirect WriteTo to another LAN or public destination.
+type routerVPNServerHomePacket struct {
+	net.Conn
+	destination M.Socksaddr
+}
+
+func (c *routerVPNServerHomePacket) ReadFrom(data []byte) (int, net.Addr, error) {
+	n, err := c.Read(data)
+	return n, c.destination, err
+}
+func (c *routerVPNServerHomePacket) WriteTo(data []byte, to net.Addr) (int, error) {
+	if to == nil || to.String() != c.destination.String() {
+		return 0, errRouterVPNServerChainDNSOwners
+	}
+	return c.Write(data)
+}
+func (h *routerVPNServerHomeDNSOutbound) ListenPacket(ctx context.Context, target M.Socksaddr) (net.PacketConn, error) {
+	conn, err := h.dial(ctx, "udp", target)
+	if err != nil {
+		return nil, err
+	}
+	return h.owner.trackPacketConnection(&routerVPNServerHomePacket{conn, target}), nil
 }

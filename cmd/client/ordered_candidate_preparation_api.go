@@ -126,8 +126,12 @@ func (a *app) orderedCandidatePreparedCatalogWithNetwork(w http.ResponseWriter, 
 		response["requested_execution"] = view.draft.Execution
 		if len(view.responseOwners) > 0 {
 			publishCandidateResponseOwners(response, view.responseOwners, "")
-			response["response_source_nodes"] = view.responseNodes
-			response["note"] = "Test measures 50 authenticated responses through the selected execution. Server requires the paired candidate to be registered on the original server."
+			publishSelectedResponseSource(response, metric, view.responseNodes)
+			if metric == hopmeasure.CandidatePublicResponseMeasurement {
+				response["note"] = "Test measures 50 HTTPS responses after TLS through the selected prefix. Server verifies the independently registered candidate and its expected public exit IP."
+			} else {
+				response["note"] = "Test measures 50 authenticated responses through the selected execution. Server requires the paired candidate to be registered on the original server."
+			}
 		} else if metric == hopmeasure.CandidatePrivateResponseMeasurement && view.draft.Execution == "auto" {
 			response["required_selected_execution"] = "local"
 			response["note"] = "If Compare selects Local, measure 50 authenticated responses through the captured prefix. Choose a candidate to save a separate final profile."
@@ -283,7 +287,7 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 		response["requested_execution"] = job.view.draft.Execution
 		if len(job.view.responseOwners) > 0 {
 			publishCandidateResponseOwners(response, job.view.responseOwners, "")
-			response["response_source_nodes"] = job.view.responseNodes
+			publishSelectedResponseSource(response, candidateViewMetric(job.view.prefixes, job.view.position), job.view.responseNodes)
 		} else if job.view.draft.Execution == "auto" && response["measurement"] == hopmeasure.CandidatePrivateResponseMeasurement {
 			response["required_selected_execution"] = "local"
 			if len(job.view.responseNodes) != 0 {

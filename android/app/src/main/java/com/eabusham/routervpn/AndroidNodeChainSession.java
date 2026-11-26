@@ -201,6 +201,7 @@ final class AndroidNodeChainSession {
         // The selected packet prefix owns this construction. The complete typed
         // saved suffix is provenance only and must never receive its factory.
         if(candidatePrefix!=null)return new CommandServer(handler,platform);
+        if(execution!=null&&capture.externalFinal)return Libbox.routerNodeChainExternalFinalExecutionNewCommandServer(execution.plan,handler,platform);
         if(execution!=null&&capture.multipleImported)return Libbox.routerNodeChainMultipleImportedExecutionNewCommandServer(execution.plan,handler,platform);
         if(execution!=null&&capture.openVPN)return Libbox.routerNodeChainOpenVPNExecutionNewCommandServer(execution.plan,handler,platform);
         if(execution!=null&&capture.socks!=null)return Libbox.routerNodeChainSOCKSExecutionNewCommandServer(execution.plan,handler,platform);

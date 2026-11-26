@@ -30,8 +30,9 @@ import Combine
                   Data(original.ordinaryLaunchInput.utf8) == active else { throw CancellationError() }
             source = original.sourceSHA256; config = original.configSHA256; ids = original.members.map(\.id)
             requested = original.requested
-            if path.count > 8 {
-                extendedCount = original.extendedOriginalNodeCount
+            publicExit = original.isExternalFinal
+            if path.count > 8 || publicExit {
+                extendedCount = path.count > 8 ? original.extendedOriginalNodeCount : original.members.count
                 provedKinds = original.members.map { $0.profile["node_kind"] as? String == "external" ? "public-path" : "private-node" }
             }
             validate = original.multipleImportedBenchmarkValidator

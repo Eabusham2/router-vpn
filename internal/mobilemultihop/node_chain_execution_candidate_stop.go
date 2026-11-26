@@ -55,6 +55,7 @@ func (c NodeChainExecutionCandidateStopCapture) validate() error {
 		q.OwnerID != c.lease.OwnerID || q.CaptureSHA256 != digest || q.ExecutionSHA256 != c.identity.SourceSHA256 ||
 		q.Position >= len(c.lease.Source.Members) || q.Schema == 1 && (!NodeChainPrefixMode(c.lease.Source.Members[q.Position-1].Mode) || c.lease.Source.Members[q.Position-1].NodeKind != "") ||
 		q.Schema == 2 && !c.lease.Source.CandidateResponsePrefix(q.Position) ||
+		q.Schema == 3 && !c.lease.Source.PublicCandidateResponsePrefix(q.Position) ||
 		!exactID.MatchString(c.entryTag) || !exactID.MatchString(c.selectedTag) || c.address != u.Host || c.token == "" ||
 		!nodeChainIdentityText(c.identity.EngineID) || !nodeChainIdentityText(c.identity.SessionID) || !nodeChainIdentityText(c.identity.NetworkID) ||
 		!proofID.MatchString(c.identity.ConfigSHA256) || c.seal == "" || c.seal != c.digest() {
@@ -97,7 +98,7 @@ func (s *nodeChainExecutionTrial) candidateStopCapture(ctx context.Context, q mu
 	if err != nil {
 		return NodeChainExecutionCandidateStopCapture{}, err
 	}
-	body, err := json.Marshal(q)
+	body, err := multihoprelay.MarshalNodeChainCandidateRequest(q)
 	if err != nil {
 		return NodeChainExecutionCandidateStopCapture{}, err
 	}

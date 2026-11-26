@@ -19,7 +19,7 @@ var executionServerMTUTag = regexp.MustCompile(`^routervpn-chain-server-[1-9][0-
 // entry; it never grants a larger packet envelope. Private server path MTUs are
 // not inferred here. Native probing and actual interface readback remain required.
 func CombineExecutionPlans(config string, actual int, prefixes []*Plan) (*Plan, error) {
-	return combineExecutionPlans(config, actual, prefixes, nil, false)
+	return combineExecutionPlans(config, actual, prefixes, nil, false, nil)
 }
 
 // The selected projection supplies the exact native tags of its qualified
@@ -28,7 +28,7 @@ func CombineExtendedExecutionPlans(config string, actual int, prefixes []*Plan, 
 	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(originalTags) != len(prefixes) {
 		return nil, errors.New("extended selected MTU requires every original Local prefix")
 	}
-	return combineExecutionPlans(config, actual, prefixes, originalTags, false)
+	return combineExecutionPlans(config, actual, prefixes, originalTags, false, nil)
 }
 
 // The captured AWG2 preparation retains an Amnezia packet entry and the same
@@ -38,10 +38,29 @@ func CombineExtendedAWGExecutionPlans(config string, actual int, prefixes []*Pla
 	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(originalTags) != len(prefixes) {
 		return nil, errors.New("extended AWG2 selected MTU requires every original Local prefix")
 	}
-	return combineExecutionPlans(config, actual, prefixes, originalTags, true)
+	return combineExecutionPlans(config, actual, prefixes, originalTags, true, nil)
 }
 
-func combineExecutionPlans(config string, actual int, prefixes []*Plan, originalTags []string, amnezia bool) (*Plan, error) {
+// Every external-final branch retains the same original packet entry and
+// one stream per captured suffix. Its outer Start Layer belongs to that entry.
+func CombineExternalFinalExecutionPlans(config string, actual int, prefixes []*Plan, originalTags []string, mode, outerTag, layer string) (*Plan, error) {
+	if len(prefixes) < 3 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(prefixes) != len(originalTags) || mode != "wg" && mode != "awg2-fast" && mode != "awg2-strong" {
+		return nil, errors.New("selected public exit MTU lost its complete packet and stream inventory")
+	}
+	var bound *capturedEntryLayer
+	if layer != "off" {
+		var err error
+		bound, err = originalExternalEntryLayer(originalTags[0], outerTag, layer)
+		if err != nil {
+			return nil, err
+		}
+	} else if outerTag != "" {
+		return nil, errors.New("unlayered entry cannot own an outer MTU transport")
+	}
+	return combineExecutionPlans(config, actual, prefixes, originalTags, mode != "wg", bound)
+}
+
+func combineExecutionPlans(config string, actual int, prefixes []*Plan, originalTags []string, amnezia bool, layer *capturedEntryLayer) (*Plan, error) {
 	bad := errors.New("ordered execution MTU requires its original gated graph and complete prefix plans")
 	if len(prefixes) < 2 || len(prefixes) > 8 && originalTags == nil {
 		return nil, bad
@@ -119,7 +138,7 @@ func combineExecutionPlans(config string, actual int, prefixes []*Plan, original
 		}
 		tag, err := stringField(projectedRoute, "final", "")
 		if err != nil || !executionLocalMTUTag.MatchString(tag) || !strings.HasPrefix(tag, "routervpn-chain-"+strconv.Itoa(i)+"-") ||
-			originalTags != nil && !extendedMTUPrefix(extendedNodes, originalTags, tag, i, 1, amnezia, nil) || seen[tag] || i == len(prefixes)-1 && tag != local || i == 0 && final["detour"] != tag {
+			originalTags != nil && !extendedMTUPrefix(extendedNodes, originalTags, tag, i, 1, amnezia, layer) || seen[tag] || i == len(prefixes)-1 && tag != local || i == 0 && final["detour"] != tag {
 			return nil, bad
 		}
 		seen[tag] = true

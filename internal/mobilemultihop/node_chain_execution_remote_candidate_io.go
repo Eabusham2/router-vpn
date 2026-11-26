@@ -84,6 +84,8 @@ func (op *nodeChainExecutionRemoteOperation) initialize(ctx context.Context) err
 	q := multihoprelay.NodeChainCandidateRequest{Schema: 1, Lease: request, OwnerID: lease.OwnerID, CaptureSHA256: digest, Operation: operation, ExecutionSHA256: e.plan.identity.SourceSHA256, Trial: s.id, SelectionEpoch: s.selectionEpoch, InventorySHA256: externalDigest([]byte(e.plan.packet.inventory)), Position: e.plan.packet.prefix.Position, CandidateID: op.target.ID, CandidateSourceSHA256: op.target.SourceSHA256, Address: op.target.Address, DeadlineAt: deadline.UnixMilli(), Password: password}
 	if e.plan.packet.measurement == hopmeasure.CandidatePrivateResponseMeasurement {
 		q.Schema = 2
+	} else if e.plan.packet.measurement == hopmeasure.CandidatePublicResponseMeasurement {
+		q.Schema = 3
 	}
 	capture, err := s.candidateStopCapture(ctx, q)
 	if err != nil {
@@ -170,7 +172,7 @@ func (op *nodeChainExecutionRemoteOperation) verify(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if method == "PUT" && op.capture.request.Schema == 2 {
+		if method == "PUT" && (op.capture.request.Schema == 2 || op.capture.request.Schema == 3) {
 			if multihoprelay.DecodeNodeChainCandidateAbsenceReceipt(raw, op.capture.lease, op.capture.request, op.capture.token, time.Now()) == nil {
 				if err := op.engine.current(call); err != nil {
 					return err

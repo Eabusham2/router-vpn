@@ -9,23 +9,43 @@ import (
 	"router-vpn/internal/mobilemultihop"
 )
 
-// A Local public source has one immutable class per original prefix. Avoid
-// repeatedly validating the same physical policy and complete chain for every
-// linked store row. Selected Server/Compare state still follows its live gate.
+// Classify each original public member once for this catalog. The selected
+// owner still validates its current epoch before Start, status and adoption.
 func desktopCandidateCatalogMetric(launch *desktopNodeLaunch, serverResponse bool) func(int) string {
-	if launch != nil && launch.chain != nil && launch.chain.execution == nil && launch.chain.policy != nil &&
-		desktopNodeChainHasExternalFinal(launch.chain.selection.Nodes) {
-		metrics := launch.chain.policy.OriginalChain().PublicCandidatePrefixMeasurements()
-		if len(metrics) == len(launch.chain.selection.Nodes) {
-			return func(position int) string {
-				if position < 0 || position >= len(metrics) {
-					return ""
-				}
-				return metrics[position]
-			}
-		}
+	fallback := func(position int) string { return desktopCandidateMetricForIntent(launch, position, serverResponse) }
+	if launch == nil || launch.chain == nil || !desktopNodeChainHasExternalFinal(launch.chain.selection.Nodes) {
+		return fallback
 	}
-	return func(position int) string { return desktopCandidateMetricForIntent(launch, position, serverResponse) }
+	var original *mobilemultihop.NodeChain
+	allowPublic := true
+	if e := launch.chain.execution; e != nil {
+		var err error
+		original, err = e.preparation.OriginalExternalFinalSource()
+		if err != nil {
+			return fallback
+		}
+		requested := e.preparation.Execution()
+		local := requested == "auto"
+		server := serverResponse && (requested == "server" || requested == "auto")
+		e.mu.Lock()
+		allowPublic = (local || server) && (e.ready == nil || local && e.ready.Progress.Execution == "local" || server && e.ready.Progress.Execution == "server")
+		e.mu.Unlock()
+	} else if launch.chain.policy != nil {
+		original = launch.chain.policy.OriginalChain()
+	}
+	if original == nil {
+		return fallback
+	}
+	metrics := original.PublicCandidatePrefixMeasurements()
+	if len(metrics) != len(launch.chain.selection.Nodes) {
+		return fallback
+	}
+	return func(position int) string {
+		if position < 0 || position >= len(metrics) || metrics[position] == hopmeasure.CandidatePublicResponseMeasurement && !allowPublic {
+			return ""
+		}
+		return metrics[position]
+	}
 }
 
 // The shared source compiler removes every ambiguous public import before the
@@ -45,7 +65,16 @@ func filterDesktopPublicCandidateViews(ctx context.Context, parts []*desktopNode
 	if desktopCandidateMetricForIntent(first.launch, position, first.serverResponse) != hopmeasure.CandidatePublicResponseMeasurement {
 		return parts, choices, nil
 	}
-	original := first.launch.chain.policy.OriginalChain()
+	var original *mobilemultihop.NodeChain
+	if e := first.launch.chain.execution; e != nil {
+		var err error
+		original, err = e.preparation.OriginalExternalFinalSource()
+		if err != nil {
+			return nil, nil, err
+		}
+	} else if first.launch.chain.policy != nil {
+		original = first.launch.chain.policy.OriginalChain()
+	}
 	if original == nil {
 		return nil, nil, errors.New("public candidate view lost its original Local chain")
 	}
@@ -90,11 +119,10 @@ func desktopCandidateResponseMetric(metric string) bool {
 	return metric == hopmeasure.CandidatePrivateResponseMeasurement || metric == hopmeasure.CandidatePublicResponseMeasurement
 }
 
-// This public map describes the retained Local source. The original shared
-// compiler and native owner independently authorize the actual measurement.
-// Public exit responses never acquire a private-agent or selected Server grant.
+// The public map retains the full original Local geometry. The shared compiler
+// and the selected native owner independently authorize a public response trial.
 func desktopPublicCandidateMembers(members []desktopNodeChainMember, execution string, position int) bool {
-	if execution != "local" || len(members) < 3 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes ||
+	if !validDesktopOrderedExecution(execution) || len(members) < 3 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes ||
 		position < 1 || position >= len(members)-1 || !desktopNodeChainHasExternalFinal(members) ||
 		!mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[0].Profile.External != nil {
 		return false
@@ -108,11 +136,15 @@ func desktopPublicCandidateMembers(members []desktopNodeChainMember, execution s
 }
 
 func addOrderedPublicCandidateSource(reply map[string]any, selection multihopSelection, position int, metric string) {
-	if metric != hopmeasure.CandidatePublicResponseMeasurement || !desktopPublicCandidateMembers(selection.Nodes, "local", position) ||
+	execution := selection.Control.MultihopExecution
+	if execution == "" {
+		execution = "local"
+	}
+	if metric != hopmeasure.CandidatePublicResponseMeasurement || !desktopPublicCandidateMembers(selection.Nodes, execution, position) ||
 		selection.Native == nil || selection.Native.chain == nil || selection.Native.chain.chain == nil ||
 		!selection.Native.chain.chain.HasExternalFinal() || selection.Native.chain.chain.CandidatePrefixMeasurement(position) != metric {
 		return
 	}
-	reply["external_final"], reply["requested_execution"] = true, "local"
+	reply["external_final"], reply["requested_execution"] = true, execution
 	reply["public_response_source_nodes"] = originalCandidateResponseNodes(selection)
 }

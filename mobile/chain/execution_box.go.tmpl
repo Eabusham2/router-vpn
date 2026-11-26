@@ -327,11 +327,27 @@ func (e *RouterVPNNodeChainExecutionEngine) nativeCurrent(ctx context.Context, s
 	}
 }
 
+// The bound ingress and gate call gateCurrent themselves. An observation can
+// count those complete native checks only for its own original engine/state.
+type routerVPNObservedGateKey struct{}
+type routerVPNObservedGate struct {
+	engine *RouterVPNNodeChainExecutionEngine
+	state  *routerVPNExecutionState
+	checks atomic.Uint32
+}
+
 func (e *RouterVPNNodeChainExecutionEngine) gateCurrent(ctx context.Context) error {
 	if e == nil {
 		return errRouterVPNExecutionOwner
 	}
-	return e.nativeCurrent(ctx, e.state.Load())
+	state := e.state.Load()
+	if err := e.nativeCurrent(ctx, state); err != nil {
+		return err
+	}
+	if witness, _ := ctx.Value(routerVPNObservedGateKey{}).(*routerVPNObservedGate); witness != nil && witness.engine == e && witness.state == state {
+		witness.checks.Add(1)
+	}
+	return ctx.Err()
 }
 
 // This native-pointer check is also usable by the narrowly sealed DELETE
@@ -368,8 +384,19 @@ func (e *RouterVPNNodeChainExecutionEngine) ObserveChainContext(ctx context.Cont
 	}
 	state := e.state.Load()
 	reader := e.reader.Load()
-	if state == nil || state.stage != 0 && state.stage != 2 || e.nativeCurrent(ctx, state) != nil ||
-		reader == nil || reader.ingress == nil || reader.ingress.Current(ctx) != nil || e.reader.Load() != reader || e.state.Load() != state {
+	if ctx == nil || state == nil || state.stage != 0 && state.stage != 2 || reader == nil || reader.ingress == nil {
+		return mobilemultihop.NodeChainIdentity{}, errRouterVPNExecutionOwner
+	}
+	var witness *routerVPNObservedGate
+	if e.prep.RequiresExternalFinalExecutionObserver() {
+		witness = &routerVPNObservedGate{engine: e, state: state}
+		ctx = context.WithValue(ctx, routerVPNObservedGateKey{}, witness)
+	} else if e.nativeCurrent(ctx, state) != nil {
+		return mobilemultihop.NodeChainIdentity{}, errRouterVPNExecutionOwner
+	}
+	// Ingress.Current performs the original complete guard both before and
+	// after its own gate and inbound lookups. A foreign callback cannot count.
+	if reader.ingress.Current(ctx) != nil || witness != nil && witness.checks.Load() < 2 || e.reader.Load() != reader || e.state.Load() != state || ctx.Err() != nil {
 		return mobilemultihop.NodeChainIdentity{}, errRouterVPNExecutionOwner
 	}
 	return state.identity, nil
@@ -781,11 +808,18 @@ func (e *RouterVPNNodeChainExecutionEngine) ApplicationOpenContext(ctx context.C
 		return false, ctx.Err()
 	}
 	state := e.state.Load()
-	if state == nil || e.nativeCurrent(ctx, state) != nil {
+	if state == nil {
+		return false, errRouterVPNExecutionOwner
+	}
+	var witness *routerVPNObservedGate
+	if e.prep.RequiresExternalFinalExecutionObserver() {
+		witness = &routerVPNObservedGate{engine: e, state: state}
+		ctx = context.WithValue(ctx, routerVPNObservedGateKey{}, witness)
+	} else if e.nativeCurrent(ctx, state) != nil {
 		return false, errRouterVPNExecutionOwner
 	}
 	observed, err := e.control.Observe(ctx)
-	if err != nil || observed.Identity != e.gateID || observed.Closed || e.state.Load() != state {
+	if err != nil || witness != nil && witness.checks.Load() == 0 || observed.Identity != e.gateID || observed.Closed || e.state.Load() != state {
 		return false, errRouterVPNExecutionOwner
 	}
 	if !observed.Open {

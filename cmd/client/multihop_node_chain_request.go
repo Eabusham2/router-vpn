@@ -30,8 +30,8 @@ func (q multihopConnectRequest) validateOrdered() error {
 		return err
 	}
 	if q.ExternalFinal {
-		if q.Execution != "local" || !desktopExternalFinalReferences(q.Nodes) || q.Nodes[0].ID != *q.ExpectedSelectedNodeID {
-			return errors.New("ordered external final requires its original selected WireGuard or AWG2 entry and Local execution")
+		if !desktopExternalFinalReferences(q.Nodes) || q.Nodes[0].ID != *q.ExpectedSelectedNodeID {
+			return errors.New("ordered external final requires its original selected WireGuard or AWG2 entry and complete literal public suffix")
 		}
 	} else if q.Nodes[len(q.Nodes)-1].ID != *q.ExpectedSelectedNodeID {
 		return errors.New("ordered Connect must end at its original selected node")

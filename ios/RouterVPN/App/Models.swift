@@ -5,6 +5,69 @@ import Darwin
 import Glibc
 #endif
 
+enum IOSOrderedLastBounds {
+    static let ordinary = 16 * 1024
+    static let maximum = 64 * 1024
+
+    static func record(registered: Bool, members: Int) -> Int {
+        guard registered, (9...96).contains(members) else { return ordinary }
+        return min(maximum, max(ordinary, 1024 + 640 * members))
+    }
+
+    static func envelope(_ recordLimit: Int) -> Int {
+        recordLimit > ordinary ? 4096 + 2 * recordLimit : 20 * 1024
+    }
+
+    // Storage and the incoming provider message have no live owner. An
+    // extended byte allowance only permits the original native Last replay.
+    static func stored(_ raw: String) -> Bool {
+        let size = raw.utf8.count
+        guard size > 0, size <= maximum else { return false }
+        if size <= ordinary { return true }
+        guard let frame = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
+              let descriptor = frame["descriptor"] as? [String: Any],
+              let schema = descriptor["schema"] as? Int, let suffix = descriptor["members"] as? [[String: Any]],
+              (8...95).contains(suffix.count) else { return false }
+        let registered = schema == 8 && descriptor["external_final"] is [String: Any] ||
+            schema == 6 && registeredPrivateSuffix(descriptor, suffix)
+        return size <= record(registered: registered, members: suffix.count + 1)
+    }
+
+    private static func registeredPrivateSuffix(_ descriptor: [String: Any], _ suffix: [[String: Any]]) -> Bool {
+        let memberFields = Set(["position","profile_id","node_id","mode","start_layer"])
+        let publicFields = memberFields.union(["node_kind","proof_kind","source_sha256","expected_public_ip"])
+        func proof(_ value: Any?) -> Bool {
+            guard let raw = value as? String, raw.utf8.count == 64 else { return false }
+            return raw.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+        }
+        let descriptorFields = Set(["schema","entry_id","entry_node_id","entry_mode","source_sha256","dns_policy_sha256","members"])
+        guard Set(descriptor.keys) == descriptorFields, let entry = descriptor["entry_mode"] as? String,
+              ["wg","awg2-fast","awg2-strong"].contains(entry), let entryID = descriptor["entry_id"] as? String, !entryID.isEmpty,
+              let entryNode = descriptor["entry_node_id"] as? String, proof(entryNode),
+              proof(descriptor["source_sha256"]), proof(descriptor["dns_policy_sha256"]), let last = suffix.last,
+              Set(last.keys) == memberFields, let paired = last["node_id"] as? String, proof(paired), paired != entryNode else { return false }
+        var ids: Set<String> = [entryID], sources = Set<String>()
+        for (offset, row) in suffix.enumerated() {
+            guard row["position"] as? Int == offset + 1, row["mode"] as? String == "shadowsocks",
+                  row["start_layer"] as? String == "off", let id = row["profile_id"] as? String,
+                  !id.isEmpty, ids.insert(id).inserted else { return false }
+            if offset == suffix.count - 1 { continue }
+            guard Set(row.keys) == publicFields, row["node_id"] as? String == "", row["node_kind"] as? String == "external",
+                  row["proof_kind"] as? String == "public-path", let digest = row["source_sha256"] as? String,
+                  proof(digest),
+                  sources.insert(digest).inserted, let address = row["expected_public_ip"] as? String, !address.utf8.contains(0) else { return false }
+            var v4 = in_addr(), v6 = in6_addr()
+            guard inet_pton(AF_INET, address, &v4) == 1 || inet_pton(AF_INET6, address, &v6) == 1 else { return false }
+        }
+        return true
+    }
+
+    static func envelope(forStored raw: String?) -> Int {
+        guard let raw, raw.utf8.count > ordinary, stored(raw) else { return envelope(ordinary) }
+        return envelope(raw.utf8.count)
+    }
+}
+
 enum IOSCustomPresetName {
     static func suffix(in mode: String) -> String? {
         // A name starting with a combining mark can share a grapheme with the colon.
@@ -688,8 +751,8 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
     }
 
     static func externalExitReferences(_ nodes: [Self], controlID: String, execution: String?) -> Bool {
-        execution == "local" && (3...physicalTraversalDepth).contains(nodes.count) &&
-            nodes.first?.id == controlID && supportsNativePrefix(nodes.first?.mode ?? "") &&
+        ["local", "server", "auto"].contains(execution ?? "") && (3...physicalTraversalDepth).contains(nodes.count) &&
+            nodes.first?.id == controlID && nodes.last?.id != controlID && supportsNativePrefix(nodes.first?.mode ?? "") &&
             nodes.dropFirst().allSatisfy { $0.mode == "shadowsocks" }
     }
 
@@ -859,7 +922,8 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
     static func validate(_ nodes: [Self], execution: String?, entryID: String?, entryMode: String?,
                          exitID: String?, exitMode: String?, controlID: String? = nil) throws {
         guard (2...maximumNodes).contains(nodes.count) || extendedOriginalModes(nodes.map(\.mode), execution: execution),
-              execution == "local" || ["server", "auto"].contains(execution ?? "") && supportsServerExecution(nodes),
+              execution == "local" || ["server", "auto"].contains(execution ?? "") &&
+                (supportsServerExecution(nodes) || controlID.map { externalExitReferences(nodes, controlID: $0, execution: execution) } == true),
               [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" }) else {
             throw issue("Keep the selected order and clear separate entry/exit selections. Longer Local routes end at a paired Shadowsocks node with every Start Layer Off. Use paired WireGuard for a packet-only prefix, or paired WireGuard or AWG2 followed by Shadowsocks 2022 streams. The first stream can use an imported hostname with its saved Custom TCP resolver. A longer Server or Compare route requires one WireGuard, AWG2 Fast, or AWG2 Strong entry followed by literal Shadowsocks 2022 imports and a paired Shadowsocks final. Server or Compare supports a paired Shadowsocks or Hysteria2 final after paired WireGuard/AWG2 nodes. Hysteria2 retains its own Off, AES or AES+XOR final Start Layer. Literal Shadowsocks 2022 imports can occupy individual interior positions before a paired Shadowsocks final. A single SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node can appear immediately before that final. Each paired preceding node retains its own selected Start Layer.")
         }

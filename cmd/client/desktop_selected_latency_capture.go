@@ -46,12 +46,25 @@ type desktopSelectedLatencyCapture struct {
 	Execution        string                                  `json:"selected_execution"`
 	Nodes            []desktopSelectedLatencyNode            `json:"nodes"`
 	MultipleImported *desktopSelectedLatencyMultipleImported `json:"multiple_imported,omitempty"`
+	ExternalFinal    *desktopSelectedLatencyExternalFinal    `json:"external_final,omitempty"`
 }
 
 type desktopSelectedLatencyMultipleImported struct {
 	Schema               int                            `json:"schema"`
 	OriginalSourceSHA256 string                         `json:"original_source_sha256"`
 	Public               []desktopSelectedLatencyPublic `json:"public"`
+}
+
+type desktopSelectedLatencyExternalFinal struct {
+	Schema                      int                            `json:"schema"`
+	OriginalSourceSHA256        string                         `json:"original_source_sha256"`
+	EntrySourceSHA256           string                         `json:"entry_source_sha256"`
+	EntryStartLayer             string                         `json:"entry_start_layer"`
+	DNSOwner                    string                         `json:"dns_owner"`
+	FinalTransportSHA256        string                         `json:"final_transport_sha256"`
+	RegisteredFinalSourceSHA256 string                         `json:"registered_final_source_sha256"`
+	Public                      []desktopSelectedLatencyPublic `json:"public"`
+	SourceAuthenticator         string                         `json:"source_authenticator"`
 }
 
 type desktopSelectedLatencyPublic struct {
@@ -90,7 +103,10 @@ func decodeDesktopSelectedLatencyCapture(raw string) (desktopSelectedLatencyCapt
 	if err != nil || string(canonical) != raw {
 		return capture, nil, bad
 	}
-	if err := capture.validateMultipleImportedShape(); err != nil {
+	if capture.ExternalFinal != nil && len(raw) > 64<<10 {
+		return capture, nil, bad
+	}
+	if err := capture.validateTypedShape(); err != nil {
 		return capture, nil, err
 	}
 	nodes := make([]desktopOrderedLatencyNode, len(capture.Nodes))
@@ -107,6 +123,12 @@ func decodeDesktopSelectedLatencyCapture(raw string) (desktopSelectedLatencyCapt
 }
 
 func (capture desktopSelectedLatencyCapture) meaning(position int, kind string) (string, string, string, string, string) {
+	if capture.ExternalFinal != nil {
+		if position < 0 || position >= len(capture.Nodes) || (position == 0) != (kind == "private-node") || kind != "private-node" && kind != "public-path" {
+			return "", "", "", "", ""
+		}
+		return desktopSelectedLatencyLabels(position, len(capture.Nodes), kind, capture.Execution)
+	}
 	return desktopSelectedLatencyMeaningSource(position, len(capture.Nodes), kind, capture.Execution, capture.MultipleImported != nil, capture.privateStreamShape())
 }
 
@@ -117,6 +139,10 @@ func desktopSelectedLatencyMeaningSource(position, count int, capturedKind, exec
 		capturedKind == "public-path" && (count < 3 || position == 0 || position == count-1 || !multiple && position != count-2) {
 		return
 	}
+	return desktopSelectedLatencyLabels(position, count, capturedKind, execution)
+}
+
+func desktopSelectedLatencyLabels(position, count int, capturedKind, execution string) (role, kind, label, metric, endpoint string) {
 	role = "intermediate"
 	if position == 0 {
 		role = "entry"
@@ -151,6 +177,49 @@ func (capture desktopSelectedLatencyCapture) privateStreamShape() bool {
 	return private > 0 && len(multiple.Public) == count-private-2
 }
 
+func (capture desktopSelectedLatencyCapture) publicTagMatches(row desktopSelectedLatencyPublic) bool {
+	if !desktopOrderedDigest.MatchString(row.SourceSHA256) || !desktopOrderedDigest.MatchString(capture.SourceSHA256) {
+		return false
+	}
+	if capture.Execution == "server" {
+		return row.Tag == fmt.Sprintf("routervpn-chain-server-%d-%s", row.Position, capture.SourceSHA256[:16])
+	}
+	prefix := fmt.Sprintf("routervpn-chain-%d-%s-node-", row.Position, row.SourceSHA256[:12])
+	suffix, ok := strings.CutPrefix(row.Tag, prefix)
+	if !ok || len(suffix) != 12 || strings.ToLower(suffix) != suffix {
+		return false
+	}
+	_, err := hex.DecodeString(suffix)
+	return err == nil
+}
+
+func (capture desktopSelectedLatencyCapture) validateTypedShape() error {
+	x := capture.ExternalFinal
+	if x == nil {
+		return capture.validateMultipleImportedShape()
+	}
+	bad := errors.New("selected public exit requires its original private entry and every registered public prefix")
+	if capture.MultipleImported != nil || x.Schema != 8 || len(capture.Nodes) < 3 || len(x.Public) != len(capture.Nodes)-1 || capture.Nodes[0].Kind != "private-node" ||
+		x.EntryStartLayer != "off" && x.EntryStartLayer != "aes-256-gcm" && x.EntryStartLayer != "aes-256-gcm+xor-whitening" ||
+		x.DNSOwner != "entry-home" && x.DNSOwner != "external-final" {
+		return bad
+	}
+	for _, digest := range []string{x.OriginalSourceSHA256, x.EntrySourceSHA256, x.FinalTransportSHA256, x.RegisteredFinalSourceSHA256, x.SourceAuthenticator} {
+		if !desktopOrderedDigest.MatchString(digest) {
+			return bad
+		}
+	}
+	for i, row := range x.Public {
+		if row.Position != i+1 || capture.Nodes[i+1].Kind != "public-path" || !capture.publicTagMatches(row) {
+			return bad
+		}
+	}
+	if capture.Execution == "server" && x.Public[len(x.Public)-1].SourceSHA256 != x.RegisteredFinalSourceSHA256 {
+		return bad
+	}
+	return nil
+}
+
 // Historical shape has no native authority. Live publication additionally
 // matches every tag and digest against the original typed projection below.
 func (capture desktopSelectedLatencyCapture) validateMultipleImportedShape() error {
@@ -175,19 +244,8 @@ func (capture desktopSelectedLatencyCapture) validateMultipleImportedShape() err
 		if row.Position <= previous || row.Position >= len(capture.Nodes)-1 || capture.Nodes[row.Position].Kind != "public-path" || !desktopOrderedDigest.MatchString(row.SourceSHA256) {
 			return bad
 		}
-		if capture.Execution == "server" {
-			if row.Tag != fmt.Sprintf("routervpn-chain-server-%d-%s", row.Position, capture.SourceSHA256[:16]) {
-				return bad
-			}
-		} else {
-			prefix := fmt.Sprintf("routervpn-chain-%d-%s-node-", row.Position, row.SourceSHA256[:12])
-			suffix, ok := strings.CutPrefix(row.Tag, prefix)
-			if !ok || len(suffix) != 12 || strings.ToLower(suffix) != suffix {
-				return bad
-			}
-			if _, err := hex.DecodeString(suffix); err != nil {
-				return bad
-			}
+		if !capture.publicTagMatches(row) {
+			return bad
 		}
 		public[row.Position], previous = true, row.Position
 	}
@@ -279,8 +337,22 @@ func readDesktopSelectedLatencyCaptureForPurpose(ctx context.Context, launch *de
 	var nodes []desktopOrderedLatencyNode
 	capture, nodes, err = decodeDesktopSelectedLatencyCapture(publication.Selected)
 	if err != nil || capture.SourceSHA256 != projection.SourceSHA256() || capture.ConfigSHA256 != projection.ConfigSHA256() ||
-		capture.Execution != ready.Progress.Execution || len(nodes) != len(launch.chain.selection.Nodes) || (e.multiplePhysical != nil) != (capture.MultipleImported != nil) {
+		capture.Execution != ready.Progress.Execution || len(nodes) != len(launch.chain.selection.Nodes) || (e.multiplePhysical != nil) != (capture.MultipleImported != nil) || e.preparation.RequiresDesktopExternalFinalExecutionObserver() != (capture.ExternalFinal != nil) {
 		return publication, ready, capture, nil, errors.Join(err, bad)
+	}
+	if capture.ExternalFinal != nil {
+		original, err := e.preparation.OriginalExternalFinalSource()
+		public, _, captureErr := projection.ExternalFinalPublicMeasurementCaptures(capture.Execution)
+		if err != nil || captureErr != nil || original.ValidateExternalFinalLatencyCapture(publication.Selected) != nil || len(public) != len(capture.ExternalFinal.Public) ||
+			len(nodes) > mobilemultihop.NodeChainMaximumNodes && e.preparation.ExtendedOriginalNodeCount() != len(nodes) {
+			return publication, ready, capture, nil, errors.Join(err, captureErr, bad)
+		}
+		for i, expected := range public {
+			row := capture.ExternalFinal.Public[i]
+			if row.Position != expected.Position || row.Tag != expected.Tag || row.SourceSHA256 != expected.SourceSHA256 {
+				return publication, ready, capture, nil, bad
+			}
+		}
 	}
 	if capture.MultipleImported != nil {
 		original, originalErr := e.preparation.OriginalMultipleImportedSource()
@@ -339,6 +411,12 @@ func captureDesktopSelectedLatency(ctx context.Context, identity speedLabPathIde
 		SourceSHA256: capture.SourceSHA256, ConfigSHA256: capture.ConfigSHA256, GenerationSHA256: capture.GenerationSHA256,
 		SelectedCaptureJSON: publication.Selected}}, Nodes: nodes,
 		Status: hopmeasure.Status{Stage: "idle", Complete: true, Drained: true, Results: []hopmeasure.Result{}}}
+	if capture.ExternalFinal != nil {
+		view.externalFinalSource, err = desktopNodeChainLaunchExecution(identity.Ordered.launch).preparation.OriginalExternalFinalSource()
+		if err != nil {
+			return desktopOrderedLatencyView{}, err
+		}
+	}
 	if len(nodes) > mobilemultihop.NodeChainMaximumNodes {
 		view.Capture.ExtendedOriginalNodes = desktopNodeChainLaunchExecution(identity.Ordered.launch).preparation.ExtendedOriginalNodeCount()
 	}

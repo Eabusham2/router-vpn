@@ -21,6 +21,7 @@ final class AndroidOrderedExecutionLatencyCapture {
     int extendedCount(){return nodes.size()>8?nodes.size():0;}
     final String raw,source,config,generation,selected;
     final String originalSource;
+    final boolean externalFinal;
     final String privateStreamRoles;
     final List<Node> nodes;
     static final class Node {
@@ -42,7 +43,18 @@ final class AndroidOrderedExecutionLatencyCapture {
         io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(raw);
         JSONObject value=new JSONObject(raw);
         JSONObject imported=null;
-        if(value.has("multiple_imported")){
+        externalFinal=value.has("external_final");
+        if(externalFinal){
+            keys(value,"schema","source_sha256","config_sha256","generation_sha256","selected_execution","nodes","external_final");
+            imported=value.getJSONObject("external_final");
+            keys(imported,"schema","original_source_sha256","entry_source_sha256","entry_start_layer","dns_owner","final_transport_sha256","registered_final_source_sha256","source_authenticator","public");
+            originalSource=text(imported,"original_source_sha256");
+            if(integer(imported,"schema")!=8 || !sha(originalSource)
+                    || !Arrays.asList("entry-home","external-final").contains(text(imported,"dns_owner"))
+                    || !Arrays.asList("off","aes-256-gcm","aes-256-gcm+xor-whitening").contains(text(imported,"entry_start_layer")))throw invalid();
+            for(String key:Arrays.asList("entry_source_sha256","final_transport_sha256","registered_final_source_sha256","source_authenticator"))
+                if(!sha(text(imported,key)))throw invalid();
+        }else if(value.has("multiple_imported")){
             keys(value,"schema","source_sha256","config_sha256","generation_sha256","selected_execution","nodes","multiple_imported");
             imported=value.getJSONObject("multiple_imported");
             keys(imported,"schema","original_source_sha256","public");
@@ -56,7 +68,7 @@ final class AndroidOrderedExecutionLatencyCapture {
         if(integer(value,"schema")!=1||!sha(source)||!sha(config)||!sha(generation)||!Arrays.asList("local","server").contains(selected))throw invalid();
         JSONArray members=value.getJSONArray("nodes");
         int count=members.length();
-        if(count<2||count>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || raw.getBytes(StandardCharsets.UTF_8).length>metadataLimit(count)
+        if(count<(externalFinal?3:2)||count>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || raw.getBytes(StandardCharsets.UTF_8).length>metadataLimit(count)
                 || provedCount!=0 && count!=provedCount || count>8 && (imported==null||!stored&&count!=provedCount))throw invalid();
         List<Node> parsed=new ArrayList<>();Set<String> identities=new HashSet<>();
         JSONArray inventory=imported==null?null:imported.getJSONArray("public");
@@ -67,6 +79,7 @@ final class AndroidOrderedExecutionLatencyCapture {
             JSONObject member=members.getJSONObject(i);keys(member,"node_id","position","role","kind");
             String id=text(member,"node_id"),role=text(member,"role"),kind=text(member,"kind");
             String expectedRole=i==0?"entry":i==members.length()-1?"exit":"intermediate";
+            if (externalFinal && !(i==0?"private-node":"public-path").equals(kind)) throw invalid();
             if (count>8 && i>0 && i<count-1 && "private-node".equals(kind)) {
                 if (i<2 || inventory==null) throw invalid();
                 hasPrivateStream=true;
@@ -74,7 +87,7 @@ final class AndroidOrderedExecutionLatencyCapture {
             roles.put(kind);
             if(integer(member,"position")!=i||!id.matches("[A-Za-z0-9_-]{1,64}")||!identities.add(id)||!expectedRole.equals(role)
                     ||!Arrays.asList("private-node","public-path").contains(kind)
-                    ||"public-path".equals(kind)&&(i==0||i==members.length()-1||inventory==null&&i!=members.length()-2))throw invalid();
+                    ||"public-path".equals(kind)&&(i==0||i==members.length()-1&&!externalFinal||inventory==null&&i!=members.length()-2))throw invalid();
             if(inventory!=null&&"public-path".equals(kind)){
                 JSONObject row=inventory.getJSONObject(publicCount++);
                 keys(row,"position","tag","source_sha256");
@@ -83,7 +96,7 @@ final class AndroidOrderedExecutionLatencyCapture {
             parsed.add(new Node(id,i,role,kind));
         }
         if(inventory!=null&&(publicCount==0||publicCount!=inventory.length()))throw invalid();
-        privateStreamRoles = hasPrivateStream ? roles.toString() : "";
+        privateStreamRoles = hasPrivateStream || externalFinal ? roles.toString() : "";
         nodes=Collections.unmodifiableList(parsed);this.raw=raw;
     }
 

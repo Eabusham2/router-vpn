@@ -84,12 +84,20 @@ func validateOrderedCandidateExecutionPreparation(captured *desktopNodeChainCapt
 	if json.Unmarshal([]byte(input), &source) != nil {
 		return errors.New("candidate proposal original execution source is unreadable")
 	}
-	if source.Schema == 6 {
-		preparation, err := mobilemultihop.NewNodeChainMultipleImportedExecutionPreparation(captured.chain, requested)
+	if source.Schema == 6 || source.Schema == 8 {
+		constructor := mobilemultihop.NewNodeChainMultipleImportedExecutionPreparation
+		if source.Schema == 8 {
+			constructor = mobilemultihop.NewNodeChainExternalFinalExecutionPreparation
+		}
+		preparation, err := constructor(captured.chain, requested)
 		if err != nil {
 			return err
 		}
-		original, err := preparation.OriginalMultipleImportedSource()
+		read := preparation.OriginalMultipleImportedSource
+		if source.Schema == 8 {
+			read = preparation.OriginalExternalFinalSource
+		}
+		original, err := read()
 		if err != nil || original != captured.chain || preparation.LocalSourceSHA256() != captured.chain.SourceSHA256() || preparation.Execution() != requested {
 			return errors.New("candidate proposal changed its original independent imported source")
 		}
@@ -251,7 +259,7 @@ func (a *app) saveOrderedCandidateProfile(w http.ResponseWriter, r *http.Request
 		response["prefix_position"], response["measurement"] = job.view.position, hopmeasure.CandidatePublicResponseMeasurement
 		response["proposal_action"] = "save-intermediate-profile"
 	}
-	if len(job.view.responseNodes) != 0 {
+	if len(job.view.responseNodes) != 0 && candidateViewMetric(job.view.prefixes, job.view.position) == hopmeasure.CandidatePrivateResponseMeasurement {
 		response["request_id"], response["candidate_id"] = q.RequestID, q.CandidateID
 		action := "save-final-profile"
 		if job.view.position < len(job.view.responseNodes)-2 {

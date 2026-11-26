@@ -37,20 +37,29 @@ func candidateRegistryMAC(token, digest string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+func candidateRegistryReceiptMAC(schema int, token, digest string) string {
+	if schema == 2 {
+		return candidateRegistryMAC(token, digest)
+	}
+	mac := hmac.New(sha256.New, []byte(token))
+	mac.Write([]byte("routervpn-joined-public-candidate-not-registered-v3\n" + digest))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 func (a *CandidateRegistryAbsence) Receipt(q NodeChainCandidateRequest, token string, now time.Time) (NodeChainCandidateAbsenceReceipt, error) {
 	var empty NodeChainCandidateAbsenceReceipt
-	if a == nil || q.Schema != 2 || !sameNodeChainCandidate(q, a.capture.Request) || token == "" || q.DeadlineAt <= now.UnixMilli() {
+	if a == nil || (q.Schema != 2 && q.Schema != 3) || !sameNodeChainCandidate(q, a.capture.Request) || token == "" || q.DeadlineAt <= now.UnixMilli() {
 		return empty, ErrOwnership
 	}
 	d, err := a.capture.Digest()
 	if err != nil {
 		return empty, err
 	}
-	return NodeChainCandidateAbsenceReceipt{2, "not-registered", a.capture.OperationOwnerID, d, true, candidateRegistryMAC(token, d)}, nil
+	return NodeChainCandidateAbsenceReceipt{q.Schema, "not-registered", a.capture.OperationOwnerID, d, true, candidateRegistryReceiptMAC(q.Schema, token, d)}, nil
 }
 func (r NodeChainCandidateAbsenceReceipt) Validate(c NodeChainCandidateCapture, token string, now time.Time) error {
 	d, err := c.Digest()
-	if err != nil || c.Request.Schema != 2 || token == "" || r.Schema != 2 || r.Disposition != "not-registered" || r.Owner != c.OperationOwnerID || !r.Drained || r.Capture != d || c.Request.DeadlineAt <= now.UnixMilli() || !hmac.Equal([]byte(r.MAC), []byte(candidateRegistryMAC(token, d))) {
+	if err != nil || (c.Request.Schema != 2 && c.Request.Schema != 3) || token == "" || r.Schema != c.Request.Schema || r.Disposition != "not-registered" || r.Owner != c.OperationOwnerID || !r.Drained || r.Capture != d || c.Request.DeadlineAt <= now.UnixMilli() || !hmac.Equal([]byte(r.MAC), []byte(candidateRegistryReceiptMAC(r.Schema, token, d))) {
 		return ErrOwnership
 	}
 	return nil

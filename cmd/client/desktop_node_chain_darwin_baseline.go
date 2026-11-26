@@ -11,6 +11,7 @@ import (
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/common"
 	"router-vpn/internal/macosprocess"
+	"router-vpn/internal/mobilemultihop"
 )
 
 // The ordered baseline has its own concrete capture. Its source digest binds
@@ -26,6 +27,7 @@ type desktopMacOSNodeChainSelection struct {
 	Config           string              `json:"config_sha256"`
 	HomeLAN          bool                `json:"home_lan_access"`
 	Policy           string              `json:"policy"`
+	EntryStartLayer  string              `json:"entry_start_layer,omitempty"`
 	MembersJSON      string              `json:"members_json,omitempty"`
 	MembersSHA256    string              `json:"members_sha256,omitempty"`
 }
@@ -39,8 +41,18 @@ type desktopMacOSNodeChainReceipt struct {
 }
 
 func (s desktopMacOSNodeChainSelection) valid() bool {
-	return (s.Schema == 2 && s.ControlProfileID == "" && s.MembersJSON == "" && s.MembersSHA256 == "" ||
-		s.Schema == 3 && s.ControlProfileID == "" && s.validMembers() || s.Schema == 4 && s.validMembers()) &&
+	var shape bool
+	switch s.Schema {
+	case 2:
+		shape = s.ControlProfileID == "" && s.EntryStartLayer == "" && s.MembersJSON == "" && s.MembersSHA256 == ""
+	case 3:
+		shape = s.ControlProfileID == "" && s.EntryStartLayer == "" && s.validMembers()
+	case 4:
+		shape = s.Family == macosprocess.NodeChainFamily && s.EntryStartLayer != "off" && mobilemultihop.NodeChainExternalFinalEntryLayer(s.EntryStartLayer) && s.validMembers()
+	case 5:
+		shape = s.Family == macosprocess.NodeChainExecutionFamily && s.EntryStartLayer != "" && mobilemultihop.NodeChainExternalFinalEntryLayer(s.EntryStartLayer) && s.validMembers()
+	}
+	return shape &&
 		(s.Family == macosprocess.NodeChainFamily || s.Family == macosprocess.NodeChainSOCKSFamily || s.Family == macosprocess.NodeChainCONNECTFamily || s.Family == macosprocess.NodeChainExecutionFamily) && validProfileID(s.ProfileID) &&
 		desktopMacOSExternalShort.MatchString(s.Session) && desktopMacOSExternalLong.MatchString(s.Source) &&
 		desktopMacOSExternalLong.MatchString(s.Config) && (s.Policy == "off" || s.Policy == "on-connect" || s.Policy == "always")
@@ -71,10 +83,10 @@ func (s desktopMacOSNodeChainSelection) validMembers() bool {
 		}
 		refs[i].Mode, _ = row[1].(string)
 	}
-	externalFinal := s.Schema == 4
+	externalFinal := s.Schema == 4 || s.Schema == 5
 	if externalFinal {
-		if s.Family != macosprocess.NodeChainFamily || len(rows) < 3 || !validProfileID(s.ControlProfileID) || s.ControlProfileID == s.ProfileID ||
-			rows[0][0] != s.ControlProfileID || rows[0][1] != "wg" || rows[0][2] != "router-vpn" {
+		if s.Schema == 4 && s.Family != macosprocess.NodeChainFamily || s.Schema == 5 && s.Family != macosprocess.NodeChainExecutionFamily || len(rows) < 3 || !validProfileID(s.ControlProfileID) || s.ControlProfileID == s.ProfileID ||
+			rows[0][0] != s.ControlProfileID || !mobilemultihop.NodeChainPrefixMode(refs[0].Mode) || rows[0][2] != "router-vpn" {
 			return false
 		}
 		for _, row := range rows[1:] {
@@ -123,7 +135,7 @@ func (s desktopMacOSNodeChainSelection) validMembers() bool {
 		if _, ok := row[5].(bool); !ok {
 			return false
 		}
-		if i == len(rows)-1 && id != s.ProfileID {
+		if i == len(rows)-1 && (id != s.ProfileID || !externalFinal && row[2] == "external") {
 			return false
 		}
 		if len(rows) > common.MultihopMaximumNodes && !privateStreams && !externalFinal {
@@ -178,11 +190,14 @@ func decodeDesktopMacOSNodeChainReceipt(raw []byte, capture desktopMacOSNodeChai
 	}
 	fields, ok := object["capture"].(map[string]any)
 	names := []string{"schema", "family", "profile_id", "session_id", "source_sha256", "config_sha256", "home_lan_access", "policy"}
-	if capture.Schema == 3 || capture.Schema == 4 {
+	if capture.Schema == 3 || capture.Schema == 4 || capture.Schema == 5 {
 		names = append(names, "members_json", "members_sha256")
 	}
-	if capture.Schema == 4 {
+	if capture.Schema == 4 || capture.Schema == 5 {
 		names = append(names, "control_profile_id")
+	}
+	if capture.EntryStartLayer != "" {
+		names = append(names, "entry_start_layer")
 	}
 	if !ok || !exactDesktopMacOSNodeChainFields(fields, names...) {
 		return value, failure
@@ -206,7 +221,7 @@ func decodeDesktopMacOSNodeChainReceipt(raw []byte, capture desktopMacOSNodeChai
 
 func encodeDesktopMacOSNodeChainBaselineRequest(selection desktopMacOSNodeChainSelection, action string, expected *desktopMacOSNodeChainReceipt) ([]byte, error) {
 	if !selection.valid() || action != "apply" && action != "current" && action != "retire" && action != "release" ||
-		action == "apply" && (expected != nil || selection.Schema != 3 && selection.Schema != 4) || action == "current" && (expected == nil || expected.Phase != "active") {
+		action == "apply" && (expected != nil || selection.Schema != 3 && selection.Schema != 4 && selection.Schema != 5) || action == "current" && (expected == nil || expected.Phase != "active") {
 		return nil, errors.New("macOS ordered baseline requires its original typed action")
 	}
 	if expected != nil {

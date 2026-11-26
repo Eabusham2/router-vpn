@@ -133,8 +133,8 @@ func desktopCandidatePositionForIntent(launch *desktopNodeLaunch, position int, 
 	if launch == nil || launch.chain == nil || position < 0 || position >= len(launch.chain.selection.Nodes) {
 		return false
 	}
-	local := e.preparation.SupportsCompareLocalResponseCandidate(position)
-	server := serverResponse && e.preparation.SupportsServerResponseCandidate(position)
+	local := e.preparation.SupportsCompareLocalResponseCandidate(position) || e.preparation.SupportsCompareLocalPublicResponseCandidate(position)
+	server := serverResponse && (e.preparation.SupportsServerResponseCandidate(position) || e.preparation.SupportsServerPublicResponseCandidate(position))
 	if local || server {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -164,7 +164,13 @@ func captureDesktopSelectedCandidateForIntent(launch *desktopNodeLaunch, positio
 		d.plan, err = e.preparation.DescribeDesktopTypedEntryCandidate(d.socksPolicy, d.connectPolicy, position, inventory)
 	} else {
 		d.original = launch.chain.policy.OriginalChain()
-		if e.multiplePhysical != nil {
+		if e.preparation.RequiresDesktopExternalFinalExecutionObserver() {
+			original, sourceErr := e.preparation.OriginalExternalFinalSource()
+			if sourceErr != nil || original != d.original {
+				return nil, bad
+			}
+			d.plan, err = original.NewMultipleImportedCandidatePlan(position, inventory)
+		} else if e.multiplePhysical != nil {
 			original, sourceErr := e.preparation.OriginalMultipleImportedSource()
 			if sourceErr != nil || original != d.original {
 				return nil, bad
@@ -233,7 +239,7 @@ func (d *desktopSelectedCandidateDescriptor) validateMetadata(request desktopSel
 		return envelope, "", bad
 	}
 	if expected.Measurement != "" {
-		if expected.Measurement != hopmeasure.CandidatePrivateResponseMeasurement || metadata.Measurement != expected.Measurement ||
+		if !desktopCandidateResponseMetric(expected.Measurement) || metadata.Measurement != expected.Measurement ||
 			request.Operation != d.responseOperation(request.Position, metadata.Execution) || request.Operation == "" {
 			return envelope, "", bad
 		}
@@ -350,5 +356,5 @@ func validateDesktopSelectedCandidateStatus(d *desktopSelectedCandidateDescripto
 	// copy after the original selected capture has independently matched above.
 	description := status
 	description.CaptureSHA256 = d.plan.CaptureSHA256()
-	return validateDesktopNodeChainCandidateReceipt(d.plan, id, description, now, d.serverResponse && metadata.Measurement == hopmeasure.CandidatePrivateResponseMeasurement && metadata.Execution == "server")
+	return validateDesktopNodeChainCandidateReceipt(d.plan, id, description, now, d.serverResponse && desktopCandidateResponseMetric(metadata.Measurement) && metadata.Execution == "server")
 }

@@ -136,6 +136,13 @@ func (r *relayNodeChainExecRunner) captureSource(source multihoprelay.NodeChainD
 		if err != nil || sha256.Sum256(raw) != fingerprint {
 			return false
 		}
+		if source.Schema == 8 {
+			// The public suffix compiler already verified these exact private
+			// bytes. Its immutable descriptor must still be the captured lease.
+			got, err := policy.Descriptor().Digest()
+			want, expectedErr := source.Digest()
+			return err == nil && expectedErr == nil && got == want
+		}
 		actual, err := parse(raw)
 		return err == nil && actual.Source() == policy.Source()
 	}
@@ -185,7 +192,7 @@ func (r *relayNodeChainExecRunner) StartChain(ctx context.Context, capture multi
 	if err != nil || !os.SameFile(original, current) {
 		return p, bad
 	}
-	raw, err := json.Marshal(capture)
+	raw, err := multihoprelay.MarshalNodeChainWorkerCapture(capture)
 	if err != nil {
 		return p, bad
 	}
@@ -299,7 +306,7 @@ func (p *relayNodeChainProcess) read(output io.ReadCloser) {
 		if p.candidateResponse(scanner.Bytes()) {
 			continue
 		}
-		r, err := multihoprelay.DecodeNodeChainIPCResponse(scanner.Bytes())
+		r, err := multihoprelay.DecodeNodeChainWorkerResponse(scanner.Bytes(), p.capture)
 		if err != nil || r.CaptureSHA256 != p.digest || p.closed.Load() {
 			p.bad.Store(true)
 			return

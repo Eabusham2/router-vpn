@@ -103,7 +103,7 @@ final class AndroidNodeCandidateMeasurement {
         if(catalog.executionOwner!=null){
             var owner=catalog.executionOwner;
             Object epoch=metadata.get("selection_epoch");
-            int expectedFields = "routed-candidate-response".equals(catalog.measurement) ? 13 : 12;
+            int expectedFields = "routed-tcp-connect".equals(catalog.measurement) ? 12 : 13;
             if(metadata.length()!=expectedFields||metadata.getInt("schema")!=1
                     ||!catalog.selectedPrefixID().equals(metadata.getString("prefix_id"))
                     ||!owner.sourceSHA256().equals(metadata.getString("preparation_source_sha256"))
@@ -203,7 +203,12 @@ final class AndroidNodeCandidateMeasurement {
                 }
                 nativeOwner.drain(request);requireMetadata();
                 if(cancelled)break;
-                if ("server".equals(metadata.optString("execution")) && "routed-candidate-response".equals(catalog.measurement)) {
+                if (catalog.executionOwner != null && "routed-public-candidate-response".equals(catalog.measurement)) {
+                    AndroidNodeCandidateResult receipt=AndroidNodeCandidateResult.captureSelectedPublic(raw,request,metadata,row.id,row.name,System.currentTimeMillis(),
+                            catalog.prefix,catalog.selectedPrefixID(),catalog.originalSource.execution,catalog.executionOwner.execution(),
+                            catalog.executionOwner.sourceSHA256(),catalog.executionOwner.configSHA256());
+                    if (receipt!=null) results.add(receipt);
+                } else if ("server".equals(metadata.optString("execution")) && "routed-candidate-response".equals(catalog.measurement)) {
                     AndroidNodeCandidateResult receipt=AndroidNodeCandidateResult.captureSelectedServer(raw,request,metadata,row.id,row.name,System.currentTimeMillis());
                     if (receipt!=null) results.add(receipt);
                 } else {

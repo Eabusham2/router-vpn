@@ -27,7 +27,7 @@ import Foundation
         prefixes = execution.members.enumerated().map { position, member in
             IOSNodeCandidatePrefix(position: position, profile_id: member.id,
                 node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode,
-                measurement: responses.contains(position) ? "routed-candidate-response" : nil)
+                measurement: responses.contains(position) ? execution.candidateResponseMetric : nil)
         }
         draftBundle = try IOSNodeUsage.canonical(bundle)
         self.position = position; self.request = request

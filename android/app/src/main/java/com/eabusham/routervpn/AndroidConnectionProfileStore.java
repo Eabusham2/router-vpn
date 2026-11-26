@@ -418,10 +418,10 @@ final class AndroidConnectionProfileStore {
         boolean independent=importedCount>1||importedCount==1&&importedPosition!=members.length()-2;
         String requested=row.getString("multihop_execution");
         boolean externalFinal="external".equals(members.getJSONObject(members.length()-1).optString("node_kind"));
-        if (externalFinal && (members.length()<3 || !"local".equals(requested) || importedCount!=members.length()-1
+        if (externalFinal && (members.length()<3 || !List.of("local","server","auto").contains(requested) || importedCount!=members.length()-1
                 || "external".equals(members.getJSONObject(0).optString("node_kind"))
                 || !List.of("wg","awg2-fast","awg2-strong").contains(members.getJSONObject(0).getString("mode"))))
-            throw new IllegalStateException("A saved imported exit requires its original Local packet entry and literal Shadowsocks sources.");
+            throw new IllegalStateException("A saved imported exit requires its original paired packet entry and literal Shadowsocks sources.");
         if (members.length() > 8) {
             int last=members.length()-1;
             boolean localExecution="local".equals(requested),stream=false;

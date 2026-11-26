@@ -190,7 +190,7 @@ func (p *NodeChainServerPolicy) prove(parent context.Context, original multihopr
 			address, count = strings.TrimSpace(strings.TrimPrefix(line, "ip=")), count+1
 		}
 	}
-	if count != 1 || !externalPublicIP(address) || current(ctx) != nil {
+	if count != 1 || !externalPublicIP(address) || current(ctx) != nil || p.externalFinal != nil && address != targets[len(targets)-1].ExpectedPublicIP {
 		return fail()
 	}
 	result.PublicProven, result.ExitIP, result.ProvenAt = true, address, time.Now().UTC()

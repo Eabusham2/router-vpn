@@ -6,12 +6,13 @@ import "router-vpn/internal/multihoprelay"
 // original private server policy. It is not a proof exception or a front route.
 // Native admission still needs the original worker, operation and live endpoint.
 type NodeChainServerCandidateTarget struct {
-	self    *NodeChainServerCandidateTarget
-	policy  *NodeChainServerPolicy
-	node    *NodeProfile
-	stream  *nodeChainImportedMember
-	capture multihoprelay.NodeChainCandidateCapture
-	tag     string
+	publicResponder *NodeChainServerPublicCandidateResponder
+	self            *NodeChainServerCandidateTarget
+	policy          *NodeChainServerPolicy
+	node            *NodeProfile
+	stream          *nodeChainImportedMember
+	capture         multihoprelay.NodeChainCandidateCapture
+	tag             string
 }
 
 func (p *NodeChainServerPolicy) CandidateTarget(c multihoprelay.NodeChainCandidateCapture) (*NodeChainServerCandidateTarget, error) {
@@ -39,7 +40,15 @@ func (p *NodeChainServerPolicy) originalCandidateTarget(c multihoprelay.NodeChai
 	}
 	node := p.nodes[index]
 	var stream *nodeChainImportedMember
-	if c.Request.Schema == 2 {
+	if c.Request.Schema == 3 {
+		if !p.descriptor.PublicCandidateResponsePrefix(c.Request.Position) || p.externalFinal == nil {
+			return nil, nodeChainServerError
+		}
+		stream = p.importedSSMemberAt(index)
+		if node != nil || stream == nil || stream.source != c.Member.SourceSHA256 || stream.hostname != nil {
+			return nil, nodeChainServerError
+		}
+	} else if c.Request.Schema == 2 {
 		if !p.descriptor.CandidateResponsePrefix(c.Request.Position) {
 			return nil, nodeChainServerError
 		}
@@ -80,7 +89,12 @@ func (t *NodeChainServerCandidateTarget) Read(p *NodeChainServerPolicy, c multih
 	if err != nil || other != nil || want != got {
 		return "", "", nodeChainServerError
 	}
-	fresh, err := p.originalCandidateTarget(c)
+	var fresh *NodeChainServerCandidateTarget
+	if c.Request.Schema == 3 {
+		fresh, err = p.PublicResponseCandidateTarget(c, t.publicResponder)
+	} else {
+		fresh, err = p.originalCandidateTarget(c)
+	}
 	if err != nil || fresh.node != t.node || fresh.stream != t.stream || fresh.tag != t.tag || t.tag == "" {
 		return "", "", nodeChainServerError
 	}

@@ -19,6 +19,7 @@ type orderedCandidateResponseAdmission struct {
 	nodes               []orderedCandidateResponseSourceNode
 	owners              []string
 	selected, requested string
+	measurement         string
 	created             time.Time
 	started             bool
 	drained             bool
@@ -36,7 +37,7 @@ func rememberOrderedCandidateResponseViewLocked(c *viaEntryControl, view *ordere
 		c.orderedResponseViews = map[string]*orderedCandidateResponseAdmission{}
 	}
 	c.orderedResponseViews[view.token] = &orderedCandidateResponseAdmission{
-		token: view.token, position: view.position, epoch: view.responseEpoch,
+		token: view.token, position: view.position, epoch: view.responseEpoch, measurement: candidateViewMetric(view.prefixes, view.position),
 		owners: slices.Clone(view.responseOwners), requested: view.responseRequested, selected: view.responseSelected, nodes: slices.Clone(view.responseNodes), created: time.Now(), drained: true,
 	}
 	return nil
@@ -137,7 +138,7 @@ func writeOrderedCandidateResponseCancel(w http.ResponseWriter, c *viaEntryContr
 	}
 	response := map[string]any{
 		"schema": 1, "request_id": id, "view_token": admission.token,
-		"prefix_position": admission.position, "response_source_nodes": admission.nodes,
+		"prefix_position":     admission.position,
 		"requested_execution": "auto", "required_selected_execution": "local",
 		"selected_execution": "local", "selection_epoch": admission.epoch,
 		"measurement": hopmeasure.CandidatePrivateResponseMeasurement,
@@ -148,6 +149,10 @@ func writeOrderedCandidateResponseCancel(w http.ResponseWriter, c *viaEntryContr
 		"results": []hopmeasure.CandidateStatus{}, "errors": []viaEntryCandidateError{},
 		"active_path_changed": false, "ok": failure == nil && drained,
 	}
+	if admission.measurement == hopmeasure.CandidatePublicResponseMeasurement {
+		response["measurement"] = admission.measurement
+	}
+	publishSelectedResponseSource(response, admission.measurement, admission.nodes)
 	if len(admission.owners) > 0 {
 		response["requested_execution"], response["selected_execution"] = admission.requested, admission.selected
 		publishCandidateResponseOwners(response, admission.owners, admission.selected)

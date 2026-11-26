@@ -71,7 +71,7 @@ func (op *relayNodeChainCandidateOperation) Prepare(ctx context.Context) (multih
 	bounded, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(op.ctx, cancel)
 	defer func() { stop(); cancel() }()
-	if op.capture.Request.Schema == 2 {
+	if op.capture.Request.Schema == 2 || op.capture.Request.Schema == 3 {
 		if err := op.prepareResponseSource(bounded); err != nil {
 			return multihoprelay.NodeChainCandidateReceipt{}, err
 		}
@@ -241,7 +241,12 @@ func (p *relayNodeChainProcess) candidateRequest(ctx context.Context, operation 
 		}
 		defer file.SetWriteDeadline(time.Time{})
 	}
-	if json.NewEncoder(p.input).Encode(request) != nil {
+	frame, err := multihoprelay.MarshalNodeChainCandidateWorkerRequest(request)
+	if err != nil {
+		return multihoprelay.NodeChainCandidateIPCResponse{}, bad
+	}
+	defer clear(frame)
+	if json.NewEncoder(p.input).Encode(json.RawMessage(frame)) != nil {
 		return multihoprelay.NodeChainCandidateIPCResponse{}, bad
 	}
 	select {
@@ -306,7 +311,12 @@ func (op *relayNodeChainCandidateOperation) prepareResponseSource(ctx context.Co
 	if err != nil || current == nil || !current() {
 		return multihoprelay.ErrUnavailable
 	}
-	if _, err = mobilemultihop.NewNodeChainServerCandidateResponder(op.capture, input); err != nil {
+	if op.capture.Request.Schema == 3 {
+		_, err = mobilemultihop.NewNodeChainServerPublicCandidateResponder(op.capture, input)
+	} else {
+		_, err = mobilemultihop.NewNodeChainServerCandidateResponder(op.capture, input)
+	}
+	if err != nil {
 		return multihoprelay.ErrUnavailable
 	}
 	if err := p.lock(ctx); err != nil {

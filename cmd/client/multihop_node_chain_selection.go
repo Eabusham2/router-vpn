@@ -57,7 +57,7 @@ func resolveDesktopNodeChainSelection(control common.RouterProfile, profiles []c
 	// Paired finals retain their exact selected control. A separately typed
 	// external final uses its exact original entry as the private control.
 	final := members[len(members)-1]
-	if !desktopNodeChainControlCurrent(control, members) || desktopNodeChainHasExternalFinal(members) && execution != "local" {
+	if !desktopNodeChainControlCurrent(control, members) {
 		return multihopSelection{}, errors.New("ordered native control must match its original paired final or typed external-final entry")
 	}
 	return multihopSelection{Control: common.CloneRouterProfile(control), Entry: common.CloneRouterProfile(members[0].Profile),

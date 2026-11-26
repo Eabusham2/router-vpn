@@ -69,7 +69,7 @@ func (e *desktopNodeChainExecutionLaunch) captureRestoreContext(ctx context.Cont
 }
 
 func (e *desktopNodeChainExecutionLaunch) provedLastAtReady(ctx context.Context, launch *desktopNodeLaunch, ready mobilemultihop.DesktopNodeChainExecutionReadyRecord) (mobilemultihop.NodeChainExecutionLast, error) {
-	raw, err := readDesktopRuntimeFileContext(ctx, launch, "node-chain-execution-last.json", 16<<10)
+	raw, err := readDesktopRuntimeFileContext(ctx, launch, "node-chain-execution-last.json", int64(e.preparation.LastRecordLimit()))
 	if err != nil {
 		return mobilemultihop.NodeChainExecutionLast{}, err
 	}
@@ -194,6 +194,8 @@ func (execution *desktopNodeChainExecutionLaunch) prepareOriginalLast(launch *de
 		prep, err = mobilemultihop.NewDesktopNodeChainSOCKSExecutionLastPreparation(launch.chain.socksPolicy, execution.preparation.Execution(), raw)
 	} else if execution.connectPhysical != nil {
 		prep, err = mobilemultihop.NewDesktopNodeChainCONNECTExecutionLastPreparation(launch.chain.connectPolicy, execution.preparation.Execution(), raw)
+	} else if execution.preparation.RequiresDesktopExternalFinalExecutionObserver() {
+		prep, err = mobilemultihop.NewDesktopNodeChainExternalFinalExecutionLastPreparation(launch.chain.policy, execution.preparation.Execution(), raw)
 	} else {
 		prep, err = mobilemultihop.NewDesktopNodeChainExecutionLastPreparation(launch.chain.policy, execution.preparation.Execution(), raw)
 	}

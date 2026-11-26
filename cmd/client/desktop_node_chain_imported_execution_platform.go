@@ -53,7 +53,7 @@ func nativeDesktopOrderedExecutionSelectionPlatformSupported(members []desktopNo
 		return true
 	}
 	return runtime.GOOS == "darwin" && nativeDesktopImportedTrioExecutionPlatformSupported() &&
-		(desktopDarwinImportedTrioExecutionMembers(members, requested) || desktopCONNECTTrioExecutionMembers(members, requested) || desktopSOCKSTrioExecutionMembers(members, requested) || desktopOpenVPNExecutionMembers(members, requested) || desktopMultipleImportedExecutionMembers(members, requested))
+		(desktopDarwinImportedTrioExecutionMembers(members, requested) || desktopCONNECTTrioExecutionMembers(members, requested) || desktopSOCKSTrioExecutionMembers(members, requested) || desktopOpenVPNExecutionMembers(members, requested) || desktopMultipleImportedExecutionMembers(members, requested) || (requested == "server" || requested == "auto") && desktopNodeChainHasExternalFinal(members))
 }
 
 func desktopCONNECTTrioExecutionChoices() []string {

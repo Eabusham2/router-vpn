@@ -66,13 +66,18 @@ func desktopCandidateMetricForIntent(launch *desktopNodeLaunch, position int, se
 	}
 	privateSelected := launch.chain.execution != nil && launch.chain.execution.preparation != nil &&
 		(launch.chain.execution.preparation.SupportsCompareLocalResponseCandidate(position) || serverResponse && launch.chain.execution.preparation.SupportsServerResponseCandidate(position))
-	if position > 7 && !privateSelected && (launch.chain.execution != nil || launch.chain.policy == nil || launch.chain.policy.OriginalChain().ExtendedLocalNodeCount() <= position+1) {
+	publicSelected := launch.chain.execution != nil && launch.chain.execution.preparation != nil &&
+		(launch.chain.execution.preparation.SupportsCompareLocalPublicResponseCandidate(position) || serverResponse && launch.chain.execution.preparation.SupportsServerPublicResponseCandidate(position))
+	if position > 7 && !privateSelected && !publicSelected && (launch.chain.execution != nil || launch.chain.policy == nil || launch.chain.policy.OriginalChain().ExtendedLocalNodeCount() <= position+1) {
 		return ""
 	}
 	if mobilemultihop.NodeChainPrefixMode(launch.chain.selection.Nodes[position].Mode) {
 		return hopmeasure.CandidateTCPMeasurement
 	}
 	if launch.chain.execution != nil {
+		if publicSelected {
+			return hopmeasure.CandidatePublicResponseMeasurement
+		}
 		if privateSelected {
 			return hopmeasure.CandidatePrivateResponseMeasurement
 		}
@@ -211,7 +216,7 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 			_, proposal, err = orderedCandidateProposalForExecution(members, position, p, profiles, requested)
 		}
 		if err != nil {
-			if privateResponse {
+			if privateResponse && candidateViewMetric(view.prefixes, position) == hopmeasure.CandidatePrivateResponseMeasurement {
 				continue
 			}
 			choice.SaveReason = err.Error()
@@ -249,7 +254,7 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 	reply := map[string]any{"schema": 1, "view_token": view.token, "expires_at": view.expires.UnixMilli(), "prefix_position": position, "prefixes": view.prefixes, "candidates": view.candidates, "samples": 50, "measurement": metric, "note": note}
 	addOrderedPublicCandidateSource(reply, identity.Ordered.launch.chain.selection, position, metric)
-	if (requested == "auto" || len(owners) > 0) && metric == hopmeasure.CandidatePrivateResponseMeasurement {
+	if (requested == "auto" || len(owners) > 0) && desktopCandidateResponseMetric(metric) {
 		reply["required_selected_execution"] = "local"
 		reply["requested_execution"] = requested
 		launch := identity.Ordered.launch.chain.execution
@@ -257,11 +262,14 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		ready := launch.ready
 		launch.mu.Unlock()
 		if ready == nil || ready.SelectionEpoch == 0 || (len(owners) == 0 && ready.Progress.Execution != "local") || len(owners) > 0 && !slices.Contains(owners, ready.Progress.Execution) {
-			http.Error(w, "private responses require the original eligible selected execution", 409)
+			http.Error(w, "candidate responses require the original eligible selected execution", 409)
 			return
 		}
 		reply["selected_execution"], reply["selection_epoch"] = ready.Progress.Execution, ready.SelectionEpoch
 		view.responseNodes = orderedCandidateResponseSourceNodes(identity.Ordered.launch.chain.selection, requested, position)
+		if metric == hopmeasure.CandidatePublicResponseMeasurement && len(owners) == 0 && requested == "auto" && ready.Progress.Execution == "local" {
+			owners = []string{"local"}
+		}
 		if len(owners) > 0 {
 			view.responseNodes = originalCandidateResponseNodes(identity.Ordered.launch.chain.selection)
 			view.responseOwners, view.responseRequested, view.responseSelected = owners, requested, ready.Progress.Execution
@@ -352,7 +360,7 @@ func orderedCandidateProposalForExecution(members []desktopNodeChainMember, posi
 	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !common.ExtendedAWGSelectedMultihopSelection(nodeChainSelectedReferences(members)) && !(requested == "local" && (common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)) || common.ExtendedMixedLocalPacketCount(nodeChainSelectedReferences(members)) > 0))) || position < 0 || position >= len(members)-1 || !(mobilemultihop.NodeChainPrefixMode(members[position].Mode) || publicResponse || (requested == "local" || desktopSelectedResponseProposal(members, requested, position, candidate)) && members[position].Mode == "shadowsocks" && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
 		return control, nil, errors.New("candidate requires an original packet prefix")
 	}
-	if desktopNodeChainHasExternalFinal(members) && (requested != "local" || position != 0 && !publicResponse || !desktopNodeChainImportedExecutionMiddle(candidate)) {
+	if desktopNodeChainHasExternalFinal(members) && (!validDesktopOrderedExecution(requested) || position != 0 && !publicResponse || !desktopNodeChainImportedExecutionMiddle(candidate)) {
 		return control, nil, errors.New("the external-final route requires an original literal SS2022 candidate through its captured prefix")
 	}
 	nodes := nodeChainSelectedReferences(members)

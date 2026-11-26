@@ -51,8 +51,31 @@ type NodeChainReceipt struct {
 	TrafficAllowed  bool                     `json:"traffic_allowed"`
 	DNSProven       bool                     `json:"dns_proven"`
 	PublicProven    bool                     `json:"public_proven"`
+	ExitIP          string                   `json:"exit_ip,omitempty"`
 	ProofAt         int64                    `json:"proof_at,omitempty"`
 	Prefixes        []NodeChainPrefixReceipt `json:"prefixes,omitempty"`
+}
+
+// An omitted observation is distinct from an explicit null or empty value.
+// Both private worker IPC and the client's authenticated HTTP status use this
+// decoder. The capture-dependent comparison follows in ValidateNodeChainReceipt.
+func (r *NodeChainReceipt) UnmarshalJSON(raw []byte) error {
+	type Plain NodeChainReceipt
+	var wire struct {
+		Plain
+		Observed *string `json:"exit_ip,omitempty"`
+	}
+	if err := decodeNodeChainJSON(raw, &wire, MaxControlResponseBytes); err != nil {
+		return err
+	}
+	if wire.Observed != nil {
+		if !externalPublicIP(*wire.Observed) {
+			return nodeChainCaptureError
+		}
+		wire.Plain.ExitIP = *wire.Observed
+	}
+	*r = NodeChainReceipt(wire.Plain)
+	return nil
 }
 
 func (r NodeChainReceipt) Clone() NodeChainReceipt {
@@ -72,6 +95,16 @@ func ValidateNodeChainReceipt(receipt NodeChainReceipt, capture NodeChainCapture
 	}
 	heartbeat := time.UnixMilli(receipt.HeartbeatAt)
 	if receipt.HeartbeatAt <= 0 || heartbeat.After(now) || now.Sub(heartbeat) > 5*time.Second || heartbeat.Before(started.Add(-time.Second)) {
+		return bad
+	}
+	// The expected exit comes from the registered suffix and the observed exit
+	// comes from the authenticated worker. Pending and private-final receipts
+	// have no external-exit observation.
+	expectedExit := ""
+	if receipt.Phase == NodeChainReady && capture.Source.Schema == 8 {
+		expectedExit = capture.Source.Members[len(capture.Source.Members)-1].ExpectedPublicIP
+	}
+	if receipt.ExitIP != expectedExit {
 		return bad
 	}
 	switch receipt.Phase {

@@ -50,7 +50,8 @@ type desktopOrderedLatencyRequest struct {
 	Request  string                       `json:"request_id"`
 }
 type desktopOrderedLatencyView struct {
-	Schema int `json:"schema"`
+	externalFinalSource *mobilemultihop.NodeChain
+	Schema              int `json:"schema"`
 	desktopOrderedLatencyRequest
 	Nodes   []desktopOrderedLatencyNode        `json:"nodes,omitempty"`
 	History []hopmeasure.OrderedLatencyReceipt `json:"history,omitempty"`

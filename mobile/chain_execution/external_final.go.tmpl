@@ -1,0 +1,22 @@
+package libbox
+
+import "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+
+const routerNodeChainExternalFinalExecutionLaunchKind = "routervpn-node-chain-external-final-execution-preparation-input"
+
+func RouterNodeChainExternalFinalExecutionFromLaunch(input, execution string) (*RouterNodeChainExecution, error) {
+	return routerNodeImportedExecutionFromLaunch(input, execution, mobilemultihop.NewNodeChainExternalFinalExecutionPreparation)
+}
+
+func NewRouterNodeChainExternalFinalExecutionLaunch(input string) (*RouterNodeChainExecution, error) {
+	return routerNodeImportedExecutionLaunch(input, routerNodeChainExternalFinalExecutionLaunchKind, mobilemultihop.ParseNodeChainExternalFinalExecutionPreparation)
+}
+
+func RouterNodeChainExternalFinalExecutionFromLast(input, execution, lastJSON string) (*RouterNodeChainExecution, error) {
+	m, err := RouterNodeChainExternalFinalExecutionFromLaunch(input, execution)
+	return routerNodeImportedExecutionFromLast(m, err, lastJSON)
+}
+
+func RouterNodeChainExternalFinalExecutionNewCommandServer(m *RouterNodeChainExecution, handler CommandServerHandler, platform PlatformInterface) (*CommandServer, error) {
+	return m.newImportedCommandServer(handler, platform, true)
+}

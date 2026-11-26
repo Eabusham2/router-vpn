@@ -250,7 +250,11 @@ func (p *DesktopNodeChainExecutionPhysicalPolicy) physicalReadValidated() (strin
 		}
 		return nil
 	}
-	if update(&capture.SelectedDNS) != nil || capture.SelectedDNS.Detour != SelectorTag || capture.SelectedDNS.Physical ||
+	selectedDetour := SelectorTag
+	if p.preparation.externalFinal != nil {
+		selectedDetour = p.preparation.externalFinal.resolverTag()
+	}
+	if update(&capture.SelectedDNS) != nil || capture.SelectedDNS.Detour != selectedDetour || capture.SelectedDNS.Physical ||
 		capture.SelectedDNS.ConfigSHA256 != p.preparation.dns.DNS.ResolverSHA256 {
 		return bad()
 	}
@@ -315,8 +319,14 @@ func (p *NodeChainExecutionProjection) readDesktopReadyCapture(execution string)
 }
 
 func (p *NodeChainExecutionPreparation) bindProjectedExecution(policy *NodeChainExecutionPolicy) (*NodeChainExecutionProjection, error) {
+	if p.RequiresDesktopExternalFinalExecutionObserver() {
+		return p.bindExternalFinalDesktopProjected(policy)
+	}
 	if p.multiple != nil && p.multiple.desktop != nil {
 		return p.bindMultipleImportedDesktopProjected(policy)
+	}
+	if p.mobile != nil && p.mobile.externalFinal != nil {
+		return p.bindExternalFinalMobileProjected(policy)
 	}
 	if p.mobile != nil && p.mobile.multiple != nil {
 		return p.bindMultipleImportedMobileProjected(policy)

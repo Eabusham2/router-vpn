@@ -8,6 +8,16 @@ import (
 // NewOrderedExternalFinalContext admits an authenticated private entry followed
 // by separately captured public HTTPS observations at every stream, including the exit.
 func NewOrderedExternalFinalContext(ctx context.Context, engine Engine, hops []Hop) (*Service, error) {
+	return newOrderedExternalFinal(ctx, engine, hops, false)
+}
+
+// NewOrderedExternalFinalServerContext binds every public suffix position,
+// including the exit, to the same selected Server branch digest.
+func NewOrderedExternalFinalServerContext(ctx context.Context, engine Engine, hops []Hop) (*Service, error) {
+	return newOrderedExternalFinal(ctx, engine, hops, true)
+}
+
+func newOrderedExternalFinal(ctx context.Context, engine Engine, hops []Hop, server bool) (*Service, error) {
 	if len(hops) < 3 || len(hops) > PhysicalTraversalDepth || hops[0].Kind != "private-node" {
 		return nil, errors.New("ordered external exit requires the captured private entry and original public streams")
 	}
@@ -18,7 +28,7 @@ func NewOrderedExternalFinalContext(ctx context.Context, engine Engine, hops []H
 		}
 		public[i] = true
 	}
-	s, err := newOrderedInventoryContext(ctx, engine, hops, true, public, false, len(hops) > 8)
+	s, err := newOrderedInventoryContext(ctx, engine, hops, true, public, server, len(hops) > 8)
 	if err != nil {
 		return nil, err
 	}

@@ -183,6 +183,28 @@ final class AndroidNodeStore {
             this.members=Collections.unmodifiableList(new ArrayList<>(members));this.modes=Collections.unmodifiableList(new ArrayList<>(modes));
             this.draftCatalog=draftCatalog;this.draftPrefix=draftPrefix;this.draftCurrent=draftCurrent;this.draftReferences=draftReferences;
         }
+        int executionLastLimit() {
+            int count=members.size();
+            if(count<=8 || count>PHYSICAL_TRAVERSAL_DEPTH || members.get(0).imported) return 16*1024;
+            if(!members.get(count-1).imported && !registeredPrivateFinal()) return 16*1024;
+            return Math.min(64*1024,Math.max(16*1024,1024+640*count));
+        }
+        private boolean registeredPrivateFinal() {
+            int last=members.size()-1;
+            if(!List.of("server","auto").contains(execution) || modes.size()!=members.size()
+                    || !List.of("wg","awg2-fast","awg2-strong").contains(modes.get(0)) || !"shadowsocks".equals(modes.get(last)))return false;
+            try {
+                if(!List.of("","off").contains(members.get(0).profile().optString("start_layer","off"))
+                        || !List.of("","off").contains(members.get(last).profile().optString("start_layer","off")))return false;
+                for(int i=1;i<last;i++) {
+                    ChainSource source=members.get(i);
+                    // ChainSource copied and validated the original method, key and endpoint at capture.
+                    if(!source.imported || !"shadowsocks".equals(modes.get(i)) || !"shadowsocks".equals(source.external.protocol)
+                            || AndroidStandardExitStore.importedHostname(source.external))return false;
+                }
+                return true;
+            } catch(Exception invalid) { return false; }
+        }
         boolean measurementOnly(){return draftCatalog!=null;}
         boolean selectedCandidateDraft(){return measurementOnly()&&java.util.Arrays.asList("server","auto").contains(execution);}
         void requirePurpose(int prefix){
@@ -208,6 +230,14 @@ final class AndroidNodeStore {
         }
         JSONArray selectedCandidateReferences(Object purpose)throws Exception{
             requireSelectedCandidatePurpose(purpose);return new JSONArray(draftReferences);
+        }
+        JSONArray publicInventoryReferences(int prefix) throws Exception {
+            requireCandidatePurpose(prefix);
+            requireCurrent();
+            if (!selectedCandidateDraft()) return references(measurementOnly() ? prefix : -1);
+            if (prefix <= 0 || prefix >= members.size() - 1 || members.get(0).imported || !members.get(members.size() - 1).imported)
+                throw new IllegalStateException("The captured draft has no public candidate stop at this position.");
+            return new JSONArray(draftReferences);
         }
         JSONArray references(int prefix) throws Exception {
             requirePurpose(prefix);return measurementOnly()?new JSONArray(draftReferences):orderedSelection(control.profile());
@@ -615,10 +645,10 @@ final class AndroidNodeStore {
             originals.add(original);refs.put(new JSONObject().put("id",original.profileId).put("mode",modes.get(i)));
         }
         int schema=AndroidNodeChainCapture.sourceSchema(originals,modes);
-        if (originals.size()>8 && !(schema==6 && ("auto".equals(execution) || "server".equals(execution))
+        if (originals.size()>8 && schema!=8 && !(schema==6 && ("auto".equals(execution) || "server".equals(execution))
                 && AndroidNodeChainCapture.responsePrefix(originals,modes,prefix,execution)))
             throw new IllegalStateException("This longer selected draft has no qualified private response at this position.");
-        if((schema==3||schema==4)&&prefix!=0||schema==7||originals.get(0).imported||originals.get(originals.size()-1).imported
+        if((schema==3||schema==4)&&prefix!=0||schema==7||originals.get(0).imported||schema!=8&&originals.get(originals.size()-1).imported
                 ||((originals.get(prefix).imported||!List.of("wg","awg2-fast","awg2-strong").contains(modes.get(prefix)))
                 &&!AndroidNodeChainCapture.responsePrefix(originals,modes,prefix,execution)))
             throw new IllegalStateException("The selected draft has no original packet candidate owner at this position.");
@@ -705,7 +735,7 @@ final class AndroidNodeStore {
                     || !ids.add(member.getString("id"))) throw new IllegalStateException("Every ordered position needs a distinct canonical node and exact mode.");
         }
         if (!profile.getString("id").equals(selected.getJSONObject(selected.length() - 1).getString("id"))) {
-            if (!"local".equals(profile.getString("multihop_execution")) || selected.length() < 3
+            if (selected.length() < 3
                     || !profile.getString("id").equals(selected.getJSONObject(0).getString("id"))
                     || !List.of("wg","awg2-fast","awg2-strong").contains(selected.getJSONObject(0).getString("mode")))
                 throw new IllegalStateException("The selected control must own the final Router or the paired packet entry of an imported exit.");

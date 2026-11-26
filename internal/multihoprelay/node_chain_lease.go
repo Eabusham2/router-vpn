@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -384,9 +385,15 @@ func (m *Manager) ChainAvailable(peer netip.Addr) (ExternalPacketChallenge, []No
 	if peer.Zone() != "" || !nodeChainPrivateAddress(challenge.Peer) || challenge.Validate() != nil {
 		return ExternalPacketChallenge{}, nil, ErrOwnership
 	}
-	sources := make([]NodeChainDescriptor, len(m.cfg.NodeChains))
-	for i, source := range m.cfg.NodeChains {
-		sources[i] = source.Clone()
+	sources := make([]NodeChainDescriptor, 0, len(m.cfg.NodeChains))
+	for _, source := range m.cfg.NodeChains {
+		if source.Schema == 8 && !slices.Contains(source.ExternalFinal.EntryPeerAddresses, challenge.Peer) {
+			continue
+		}
+		sources = append(sources, source.Clone())
+	}
+	if len(sources) == 0 {
+		return ExternalPacketChallenge{}, nil, ErrUnavailable
 	}
 	return challenge, sources, nil
 }
@@ -504,6 +511,9 @@ func (m *Manager) CreateChain(ctx context.Context, peer netip.Addr, request Node
 		return NodeChainLease{}, ErrUnavailable
 	}
 	source, err := m.chainSourceLocked(q)
+	if err == nil && source.Schema == 8 {
+		err = CheckNodeChainLeaseResponseCapacity(source, q, m.cfg.ListenIP)
+	}
 	if err == nil {
 		err = m.reapLocked(ctx)
 	}
@@ -669,6 +679,15 @@ func (m *Manager) DeleteChain(ctx context.Context, peer netip.Addr, request Node
 	}
 	// A DELETE which overtakes its PUT retires exactly that captured attempt.
 	// Registry removal must not prevent retirement of an existing owner.
+	if active == nil && q.Schema == 8 && q.AcquireExpiresAt > m.now().Unix() {
+		previous, known := m.chainAttempts[nodeChainAttemptKey(peer, q)]
+		if !known || !sameNodeChainRequest(previous.request, q) {
+			if _, err := m.chainSourceLocked(q); err != nil {
+				m.mu.Unlock()
+				return err
+			}
+		}
+	}
 	if err := m.rememberChainAttemptLocked(peer, q, true); err != nil {
 		m.mu.Unlock()
 		return err

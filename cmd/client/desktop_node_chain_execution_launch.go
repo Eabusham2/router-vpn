@@ -101,7 +101,12 @@ func newDesktopNodeChainExecutionSource(original *desktopNodeChainLaunch, reques
 		result := &desktopNodeChainExecutionLaunch{original: original, preparation: prep, connectPhysical: physical}
 		return result, result.validateSource()
 	}
-	prep, err := mobilemultihop.NewDesktopNodeChainExecutionPreparation(original.policy, requested)
+	var prep *mobilemultihop.NodeChainExecutionPreparation
+	if meta.ExternalFinal != nil {
+		prep, err = mobilemultihop.NewDesktopNodeChainExternalFinalExecutionPreparation(original.policy, requested)
+	} else {
+		prep, err = mobilemultihop.NewDesktopNodeChainExecutionPreparation(original.policy, requested)
+	}
 	if err != nil {
 		return nil, err
 	}

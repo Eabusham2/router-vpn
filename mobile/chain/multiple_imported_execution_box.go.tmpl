@@ -16,40 +16,64 @@ import (
 type routerVPNMultipleImportedExecutionKey struct{}
 
 type routerVPNMultipleImportedExecutionConstruction struct {
-	self        *routerVPNMultipleImportedExecutionConstruction
-	prep        *mobilemultihop.NodeChainExecutionPreparation
-	source      *mobilemultihop.NodeChain
-	physical    *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy
-	inventory   []mobilemultihop.NodeChainPublicMeasurementCapture
-	digest      string
-	resolverTag string
-	mu          sync.Mutex
-	attempted   bool
-	instance    *Box
-	outbounds   adapter.OutboundManager
-	transports  adapter.DNSTransportManager
-	dns         adapter.DNSRouter
-	resolver    adapter.DNSTransport
-	members     []*shadowsocks.Outbound
-	close       *RouterVPNNativeCloseReceipt
+	self           *routerVPNMultipleImportedExecutionConstruction
+	externalFinal  bool
+	prep           *mobilemultihop.NodeChainExecutionPreparation
+	source         *mobilemultihop.NodeChain
+	physical       *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy
+	publicPhysical *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy
+	inventory      []mobilemultihop.NodeChainPublicMeasurementCapture
+	digest         string
+	resolverTag    string
+	mu             sync.Mutex
+	attempted      bool
+	instance       *Box
+	outbounds      adapter.OutboundManager
+	transports     adapter.DNSTransportManager
+	dns            adapter.DNSRouter
+	resolver       adapter.DNSTransport
+	members        []*shadowsocks.Outbound
+	close          *RouterVPNNativeCloseReceipt
 }
 
 func RouterVPNNodeMultipleImportedExecutionContext(ctx context.Context, prep *mobilemultihop.NodeChainExecutionPreparation) (context.Context, error) {
-	return routerVPNMultipleImportedExecutionContext(ctx, prep, nil)
+	return routerVPNMultipleImportedExecutionContext(ctx, prep, nil, nil, false)
 }
 
 func RouterVPNDesktopNodeMultipleImportedExecutionContext(ctx context.Context, prep *mobilemultihop.NodeChainExecutionPreparation, physical *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy) (context.Context, error) {
 	if physical == nil {
 		return nil, errRouterVPNExecutionOwner
 	}
-	return routerVPNMultipleImportedExecutionContext(ctx, prep, physical)
+	return routerVPNMultipleImportedExecutionContext(ctx, prep, physical, nil, false)
 }
 
-func routerVPNMultipleImportedExecutionContext(ctx context.Context, prep *mobilemultihop.NodeChainExecutionPreparation, physical *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy) (context.Context, error) {
+func RouterVPNNodeExternalFinalExecutionContext(ctx context.Context, prep *mobilemultihop.NodeChainExecutionPreparation) (context.Context, error) {
+	if prep.RequiresDesktopExternalFinalExecutionObserver() {
+		return nil, errRouterVPNExecutionOwner
+	}
+	return routerVPNMultipleImportedExecutionContext(ctx, prep, nil, nil, true)
+}
+
+func RouterVPNDesktopNodeExternalFinalExecutionContext(ctx context.Context, prep *mobilemultihop.NodeChainExecutionPreparation, physical *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy) (context.Context, error) {
+	if !prep.RequiresDesktopExternalFinalExecutionObserver() || physical == nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	return routerVPNMultipleImportedExecutionContext(ctx, prep, nil, physical, true)
+}
+
+func (c *routerVPNMultipleImportedExecutionConstruction) readOriginal() (*mobilemultihop.NodeChain, []mobilemultihop.NodeChainPublicMeasurementCapture, error) {
+	if !c.externalFinal {
+		return c.prep.ReadMultipleImportedNativeMembers()
+	}
+	return c.prep.ReadExternalFinalNativeMembers()
+}
+
+func routerVPNMultipleImportedExecutionContext(ctx context.Context, prep *mobilemultihop.NodeChainExecutionPreparation, physical *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy, publicPhysical *mobilemultihop.DesktopNodeChainExecutionPhysicalPolicy, externalFinal bool) (context.Context, error) {
 	if ctx == nil || ctx.Err() != nil || prep == nil || ctx.Value(routerVPNOrderedTypedConstructionKey{}) != nil || ctx.Value(routerVPNMultipleImportedExecutionKey{}) != nil {
 		return nil, errRouterVPNExecutionOwner
 	}
-	source, inventory, err := prep.ReadMultipleImportedNativeMembers()
+	c := &routerVPNMultipleImportedExecutionConstruction{prep: prep, physical: physical, publicPhysical: publicPhysical, externalFinal: externalFinal}
+	source, inventory, err := c.readOriginal()
 	if err != nil || source == nil {
 		return nil, errRouterVPNExecutionOwner
 	}
@@ -61,7 +85,7 @@ func routerVPNMultipleImportedExecutionContext(ctx context.Context, prep *mobile
 	if err != nil {
 		return nil, err
 	}
-	c := &routerVPNMultipleImportedExecutionConstruction{prep: prep, source: source, physical: physical, inventory: inventory, resolverTag: dns.DNS.ResolverTag, digest: routerVPNNodeChainExecutionOptionsDigest(ctx, options)}
+	c.source, c.inventory, c.resolverTag, c.digest = source, inventory, dns.DNS.ResolverTag, routerVPNNodeChainExecutionOptionsDigest(ctx, options)
 	c.self = c
 	if c.digest == "" || c.validateSource(ctx) != nil {
 		return nil, errRouterVPNExecutionOwner
@@ -71,12 +95,22 @@ func routerVPNMultipleImportedExecutionContext(ctx context.Context, prep *mobile
 }
 
 func (c *routerVPNMultipleImportedExecutionConstruction) validateSource(ctx context.Context) error {
-	if c == nil || c.self != c || ctx == nil || ctx.Err() != nil || c.prep == nil || c.source == nil || (c.physical != nil) != c.prep.RequiresDesktopMultipleImportedExecutionObserver() {
+	if c == nil || c.self != c || ctx == nil || ctx.Err() != nil || c.prep == nil || c.source == nil || c.externalFinal != c.prep.RequiresExternalFinalExecutionObserver() || (c.physical != nil) != c.prep.RequiresDesktopMultipleImportedExecutionObserver() || (c.publicPhysical != nil) != c.prep.RequiresDesktopExternalFinalExecutionObserver() {
 		return errRouterVPNExecutionOwner
 	}
-	source, captured, err := c.prep.ReadMultipleImportedNativeMembers()
+	source, captured, err := c.readOriginal()
 	if err != nil || source != c.source || !slices.Equal(captured, c.inventory) {
 		return errRouterVPNExecutionOwner
+	}
+	if c.publicPhysical != nil {
+		owner, err := c.prep.DesktopPhysicalPolicy()
+		if err != nil || owner != c.publicPhysical {
+			return errRouterVPNExecutionOwner
+		}
+		parent, _, err := owner.ReadOriginalValidated(c.prep)
+		if err != nil || parent.OriginalChain() != source {
+			return errRouterVPNExecutionOwner
+		}
 	}
 	if c.physical != nil {
 		_, original, _, err := c.physical.ReadOriginalSourceValidated(c.prep)
@@ -169,9 +203,65 @@ func (e *RouterVPNNodeChainExecutionEngine) multipleImportedConstruction(ctx con
 }
 
 func (e *RouterVPNNodeChainExecutionEngine) ObserveMultipleImportedExecutionContext(ctx context.Context, source *mobilemultihop.NodeChain) error {
-	c, err := e.multipleImportedConstruction(ctx, source)
+	return e.observeCapturedImportedExecution(ctx, source, false)
+}
+func (e *RouterVPNNodeChainExecutionEngine) ObserveExternalFinalExecutionContext(ctx context.Context, source *mobilemultihop.NodeChain) error {
+	return e.observeCapturedImportedExecution(ctx, source, true)
+}
+
+// Read the same original selector generation around the complete live
+// observation, including native TUN ingress, resolver and every prefix.
+func (e *RouterVPNNodeChainExecutionEngine) ObserveExternalFinalSelectionContext(ctx context.Context, source *mobilemultihop.NodeChain) (mobilemultihop.NodeChainIdentity, string, uint64, error) {
+	empty := mobilemultihop.NodeChainIdentity{}
+	if e == nil || e.selector == nil || e.instance == nil || e.instance.ctx == nil {
+		return empty, "", 0, errRouterVPNExecutionOwner
+	}
+	c, ok := e.instance.ctx.Value(routerVPNMultipleImportedExecutionKey{}).(*routerVPNMultipleImportedExecutionConstruction)
+	if !ok || c == nil || !c.externalFinal || c.source != source || c.prep != e.prep {
+		return empty, "", 0, errRouterVPNExecutionOwner
+	}
+	state := e.state.Load()
+	if state == nil || state.stage != 2 {
+		return empty, "", 0, errRouterVPNExecutionOwner
+	}
+	epoch, tag := e.selector.RouterVPNNodeChainSelectionEpoch(), e.selector.Now()
+	identity, err := e.ObserveChainContext(ctx)
 	if err != nil {
-		return err
+		return empty, "", 0, err
+	}
+	if e.state.Load() != state || epoch == 0 || tag == "" || tag != e.selector.Now() || epoch != e.selector.RouterVPNNodeChainSelectionEpoch() || ctx.Err() != nil {
+		return empty, "", 0, errRouterVPNExecutionOwner
+	}
+	return identity, tag, epoch, nil
+}
+
+// Keep the reader, permit and selector generation stable across both actual
+// native observations. ApplicationOpenContext independently reads the gate.
+func (e *RouterVPNNodeChainExecutionEngine) ObserveExternalFinalOpenSelectionContext(ctx context.Context, source *mobilemultihop.NodeChain) (mobilemultihop.NodeChainIdentity, string, uint64, bool, error) {
+	empty := mobilemultihop.NodeChainIdentity{}
+	if e == nil || ctx == nil || ctx.Err() != nil {
+		return empty, "", 0, false, errRouterVPNExecutionOwner
+	}
+	state, reader, permit := e.state.Load(), e.reader.Load(), e.permit.Load()
+	if state == nil || reader == nil || permit == nil || permit.state != state {
+		return empty, "", 0, false, errRouterVPNExecutionOwner
+	}
+	identity, tag, epoch, err := e.ObserveExternalFinalSelectionContext(ctx, source)
+	if err != nil || permit.tag != tag || permit.epoch != epoch {
+		return empty, "", 0, false, errors.Join(err, errRouterVPNExecutionOwner)
+	}
+	open, err := e.ApplicationOpenContext(ctx)
+	if err != nil || !open || ctx.Err() != nil || e.state.Load() != state || e.reader.Load() != reader || e.permit.Load() != permit ||
+		tag != e.selector.Now() || epoch != e.selector.RouterVPNNodeChainSelectionEpoch() {
+		return empty, "", 0, false, errors.Join(err, errRouterVPNExecutionOwner)
+	}
+	return identity, tag, epoch, true, nil
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) observeCapturedImportedExecution(ctx context.Context, source *mobilemultihop.NodeChain, externalFinal bool) error {
+	c, err := e.multipleImportedConstruction(ctx, source)
+	if err != nil || c.externalFinal != externalFinal {
+		return errors.Join(err, errRouterVPNExecutionOwner)
 	}
 	s := e.instance
 	if s.ctx.Err() != nil || s.done == nil {
@@ -208,7 +298,7 @@ func (e *RouterVPNNodeChainExecutionEngine) observeTypedMultipleImported(ctx con
 		return errRouterVPNExecutionOwner
 	}
 	raw := e.instance.ctx.Value(routerVPNMultipleImportedExecutionKey{})
-	if !e.prep.RequiresMultipleImportedExecutionObserver() {
+	if !e.prep.RequiresMultipleImportedExecutionObserver() && !e.prep.RequiresExternalFinalExecutionObserver() {
 		if raw != nil {
 			return errRouterVPNExecutionOwner
 		}
@@ -218,13 +308,22 @@ func (e *RouterVPNNodeChainExecutionEngine) observeTypedMultipleImported(ctx con
 	if !ok || c == nil {
 		return errRouterVPNExecutionOwner
 	}
+	if e.prep.RequiresExternalFinalExecutionObserver() {
+		return e.ObserveExternalFinalExecutionContext(ctx, c.source)
+	}
 	return e.ObserveMultipleImportedExecutionContext(ctx, c.source)
 }
 
 func (e *RouterVPNNodeChainExecutionEngine) MultipleImportedExecutionRetiredContext(ctx context.Context, source *mobilemultihop.NodeChain) error {
+	return e.importedExecutionRetired(ctx, source, false)
+}
+func (e *RouterVPNNodeChainExecutionEngine) ExternalFinalExecutionRetiredContext(ctx context.Context, source *mobilemultihop.NodeChain) error {
+	return e.importedExecutionRetired(ctx, source, true)
+}
+func (e *RouterVPNNodeChainExecutionEngine) importedExecutionRetired(ctx context.Context, source *mobilemultihop.NodeChain, externalFinal bool) error {
 	c, err := e.multipleImportedConstruction(ctx, source)
-	if err != nil {
-		return err
+	if err != nil || c.externalFinal != externalFinal {
+		return errors.Join(err, errRouterVPNExecutionOwner)
 	}
 	state := e.state.Load()
 	current := func() error {

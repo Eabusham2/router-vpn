@@ -279,7 +279,7 @@ func (m *Manager) CreateChainCandidate(ctx context.Context, peer netip.Addr, req
 	// Keep the captured handle attached if the request's cleanup budget expired.
 	closeErr := op.close(ctx)
 	if workErr == ErrCandidateNotRegistered {
-		if q.Schema != 2 || closeErr != nil || ctx.Err() != nil || !stopRequest() || m.now().UnixMilli() >= q.DeadlineAt {
+		if (q.Schema != 2 && q.Schema != 3) || closeErr != nil || ctx.Err() != nil || !stopRequest() || m.now().UnixMilli() >= q.DeadlineAt {
 			return NodeChainCandidateReceipt{}, ErrUnavailable
 		}
 		if err := m.candidateCurrent(ctx, peer, q, o); err != nil {

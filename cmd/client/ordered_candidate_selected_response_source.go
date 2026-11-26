@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"slices"
 
+	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -32,10 +33,10 @@ func takeCandidateServerIntent(query url.Values) (bool, bool) {
 
 func candidateResponseExecutions(prep *mobilemultihop.NodeChainExecutionPreparation, pos int) []string {
 	var owners []string
-	if prep.SupportsCompareLocalResponseCandidate(pos) {
+	if prep.SupportsCompareLocalResponseCandidate(pos) || prep.SupportsCompareLocalPublicResponseCandidate(pos) {
 		owners = append(owners, "local")
 	}
-	if prep.SupportsServerResponseCandidate(pos) {
+	if prep.SupportsServerResponseCandidate(pos) || prep.SupportsServerPublicResponseCandidate(pos) {
 		owners = append(owners, "server")
 	}
 	return owners
@@ -111,11 +112,22 @@ func originalCandidateResponseNodes(selection multihopSelection) []orderedCandid
 	return rows
 }
 
+func publishSelectedResponseSource(response map[string]any, metric string, nodes []orderedCandidateResponseSourceNode) {
+	if len(nodes) == 0 {
+		return
+	}
+	if metric == hopmeasure.CandidatePublicResponseMeasurement {
+		response["external_final"], response["public_response_source_nodes"] = true, nodes
+		return
+	}
+	response["response_source_nodes"] = nodes
+}
+
 func (view *orderedCandidateView) addResponseSource(response map[string]any) {
 	if view == nil || len(view.responseNodes) == 0 {
 		return
 	}
-	response["response_source_nodes"] = view.responseNodes
+	publishSelectedResponseSource(response, candidateViewMetric(view.prefixes, view.position), view.responseNodes)
 	response["view_token"], response["prefix_position"] = view.token, view.position
 	response["requested_execution"], response["required_selected_execution"] = "auto", "local"
 	selected := "local"

@@ -446,6 +446,9 @@ func (owner *routerVPNNodeChainExecutionRuntime) heartbeat(ctx context.Context, 
 		TransferSHA256: owner.transfer, DNSConfigSHA256: capture.SelectedDNS.ConfigSHA256, Identity: identity,
 		SelectionEpoch: epoch, Generation: state.proofGeneration.Load(), Reader: record.Reader, InterfaceName: record.Interface,
 		InterfaceIndex: uint32(record.Index), MTU: record.MTU, ObservedAt: time.Now().UnixMilli(), Progress: state.controller.Load().value.Progress()}
+	if owner.prep.RequiresDesktopExternalFinalExecutionObserver() {
+		ready.Kind = "routervpn-node-chain-external-final-execution-ready-v1"
+	}
 	var heartbeat any = ready
 	var readyErr error
 	if owner.prep.RequiresSOCKSExecutionObserver() {

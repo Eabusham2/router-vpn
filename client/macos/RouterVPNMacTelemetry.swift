@@ -1169,10 +1169,9 @@ private enum RouterVPNOrderedCandidateDisplay {
         }
         return rows
     }
-    static func publicSource(_ value: [String:Any], position: Int, draft: [String:Any]?) -> [[String:String]]? {
-        guard flag(value,"external_final"), value["requested_execution"] as? String == "local",
-              value["scope"] as? String != "draft-complete-selected",
-              ["selected_execution","selection_epoch","required_selected_execution","response_executions","response_source_nodes"].allSatisfy({ !value.keys.contains($0) }),
+    static func publicInventory(_ value: [String:Any], position: Int, draft: [String:Any]?) -> [[String:String]]? {
+        guard flag(value,"external_final"), let requested=value["requested_execution"] as? String, ["local","server","auto"].contains(requested),
+              !value.keys.contains("response_source_nodes"),
               number(value,"prefix_position") == Double(position),
               let rows=value["public_response_source_nodes"] as? [[String:String]], (3...96).contains(rows.count),
               position>=1, position<rows.count-1 else { return nil }
@@ -1183,10 +1182,19 @@ private enum RouterVPNOrderedCandidateDisplay {
                   row["kind"] == (i==0 ? "router-vpn":"external") else { return nil }
         }
         if let draft {
-            guard draft["execution"] as? String == "local", flag(draft,"external_final"),
+            guard draft["execution"] as? String == requested, flag(draft,"external_final"),
                   draft["nodes"] as? [[String:String]] == rows.map({ ["id":$0["id"]!,"mode":$0["mode"]!] }) else { return nil }
         }
         return rows
+    }
+    static func publicSource(_ value: [String:Any], position: Int, draft: [String:Any]?) -> [[String:String]]? {
+        guard let rows=publicInventory(value,position:position,draft:draft) else { return nil }
+        if value["requested_execution"] as? String == "local" {
+            guard value["scope"] as? String != "draft-complete-selected",
+                  ["selected_execution","selection_epoch","required_selected_execution","response_executions"].allSatisfy({ !value.keys.contains($0) }) else { return nil }
+            return rows
+        }
+        return value.keys.contains("response_executions") && responseWinner(value,position:position,draft:draft) ? rows:nil
     }
     static func publicPath(_ choice:[String:Any], view:[String:Any], position:Int, draft:[String:Any]?, key:String) -> [[String:String]]? {
         guard let source=publicSource(view,position:position,draft:draft), source.count<96,
@@ -1234,7 +1242,7 @@ private enum RouterVPNOrderedCandidateDisplay {
             guard let owners = value["response_executions"] as? [String], let requested = value["requested_execution"] as? String,
                   requested == "server" ? owners == ["server"] : requested == "auto" && [["local"],["local","server"]].contains(owners),
                   (draft == nil || draft?["execution"] as? String == requested),
-                  responseSource(value,position:position,draft:draft) != nil else { return false }
+                  (value.keys.contains("public_response_source_nodes") ? publicInventory(value,position:position,draft:draft) != nil : responseSource(value,position:position,draft:draft) != nil) else { return false }
             if value["selected_execution"] == nil && value["selection_epoch"] == nil {
                 guard draft != nil, value["scope"] as? String == "draft-complete-selected" else { return false }
                 return owners.count == 1 ? value["required_selected_execution"] as? String == owners[0] : value["required_selected_execution"] == nil
@@ -1263,7 +1271,7 @@ private enum RouterVPNOrderedCandidateDisplay {
             guard value["selected_execution"] == nil, value["selection_epoch"] == nil,
                   let nodes = draft["nodes"] as? [[String:String]], nodes.indices.contains(position),
                   let prefix = nodes[position]["id"], let mode = nodes[position]["mode"],
-                  ["wg","awg2-fast","awg2-strong"].contains(mode) || (value["measurement"] as? String == "routed-candidate-response" && responseWinner(value,position: position,draft: draft)),
+                  ["wg","awg2-fast","awg2-strong"].contains(mode) || (["routed-candidate-response","routed-public-candidate-response"].contains(value["measurement"] as? String ?? "") && responseWinner(value,position: position,draft: draft)),
                   let prefixes = value["prefixes"] as? [[String:Any]] else { return false }
             let rows = prefixes.filter { number($0,"position") == Double(position) }
             return rows.count == 1 && rows[0]["id"] as? String == prefix && rows[0]["mode"] as? String == mode
@@ -1381,7 +1389,7 @@ private enum RouterVPNOrderedCandidateDisplay {
               value["node_id"] as? String == row["candidate_id"] as? String, value["role"] as? String == "candidate", value["kind"] as? String == (measurement == "routed-candidate-response" ? "private-agent-response" : measurement == "routed-public-candidate-response" ? "public-exit-response" : "tcp-connect"), flag(value,"ready"),
               let b = value["benchmark"] as? [String: Any], b["measurement"] as? String == measurement, number(b,"attempts") == 50, number(b,"failed") == 0,
               measurement != "routed-public-candidate-response" || b["endpoint"] as? String == "https://1.1.1.1/cdn-cgi/trace",
-              let d = b["distribution"] as? [String: Any], number(d,"samples") == 50, let min = number(d,"min_ms"), let max = number(d,"max_ms"), let score = number(b,"trimmed_mean_ms"), min > 0, score >= min, score <= max else { return nil }
+              let d = b["distribution"] as? [String: Any], number(d,"samples") == 50, let min = number(d,"min_ms"), let max = number(d,"max_ms"), let score = number(b,"trimmed_mean_ms"), min > 0, max <= 60000, score >= min, score <= max else { return nil }
         return score
     }
     static func path(_ nodes: [[String: Any]]) -> String { nodes.map { ($0["id"] as? String ?? "?") + " (" + ($0["mode"] as? String ?? "?") + ")" }.joined(separator: " → ") }
@@ -1550,7 +1558,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         guard !closed else{return}
         if request==nil,cancelWanted,pendingDrain,Date()>=nextRetry {
             var body:[String:Any]=["request_id":requestID]
-            if savedPath || view?["response_source_nodes"] != nil {body["view_token"]=view?["view_token"] ?? ""}
+            if savedPath || view?["response_source_nodes"] != nil || view?["response_executions"] != nil {body["view_token"]=view?["view_token"] ?? ""}
             send("cancel",path:endpoint+"/cancel",body:body)
         }
         if closeWanted,request==nil,!pendingDrain {controls();window?.close();return}
@@ -1588,16 +1596,54 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
     }
     private func receive(_ value:[String:Any],action:String)throws {
         if value["measurement"] as? String == "routed-public-candidate-response" || measurement == "routed-public-candidate-response" {
-            guard value["requested_execution"] == nil || value["requested_execution"] as? String == "local",
-                  value["scope"] as? String != "draft-complete-selected",
-                  value["external_final"] == nil || RouterVPNOrderedCandidateDisplay.flag(value,"external_final"),
-                  ["selected_execution","selection_epoch","required_selected_execution","response_executions","response_source_nodes"].allSatisfy({ !value.keys.contains($0) }) else {
-                throw Self.issue("A public candidate response cannot acquire a private or Server owner.")
+            let selectedPublic=value.keys.contains("response_executions") || view?.keys.contains("response_executions") == true
+            if selectedPublic {
+                guard RouterVPNOrderedCandidateDisplay.publicSource(value,position:position,draft:draft) != nil else {
+                    throw Self.issue("The selected public candidate lost its original source or execution owner.")
+                }
+                if action != "catalog" {
+                    guard value["measurement"] as? String == "routed-public-candidate-response",
+                          value["view_token"] as? String == view?["view_token"] as? String,
+                          value["request_id"] as? String == requestID else { throw Self.issue("The selected public response belongs to another request.") }
+                }
+                if let winner=value["selected_execution"] as? String, ["local","server"].contains(winner) {
+                    let limit=winner == "server" ? 2500.0:60000.0
+                    for row in value["results"] as? [[String:Any]] ?? [] {
+                        for result in row["results"] as? [[String:Any]] ?? [] {
+                            guard let benchmark=result["benchmark"] as? [String:Any] else { continue }
+                            guard let distribution=benchmark["distribution"] as? [String:Any],
+                                  let maximum=RouterVPNOrderedCandidateDisplay.number(distribution,"max_ms"), maximum > 0, maximum <= limit,
+                                  let jitter=RouterVPNOrderedCandidateDisplay.number(distribution,"jitter_ms"), jitter >= 0, jitter <= limit else {
+                                throw Self.issue("The public response timings exceed their selected execution limit.")
+                            }
+                        }
+                    }
+                }
+            } else {
+                guard value["requested_execution"] == nil || value["requested_execution"] as? String == "local",
+                      value["scope"] as? String != "draft-complete-selected",
+                      value["external_final"] == nil || RouterVPNOrderedCandidateDisplay.flag(value,"external_final"),
+                      ["selected_execution","selection_epoch","required_selected_execution","response_executions","response_source_nodes"].allSatisfy({ !value.keys.contains($0) }) else {
+                    throw Self.issue("A Local public candidate response cannot acquire another execution owner.")
+                }
             }
             if action != "catalog", value.keys.contains("public_response_source_nodes") {
                 guard let view, let source=value["public_response_source_nodes"] as? [[String:String]],
                       source == RouterVPNOrderedCandidateDisplay.publicSource(view,position:position,draft:draft) else {
                     throw Self.issue("The public candidate response changed its original route.")
+                }
+            }
+            if selectedPublic, action != "catalog", draft == nil {
+                if action == "cancel" {
+                    let started=RouterVPNOrderedCandidateDisplay.flag(value,"started")
+                    guard (started && RouterVPNOrderedCandidateDisplay.falseFlag(value,"admission_cancelled")) ||
+                          (!savedAdmitted && RouterVPNOrderedCandidateDisplay.falseFlag(value,"started") && RouterVPNOrderedCandidateDisplay.flag(value,"admission_cancelled")),
+                          ["ok","cancelled","drained"].allSatisfy({RouterVPNOrderedCandidateDisplay.flag(value,$0)}),
+                          ["running","accepted","reviewing","cleanup_pending","active_path_changed"].allSatisfy({RouterVPNOrderedCandidateDisplay.falseFlag(value,$0)}),
+                          let results=value["results"] as? [[String:Any]], results.isEmpty,
+                          value["saved_profile_id"] == nil || value["saved_profile_id"] as? String == "" else {
+                        throw Self.issue("The original public candidate cancellation is still pending.")
+                    }
                 }
             }
         }
@@ -1650,9 +1696,14 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
                   value["response_executions"] as? [String] == owners,
                   value["requested_execution"] as? String == original["requested_execution"] as? String,
                   RouterVPNOrderedCandidateDisplay.responseWinner(value,position:position,draft:draft),
-                  draft != nil || value["selected_execution"] as? String == original["selected_execution"] as? String else {
+                  draft != nil || (value["selected_execution"] as? String == original["selected_execution"] as? String &&
+                    (value["selection_epoch"] as? NSNumber)?.stringValue == (original["selection_epoch"] as? NSNumber)?.stringValue) else {
                 throw Self.issue("The authenticated response owner changed.")
             }
+        }
+        if measurement == "routed-public-candidate-response", value.keys.contains("response_executions"), draft == nil,
+           ["run","poll"].contains(action), ["started","running","accepted","reviewing"].contains(where:{RouterVPNOrderedCandidateDisplay.flag(value,$0)}) {
+            savedAdmitted=true
         }
         if view?["response_source_nodes"] != nil || value["response_source_nodes"] != nil {
             guard let view, let original = RouterVPNOrderedCandidateDisplay.responseSource(view, position:position, draft:draft),

@@ -2,17 +2,18 @@
 
 GitHub Actions is the normal compile/test environment. The AI Board is not the routine cross-platform build farm; its bounded local toolchain exists only as a fallback for one requested generic client package when the matching artifact is unavailable, and only where the finished product can be assembled truthfully from same-image components.
 
-## Release workflows
+## CI and release
 
-The current release path uses multiple gates rather than treating one workflow as proof of everything. Important workflows include:
+The repository has two workflows. [Router VPN CI](../.github/workflows/ci.yml)
+runs source syntax, shared Go behavior, VPN policy, router safety and Setup
+Center checks on ordinary changes. It does not publish packages.
 
-- cross-platform client/native app CI
-- release-candidate packaging and one-SHA aggregation
-- repository-state and weighted/source audits
-- exact-SHA ARM64 server image publishing
-- native ARM64 server/runtime preflight
-- standard/custom-exit contracts
-- AI Help/setup-center contracts
+[Router VPN Release](../.github/workflows/build-all.yml) is dispatched manually
+for a stable `main` commit after CI succeeds for that exact SHA. Its jobs build
+and verify the native engines, package the desktop and mobile apps, run native
+platform and artifact checks, aggregate the ten packages, build and verify the
+ARM64 images, generate production Compose, and publish the immutable release.
+These stages retain their own results within the single release run.
 
 A release candidate is valid only for its exact source SHA. Do not deploy an older candidate merely because it passed previously.
 
@@ -45,7 +46,7 @@ CI execution still does not replace physical Windows full-device routing, DNS/IP
 
 The APK is a real native `VpnService` application. Build/runtime-contract CI compiles WireGuard/AmneziaWG and the combined pinned Libbox/Xray runtime, including supported PQ, helper/composite and complete MAX graphs. It also packages native Tor/pluggable transports and the bounded userspace OpenVPN endpoint. Native constructor/configuration gates exercise supported captured graphs and missing-engine rejection; they do not prove all requested compositions or physical networking. See [NATIVE-APPS.md](NATIVE-APPS.md) and [MOBILE-OPENVPN.md](MOBILE-OPENVPN.md) for current boundaries.
 
-The authoritative Android delivery selects a production-signed release when the complete persistent-key configuration is present, verifies the actual APK signer/version/source, and publishes its receipt. Missing optional configuration produces a labeled debug package; partial, invalid or required-but-missing production configuration fails. Dedicated Android CI remains debug-only. See [Android signing and upgrade delivery](../android/PRODUCTION-SIGNING.md). Availability of the owner's persistent key, a production-signed full package and real-device upgrade acceptance still need evidence. Physical VPN permission, lockdown, reconnect, DNS/IPv4/IPv6, custom-exit traffic and leak-negative tests also remain release gates; native-library/provenance verification does not close them.
+The authoritative Android delivery selects a production-signed release when the complete persistent-key configuration is present, verifies the actual APK signer/version/source, and publishes its receipt. Missing optional configuration produces a labeled debug package; partial, invalid or required-but-missing production configuration fails. Routine CI does not produce an Android package. See [Android signing and upgrade delivery](../android/PRODUCTION-SIGNING.md). Availability of the owner's persistent key, a production-signed full package and real-device upgrade acceptance still need evidence. Physical VPN permission, lockdown, reconnect, DNS/IPv4/IPv6, custom-exit traffic and leak-negative tests also remain release gates; native-library/provenance verification does not close them.
 
 ## iOS / iPadOS
 

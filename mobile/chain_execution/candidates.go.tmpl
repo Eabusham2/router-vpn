@@ -69,7 +69,7 @@ func RouterNodeChainExecutionNewCandidateMeasurement(owner *RouterNodeChainExecu
 	return owner.newExecutionCandidateMeasurementContext(ctx, server, int(position), inventory, catalog)
 }
 func (m *RouterNodeChainExecution) newExecutionCandidateMeasurementContext(ctx context.Context, server *CommandServer, position int, inventory string, catalog RouterNodeChainCandidateCatalog) (*RouterNodeChainExecutionCandidateMeasurement, error) {
-	if m == nil || ctx == nil || ctx.Err() != nil || position < 0 || position > 7 || server == nil || catalog == nil {
+	if m == nil || ctx == nil || ctx.Err() != nil || position < 0 || position >= mobilemultihop.NodeChainExtendedLocalMaximumNodes-1 || server == nil || catalog == nil {
 		return nil, errRouterNodeChainExecution
 	}
 	deadline := time.Now().Add(hopmeasure.ObservationTimeout)

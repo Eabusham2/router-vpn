@@ -633,8 +633,8 @@ function UnifiedConnect{
             if($Supported-isnot[bool]-or-not$Supported){throw 'This controller has not enabled the ordered native host. The complete path is retained; update the app before connecting it.'}
             $Store=Api '/api/profiles' -Timeout 5
             $RequestedExecution=[string]$Ordered.multihop_execution
-            $ExecutionCapability=Get-RouterVPNOrderedExecutionCapability $Ordered.multihop_nodes $RequestedExecution
-            if(@(Get-RouterVPNOrderedValue $Capability $ExecutionCapability @())-cnotcontains$RequestedExecution){throw 'This native controller has not enabled the selected ordered execution. Your complete path is retained.'}
+            $ExecutionCapability=Get-RouterVPNOrderedExecutionCapability $Ordered.multihop_nodes $RequestedExecution ([string]$P.id)
+            if(-not(Test-RouterVPNOrderedExecutionAdvertised $Capability $ExecutionCapability $RequestedExecution)){throw 'This native controller has not enabled the selected ordered execution. Your complete path is retained.'}
             $Draft=[pscustomobject]@{control_id=[string]$P.id;nodes=$Ordered.multihop_nodes;execution=$RequestedExecution;profile_tokens=(Get-RouterVPNOrderedValue (Control 'UnifiedNodeChainButton').Tag 'profile_tokens')}
             $Body=New-RouterVPNOrderedConnectPayload $Draft $Store
             $Path='/api/multihop/connect';$Timeout=380;$Label='Connecting ordered nodes…'
@@ -977,8 +977,8 @@ function ShowUnifiedOrderedNodes {
         }
         $dialog.FindName('ExternalExit').Add_Click({try{
             $source=$available.SelectedItem
-            if([string](Control 'UnifiedExecution').SelectedItem.Tag -cne 'local' -or -not(Test-RouterVPNOrderedExternalFinalProfile $source) -or
-               -not(Test-RouterVPNOrderedPairedLayer $selected[0] -AllowAuthenticated)){throw 'Choose a linked literal Shadowsocks exit with the selected WireGuard or AmneziaWG control in Local.'}
+            if([string](Control 'UnifiedExecution').SelectedItem.Tag -cnotin @('local','server','auto') -or -not(Test-RouterVPNOrderedExternalFinalProfile $source) -or
+               -not(Test-RouterVPNOrderedPairedLayer $selected[0] -AllowAuthenticated)){throw 'Choose a linked literal Shadowsocks exit with the original paired WireGuard or AmneziaWG entry.'}
             foreach($row in $rows){if($row.id -cne $id -and -not(Test-RouterVPNOrderedLiteralOff (@($store.profiles|Where-Object {$_.id -ceq $row.id})[0]))){throw 'Keep only literal Shadowsocks imports after the paired entry.'}}
             if(-not $dialog.FindName('Final').Tag){
                 if($rows.Count -ge ((Get-RouterVPNOrderedPhysicalTraversalDepth)-1)){throw 'The path has reached its supported node limit.'}

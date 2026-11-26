@@ -9,6 +9,15 @@ import (
 
 const DesktopNodeChainMultipleImportedExecutionReadyRecordLimit = 16384
 
+// A longer private-terminal heartbeat is valid only for the original desktop
+// physical preparation with a literal public import at every intermediate.
+func (p *NodeChainExecutionPreparation) desktopPrivateFinalReadyLimit() int {
+	if !p.RequiresDesktopMultipleImportedExecutionObserver() {
+		return DesktopNodeChainMultipleImportedExecutionReadyRecordLimit
+	}
+	return max(DesktopNodeChainMultipleImportedExecutionReadyRecordLimit, extendedNodeChainStatusLimit(p.originalDeepPrivateFinalCount()))
+}
+
 // This private observation belongs to a retained preparation, its authenticated
 // in-place projection, and one selected native epoch. It grants no Box, TUN,
 // process or lease authority. The host must independently retain that owner and
@@ -113,7 +122,7 @@ func CanonicalDesktopNodeChainMultipleImportedExecutionReadyRecord(r DesktopNode
 		return nil, err
 	}
 	raw, err := json.Marshal(r)
-	if err != nil || len(raw) > DesktopNodeChainMultipleImportedExecutionReadyRecordLimit {
+	if err != nil || len(raw) > p.preparation.desktopPrivateFinalReadyLimit() {
 		return nil, errors.New("ordered execution heartbeat exceeds its private record bound")
 	}
 	return raw, nil
@@ -121,7 +130,7 @@ func CanonicalDesktopNodeChainMultipleImportedExecutionReadyRecord(r DesktopNode
 
 func ParseDesktopNodeChainMultipleImportedExecutionReadyRecord(raw []byte, p *NodeChainExecutionProjection, transfer string) (DesktopNodeChainMultipleImportedExecutionReadyRecord, error) {
 	var r DesktopNodeChainMultipleImportedExecutionReadyRecord
-	if len(raw) == 0 || len(raw) > DesktopNodeChainMultipleImportedExecutionReadyRecordLimit || json.Unmarshal(raw, &r) != nil {
+	if p == nil || len(raw) == 0 || len(raw) > p.preparation.desktopPrivateFinalReadyLimit() || json.Unmarshal(raw, &r) != nil {
 		return r, errors.New("ordered execution heartbeat is not a bounded private record")
 	}
 	canonical, err := CanonicalDesktopNodeChainMultipleImportedExecutionReadyRecord(r, p, transfer)

@@ -3,6 +3,7 @@ package mobilemultihop
 import (
 	"context"
 	"encoding/json"
+
 	"errors"
 	"reflect"
 	"sync"
@@ -245,7 +246,7 @@ func (s *nodeChainExecutionTrial) renew(ctx context.Context) error {
 	if stopped {
 		return nodeChainExecutionError
 	}
-	raw, err := json.Marshal(request)
+	raw, err := nodeChainLeaseRequestBody(request, "")
 	if err != nil {
 		return err
 	}
@@ -254,7 +255,12 @@ func (s *nodeChainExecutionTrial) renew(ctx context.Context) error {
 		return err
 	}
 	var lease multihoprelay.NodeChainLease
-	if exactJSON(data, &lease, multihoprelay.MaxControlResponseBytes) != nil {
+	if request.HasRegisteredFronts() {
+		lease, err = multihoprelay.DecodeNodeChainLeaseGrant(data, request)
+		if err != nil {
+			return err
+		}
+	} else if exactJSON(data, &lease, multihoprelay.MaxControlResponseBytes) != nil {
 		return nodeChainExecutionError
 	}
 	if err = s.validateLease(lease, time.Now(), true); err != nil {
@@ -264,6 +270,16 @@ func (s *nodeChainExecutionTrial) renew(ctx context.Context) error {
 }
 
 func nodeChainStatusRequest(request multihoprelay.NodeChainRequest, nonce string) ([]byte, error) {
+	return nodeChainLeaseRequestBody(request, nonce)
+}
+
+func nodeChainLeaseRequestBody(request multihoprelay.NodeChainRequest, nonce string) ([]byte, error) {
+	if request.HasRegisteredFronts() {
+		return multihoprelay.MarshalNodeChainLeaseRequest(request, nonce)
+	}
+	if nonce == "" {
+		return json.Marshal(request)
+	}
 	return json.Marshal(struct {
 		multihoprelay.NodeChainRequest
 		StatusNonce string `json:"status_nonce"`
@@ -307,8 +323,14 @@ func (s *nodeChainExecutionTrial) status(ctx context.Context, requireReady bool)
 		return err
 	}
 	now := time.Now()
+	capture := multihoprelay.NodeChainCapture{Schema: 1, Request: request, Source: source, RegistrySHA256: old.RegistrySHA256, OwnerID: old.OwnerID, Peer: request.Peer, Host: old.Host, BootstrapDeadline: old.BootstrapDeadline}
 	var status multihoprelay.NodeChainLeaseStatus
-	if len(request.Users) > multihoprelay.NodeChainMaximumMembers {
+	if request.HasRegisteredFronts() {
+		status, err = multihoprelay.DecodeRegisteredNodeChainStatus(data, old, capture)
+		if err != nil {
+			return err
+		}
+	} else if len(request.Users) > multihoprelay.NodeChainMaximumMembers {
 		var update multihoprelay.NodeChainStatusUpdate
 		if exactJSON(data, &update, multihoprelay.MaxControlResponseBytes) != nil {
 			return nodeChainExecutionError
@@ -321,7 +343,6 @@ func (s *nodeChainExecutionTrial) status(ctx context.Context, requireReady bool)
 		return nodeChainExecutionError
 	}
 	// Validate the complete status before changing any original lease receipt.
-	capture := multihoprelay.NodeChainCapture{Schema: 1, Request: request, Source: source, RegistrySHA256: old.RegistrySHA256, OwnerID: old.OwnerID, Peer: request.Peer, Host: old.Host, BootstrapDeadline: old.BootstrapDeadline}
 	if multihoprelay.ValidateNodeChainReceipt(status.Receipt, capture, nonce, started, now) != nil || status.Receipt.Sequence <= sequence || status.Receipt.ProofAt < previousProof || status.Receipt.HeartbeatAt < previousHeartbeat ||
 		status.Lease.Phase != status.Receipt.Phase || requireReady && status.Receipt.Phase != multihoprelay.NodeChainReady {
 		return nodeChainExecutionError

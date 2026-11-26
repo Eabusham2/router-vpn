@@ -60,6 +60,7 @@ type nodeChainMultipleImportedMemberSeal struct {
 	input, source, seal, policySeal, config, metadata, policySource string
 	mutable                                                         string
 	original                                                        *[2]externalPolicyCapture
+	fields                                                          [2]struct{ profile, entry any }
 }
 
 func (m *nodeChainImportedMember) rememberMultipleImportedMember() error {
@@ -75,6 +76,12 @@ func (m *nodeChainImportedMember) rememberMultipleImportedMember() error {
 		owner: m, policy: m.policy, input: m.input, source: m.source, seal: m.seal, policySeal: m.policySeal,
 		config: m.policy.config, metadata: m.policy.metadata, policySource: m.policy.source, mutable: string(raw), original: original,
 	}
+	if original != nil {
+		for i, capture := range original {
+			m.multipleSeal.fields[i].profile = freezeImportedJSON(capture.Profile)
+			m.multipleSeal.fields[i].entry = freezeImportedJSON(capture.Entry)
+		}
+	}
 	return nil
 }
 
@@ -84,7 +91,7 @@ func (s *nodeChainMultipleImportedMemberSeal) matches(m *nodeChainImportedMember
 		m.policy.config != s.config || m.policy.metadata != s.metadata || m.policy.source != s.policySource {
 		return false
 	}
-	if s.original != nil && sameMultipleImportedCapture(m.selection, s.original[0]) && sameMultipleImportedCapture(m.policy.capture, s.original[1]) {
+	if s.original != nil && s.matchesFields(m.selection, 0) && s.matchesFields(m.policy.capture, 1) {
 		return true
 	}
 	raw, err := json.Marshal([2]externalPolicyCapture{m.selection, m.policy.capture})
@@ -109,8 +116,88 @@ func decodeMultipleImportedOriginal[T any](raw []byte) *T {
 // The original cannot alias the live maps or slices. Compare the exact JSON
 // value tree, including object keys and array order. Values of a different Go
 // type take the caller's canonical fallback (e.g. int(7) can encode like 7.0).
+type frozenImportedField struct {
+	key   string
+	value any
+}
+
+type frozenImportedString struct {
+	key, value string
+}
+
+type frozenImportedObject struct {
+	text   []frozenImportedString
+	fields []frozenImportedField
+}
+
+// Freeze only an independently decoded, byte-verified original. A linear key
+// inventory avoids iterating the original Go map on every observation; each
+// live map is still freshly read, including all keys, sizes and nested values.
+func freezeImportedJSON(original any) any {
+	switch x := original.(type) {
+	case map[string]any:
+		var frozen *frozenImportedObject
+		if x != nil {
+			frozen = &frozenImportedObject{}
+			for key, value := range x {
+				if text, ok := value.(string); ok {
+					frozen.text = append(frozen.text, frozenImportedString{key, text})
+				} else {
+					frozen.fields = append(frozen.fields, frozenImportedField{key, freezeImportedJSON(value)})
+				}
+			}
+		}
+		return frozen
+	case []any:
+		var elements []any
+		if x != nil {
+			elements = make([]any, len(x))
+			for i, value := range x {
+				elements[i] = freezeImportedJSON(value)
+			}
+		}
+		return elements
+	default:
+		return original
+	}
+}
+
+func (s *nodeChainMultipleImportedMemberSeal) matchesFields(current externalPolicyCapture, position int) bool {
+	original := &s.original[position]
+	fields := &s.fields[position]
+	return sameImportedCaptureFields(current, *original) &&
+		sameMultipleImportedJSON(current.Profile, fields.profile) &&
+		sameMultipleImportedJSON(current.Entry, fields.entry)
+}
+
 func sameMultipleImportedJSON(value, original any) bool {
 	switch want := original.(type) {
+	case *frozenImportedObject:
+		got, ok := value.(map[string]any)
+		if !ok || (got == nil) != (want == nil) {
+			return false
+		}
+		if want == nil {
+			return true
+		}
+		if len(got) != len(want.text)+len(want.fields) {
+			return false
+		}
+		// Most original profile fields are strings. Read each live value
+		// directly. A missing key or a non-string cannot match even "".
+		for _, field := range want.text {
+			text, ok := got[field.key].(string)
+			if !ok || text != field.value {
+				return false
+			}
+		}
+		for _, field := range want.fields {
+			actual, exists := got[field.key]
+			if !exists || !sameMultipleImportedJSON(actual, field.value) {
+				return false
+			}
+		}
+		return true
 	case nil:
 		return value == nil
 	case bool:
@@ -151,13 +238,12 @@ func sameMultipleImportedJSON(value, original any) bool {
 }
 
 func sameMultipleImportedCapture(current, original externalPolicyCapture) bool {
-	if current.DNSBootstrap != nil || original.DNSBootstrap != nil || current.Execution != nil || original.Execution != nil {
-		return false
-	}
-	if !sameMultipleImportedJSON(current.Profile, original.Profile) || !sameMultipleImportedJSON(current.Entry, original.Entry) {
-		return false
-	}
-	return current.Schema == original.Schema && current.ExitID == original.ExitID && current.Protocol == original.Protocol &&
+	return sameImportedCaptureFields(current, original) && sameMultipleImportedJSON(current.Profile, original.Profile) && sameMultipleImportedJSON(current.Entry, original.Entry)
+}
+
+func sameImportedCaptureFields(current, original externalPolicyCapture) bool {
+	return current.DNSBootstrap == nil && original.DNSBootstrap == nil && current.Execution == nil && original.Execution == nil &&
+		current.Schema == original.Schema && current.ExitID == original.ExitID && current.Protocol == original.Protocol &&
 		current.ExpectedPublicIP == original.ExpectedPublicIP && current.EntryTag == original.EntryTag && current.PredecessorConfig == original.PredecessorConfig
 }
 
@@ -177,7 +263,7 @@ type nodeChainMultipleImportedLocalSeal struct {
 	physical                                                         []PhysicalEgress
 	projection                                                       nodeChainProjection
 	packets                                                          []*nodeChainMultipleImportedPacketSeal
-	extendedProofs                                                   bool
+	extendedProofs, externalFinalProofs                              bool
 }
 
 func (s *nodeChainMultipleImportedLocalSeal) matches(c *NodeChain) bool {
@@ -243,7 +329,7 @@ func snapshotOriginalNodeChain(c *NodeChain) *nodeChainMultipleImportedLocalSeal
 	return &nodeChainMultipleImportedLocalSeal{
 		owner: c, sourceJSON: c.sourceJSON, sourceSHA: c.sourceSHA, config: c.config, metadata: c.metadata,
 		originalConfigSHA: c.originalConfigSHA, seal: c.seal, proofs: slices.Clone(c.proofs), dns: c.dns,
-		physical: slices.Clone(c.physical), projection: c.projection, packets: packets, extendedProofs: extendedLocalProofs(c.proofs),
+		physical: slices.Clone(c.physical), projection: c.projection, packets: packets, extendedProofs: extendedLocalProofs(c.proofs), externalFinalProofs: externalFinalProofs(c.proofs),
 	}
 }
 
@@ -283,8 +369,8 @@ func (s *nodeChainExecutionPolicySeal) localPacketCurrent(p *NodeChainExecutionP
 func (s *nodeChainExecutionPolicySeal) matches(p *NodeChainExecutionPolicy) bool {
 	return s != nil && s.owner == p &&
 		p.sourceJSON == s.sourceJSON && p.sourceSHA == s.sourceSHA && p.config == s.config && p.configSHA == s.configSHA && p.dns == s.dns &&
-		reflect.DeepEqual(p.source, s.source) && reflect.DeepEqual(p.front, s.front) && reflect.DeepEqual(p.localProofs, s.local) &&
-		reflect.DeepEqual(p.serverProofs, s.server) && reflect.DeepEqual(p.physical, s.physical)
+		reflect.DeepEqual(p.source, s.source) && reflect.DeepEqual(p.front, s.front) && sameTypedSlice(p.localProofs, s.local) &&
+		sameTypedSlice(p.serverProofs, s.server) && sameTypedSlice(p.physical, s.physical)
 }
 
 type nodeChainExecutionProjectionSeal struct {

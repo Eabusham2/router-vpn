@@ -30,7 +30,7 @@ func externalFinalEntrySources(mode, layer string, sources []connectionProfileNo
 // private files are still recompiled before restoration or physical admission.
 func validateSavedExternalFinalNodeChain(record connectionProfileRecord) error {
 	bad := errors.New("saved ordered external exit lost its original paired entry or independent external sources")
-	if record.Prefs == nil || record.Prefs.MultihopExecution != "local" ||
+	if record.Prefs == nil || !validDesktopOrderedExecution(record.Prefs.MultihopExecution) ||
 		!desktopExternalFinalReferences(record.Prefs.MultihopNodes) || len(record.NodeChain) != len(record.Prefs.MultihopNodes) ||
 		record.External != nil || len(record.Hops) != 0 {
 		return bad

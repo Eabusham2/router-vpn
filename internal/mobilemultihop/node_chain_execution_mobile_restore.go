@@ -17,10 +17,14 @@ type nodeChainExecutionMobileProjection struct {
 	socks           *nodeChainSOCKSExecutionMobileRestore
 	openvpn         *nodeChainOpenVPNExecutionMobileRestore
 	multiple        *nodeChainMultipleImportedExecutionMobileRestore
+	externalFinal   *nodeChainExternalFinalMobileRestore
 }
 
 func (p *NodeChainExecutionPreparation) validateMobileCapture() error {
 	m := p.mobile
+	if m != nil && m.externalFinal != nil {
+		return m.externalFinal.validate(p)
+	}
 	if m != nil && m.multiple != nil {
 		return m.multiple.validate(p)
 	}
@@ -104,6 +108,15 @@ func (c NodeChainExecutionMobileRestoreCapture) validateRetiredContext(ctx conte
 	if err := c.engine.ExecutionTUNReadbackRetiredContext(ctx, c.readback); err != nil {
 		return err
 	}
+	if c.restore.projection.preparation.externalFinal != nil {
+		old, ok := c.restore.owner.engine.(NodeChainExternalFinalExecutionRetiredObserver)
+		if !ok {
+			return nodeChainExecutionError
+		}
+		if err := old.ExternalFinalExecutionRetiredContext(ctx, c.restore.projection.policy.local); err != nil {
+			return err
+		}
+	}
 	if err := c.sharedClosedContext(ctx); err != nil {
 		return err
 	}
@@ -142,6 +155,9 @@ func (c NodeChainExecutionMobileRestoreCapture) NewPreparationContext(ctx contex
 		return nil, err
 	}
 	p := c.restore.projection
+	if p.preparation.externalFinal != nil {
+		return c.newExternalFinalPreparationContext(ctx)
+	}
 	if p.preparation.multiple != nil {
 		return c.newMultipleImportedPreparationContext(ctx)
 	}

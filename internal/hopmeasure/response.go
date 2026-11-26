@@ -165,6 +165,19 @@ func orderedResponseMethod(hop Hop) (string, string) {
 // OrderedResponseLatencies validates the retained paired endpoints. An imported
 // entry has no private response row; a public final uses its own HTTPS receipt.
 func OrderedResponseLatencies(status Status, request string, samples int, endpoints [2]Hop) ([2]Latency, error) {
+	return orderedResponseLatencies(status, request, samples, endpoints, false)
+}
+
+// This parser is only for a selected registered Server exit. Its caller reads
+// the original tag from the same captured native publication as the response.
+func OrderedExternalFinalServerResponseLatencies(status Status, request string, samples int, endpoints [2]Hop) ([2]Latency, error) {
+	if endpoints[0].Kind != "private-node" || endpoints[1].Kind != "public-path" || !orderedServerPrefixTag.MatchString(endpoints[1].Tag) {
+		return [2]Latency{}, errors.New("selected public response lost its registered Server final")
+	}
+	return orderedResponseLatencies(status, request, samples, endpoints, true)
+}
+
+func orderedResponseLatencies(status Status, request string, samples int, endpoints [2]Hop, externalFinalServer bool) ([2]Latency, error) {
 	var values [2]Latency
 	bad := errors.New("incomplete ordered private response")
 	if request == "" || samples < 1 || samples > 10 || status.Request != request || !status.Complete || !status.Drained || status.Stage != "complete" || status.Failure != "" {
@@ -176,7 +189,7 @@ func OrderedResponseLatencies(status Status, request string, samples int, endpoi
 	} else if endpoints[0].Kind != "private-node" {
 		return values, bad
 	}
-	if endpoints[0].ID == "" || endpoints[0].ID == endpoints[1].ID || endpoints[1].Kind != "private-node" && !(first == 0 && endpoints[1].Kind == "public-path" && orderedPrefixTag.MatchString(endpoints[1].Tag)) || len(status.Results) != len(endpoints)-first {
+	if endpoints[0].ID == "" || endpoints[0].ID == endpoints[1].ID || endpoints[1].Kind != "private-node" && !(first == 0 && endpoints[1].Kind == "public-path" && (orderedPrefixTag.MatchString(endpoints[1].Tag) || externalFinalServer && orderedServerPrefixTag.MatchString(endpoints[1].Tag))) || len(status.Results) != len(endpoints)-first {
 		return values, bad
 	}
 	for i := first; i < len(endpoints); i++ {
@@ -217,7 +230,7 @@ func (s *Service) CompletedOrderedResponseContext(ctx context.Context, request s
 	if json.Unmarshal([]byte(s.StatusContextJSON(ctx)), &state) != nil {
 		return Status{}, errors.New("invalid ordered response status")
 	}
-	_, err := OrderedResponseLatencies(state, request, samples, [2]Hop{s.hops[0], s.hops[len(s.hops)-1]})
+	_, err := orderedResponseLatencies(state, request, samples, [2]Hop{s.hops[0], s.hops[len(s.hops)-1]}, s.orderedExternalFinal)
 	if err != nil {
 		return Status{}, err
 	}

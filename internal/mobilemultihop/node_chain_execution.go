@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
-	"reflect"
 	"strings"
 
 	"router-vpn/internal/multihoprelay"
@@ -54,6 +53,7 @@ type NodeChainExecutionPolicy struct {
 	socks                                          *nodeChainSOCKSExecutionBinding
 	openvpn                                        *nodeChainOpenVPNExecutionBinding
 	multiple                                       *nodeChainMultipleImportedExecutionBinding
+	externalFinal                                  *nodeChainExternalFinalExecutionBinding
 	originalSeal                                   *nodeChainExecutionPolicySeal
 	front                                          NodeChainExecutionFront
 	localProofs, serverProofs                      []NodeChainProof
@@ -80,10 +80,17 @@ func newNodeChainExecutionPolicyFamilyOpenVPN(sourceJSON string, connect *nodeCh
 }
 
 func newNodeChainExecutionPolicyFamilyMultiple(sourceJSON string, connect *nodeChainCONNECTExecutionBinding, socks *nodeChainSOCKSExecutionBinding, openvpn *nodeChainOpenVPNExecutionBinding, multiple *nodeChainMultipleImportedExecutionBinding) (*NodeChainExecutionPolicy, error) {
-	if connect != nil && socks != nil || openvpn != nil && (connect != nil || socks != nil) || multiple != nil && (connect != nil || socks != nil || openvpn != nil) {
+	return newNodeChainExecutionPolicyFamilyExternalFinal(sourceJSON, connect, socks, openvpn, multiple, nil)
+}
+
+func newNodeChainExecutionPolicyFamilyExternalFinal(sourceJSON string, connect *nodeChainCONNECTExecutionBinding, socks *nodeChainSOCKSExecutionBinding, openvpn *nodeChainOpenVPNExecutionBinding, multiple *nodeChainMultipleImportedExecutionBinding, public *nodeChainExternalFinalExecutionBinding) (*NodeChainExecutionPolicy, error) {
+	if connect != nil && socks != nil || openvpn != nil && (connect != nil || socks != nil) || multiple != nil && (connect != nil || socks != nil || openvpn != nil) || public != nil && (connect != nil || socks != nil || openvpn != nil || multiple != nil) {
 		return nil, nodeChainExecutionError
 	}
 	schema := 1
+	if public != nil {
+		schema = 8
+	}
 	if multiple != nil {
 		schema = 6
 	}
@@ -105,7 +112,12 @@ func newNodeChainExecutionPolicyFamilyMultiple(sourceJSON string, connect *nodeC
 	}
 	var local *NodeChain
 	var err error
-	if multiple != nil {
+	if public != nil {
+		if !public.matches(source.Server) || public.preparation.validateCapture() != nil || source.LocalSource != public.preparation.LocalSource() || source.Execution != public.preparation.Execution() {
+			return nil, nodeChainExecutionError
+		}
+		local = public.local
+	} else if multiple != nil {
 		if multiple.preparation == nil || multiple.preparation.validateCapture() != nil || source.LocalSource != multiple.preparation.LocalSource() || source.Execution != multiple.preparation.Execution() || source.Server.Schema != 6 {
 			return nil, nodeChainExecutionError
 		}
@@ -130,7 +142,7 @@ func newNodeChainExecutionPolicyFamilyMultiple(sourceJSON string, connect *nodeC
 		}
 		local = connect.local
 	}
-	if err != nil || local.validateCapture() != nil || local.importedNodes != nil && multiple == nil || local.openVPNMiddle != nil && openvpn == nil || len(local.nodes) != len(source.Server.Members)+1 ||
+	if err != nil || local.validateCapture() != nil || local.importedNodes != nil && multiple == nil && public == nil || local.openVPNMiddle != nil && openvpn == nil || len(local.nodes) != len(source.Server.Members)+1 ||
 		local.importedMiddle != nil && !nodeChainImportedExecutionMemberSupported(local.importedMiddle, len(local.nodes)) {
 		return nil, nodeChainExecutionError
 	}
@@ -155,6 +167,11 @@ func newNodeChainExecutionPolicyFamilyMultiple(sourceJSON string, connect *nodeC
 	packetIndex := 0
 	for index, node := range local.nodes {
 		if node == nil {
+			if public != nil {
+				// matches validated every suffix source and the independent final
+				// transport against the registered descriptor.
+				continue
+			}
 			if multiple == nil && (index != len(local.nodes)-2 || source.Server.Schema != 2 && source.Server.Schema != 3 && source.Server.Schema != 4 && source.Server.Schema != 5) {
 				return nil, nodeChainExecutionError
 			}
@@ -245,14 +262,21 @@ func newNodeChainExecutionPolicyFamilyMultiple(sourceJSON string, connect *nodeC
 	if packetIndex != len(source.Request.LocalPacketPublicKeys) {
 		return nil, nodeChainExecutionError
 	}
-	last := local.nodes[len(local.nodes)-1]
-	var finalGraph map[string]any
-	if exactJSON([]byte(last.config), &finalGraph, 4<<20) != nil {
-		return nil, nodeChainExecutionError
+	if public == nil {
+		last := local.nodes[len(local.nodes)-1]
+		var finalGraph map[string]any
+		if exactJSON([]byte(last.config), &finalGraph, 4<<20) != nil {
+			return nil, nodeChainExecutionError
+		}
+		dnsRaw, err := json.Marshal(finalGraph["dns"])
+		if err != nil || externalDigest(dnsRaw) != source.Server.DNSPolicySHA256 {
+			return nil, nodeChainExecutionError
+		}
 	}
-	dnsRaw, err := json.Marshal(finalGraph["dns"])
-	if err != nil || externalDigest(dnsRaw) != source.Server.DNSPolicySHA256 {
-		return nil, nodeChainExecutionError
+	if public != nil {
+		if err := multihoprelay.CheckNodeChainLeaseResponseCapacity(source.Server, source.Request, host.String()); err != nil {
+			return nil, fmt.Errorf("%w: %w", errNodeChainControlCapacity, err)
+		}
 	}
 	if multiple != nil && len(source.Server.Members) > multihoprelay.NodeChainMaximumMembers {
 		// The nonce-bound POST is the largest request the original lease must
@@ -278,8 +302,11 @@ func newNodeChainExecutionPolicyFamilyMultiple(sourceJSON string, connect *nodeC
 	if err != nil || len(raw) > NodeChainInputLimit {
 		return nil, nodeChainExecutionError
 	}
-	p := &NodeChainExecutionPolicy{source: source, sourceJSON: string(raw), local: local, connect: connect, socks: socks, openvpn: openvpn, multiple: multiple}
+	p := &NodeChainExecutionPolicy{source: source, sourceJSON: string(raw), local: local, connect: connect, socks: socks, openvpn: openvpn, multiple: multiple, externalFinal: public}
 	domain := "routervpn-node-chain-execution-source-v1"
+	if public != nil {
+		domain = "routervpn-node-chain-external-final-execution-source-v1"
+	}
 	if multiple != nil {
 		domain = "routervpn-node-chain-multiple-imported-execution-source-v1"
 	}
@@ -339,7 +366,7 @@ func (p *NodeChainExecutionPolicy) compile() error {
 		}
 		outbounds = append(outbounds, out)
 		p.serverProofs[position].Tag = tag
-		if p.openvpn != nil && position == len(p.localProofs)-2 {
+		if p.externalFinal != nil && position == len(p.localProofs)-1 || p.openvpn != nil && position == len(p.localProofs)-2 {
 			p.serverProofs[position].SourceSHA256 = p.source.Server.Members[index].SourceSHA256
 		}
 	}
@@ -363,7 +390,7 @@ func (p *NodeChainExecutionPolicy) compile() error {
 			selected = row
 		}
 	}
-	if selected == nil || selected["detour"] != SelectorTag {
+	if selected == nil || selected["detour"] != p.externalFinal.resolverTag() {
 		return nodeChainExecutionError
 	}
 	raw, err := json.Marshal(graph)
@@ -443,11 +470,15 @@ func (p *NodeChainExecutionPolicy) captureAndRequestCurrent() bool {
 }
 
 func (p *NodeChainExecutionPolicy) validateCapture() error {
-	if !p.captureAndRequestCurrent() || p.local == nil || p.local.importedNodes != nil && p.multiple == nil || (p.connect == nil && p.socks == nil && p.openvpn == nil && p.multiple == nil && !p.originalSeal.localPacketCurrent(p) && p.local.validateCapture() != nil) || p.local.openVPNMiddle != nil && p.openvpn == nil ||
-		!reflect.DeepEqual(p.localProofs, p.local.ProofInventory()) {
+	if !p.captureAndRequestCurrent() || p.local == nil || p.local.importedNodes != nil && p.multiple == nil && p.externalFinal == nil || (p.connect == nil && p.socks == nil && p.openvpn == nil && p.multiple == nil && p.externalFinal == nil && !p.originalSeal.localPacketCurrent(p) && p.local.validateCapture() != nil) || p.local.openVPNMiddle != nil && p.openvpn == nil ||
+		!sameTypedSlice(p.localProofs, p.local.proofs) {
 		return nodeChainExecutionError
 	}
-	if p.multiple != nil {
+	if p.externalFinal != nil {
+		if p.source.Schema != 8 || p.externalFinal.local != p.local || p.externalFinal.preparation.validateCapture() != nil || !p.externalFinal.matchesOriginalDescriptor(p.source.Server) {
+			return nodeChainExecutionError
+		}
+	} else if p.multiple != nil {
 		if p.connect != nil || p.socks != nil || p.openvpn != nil || p.source.Schema != 6 || p.source.Server.Schema != 6 || p.multiple.preparation == nil || p.multiple.preparation.multiple != p.multiple || p.multiple.preparation.local != p.local || p.multiple.preparation.validateCapture() != nil {
 			return nodeChainExecutionError
 		}
@@ -540,7 +571,7 @@ type nodeChainExecutionLaunch struct {
 }
 
 func (p *NodeChainExecutionPolicy) LaunchInput() (string, error) {
-	if p.validateCapture() != nil || p.connect != nil || p.socks != nil || p.openvpn != nil || p.multiple != nil {
+	if p.validateCapture() != nil || p.connect != nil || p.socks != nil || p.openvpn != nil || p.multiple != nil || p.externalFinal != nil {
 		return "", nodeChainExecutionError
 	}
 	raw, err := json.Marshal(nodeChainExecutionLaunch{"native-node-chain-execution", p.source, p.sourceSHA, p.configSHA})

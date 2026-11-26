@@ -636,6 +636,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         private final Network physical;
         private volatile boolean started;
         private org.json.JSONArray localThroughputRoles;
+        private String measuredExecution="";
         private HopMeasurementOwner(LayeredVpnService service,String request){this(service,request,"","",null);}
         private HopMeasurementOwner(LayeredVpnService service,String request,String exitID,String nativeSession,AndroidHomeStateStore.Snapshot home){
             this.service=service;probe=service.hopMeasurement;server=service.commandServer;generation=service.lifecycle.get();network=service.executionNetwork;this.request=request;
@@ -671,8 +672,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 requireCurrent();
                 if(service.mtuSession!=null&&service.mtuSession.running())throw new IllegalStateException("MTU Retest has not drained.");
                 if(exitID.isEmpty()){
-                    if(chain!=null&&chain.execution==null&&chain.candidatePrefix==null&&chain.capture.plan!=null)
+                    if(chain!=null&&(chain.execution==null||chain.capture.externalFinal)&&chain.candidatePrefix==null&&chain.capture.plan!=null) {
                         localThroughputRoles=captureLocalRoles(chain);
+                        if(chain.execution!=null) {
+                            measuredExecution=chain.provedExecution();
+                            if(!"local".equals(measuredExecution)&&!"server".equals(measuredExecution))throw new IllegalStateException("The selected public-exit measurement has no proved execution.");
+                        }
+                    }
                     probe.start(request,8388608);
                 }else{
                     probe.startLatency(request,exitID);
@@ -712,6 +718,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             JSONObject status=new JSONObject(raw);
             org.json.JSONArray results=status.getJSONArray("results");
             int count=localThroughputRoles.length();
+            if(!measuredExecution.isEmpty()&&!measuredExecution.equals(chain.provedExecution()))
+                throw new IllegalStateException("The selected public-exit measurement changed execution.");
             if(!request.equals(status.get("request_id"))||results.length()>count||
                     status.getBoolean("complete")&&status.optString("failure").isEmpty()&&results.length()!=count)
                 throw new IllegalStateException("The throughput result lost its original request or Local path.");
@@ -719,7 +727,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 JSONObject row=results.getJSONObject(i);
                 String kind=localThroughputRoles.getString(i),role=i==0?"entry":i==count-1?"exit":"intermediate";
                 boolean imported="public-path".equals(kind);
-                String label="Cumulative path through "+(imported?"custom node ":"node ")+(i+1)+" of "+count+(imported?" → Cloudflare edge":"");
+                String label="Cumulative "+(measuredExecution.isEmpty()?"":measuredExecution+" ")+"path through "+(imported?"custom node ":"node ")+(i+1)+" of "+count+(imported?" → Cloudflare edge":"");
                 if(!chain.source.members.get(i).profileId.equals(row.get("node_id"))||!kind.equals(row.get("kind"))||
                         !role.equals(row.get("role"))||!label.equals(row.get("label"))||
                         row.has("benchmark")||row.has("response")||!(row.get("ready") instanceof Boolean))
@@ -781,11 +789,12 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         final AndroidNodeChainExecutionCapture execution;
         final int position,count,extendedCount,pairedPrefixNodes;final String originalRoles;
         void requireOriginal(AndroidOrderedExecutionLatencyCapture captured)throws Exception {
-            if((captured.originalSource!=null)!=chain.capture.multipleImported)
+            if(captured.externalFinal!=chain.capture.externalFinal || (captured.originalSource!=null)!=(chain.capture.multipleImported||chain.capture.externalFinal))
                 throw new IllegalStateException("The selected benchmark changed its original source family.");
-            if(chain.capture.multipleImported){
+            if(chain.capture.multipleImported||chain.capture.externalFinal){
                 if(!source.equals(captured.originalSource))throw new IllegalStateException("The selected benchmark identifies a different ordered source.");
-                chain.capture.plan.validateMultipleImportedLatencyCapture(captured.raw);
+                if(captured.externalFinal)chain.capture.plan.validateExternalFinalLatencyCapture(captured.raw);
+                else chain.capture.plan.validateMultipleImportedLatencyCapture(captured.raw);
             }
         }
         private OrderedLatencyTarget(AndroidNodeChainSession chain,AndroidHomeStateStore.Snapshot home,int position,int extendedCount,int packets,String roles)throws Exception {
@@ -909,7 +918,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             String status=status(),saved=saved();
             AndroidOrderedLatencyStore.Record record=executionCapture==null
                     ?AndroidOrderedLatencyStore.completed(status,saved,request,target.source,target.config,target.position,target.node,target.kind,"",false,target.extendedCount,target.extendedCount>8 && target.chain.execution==null && !target.chain.capture.multipleImported && !target.chain.source.members.get(target.count-1).imported,target.pairedPrefixNodes,target.originalRoles)
-                    :AndroidOrderedLatencyStore.completed(status,saved,request,executionCapture.source,executionCapture.config,target.position,target.node,target.kind,executionCapture.selected,executionCapture.originalSource!=null,target.extendedCount,false,0,executionCapture.privateStreamRoles);
+                    :AndroidOrderedLatencyStore.completed(status,saved,request,executionCapture.source,executionCapture.config,target.position,target.node,target.kind,executionCapture.selected,executionCapture.originalSource!=null,target.extendedCount,false,0,executionCapture.privateStreamRoles,executionCapture.externalFinal);
             if(target.execution!=null&&executionCapture==null)throw new IllegalStateException("The actual execution capture is missing.");
             if(executionCapture!=null)executionCapture.requireRecord(record);
             if(!record.role.equals(target.role)||record.count!=target.count)throw new IllegalStateException("The receipt names another ordered inventory.");

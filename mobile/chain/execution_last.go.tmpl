@@ -58,6 +58,8 @@ func (e *RouterVPNNodeChainExecutionEngine) AdoptLastContext(ctx context.Context
 		policy, err = mobilemultihop.NewNodeChainSOCKSExecutionPolicy(e.prep, projection.Source())
 	} else if e.prep.RequiresCONNECTExecutionObserver() {
 		policy, err = mobilemultihop.NewNodeChainCONNECTExecutionPolicy(e.prep, projection.Source())
+	} else if e.prep.RequiresExternalFinalExecutionObserver() {
+		policy, err = mobilemultihop.NewNodeChainExternalFinalExecutionPolicy(e.prep, projection.Source())
 	} else if e.prep.RequiresMultipleImportedExecutionObserver() {
 		policy, err = mobilemultihop.NewNodeChainMultipleImportedExecutionPolicy(e.prep, projection.Source())
 	} else if e.prep.RequiresOpenVPNExecutionObserver() {

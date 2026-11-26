@@ -57,7 +57,9 @@ func compileServerNodeChainPlan(input io.Reader, output io.Writer) error {
 		return bad
 	}
 	var policy *mobilemultihop.NodeChainServerPolicy
-	if privateNodeChainMultipleImportedInput(raw) {
+	if privateNodeChainExternalFinalInput(raw) {
+		policy, err = mobilemultihop.NewNodeChainExternalFinalServerPlan(string(raw))
+	} else if privateNodeChainMultipleImportedInput(raw) {
 		policy, err = mobilemultihop.NewNodeChainMultipleImportedServerPlan(string(raw))
 	} else if privateNodeChainOpenVPNInput(raw) {
 		policy, err = mobilemultihop.NewNodeChainOpenVPNServerPlan(string(raw))
@@ -81,6 +83,9 @@ func parsePrivateNodeChainServerSource(raw []byte) (*mobilemultihop.NodeChainSer
 	connect, err := privateNodeChainCONNECTInput(raw)
 	if err != nil {
 		return nil, err
+	}
+	if privateNodeChainExternalFinalInput(raw) {
+		return mobilemultihop.NewNodeChainExternalFinalServerPolicy(string(raw))
 	}
 	if privateNodeChainMultipleImportedInput(raw) {
 		return mobilemultihop.NewNodeChainMultipleImportedServerPolicy(string(raw))
@@ -150,4 +155,11 @@ func privateNodeChainMultipleImportedInput(raw []byte) bool {
 		Schema json.RawMessage `json:"schema"`
 	}
 	return len(raw) > 0 && len(raw) <= mobilemultihop.NodeChainInputLimit && json.Unmarshal(raw, &header) == nil && string(header.Schema) == "6"
+}
+
+func privateNodeChainExternalFinalInput(raw []byte) bool {
+	var header struct {
+		Schema json.RawMessage `json:"schema"`
+	}
+	return len(raw) > 0 && len(raw) <= mobilemultihop.NodeChainInputLimit && json.Unmarshal(raw, &header) == nil && string(header.Schema) == "8"
 }

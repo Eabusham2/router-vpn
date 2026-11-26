@@ -71,7 +71,15 @@ func (r *NodeChainExecutionRuntime) NewHopMeasurementContext(ctx context.Context
 	}
 	var service *hopmeasure.Service
 	local := r.projection.policy.local
-	if r.projection.policy.multiple != nil && local.selectedPrivateStreamPosition() > 0 {
+	if r.projection.policy.externalFinal != nil {
+		if trial.execution == "local" {
+			service, err = hopmeasure.NewOrderedExternalFinalContext(ctx, e, hops)
+		} else if trial.execution == "server" {
+			service, err = hopmeasure.NewOrderedExternalFinalServerContext(ctx, e, hops)
+		} else {
+			return nil, nodeChainExecutionError
+		}
+	} else if r.projection.policy.multiple != nil && local.selectedPrivateStreamPosition() > 0 {
 		mask := make([]bool, len(hops))
 		var private []int
 		for i := range mask {
@@ -145,6 +153,9 @@ func (e *nodeChainExecutionMeasurementEngine) current(ctx context.Context) error
 	if err != nil || active != e.runtime || active.projection != e.projection {
 		return errors.Join(err, hopmeasure.ErrStale)
 	}
+	if observer, ok := active.engine.(nodeChainObservedOpenSelection); ok && active.projection.policy.externalFinal != nil {
+		return active.healthyContext(ctx, e.trial, e.identity, observer)
+	}
 	if err := active.HealthyContext(ctx); err != nil {
 		return err
 	}
@@ -178,14 +189,17 @@ func (e *nodeChainExecutionMeasurementEngine) VerifyMeasurement(ctx context.Cont
 	}
 	// Server measurement observes a fresh nonce-bound receipt before work and
 	// before result publication; cached client health alone is not admission.
-	return e.trial.Verify(ctx)
+	// e.current just observed this same selected trial, its epoch and its open gate.
+	return e.trial.verifyCurrent(ctx)
 }
 
 func (e *nodeChainExecutionMeasurementEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
 	if err := e.current(ctx); err != nil {
 		return nil, err
 	}
-	proofs, err := e.runtime.projection.ProofInventory(e.trial.execution)
+	// current just validated this exact projection. Dial re-observes its
+	// original owner and epoch when the actual socket returns.
+	proofs, err := e.projection.policy.proofInventoryValidated(e.trial.execution)
 	if err != nil {
 		return nil, err
 	}

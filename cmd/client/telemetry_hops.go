@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
 )
 
 type routedSpeedRequest struct {
@@ -372,8 +373,17 @@ func validateActiveMultihopSpeedGraph(st state, graph activeMultihopGraph, graph
 	}
 	controlID := graph.ExitID
 	if graph.ControlID != "" {
+		selected := graph.selectedPublic
+		if selected != nil {
+			e := selected.execution
+			if e == nil || selected.projection == nil || !e.preparation.RequiresDesktopExternalFinalExecutionObserver() || e.original == nil || e.original.selection.Native == nil ||
+				e.original.selection.Native.source != graph.SourceSHA || e.original.selection.Control.ID != graph.ControlID || string(selected.winner.Execution) != graph.Execution ||
+				e.original.selection.Exit.ID != graph.ExitID || e.original.selection.EntryMode != graph.EntryMode {
+				return errors.New("public speed measurement changed its original selected execution")
+			}
+		}
 		if graph.ControlID != graph.EntryID || graph.ControlID == graph.ExitID || graph.ChainNodes < 3 ||
-			graph.Execution != "local" || graph.EntryMode != "wg" || graph.ExitMode != "shadowsocks" ||
+			selected == nil && graph.Execution != "local" || !mobilemultihop.NodeChainPrefixMode(graph.EntryMode) || graph.ExitMode != "shadowsocks" ||
 			!desktopOrderedDigest.MatchString(graph.SourceSHA) || len(graph.mapNodeIDs()) != graph.ChainNodes {
 			return errors.New("ordered external exit lost its distinct original paired control")
 		}

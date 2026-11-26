@@ -19,6 +19,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
         let source: String, config: String, requested: String
         let ids: [String]
         let privateStreamPositions: Set<Int>
+        var externalFinal = false
     }
     let selectedMeasurementSource: SelectedMeasurementSource?
     let hopMeasurementRows: Int
@@ -152,6 +153,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
         case "routervpn-node-chain-socks-execution-preparation-input": (preparationSchema, sealedField) = (3, nil)
         case "routervpn-node-chain-connect-execution-preparation-input": (preparationSchema, sealedField) = (4, nil)
         case "routervpn-node-chain-openvpn-execution-preparation-input": (preparationSchema, sealedField) = (5, "openvpn_local_launch")
+        case "routervpn-node-chain-external-final-execution-preparation-input": (preparationSchema, sealedField) = (8, "external_final_local_launch")
         case "routervpn-node-chain-multiple-imported-execution-preparation-input": (preparationSchema, sealedField) = (6, "multiple_imported_local_launch")
         default: return false
         }
@@ -163,10 +165,10 @@ struct IOSSessionIdentity: Equatable, Sendable {
               Set(local.keys) == Set(["schema", "execution", "nodes", "identity_sources"]),
               local["execution"] as? String == "local",
               let nodes = local["nodes"] as? [String], let identities = local["identity_sources"] as? [String],
-              (2...8).contains(nodes.count) || preparationSchema == 6 && (9...Self.physicalTraversalDepth).contains(nodes.count), identities.count == nodes.count,
+              (2...8).contains(nodes.count) || (preparationSchema == 6 || preparationSchema == 8) && (9...Self.physicalTraversalDepth).contains(nodes.count), identities.count == nodes.count,
               let schema = local["schema"] as? Int,
               preparationSchema == 1 ? (schema == 1 || schema == 2 && nodes.count >= 3) : (schema == preparationSchema && nodes.count >= 3),
-              schema != 6 || rawProfile == "shadowsocks" else { return false }
+              (schema != 6 && schema != 8) || rawProfile == "shadowsocks" else { return false }
         var selectedPrivateStreams = Set<Int>()
         if let sealedField {
             // Bind both representations of every private member and independent
@@ -184,6 +186,22 @@ struct IOSSessionIdentity: Equatable, Sendable {
                       guard let value = sealed[key] as? String else { return false }
                       return value.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil
                   }) else { return false }
+            if schema == 8 {
+                guard Self.extendedLocalMembers(sealed, nodes: nodes), let requested = source["execution"] as? String else { return false }
+                var ids: [String] = []
+                for (position, input) in nodes.enumerated() {
+                    guard let node = try? JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any] else { return false }
+                    let field = position == 0 ? "profile_json" : "capture"
+                    guard let raw = node[field] as? String, let original = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] else { return false }
+                    let profile = position == 0 ? original : original["profile"] as? [String: Any]
+                    guard let id = profile?["id"] as? String else { return false }
+                    ids.append(id)
+                }
+                guard Set(ids).count == ids.count else { return false }
+                selectedSource = SelectedMeasurementSource(source: digest, config: config, requested: requested, ids: ids, privateStreamPositions: [], externalFinal: true)
+                capturedRows = nodes.count
+                return true
+            }
             if schema == 6 {
                 let privateStreams = nodes.indices.dropFirst().dropLast().filter { position in
                     guard !identities[position].isEmpty,

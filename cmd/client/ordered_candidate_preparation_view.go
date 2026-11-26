@@ -116,12 +116,16 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 		}
 	}
 	catalogMetric := desktopCandidateCatalogMetric(launch, candidateServerRequested(ctx))
+	if draft != nil && draft.Execution == "auto" && len(view.responseOwners) == 0 && catalogMetric(position) == hopmeasure.CandidatePublicResponseMeasurement {
+		view.responseOwners = []string{"local"}
+		view.responseNodes = originalCandidateResponseNodes(selection)
+	}
 	for i, member := range selection.Nodes {
 		metric := catalogMetric(i)
 		if scope == orderedCandidateSavedPrefixScope && (i == len(selection.Nodes)-1 || metric == "" || metric == hopmeasure.CandidateTCPMeasurement && !mobilemultihop.DesktopNodePhysicalGraphSupported(member.Mode, member.Profile.StartLayer)) {
 			break
 		}
-		if metric != "" && (scope != orderedCandidateSelectedDraftScope || i < len(selection.Nodes)-1 && desktopCandidatePositionForIntent(launch, i, candidateServerRequested(ctx))) {
+		if metric != "" && (scope != orderedCandidateSelectedDraftScope || i < len(selection.Nodes)-1) {
 			view.prefixes = append(view.prefixes, orderedPrefixChoice(i, member, metric))
 		}
 	}
@@ -157,7 +161,7 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 			_, choice.Proposal, err = orderedDraftProposal(draft.Execution, selection.Nodes, position, profile, proposalProfiles)
 		}
 		if err != nil {
-			if len(view.responseNodes) != 0 && len(choice.DraftProposal) == 0 {
+			if len(view.responseNodes) != 0 && len(choice.DraftProposal) == 0 && candidateViewMetric(view.prefixes, position) == hopmeasure.CandidatePrivateResponseMeasurement {
 				continue
 			}
 			choice.SaveReason = err.Error()

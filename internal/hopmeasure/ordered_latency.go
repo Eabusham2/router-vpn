@@ -322,18 +322,25 @@ func (o *OrderedLatencyService) CommittedJSON(hopID string) string {
 }
 func (o *OrderedLatencyService) run(ctx context.Context, request string, position int, hop Hop) {
 	s := o.service
-	verify := func() error {
+	verifyBoundary := func() error {
 		if boundary, ok := s.engine.(MeasurementBoundary); ok {
 			if err := boundary.VerifyMeasurement(ctx); err != nil {
 				return err
 			}
+		}
+		return nil
+	}
+	verify := func() error {
+		if err := verifyBoundary(); err != nil {
+			return err
 		}
 		return s.valid(ctx)
 	}
 	values := make([]float64, 0, LatencyBenchmarkSamples)
 	failure := verify()
 	for failure == nil && len(values) < LatencyBenchmarkSamples {
-		if failure = verify(); failure != nil {
+		// phase observes the original identity immediately after this boundary.
+		if failure = verifyBoundary(); failure != nil {
 			break
 		}
 		if failure = s.phase(ctx, request, fmt.Sprintf("node %d: response %d/%d", position+1, len(values)+1, LatencyBenchmarkSamples)); failure != nil {

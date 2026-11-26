@@ -29,7 +29,7 @@ import CoreFoundation
     static func startupLast(input: String, finalProfile: RouterProfile) throws -> [String: NSObject] {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let profile = String(decoding: try encoder.encode(finalProfile), as: UTF8.self)
-        let source = try IOSNodeChainExecutionSession.Source.reopen(input, finalProfileJSON: profile)
+        let source = try IOSNodeChainExecutionSession.Source.reopen(input, controlProfileJSON: profile)
         guard let record = try IOSNodeChainExecutionLastStore.stored(for: source) else { throw IOSNodeChainExecutionSession.issue() }
         try source.validateLast(record)
         return [IOSNodeChainExecutionSession.lastKey: record as NSString]
@@ -43,8 +43,8 @@ import CoreFoundation
         let data = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         guard data.count <= 1024 else { throw IOSNodeChainExecutionSession.issue() }; return data
     }
-    private static func object(_ data: Data) throws -> [String: Any] {
-        guard !data.isEmpty, data.count <= 20 * 1024,
+    private static func object(_ data: Data, limit: Int) throws -> [String: Any] {
+        guard !data.isEmpty, data.count <= limit,
               let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) == data else { throw IOSNodeChainExecutionSession.issue() }
         return value
@@ -56,7 +56,7 @@ import CoreFoundation
         let data = try await send(encode(["operation": "ordered-execution-owner", "request_id": id,
             "session_id": "", "owner_id": "", "token": ""]))
         try current()
-        var value = try object(data)
+        var value = try object(data, limit: IOSOrderedLastBounds.envelope(source.lastRecordLimit))
         guard Set(value.keys) == Set(["schema", "kind", "request_id", "session_id", "source_sha256", "preparation_config_sha256", "last", "process_id", "registry_generation"]),
               value["kind"] as? String == "routervpn-ordered-execution-owner",
               let process = value.removeValue(forKey: "process_id") as? String, UUID(uuidString: process)?.uuidString == process,

@@ -651,8 +651,9 @@ function TestOrderedCandidateLocalResponse($S,$View){
  $fields=if($View -is [Collections.IDictionary]){$View.Keys}else{$View.PSObject.Properties.Name}
  if('response_executions' -cin $fields){
   $owners=$View.response_executions;$requested=ExternalComparisonValue $View 'requested_execution'
+  $sourceOK=if('public_response_source_nodes' -cin $fields){TestOrderedCandidatePublicInventory $S $View}else{TestOrderedCandidateResponseSource $S $View}
   if($owners -isnot [array] -or $owners.Count -notin @(1,2) -or @($owners | Where-Object {$_ -isnot [string]}).Count -ne 0 -or
-     -not(TestOrderedCandidateResponseSource $S $View)){return $false}
+     -not $sourceOK){return $false}
   if($requested -ceq 'server'){if($owners.Count -ne 1 -or $owners[0] -cne 'server'){return $false}}
   elseif($requested -cne 'auto' -or $owners[0] -cne 'local' -or ($owners.Count -eq 2 -and $owners[1] -cne 'server')){return $false}
   $draft=ExternalComparisonValue $S 'Draft';if($null -ne $draft -and $draft.execution -cne $requested){return $false}
@@ -677,18 +678,18 @@ function TestOrderedCandidateLocalResponse($S,$View){
     $nodes[1].mode -ceq 'shadowsocks' -and $nodes[2].mode -ceq 'shadowsocks')) -and
     (($null -eq $epoch -and -not $winner) -or ($winner -ceq 'local' -and $hasEpoch))
 }
-function TestOrderedCandidatePublicSource($S,$View){
+function TestOrderedCandidatePublicInventory($S,$View){
  $rows=ExternalComparisonValue $View 'public_response_source_nodes'
  $external=ExternalComparisonValue $View 'external_final'
  if($rows -isnot [array] -or $rows.Count -lt 3 -or $rows.Count -gt 96 -or $S.Position -lt 1 -or $S.Position -ge $rows.Count-1 -or
     (OrderedCandidateNumber $View 'prefix_position') -ne $S.Position -or $external -isnot [bool] -or -not $external -or
-    (ExternalComparisonValue $View 'requested_execution') -cne 'local' -or (OrderedCandidateScope $S) -ceq 'draft-complete-selected'){return $false}
+    (ExternalComparisonValue $View 'requested_execution') -cnotin @('local','server','auto')){return $false}
  $fields=if($View -is [Collections.IDictionary]){$View.Keys}else{$View.PSObject.Properties.Name}
- foreach($field in @('selected_execution','selection_epoch','required_selected_execution','response_executions','response_source_nodes')){if($field -cin $fields){return $false}}
+ if('response_source_nodes' -cin $fields){return $false}
  $draft=ExternalComparisonValue $S 'Draft'
  if($null -ne $draft){
   $final=ExternalComparisonValue $draft 'external_final'
-  if($draft.execution -cne 'local' -or $final -isnot [bool] -or -not $final -or $draft.nodes -isnot [array] -or $draft.nodes.Count -ne $rows.Count){return $false}
+  if($draft.execution -cne (ExternalComparisonValue $View 'requested_execution') -or $final -isnot [bool] -or -not $final -or $draft.nodes -isnot [array] -or $draft.nodes.Count -ne $rows.Count){return $false}
  }
  $ids=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
  for($i=0;$i -lt $rows.Count;$i++){
@@ -703,6 +704,16 @@ function TestOrderedCandidatePublicSource($S,$View){
   }
  }
  return $true
+}
+function TestOrderedCandidatePublicSource($S,$View){
+ if(-not(TestOrderedCandidatePublicInventory $S $View)){return $false}
+ $fields=if($View -is [Collections.IDictionary]){$View.Keys}else{$View.PSObject.Properties.Name}
+ if((ExternalComparisonValue $View 'requested_execution') -ceq 'local'){
+  if((ExternalComparisonValue $View 'scope') -ceq 'draft-complete-selected'){return $false}
+  foreach($field in @('selected_execution','selection_epoch','required_selected_execution','response_executions')){if($field -cin $fields){return $false}}
+  return $true
+ }
+ return 'response_executions' -cin $fields -and (TestOrderedCandidateLocalResponse $S $View)
 }
 function TestOrderedCandidatePublicPath($S,$View,$Choice,$Path){
  if($null -eq $Choice -or -not (TestOrderedCandidatePublicSource $S $View) -or $Choice.kind -cne 'external' -or $Choice.id -isnot [string] -or
@@ -825,7 +836,7 @@ function OrderedCandidateScore($Row,[long]$Now,[string]$Metric='routed-tcp-conne
     (ExternalComparisonValue $r 'node_id') -cne (ExternalComparisonValue $Row 'candidate_id') -or (ExternalComparisonValue $b 'measurement') -cne $Metric -or
     (OrderedCandidateNumber $b 'attempts') -ne 50 -or (OrderedCandidateNumber $b 'failed') -ne 0 -or (OrderedCandidateNumber $d 'samples') -ne 50){return $null}
  $score=OrderedCandidateNumber $b 'trimmed_mean_ms';$min=OrderedCandidateNumber $d 'min_ms';$max=OrderedCandidateNumber $d 'max_ms'
- foreach($number in @($score,$min,$max)){if([double]::IsNaN($number) -or $number -le 0){return $null}}
+ foreach($number in @($score,$min,$max)){if([double]::IsNaN($number) -or $number -le 0 -or $number -gt 60000){return $null}}
  if($score -lt $min -or $score -gt $max){return $null};return $score
 }
 function OrderedCandidateBase($S){
@@ -847,7 +858,7 @@ function TestOrderedCandidateDraftExecution($S,$Value,[bool]$Catalog){
  if($Catalog){
   if($null-ne$Winner-or$null-ne$Epoch){return $false}
   $Node=@($S.Draft.nodes)[$S.Position];$Found=@($Value.prefixes|Where-Object{(OrderedCandidateNumber $_ 'position')-eq$S.Position})
-  return $Found.Count-eq1-and[string]$Found[0].id-ceq[string]$Node.id-and[string]$Found[0].mode-ceq[string]$Node.mode-and([string]$Node.mode-cin@('wg','awg2-fast','awg2-strong')-or((TestOrderedCandidateLocalResponse $S $Value)-and(OrderedCandidateViewMetric $S $Value)-ceq'routed-candidate-response'))
+  return $Found.Count-eq1-and[string]$Found[0].id-ceq[string]$Node.id-and[string]$Found[0].mode-ceq[string]$Node.mode-and([string]$Node.mode-cin@('wg','awg2-fast','awg2-strong')-or((TestOrderedCandidateLocalResponse $S $Value)-and(OrderedCandidateViewMetric $S $Value)-cin@('routed-candidate-response','routed-public-candidate-response')))
  }
  $Bound=[string](ExternalComparisonValue $S 'SelectedWinner')
  if($null -ne (ExternalComparisonValue $Value 'response_executions') -and -not(TestOrderedCandidateLocalResponse $S $Value)){return $false}
@@ -879,7 +890,7 @@ function OrderedCandidateBeforeStart($Value){
  return $Cancelled-is[bool]-and$Cancelled-and$Started-is[bool]-and-not$Started
 }
 function OrderedCandidateCancelBody($S){
- $Body=@{request_id=$S.RequestID};if([bool](ExternalComparisonValue $S 'SavedPath') -or $null -ne (ExternalComparisonValue (ExternalComparisonValue $S 'View') 'response_source_nodes')){$Body.view_token=[string]$S.View.view_token};return (OrderedCandidateScopedBody $S $Body)
+ $Body=@{request_id=$S.RequestID};if([bool](ExternalComparisonValue $S 'SavedPath') -or $null -ne (ExternalComparisonValue (ExternalComparisonValue $S 'View') 'response_source_nodes') -or $null -ne (ExternalComparisonValue (ExternalComparisonValue $S 'View') 'response_executions')){$Body.view_token=[string]$S.View.view_token};return (OrderedCandidateScopedBody $S $Body)
 }
 function OrderedCandidateReady($S){
  if($S.CancelWanted-or$S.CloseWanted-or$null-eq$S.Receipt-or-not[bool](ExternalComparisonValue $S.Receipt 'accepted')){return $false}
@@ -925,15 +936,41 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
  $reported=ExternalComparisonValue $Value 'measurement'
  $publicJob=$Phase -cne 'catalog' -and (ExternalComparisonValue $prior 'measurement') -ceq $publicMetric
  if($reported -ceq $publicMetric -or $publicJob){
-  foreach($field in @('selected_execution','selection_epoch','required_selected_execution','response_executions','response_source_nodes')){
-   if($field -cin $fields){throw 'A public candidate response cannot acquire a private or Server execution owner.'}
+  $selectedPublic=$null -ne $owners -or $null -ne $originalOwners
+  if($selectedPublic){
+   if(-not(TestOrderedCandidatePublicSource $S $Value)){throw 'The selected public candidate lost its original source or execution owner.'}
+   if($publicJob -and ($Value.view_token -cne $prior.view_token -or $Value.request_id -cne $S.RequestID -or $reported -cne $publicMetric)){throw 'The selected public response belongs to another request.'}
+   if((ExternalComparisonValue $Value 'selected_execution') -cin @('local','server')){
+    $limit=if($Value.selected_execution -ceq 'server'){2500.0}else{60000.0}
+    foreach($row in @(ExternalComparisonValue $Value 'results')){foreach($result in @(ExternalComparisonValue $row 'results')){
+     $benchmark=ExternalComparisonValue $result 'benchmark';if($null -eq $benchmark){continue}
+     $distribution=ExternalComparisonValue $benchmark 'distribution'
+     $maximum=OrderedCandidateNumber $distribution 'max_ms';$jitter=OrderedCandidateNumber $distribution 'jitter_ms'
+     if([double]::IsNaN($maximum) -or $maximum -le 0 -or $maximum -gt $limit -or [double]::IsNaN($jitter) -or $jitter -lt 0 -or $jitter -gt $limit){throw 'The public response timings exceed their selected execution limit.'}
+    }}
+   }
+  }else{
+   foreach($field in @('selected_execution','selection_epoch','required_selected_execution','response_executions','response_source_nodes')){
+    if($field -cin $fields){throw 'A Local public candidate response cannot acquire another execution owner.'}
+   }
+   if('requested_execution' -cin $fields -and (ExternalComparisonValue $Value 'requested_execution') -cne 'local'){throw 'The public candidate response changed its Local execution.'}
   }
-  if('requested_execution' -cin $fields -and (ExternalComparisonValue $Value 'requested_execution') -cne 'local'){throw 'The public candidate response changed its Local execution.'}
   if('external_final' -cin $fields -and ($Value.external_final -isnot [bool] -or -not $Value.external_final)){throw 'The public candidate response changed its original exit role.'}
   if($publicJob -and 'public_response_source_nodes' -cin $fields){
    if(-not (TestOrderedCandidatePublicSource $S $Value) -or $Value.public_response_source_nodes.Count -ne $prior.public_response_source_nodes.Count){throw 'The public candidate response changed the original path.'}
    for($i=0;$i -lt $prior.public_response_source_nodes.Count;$i++){
-    if($Value.public_response_source_nodes[$i].id -cne $prior.public_response_source_nodes[$i].id){throw 'The public candidate response changed an original member.'}
+    foreach($key in @('id','mode','kind')){if($Value.public_response_source_nodes[$i].$key -cne $prior.public_response_source_nodes[$i].$key){throw 'The public candidate response changed an original member.'}}
+   }
+  }
+  if($publicJob -and $selectedPublic -and $null -eq $S.Draft){
+   if($Phase -ceq 'cancel'){
+    $started=ExternalComparisonValue $Value 'started';$beforeStart=ExternalComparisonValue $Value 'admission_cancelled'
+    $saved=ExternalComparisonValue $Value 'saved_profile_id'
+    if($started -isnot [bool] -or $beforeStart -isnot [bool] -or $started -eq $beforeStart -or
+       ($beforeStart -and (ExternalComparisonValue $S 'SavedAdmitted')) -or $Value.results -isnot [array] -or $Value.results.Count -ne 0 -or
+       ($null -ne $saved -and ($saved -isnot [string] -or $saved -cne ''))){throw 'The original public candidate cancellation is still pending.'}
+    foreach($field in @('ok','cancelled','drained')){$flag=ExternalComparisonValue $Value $field;if($flag -isnot [bool] -or -not $flag){throw 'Public candidate cleanup was not confirmed.'}}
+    foreach($field in @('running','accepted','reviewing','cleanup_pending','active_path_changed')){$flag=ExternalComparisonValue $Value $field;if($flag -isnot [bool] -or $flag){throw 'Public candidate work or review remains active.'}}
    }
   }
  }elseif('public_response_source_nodes' -cin $fields){throw 'The public exit source has a different candidate measurement.'}
@@ -941,7 +978,11 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
  if($Phase -cne 'catalog' -and ($null -ne $owners -or $null -ne $originalOwners)){
   if($null -eq $owners -or $null -eq $originalOwners -or ($owners -join ',') -cne ($originalOwners -join ',') -or
     (ExternalComparisonValue $Value 'requested_execution') -cne (ExternalComparisonValue $prior 'requested_execution') -or
-    ($null -eq $S.Draft -and (ExternalComparisonValue $Value 'selected_execution') -cne (ExternalComparisonValue $prior 'selected_execution'))){throw 'The authenticated response owner changed.'}
+    ($null -eq $S.Draft -and ((ExternalComparisonValue $Value 'selected_execution') -cne (ExternalComparisonValue $prior 'selected_execution') -or
+     (ExternalComparisonValue $Value 'selection_epoch') -ne (ExternalComparisonValue $prior 'selection_epoch')))){throw 'The authenticated response owner changed.'}
+ }
+ if($publicJob -and $null -ne $owners -and $null -eq $S.Draft -and $Phase -cin @('run','poll')){
+  foreach($field in @('started','running','accepted','reviewing')){$flag=ExternalComparisonValue $Value $field;if($flag -is [bool] -and $flag){$S.SavedAdmitted=$true}}
  }
  if($Phase -eq 'catalog' -and $null -ne $source){
   $prefix=@($Value.prefixes|Where-Object {(OrderedCandidateNumber $_ 'position') -eq $S.Position})

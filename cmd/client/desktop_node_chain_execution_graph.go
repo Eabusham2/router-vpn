@@ -99,6 +99,13 @@ func (proof *desktopNodeChainExecutionProof) original(launch *desktopNodeLaunch,
 	if e == nil || e != proof.execution || e.bound(launch) != nil || e.physical != proof.physical || e.connectPhysical != proof.connectPhysical || e.socksPhysical != proof.socksPhysical || e.openvpnPhysical != proof.openvpnPhysical || e.multiplePhysical != proof.multiplePhysical || graph.Execution != string(proof.winner.Execution) {
 		return nil, errors.New("ordered execution graph replaced its original preparation")
 	}
+	control := ""
+	if e.preparation.RequiresDesktopExternalFinalExecutionObserver() {
+		control = e.original.selection.Control.ID
+	}
+	if graph.ControlID != control || control != "" && (graph.selectedPublic == nil || graph.selectedPublic.execution != e || graph.selectedPublic.projection != proof.projection || graph.selectedPublic.identity != proof.identity || graph.selectedPublic.winner != proof.winner) {
+		return nil, errors.New("ordered execution changed its original control")
+	}
 	return e, nil
 }
 
@@ -121,6 +128,13 @@ func desktopNodeChainExecutionGraph(ctx context.Context, launch *desktopNodeLaun
 	}
 	graph := activeMultihopGraph{Execution: string(proof.winner.Execution), EntryID: selection.Entry.ID, ExitID: selection.Exit.ID,
 		Base: selection.Base, EntryMode: selection.Native.entryMode, SourceSHA: selection.Native.source, ChainNodes: len(selection.Nodes), ExitMode: selection.ExitMode, Started: time.Now().UTC()}
+	if proof.execution.preparation.RequiresDesktopExternalFinalExecutionObserver() {
+		original, err := proof.execution.preparation.OriginalExternalFinalSource()
+		if err != nil || selection.Native.chain == nil || original != selection.Native.chain.chain || !desktopNodeChainControlCurrent(selection.Control, selection.Nodes) {
+			return activeMultihopGraph{}, errors.New("selected public exit lost its original paired control")
+		}
+		graph.ControlID, graph.selectedPublic = selection.Control.ID, proof
+	}
 	graph.captureMapNodes(selection.Nodes)
 	if err := proof.currentContext(ctx, launch, graph); err != nil {
 		return activeMultihopGraph{}, err

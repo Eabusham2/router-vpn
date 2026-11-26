@@ -68,7 +68,16 @@ func (s *server) multihopNodeChainLease(w http.ResponseWriter, r *http.Request) 
 		var lease multihoprelay.NodeChainLease
 		lease, err = s.relay.CreateChain(ctx, peer, request)
 		if err == nil {
-			_ = json.NewEncoder(w).Encode(lease)
+			if !request.HasRegisteredFronts() {
+				_ = json.NewEncoder(w).Encode(lease)
+				return
+			}
+			body, encodeErr := multihoprelay.MarshalNodeChainLeaseGrant(lease)
+			if encodeErr != nil {
+				http.Error(w, "invalid ordered lease grant", http.StatusBadGateway)
+				return
+			}
+			_, _ = w.Write(body)
 			return
 		}
 	case http.MethodPost:

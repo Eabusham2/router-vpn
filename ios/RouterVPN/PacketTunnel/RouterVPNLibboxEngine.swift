@@ -235,7 +235,9 @@ final class RouterVPNLibboxEngine {
         var setupError: NSError?; LibboxSetup(setup, &setupError)
         if let setupError { throw setupError }
         var createError: NSError?
-        let created = capture.isMultipleImported
+        let created = capture.isExternalFinal
+            ? LibboxRouterNodeChainExternalFinalExecutionNewCommandServer(capture.plan, platform, platform, &createError)
+            : capture.isMultipleImported
             ? LibboxRouterNodeChainMultipleImportedExecutionNewCommandServer(capture.plan, platform, platform, &createError)
             : capture.isOpenVPN
             ? LibboxRouterNodeChainOpenVPNExecutionNewCommandServer(capture.plan, platform, platform, &createError)
@@ -1521,7 +1523,7 @@ final class RouterVPNLibboxEngine {
                         "request_id": request.request, "session_id": owner.settingsEpoch,
                         "source_sha256": host.capture.sourceSHA256, "preparation_config_sha256": host.capture.configSHA256,
                         "last": record], options: [.sortedKeys])
-                    guard (result?.count ?? 0) <= 20 * 1024 else { throw owner.error("The Last reply exceeds its bound") }
+                    guard (result?.count ?? 0) <= IOSOrderedLastBounds.envelope(forStored: record) else { throw owner.error("The Last reply exceeds its bound") }
                 } else { throw owner.error("The ordered IPC operation has no captured live owner") }
                 guard current() else { throw owner.error("The ordered IPC owner retired before delivery") }
             } catch {
@@ -2092,6 +2094,7 @@ final class RouterVPNLibboxEngine {
             let members: [IOSNodeChainCapture.Member], sourceSHA256: String, configSHA256: String
             var selectedFields: [String: Any] = [:]
             var selectedResponses: [Int] = []
+            var selectedResponseMetric = ""
             if let execution {
                 let capture = execution.capture
                 var selected: String?
@@ -2106,6 +2109,7 @@ final class RouterVPNLibboxEngine {
                       let proposalConfig = ordinary["config_sha256"] as? String, IOSCandidateCatalogPublication.isDigest(proposalConfig) else { return nil }
                 members = capture.members; sourceSHA256 = capture.sourceSHA256; configSHA256 = capture.configSHA256
                 selectedResponses = capture.responsePositions(for: selected)
+                selectedResponseMetric = capture.candidateResponseMetric
                 selectedFields = ["requested_execution": capture.requested, "execution": selected, "candidate_positions": capture.candidatePositions(for: selected),
                     "proposal_source_sha256": proposalSource, "proposal_config_sha256": proposalConfig]
             } else {
@@ -2120,7 +2124,7 @@ final class RouterVPNLibboxEngine {
                 var prefix: [String: Any] = ["position": position, "profile_id": member.id,
                     "node_id": member.profile["node_proof_id"] as? String ?? "", "mode": member.mode]
                 if selectedResponses.contains(position) {
-                    prefix["measurement"] = "routed-candidate-response"
+                    prefix["measurement"] = selectedResponseMetric
                 } else if execution == nil, let plan, member.mode == "shadowsocks" {
                     let metric = LibboxRouterNodeChainCandidatePrefixMeasurement(plan, Int32(position))
                     if metric == "routed-candidate-response" || metric == "routed-public-candidate-response" { prefix["measurement"] = metric }
@@ -2228,7 +2232,7 @@ final class RouterVPNLibboxEngine {
               status["ack_id"] as? String == request, let mtuSession = status["session_id"] as? String,
               UUID(uuidString: mtuSession) != nil else { return nil }
         var information: [String: Any] = ["request_id": request, "session_id": settingsEpoch, "mtu_session_id": mtuSession]
-        if let executionHost, executionHost.capture.plan.extendedOriginalStatusLimit() > 0 {
+        if let executionHost, executionHost.capture.isExternalFinal || executionHost.capture.plan.extendedOriginalStatusLimit() > 0 {
             let capture = executionHost.capture
             guard let original = try? JSONSerialization.jsonObject(with: Data(capture.ordinaryLaunchInput.utf8)) as? [String: Any],
                   let config = original["config_sha256"] as? String, original["source_sha256"] as? String == capture.sourceSHA256 else { return nil }

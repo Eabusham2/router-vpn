@@ -2,7 +2,7 @@ package mobilemultihop
 
 import (
 	"context"
-	"encoding/json"
+
 	"errors"
 	"net"
 	"reflect"
@@ -57,7 +57,7 @@ func (p *NodeChainExecutionProjection) stopCapture(request multihoprelay.NodeCha
 	if err != nil {
 		return NodeChainExecutionStopCapture{}, err
 	}
-	body, err := json.Marshal(request)
+	body, err := nodeChainLeaseRequestBody(request, "")
 	if err != nil || len(body) > 4096 {
 		return NodeChainExecutionStopCapture{}, nodeChainExecutionError
 	}

@@ -23,9 +23,19 @@ struct IOSOrderedLatencyExecution: Sendable {
         let v = try R.object(binding.capture, maximum: extended?.statusLimit ?? 8192)
         var fields = ["schema", "source_sha256", "config_sha256", "generation_sha256", "selected_execution", "nodes"]
         var publicRows: [[String: Any]]?
-        if v["multiple_imported"] != nil {
+        if v["external_final"] != nil {
+            fields.append("external_final")
+            guard extended?.externalFinal == true, let ext = v["external_final"] as? [String: Any] else { throw R.issue() }
+            try R.keys(ext, ["schema", "original_source_sha256", "entry_source_sha256", "entry_start_layer", "dns_owner", "final_transport_sha256", "registered_final_source_sha256", "source_authenticator", "public"])
+            let digests = ["original_source_sha256", "entry_source_sha256", "final_transport_sha256", "registered_final_source_sha256", "source_authenticator"]
+            guard try R.integer(ext, "schema") == 8, try digests.allSatisfy({ try R.hex(R.text(ext, $0)) }),
+                  ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(try R.text(ext, "entry_start_layer")),
+                  ["entry-home", "external-final"].contains(try R.text(ext, "dns_owner")),
+                  let rows = ext["public"] as? [[String: Any]], rows.count == (extended?.ids.count ?? 0)-1 else { throw R.issue() }
+            originalSource = try R.text(ext, "original_source_sha256"); publicRows = rows
+        } else if v["multiple_imported"] != nil {
             fields.append("multiple_imported")
-            guard let imported = v["multiple_imported"] as? [String: Any] else { throw R.issue() }
+            guard extended?.externalFinal != true, let imported = v["multiple_imported"] as? [String: Any] else { throw R.issue() }
             try R.keys(imported, ["schema", "original_source_sha256", "public"])
             let original = try R.text(imported, "original_source_sha256")
             guard try R.integer(imported, "schema") == 6, R.hex(original), let rows = imported["public"] as? [[String: Any]],
@@ -47,7 +57,7 @@ struct IOSOrderedLatencyExecution: Sendable {
             guard try R.integer(member, "position") == Int64(position),
                   try R.text(member, "role") == (position == 0 ? "entry" : position == nodes.count - 1 ? "exit" : "intermediate"),
                   id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil, !ids.contains(id),
-                  kind == "private-node" || (kind == "public-path" && position > 0 && position < nodes.count - 1 &&
+                  kind == "private-node" || (kind == "public-path" && position > 0 && (position < nodes.count - 1 || extended?.externalFinal == true) &&
                     (publicRows != nil || position == nodes.count - 2)) else { throw R.issue() }
             if kind == "public-path", let rows = publicRows {
                 guard rows.indices.contains(publicIndex) else { throw R.issue() }
@@ -62,7 +72,7 @@ struct IOSOrderedLatencyExecution: Sendable {
         if let rows = publicRows, rows.count != publicIndex { throw R.issue() }
         if let extended {
             let pairedStreams = kinds.indices.dropFirst().dropLast().filter { kinds[$0] == "private-node" }
-            guard ids == extended.ids, kinds == extended.kinds, kinds.first == "private-node", kinds.last == "private-node",
+            guard ids == extended.ids, kinds == extended.kinds, kinds.first == "private-node", kinds.last == (extended.externalFinal ? "public-path" : "private-node"),
                   !pairedStreams.contains(1) else { throw R.issue() }
         }
         self.binding = binding; self.ids = ids; self.kinds = kinds
@@ -165,7 +175,7 @@ struct IOSOrderedLatencyRecord: Sendable {
             let fields = incomingLabel.split(separator: " ")
             let shift = execution == nil ? 0 : 1
             guard fields.count == 11 + shift, let capturedCount = Int(fields[7 + shift]), (3...limit).contains(capturedCount),
-                  (position > 0 || capturedCount == 3), (position < capturedCount - 1 || position == capturedCount - 1 && extended?.externalFinal == true && execution == nil) else { throw Self.issue() }
+                  (position > 0 || capturedCount == 3), (position < capturedCount - 1 || position == capturedCount - 1 && (execution?.extended ?? extended)?.externalFinal == true) else { throw Self.issue() }
             count = capturedCount; label = prefix + "custom node \(position + 1) of \(capturedCount) → Cloudflare edge"
         } else {
             guard kind == "private-node", let suffix = incomingLabel.split(separator: " ").last, let capturedCount = Int(suffix), (2...limit).contains(capturedCount), position < capturedCount else { throw Self.issue() }

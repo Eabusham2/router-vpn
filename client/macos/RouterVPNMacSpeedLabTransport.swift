@@ -23,7 +23,36 @@ enum RouterVPNSelectedPublicInventory {
         return interior.contains("private-node") && interior.allSatisfy { $0 == "public-path" || $0 == "private-node" }
     }
     static let fields: Set<String> = ["schema", "source_sha256", "config_sha256", "generation_sha256", "selected_execution", "nodes"]
+    static func externalFinal(_ capture: [String: Any], nodes: [[String: Any]]) -> Bool {
+        func integer(_ value: Any?, _ expected: Int) -> Bool {
+            guard let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return false }
+            return n.doubleValue == Double(expected)
+        }
+        func digest(_ value: Any?) -> Bool {
+            guard let s = value as? String else { return false }
+            return s.utf8.count == 64 && s.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+        }
+        let keys: Set<String> = ["schema", "original_source_sha256", "entry_source_sha256", "entry_start_layer", "dns_owner", "final_transport_sha256", "registered_final_source_sha256", "public", "source_authenticator"]
+        guard Set(capture.keys) == fields.union(["external_final"]), (3...96).contains(nodes.count),
+              let original = capture["external_final"] as? [String: Any], Set(original.keys) == keys,
+              integer(original["schema"], 8),
+              ["original_source_sha256", "entry_source_sha256", "final_transport_sha256", "registered_final_source_sha256", "source_authenticator"].allSatisfy({ digest(original[$0]) }),
+              let layer = original["entry_start_layer"] as? String, ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(layer),
+              let dns = original["dns_owner"] as? String, ["entry-home", "external-final"].contains(dns),
+              let rows = original["public"] as? [[String: Any]], rows.count == nodes.count - 1,
+              nodes.enumerated().allSatisfy({ $0.element["kind"] as? String == ($0.offset == 0 ? "private-node" : "public-path") }) else { return false }
+        var tags = Set<String>()
+        for (index, row) in rows.enumerated() {
+            guard Set(row.keys) == Set(["position", "tag", "source_sha256"]), integer(row["position"], index + 1),
+                  digest(row["source_sha256"]), let tag = row["tag"] as? String, !tag.isEmpty, tag.utf8.count <= 128,
+                  tag.utf8.allSatisfy({ (33...126).contains($0) }), tags.insert(tag).inserted else { return false }
+        }
+        return capture["selected_execution"] as? String != "server" || rows.last?["source_sha256"] as? String == original["registered_final_source_sha256"] as? String
+    }
     static func selectedSize(_ count: Int?, capture: [String: Any], nodes: [[String: Any]]) -> Bool {
+        if capture.keys.contains("external_final") {
+            return externalFinal(capture, nodes: nodes) && (nodes.count <= 8 ? count == nil : count == nodes.count)
+        }
         guard let count else { return (2...8).contains(nodes.count) }
         guard (9...96).contains(count), count == nodes.count, capture["multiple_imported"] != nil else { return false }
         if selectedPrivateRoles(nodes.map { $0["kind"] as? String ?? "" }) { return true }
@@ -33,6 +62,7 @@ enum RouterVPNSelectedPublicInventory {
     }
 
     static func valid(_ capture: [String: Any], nodes: [[String: Any]]) -> Bool {
+        if capture.keys.contains("external_final") { return externalFinal(capture, nodes: nodes) }
         let positions = nodes.indices.filter { nodes[$0]["kind"] as? String == "public-path" }
         guard positions.allSatisfy({ $0 > 0 && $0 < nodes.count - 1 }) else { return false }
         guard capture.keys.contains("multiple_imported") else {
@@ -202,14 +232,16 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                     let fields = selectedCount == nil ? ["selected_capture"] : ["selected_capture", "extended_original_nodes"]
                     let captureLimit = selectedCount.map { max(16384, 512 + 1536 * $0.intValue) } ?? 8192
                     guard Set(capture.keys) == ordinaryKeys.union(fields),
-                          let raw = capture["selected_capture"] as? String, !raw.isEmpty, raw.utf8.count <= captureLimit,
+                          let raw = capture["selected_capture"] as? String, !raw.isEmpty, raw.utf8.count <= max(65536, captureLimit),
                           let data = raw.data(using: .utf8),
                           let selected = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          raw.utf8.count <= (selected.keys.contains("external_final") ? 65536 : captureLimit),
                           let schema = selected["schema"] as? NSNumber, CFGetTypeID(schema) != CFBooleanGetTypeID(), schema.doubleValue == 1,
                           ["source_sha256", "config_sha256", "generation_sha256"].allSatisfy({ selected[$0] as? String == capture[$0] as? String }),
                           let execution = selected["selected_execution"] as? String, ["local", "server"].contains(execution),
                           let nodes = selected["nodes"] as? [[String: Any]], RouterVPNSelectedPublicInventory.selectedSize(selectedCount?.intValue, capture: selected, nodes: nodes),
-                          RouterVPNSelectedPublicInventory.valid(selected, nodes: nodes), let position,
+                          RouterVPNSelectedPublicInventory.valid(selected, nodes: nodes),
+                          !selected.keys.contains("external_final") || nodes.first?["node_id"] as? String == capture["profile_id"] as? String, let position,
                           CFGetTypeID(position) != CFBooleanGetTypeID(), position.doubleValue.rounded() == position.doubleValue,
                           nodes.indices.contains(position.intValue), nodes[position.intValue]["node_id"] as? String == body?["node_id"] as? String else { return false }
                     var ids = Set<String>()
@@ -245,7 +277,8 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                 if externalFinal {
                     guard Set(body.keys) == ordinaryKeys.union(["external_final"]),
                           let flag = body["external_final"] as? NSNumber, CFGetTypeID(flag) == CFBooleanGetTypeID(), flag.boolValue,
-                          execution == "local", !serverResponse, packetEntryWithStreams else { throw URLError(.badURL) }
+                          ["local","server","auto"].contains(execution), serverResponse == (execution != "local"),
+                          execution == "local" || prefix > 0, packetEntryWithStreams else { throw URLError(.badURL) }
                 } else if Set(body.keys) != ordinaryKeys { throw URLError(.badURL) }
                 guard nodes.count <= 8 || packetEntryWithStreams || execution == "local" else { throw URLError(.badURL) }
                 let packet = ["wg", "awg2-fast", "awg2-strong"].contains(nodes[prefix]["mode"] ?? "")
@@ -253,10 +286,10 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                 let stream = execution == "local" && packets > 0 && packets <= prefix &&
                     nodes.last?["mode"] == "shadowsocks" && nodes[packets...prefix].allSatisfy { $0["mode"] == "shadowsocks" }
                 // This envelope exposes only public references. The controller checks
-                // every original source, the Local winner and its selection epoch.
+                // every original source, the selected winner and its selection epoch.
                 let compareStream = (execution == "auto" || serverResponse && execution == "server") && nodes.count >= 3 && prefix > 0 &&
                     (nodes.first?["mode"] == "wg" || serverResponse && ["awg2-fast","awg2-strong"].contains(nodes.first?["mode"] ?? "")) && nodes.dropFirst().allSatisfy { $0["mode"] == "shadowsocks" } &&
-                    (prefix == nodes.count - 2 || nodes.count < 96)
+                    (externalFinal || prefix == nodes.count - 2 || nodes.count < 96)
                 guard packet && (prefix < 7 || execution == "local") || stream || compareStream else { throw URLError(.badURL) }
                 let scope = execution == "local" ? "saved-prefix-local" : "draft-complete-selected"
                 performanceValid = ["local", "server", "auto"].contains(execution) && parts.last == "scope=" + scope && serverQueryAllowed &&

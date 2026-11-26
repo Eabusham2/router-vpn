@@ -76,7 +76,7 @@ func DecodeNodeChainIPCResponse(raw []byte) (NodeChainIPCResponse, error) {
 // protocol. Reading a private file alone does not authorize ambiguous JSON.
 func DecodeNodeChainCapture(raw []byte) (NodeChainCapture, error) {
 	var capture NodeChainCapture
-	if err := decodeNodeChainJSON(raw, &capture, NodeChainCaptureMaximumBytes); err != nil || capture.Validate() != nil {
+	if err := decodeNodeChainJSON(raw, &capture, NodeChainCaptureMaximumBytes); err != nil || capture.Request.HasRegisteredFronts() || capture.Validate() != nil {
 		return NodeChainCapture{}, errors.New("invalid ordered worker capture")
 	}
 	return capture.Clone(), nil
@@ -88,27 +88,28 @@ func DecodeNodeChainCapture(raw []byte) (NodeChainCapture, error) {
 // separate manager operation on the captured operator registry.
 func DecodeNodeChainLeaseRequest(raw []byte, status bool) (NodeChainRequest, string, error) {
 	bad := errors.New("invalid ordered lease request")
-	var envelope struct {
-		NodeChainRequest
-		StatusNonce *string `json:"status_nonce,omitempty"`
+	var envelope nodeChainRequestWire
+	if err := decodeNodeChainJSON(raw, &envelope, NodeChainLeaseRequestMaximumBytes); err != nil || status != (envelope.StatusNonce != nil) {
+		return NodeChainRequest{}, "", bad
 	}
-	if err := decodeNodeChainJSON(raw, &envelope, NodeChainLeaseRequestMaximumBytes); err != nil || envelope.NodeChainRequest.validateShape() != nil ||
-		status != (envelope.StatusNonce != nil) {
+	request, err := envelope.restore()
+	if err != nil {
 		return NodeChainRequest{}, "", bad
 	}
 	// null and an omitted nonce are distinct wire inputs. Neither may quietly
 	// turn a status envelope into a create/delete request.
 	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil || status != (fields["status_nonce"] != nil) {
+	if json.Unmarshal(raw, &fields) != nil || status != (fields["status_nonce"] != nil) || (fields["front_seed"] != nil) != (request.FrontSeed != "") || (fields["private_front_seed"] != nil) != (request.PrivateFrontSeed != "") ||
+		(fields["private_front_count"] != nil) != (request.PrivateFrontSeed != "") || (fields["public_front_count"] != nil) != (request.FrontSeed != "") {
 		return NodeChainRequest{}, "", bad
 	}
 	if status {
 		if !proofID.MatchString(*envelope.StatusNonce) {
 			return NodeChainRequest{}, "", bad
 		}
-		return envelope.NodeChainRequest.Clone(), *envelope.StatusNonce, nil
+		return request, *envelope.StatusNonce, nil
 	}
-	return envelope.NodeChainRequest.Clone(), "", nil
+	return request, "", nil
 }
 
 // encoding/json accepts repeated members and case-insensitive field aliases.

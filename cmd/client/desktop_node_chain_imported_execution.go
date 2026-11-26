@@ -57,7 +57,7 @@ func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested 
 		}
 		return nil
 	}
-	if desktopNodeChainMultipleImportedExecutionShape(members) {
+	if desktopNodeChainHasExternalFinal(members) || desktopNodeChainMultipleImportedExecutionShape(members) {
 		return nil
 	}
 	if imported != 1 || len(members) < 3 || len(members) > 8 {

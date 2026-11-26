@@ -61,15 +61,16 @@ final class AndroidNodeCandidatePreparationDialog {
         final AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(activity);final String selected;
         try{if(connection.isActiveOrTransitioning()||home.connected)throw new IllegalStateException("Stop the current VPN before testing the saved ordered path.");selected=AndroidConnectionSelection.digest(activity,nodes);}
         catch(Exception failure){showMessage(failure.getMessage());return;}
-        showProgress();output.setText(draft!=null?"Reading the original draft and measuring through hop "+(prefix+1)+"…":"Reading the saved Local path… A WireGuard or AmneziaWG prefix can be tested without later nodes. Other selections require the complete saved path. Each candidate needs 50 successful handshakes or authenticated private responses; results appear after the temporary VPN stops.");
+        showProgress();output.setText(draft!=null?"Reading the original draft and measuring through hop "+(prefix+1)+"…":"Reading the saved Local path… A WireGuard or AmneziaWG prefix can be tested without later nodes. Other selections require the complete saved path. Each candidate needs 50 successful TCP handshakes, private-agent responses or verified public HTTPS responses; results appear after the temporary VPN stops.");
         new Thread(()->{
             try{
                 AndroidNodeStore.ChainCapture source=draft==null?new AndroidConnectionProfileStore(activity,nodes,new AndroidStandardExitStore(activity)).currentOrderedPath():draft.call();
                 source.requireCurrent();
                 if(draft!=null){
                     source.requireCandidatePurpose(prefix);
-                    if(!source.measurementOnly()||!AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,source.execution))
-                        throw new IllegalStateException("The draft lost its selected Shadowsocks response prefix.");
+                    if(!source.measurementOnly() || !(AndroidNodeChainCapture.publicExitPacketEntry(source,prefix)
+                            || AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,source.execution)))
+                        throw new IllegalStateException("The draft lost its selected packet entry or Shadowsocks response prefix.");
                     activity.runOnUiThread(()->{
                         if(visible()){
                             editorSource=new WeakReference<>(source);sourceEditor=new WeakReference<>(editor);
@@ -110,7 +111,7 @@ final class AndroidNodeCandidatePreparationDialog {
         if(!visible() || waitingForReviewRelease)return;if(owner==null)owner=capturedOwner();choices=Collections.unmodifiableList(new ArrayList<>(completed));
         boolean savable=false;for(var choice:choices)if(choice.profile!=null&&choice.saveReason.isEmpty()&&choice.result.current(System.currentTimeMillis()))savable=true;
         StringBuilder text=new StringBuilder(failure==null?(choices.isEmpty()?"Temporary VPN stopped. No complete current candidate scores are available.":savable?"Temporary VPN stopped. Complete proposals are ready to save.":"Temporary VPN stopped. Candidate measurements are available. Each row gives its Save reason."):"Candidate results unavailable: "+failure.getMessage());
-        text.append("\n\nPacket prefixes measure TCP handshakes. Paired candidates return authenticated private responses. An imported candidate on a Local public-exit route returns its verified public address over HTTPS. Each score requires 50 successful samples. Load and Connect remain separate choices.");
+        text.append("\n\nPacket prefixes measure TCP handshakes. Paired candidates return authenticated private responses. On a route with a paired entry and an imported exit, an eligible imported candidate returns its verified public address over HTTPS. Server measurements require that candidate to be registered. Each score requires 50 successful samples. Load and Connect remain separate choices.");
         appendMeasuredRows(text,choices);output.setText(text.toString());changed.run();
     });}
     private static void appendMeasuredRows(StringBuilder text,List<AndroidNodeCandidatePreparation.Choice> rows){

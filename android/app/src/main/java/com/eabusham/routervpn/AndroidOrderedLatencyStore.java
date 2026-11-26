@@ -53,17 +53,25 @@ final class AndroidOrderedLatencyStore {
             this(raw,selectedExecution,multipleImported,extendedCount,history,extendedPaired,pairedPrefixNodes,"");
         }
         private Record(String raw,String selectedExecution,boolean multipleImported,int extendedCount,boolean history,boolean extendedPaired,int pairedPrefixNodes,String originalRoles)throws Exception {
+            this(raw,selectedExecution,multipleImported,extendedCount,history,extendedPaired,pairedPrefixNodes,originalRoles,false);
+        }
+        Record(String raw,String selected,boolean imported,int count,String roles,boolean externalFinal)throws Exception {
+            this(raw,selected,imported,count,false,false,0,roles,externalFinal);
+        }
+        private Record(String raw,String selectedExecution,boolean multipleImported,int extendedCount,boolean history,boolean extendedPaired,int pairedPrefixNodes,String originalRoles,boolean selectedExternalFinal)throws Exception {
             this.originalRoles=originalRoles;
             boolean externalExit=false;
             if (!originalRoles.isEmpty()) {
                 JSONArray roles=new JSONArray(originalRoles);
                 externalExit=roles.length()>=3 && "public-path".equals(roles.opt(roles.length()-1));
                 if (externalExit) {
-                    if (roles.length()>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || extendedPaired || multipleImported || pairedPrefixNodes!=1
-                            || !"".equals(selectedExecution) || !"private-node".equals(roles.get(0)) || !roles.toString().equals(originalRoles)) throw invalid();
+                    boolean owned = selectedExternalFinal ? multipleImported && !selectedExecution.isEmpty() && pairedPrefixNodes==0
+                            : !multipleImported && selectedExecution.isEmpty() && pairedPrefixNodes==1;
+                    if (roles.length()>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || extendedPaired || !owned || !"private-node".equals(roles.get(0)) || !roles.toString().equals(originalRoles)) throw invalid();
                     for (int i=1;i<roles.length();i++) if (!"public-path".equals(roles.get(i))) throw invalid();
                 }
             }
+            if (selectedExternalFinal && !externalExit)throw invalid();
             this.pairedPrefixNodes=pairedPrefixNodes;
             if(pairedPrefixNodes<0 || pairedPrefixNodes!=0 && (extendedPaired||!selectedExecution.isEmpty()))throw invalid();
             this.extendedPaired=extendedPaired;
@@ -175,10 +183,13 @@ final class AndroidOrderedLatencyStore {
         return completed(status,saved,request,source,config,position,node,kind,selectedExecution,multipleImported,extendedCount,extendedPaired,pairedPrefixNodes,"");
     }
     static Record completed(String status,String saved,String request,String source,String config,int position,String node,String kind,String selectedExecution,boolean multipleImported,int extendedCount,boolean extendedPaired,int pairedPrefixNodes,String originalRoles)throws Exception {
+        return completed(status,saved,request,source,config,position,node,kind,selectedExecution,multipleImported,extendedCount,extendedPaired,pairedPrefixNodes,originalRoles,false);
+    }
+    static Record completed(String status,String saved,String request,String source,String config,int position,String node,String kind,String selectedExecution,boolean multipleImported,int extendedCount,boolean extendedPaired,int pairedPrefixNodes,String originalRoles,boolean selectedExternalFinal)throws Exception {
         JSONObject value=status(status,request);
         if(!bool(value,"complete")||!bool(value,"drained")||!"complete".equals(text(value,"stage"))||!value.optString("failure","").isEmpty())throw invalid();
         JSONArray results=value.getJSONArray("results");if(results.length()!=1)throw invalid();
-        Record record=new Record(saved,selectedExecution,multipleImported,extendedCount,false,extendedPaired,pairedPrefixNodes,originalRoles);record.require(source,config,position,node,kind,request);
+        Record record=new Record(saved,selectedExecution,multipleImported,extendedCount,false,extendedPaired,pairedPrefixNodes,originalRoles,selectedExternalFinal);record.require(source,config,position,node,kind,request);
         if(!same(results.getJSONObject(0),new JSONObject(record.raw).getJSONObject("result")))throw invalid();
         return record;
     }

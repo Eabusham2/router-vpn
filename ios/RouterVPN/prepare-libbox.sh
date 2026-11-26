@@ -180,6 +180,15 @@ for header in headers:
     ):
         assert signature in content, 'OpenVPN execution original-owner ABI changed: '+signature
     # OPENVPN_EXECUTION_ABI_END
+    # EXTERNAL_FINAL_EXECUTION_ABI_BEGIN
+    for signature in (
+        'FOUNDATION_EXPORT LibboxRouterNodeChainExecution* _Nullable LibboxRouterNodeChainExternalFinalExecutionFromLaunch(NSString* _Nullable input, NSString* _Nullable execution, NSError* _Nullable* _Nullable error);',
+        'FOUNDATION_EXPORT LibboxRouterNodeChainExecution* _Nullable LibboxNewRouterNodeChainExternalFinalExecutionLaunch(NSString* _Nullable input, NSError* _Nullable* _Nullable error);',
+        'FOUNDATION_EXPORT LibboxRouterNodeChainExecution* _Nullable LibboxRouterNodeChainExternalFinalExecutionFromLast(NSString* _Nullable input, NSString* _Nullable execution, NSString* _Nullable lastJSON, NSError* _Nullable* _Nullable error);',
+        'FOUNDATION_EXPORT LibboxCommandServer* _Nullable LibboxRouterNodeChainExternalFinalExecutionNewCommandServer(LibboxRouterNodeChainExecution* _Nullable m, id<LibboxCommandServerHandler> _Nullable handler, id<LibboxPlatformInterface> _Nullable platform, NSError* _Nullable* _Nullable error);',
+    ):
+        assert signature in content, 'ExternalFinal execution original-owner ABI changed: '+signature
+    # EXTERNAL_FINAL_EXECUTION_ABI_END
     # Distinct typed execution ABI; candidate preparation owns no factory.
     for signature in (
         'FOUNDATION_EXPORT LibboxRouterNodeChainExecution* _Nullable LibboxNewRouterNodeChainCONNECTExecution(NSString* _Nullable localSource, NSString* _Nullable execution, NSError* _Nullable* _Nullable error);',

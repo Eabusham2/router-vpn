@@ -51,6 +51,17 @@ type nodeChainExecutionLatencyPublic struct {
 	SourceSHA256 string `json:"source_sha256"`
 }
 
+type nodeChainExecutionLatencyCapture struct {
+	Schema           int                                        `json:"schema"`
+	SourceSHA256     string                                     `json:"source_sha256"`
+	ConfigSHA256     string                                     `json:"config_sha256"`
+	GenerationSHA256 string                                     `json:"generation_sha256"`
+	Execution        string                                     `json:"selected_execution"`
+	Nodes            []nodeChainExecutionLatencyHop             `json:"nodes"`
+	MultipleImported *nodeChainExecutionLatencyMultipleImported `json:"multiple_imported,omitempty"`
+	ExternalFinal    *nodeChainExecutionLatencyExternalFinal    `json:"external_final,omitempty"`
+}
+
 // NewLatencyBenchmarkContext attaches a facade only after the actual selected
 // execution and the host's original measurement association both validate.
 // Source/config belong to that projection, never caller-supplied physical or
@@ -128,15 +139,17 @@ func (s *NodeChainExecutionMeasurement) selectedMeasurementCapture(ctx context.C
 		}
 	}
 	digest := sha256.Sum256([]byte(identity))
-	capture, err := json.Marshal(struct {
-		Schema           int                                        `json:"schema"`
-		SourceSHA256     string                                     `json:"source_sha256"`
-		ConfigSHA256     string                                     `json:"config_sha256"`
-		GenerationSHA256 string                                     `json:"generation_sha256"`
-		Execution        string                                     `json:"selected_execution"`
-		Nodes            []nodeChainExecutionLatencyHop             `json:"nodes"`
-		MultipleImported *nodeChainExecutionLatencyMultipleImported `json:"multiple_imported,omitempty"`
-	}{1, p.SourceSHA256(), p.ConfigSHA256(), hex.EncodeToString(digest[:]), s.engine.trial.execution, hops, multiple})
+	frame := nodeChainExecutionLatencyCapture{
+		Schema: 1, SourceSHA256: p.SourceSHA256(), ConfigSHA256: p.ConfigSHA256(),
+		GenerationSHA256: hex.EncodeToString(digest[:]), Execution: s.engine.trial.execution,
+		Nodes: hops, MultipleImported: multiple,
+	}
+	if p.policy.externalFinal != nil {
+		if err := p.bindExternalFinalLatencyCapture(&frame); err != nil {
+			return "", "", err
+		}
+	}
+	capture, err := json.Marshal(frame)
 	if err != nil {
 		return "", "", err
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
+	"slices"
 	"time"
 
 	"router-vpn/internal/hopmeasure"
@@ -18,7 +19,7 @@ const NodeChainMaximumMembers = 7
 const NodeChainExtendedMaximumMembers = hopmeasure.PhysicalTraversalDepth - 1
 
 func validMemberCount(schema, count int) bool {
-	return count >= 1 && (count <= NodeChainMaximumMembers || schema == 6 && count <= NodeChainExtendedMaximumMembers)
+	return count >= 1 && (count <= NodeChainMaximumMembers || (schema == 6 || schema == 8) && count <= NodeChainExtendedMaximumMembers)
 }
 
 var nodeChainCaptureError = errors.New("invalid captured ordered server path")
@@ -45,14 +46,28 @@ type NodeChainMember struct {
 	StreamIdentitySHA256 string `json:"stream_identity_sha256,omitempty"`
 }
 
+// Only public commitments cross from the original client entry into the
+// independently provisioned operator suffix. The local final source includes
+// private predecessor material and is never a server worker input.
+type NodeChainExternalFinalBinding struct {
+	EntrySourceSHA256      string   `json:"entry_source_sha256"`
+	EntryStartLayer        string   `json:"entry_start_layer"`
+	EntryClientPublicKey   string   `json:"entry_client_public_key"`
+	EntryPeerAddresses     []string `json:"entry_peer_addresses"`
+	DNSOwner               string   `json:"dns_owner"`
+	LocalFinalSourceSHA256 string   `json:"local_final_source_sha256"`
+	FinalTransportSHA256   string   `json:"final_transport_sha256"`
+}
+
 type NodeChainDescriptor struct {
-	Schema          int               `json:"schema"`
-	EntryID         string            `json:"entry_id"`
-	EntryNodeID     string            `json:"entry_node_id"`
-	EntryMode       string            `json:"entry_mode"`
-	SourceSHA256    string            `json:"source_sha256"`
-	DNSPolicySHA256 string            `json:"dns_policy_sha256"`
-	Members         []NodeChainMember `json:"members"`
+	Schema          int                            `json:"schema"`
+	EntryID         string                         `json:"entry_id"`
+	EntryNodeID     string                         `json:"entry_node_id"`
+	EntryMode       string                         `json:"entry_mode"`
+	SourceSHA256    string                         `json:"source_sha256"`
+	DNSPolicySHA256 string                         `json:"dns_policy_sha256"`
+	Members         []NodeChainMember              `json:"members"`
+	ExternalFinal   *NodeChainExternalFinalBinding `json:"external_final,omitempty"`
 }
 
 type NodeChainUser struct {
@@ -78,9 +93,11 @@ type NodeChainRequest struct {
 	// Version 1 implicitly has packet positions 0..len(Users)-1. Version 2
 	// names only actual packet positions; version 4 retains the same single
 	// original client-entry key. Neither imported transport has a packet key.
-	LocalPacketPositions []int           `json:"local_packet_positions,omitempty"`
-	Port                 int             `json:"listen_port"`
-	Users                []NodeChainUser `json:"users"`
+	LocalPacketPositions []int              `json:"local_packet_positions,omitempty"`
+	Port                 int                `json:"listen_port"`
+	Users                []NodeChainUser    `json:"users"`
+	FrontSeed            nodeChainFrontSeed `json:"front_seed,omitempty"`
+	PrivateFrontSeed     nodeChainFrontSeed `json:"private_front_seed,omitempty"`
 }
 
 // NodeChainCapture is delivered only to the separately owned native worker.
@@ -154,7 +171,10 @@ func (s NodeChainDescriptor) PrivateStreamAt(position int) bool {
 }
 
 func (s NodeChainDescriptor) Validate() error {
-	if (s.Schema != 1 && s.Schema != 2 && s.Schema != 3 && s.Schema != 4 && s.Schema != 5 && s.Schema != 6) || !ident.MatchString(s.EntryID) || !proofID.MatchString(s.EntryNodeID) || !nodeChainPacketMode(s.EntryMode) ||
+	if s.Schema == 8 {
+		return s.validateExternalFinal()
+	}
+	if s.ExternalFinal != nil || (s.Schema != 1 && s.Schema != 2 && s.Schema != 3 && s.Schema != 4 && s.Schema != 5 && s.Schema != 6) || !ident.MatchString(s.EntryID) || !proofID.MatchString(s.EntryNodeID) || !nodeChainPacketMode(s.EntryMode) ||
 		!proofID.MatchString(s.SourceSHA256) || !proofID.MatchString(s.DNSPolicySHA256) || !validMemberCount(s.Schema, len(s.Members)) {
 		return nodeChainCaptureError
 	}
@@ -241,7 +261,58 @@ func (s NodeChainDescriptor) Validate() error {
 	return nil
 }
 
+func (s NodeChainDescriptor) validateExternalFinal() error {
+	b := s.ExternalFinal
+	if b == nil || !ident.MatchString(s.EntryID) || !proofID.MatchString(s.EntryNodeID) || !nodeChainPacketMode(s.EntryMode) ||
+		!proofID.MatchString(s.SourceSHA256) || !proofID.MatchString(s.DNSPolicySHA256) || !proofID.MatchString(b.EntrySourceSHA256) ||
+		!proofID.MatchString(b.LocalFinalSourceSHA256) || !proofID.MatchString(b.FinalTransportSHA256) || !nodeChainPacketPublic(b.EntryClientPublicKey) ||
+		(b.EntryStartLayer != "off" && b.EntryStartLayer != "aes-256-gcm" && b.EntryStartLayer != "aes-256-gcm+xor-whitening") ||
+		(b.DNSOwner != "entry-home" && b.DNSOwner != "external-final") || len(s.Members) < 2 || !validMemberCount(s.Schema, len(s.Members)) {
+		return nodeChainCaptureError
+	}
+	if len(b.EntryPeerAddresses) == 0 || len(b.EntryPeerAddresses) > 64 || b.EntrySourceSHA256 == b.LocalFinalSourceSHA256 ||
+		b.FinalTransportSHA256 == b.EntrySourceSHA256 || b.FinalTransportSHA256 == b.LocalFinalSourceSHA256 {
+		return nodeChainCaptureError
+	}
+	for i, address := range b.EntryPeerAddresses {
+		if !nodeChainPrivateAddress(address) || i > 0 && b.EntryPeerAddresses[i-1] >= address {
+			return nodeChainCaptureError
+		}
+	}
+	ids := map[string]bool{s.EntryID: true}
+	sources := map[string]bool{b.EntrySourceSHA256: true, b.LocalFinalSourceSHA256: true, b.FinalTransportSHA256: true}
+	for i, m := range s.Members {
+		ip, err := netip.ParseAddr(m.ExpectedPublicIP)
+		if m.Position != i+1 || !ident.MatchString(m.ProfileID) || ids[m.ProfileID] || !proofID.MatchString(m.SourceSHA256) || sources[m.SourceSHA256] ||
+			m.NodeKind != "external" || m.ProofKind != "public-path" || m.Mode != "shadowsocks" || m.StartLayer != "off" ||
+			err != nil || ip.String() != m.ExpectedPublicIP || !externalPublicIP(m.ExpectedPublicIP) ||
+			m.NodeID != "" || m.ClientPublicKey != "" || m.ServerPublicKey != "" || m.OpenVPNPairSHA256 != "" || m.StreamIdentitySHA256 != "" {
+			return nodeChainCaptureError
+		}
+		ids[m.ProfileID], sources[m.SourceSHA256] = true, true
+	}
+	return nil
+}
+
+// SameExternalFinalEntry checks which independently registered public suffixes
+// belong to one original paired packet entry. Each suffix retains its own DNS
+// policy, credential commitments and final public address.
+func (s NodeChainDescriptor) SameExternalFinalEntry(other NodeChainDescriptor) bool {
+	if s.Schema != 8 || other.Schema != 8 || s.Validate() != nil || other.Validate() != nil {
+		return false
+	}
+	a, b := s.ExternalFinal, other.ExternalFinal
+	return s.EntryNodeID == other.EntryNodeID && s.EntryID == other.EntryID && s.EntryMode == other.EntryMode &&
+		a.EntrySourceSHA256 == b.EntrySourceSHA256 && a.EntryStartLayer == b.EntryStartLayer &&
+		a.EntryClientPublicKey == b.EntryClientPublicKey && slices.Equal(a.EntryPeerAddresses, b.EntryPeerAddresses)
+}
+
 func (s NodeChainDescriptor) Clone() NodeChainDescriptor {
+	if s.ExternalFinal != nil {
+		binding := *s.ExternalFinal
+		binding.EntryPeerAddresses = slices.Clone(binding.EntryPeerAddresses)
+		s.ExternalFinal = &binding
+	}
 	s.Members = append([]NodeChainMember(nil), s.Members...)
 	return s
 }
@@ -261,19 +332,31 @@ func (s NodeChainDescriptor) Digest() (string, error) {
 		domain = "routervpn-server-node-chain-descriptor-v5"
 	} else if s.Schema == 6 {
 		domain = "routervpn-server-node-chain-descriptor-v6"
+	} else if s.Schema == 8 {
+		domain = "routervpn-server-node-chain-descriptor-v8"
 	}
 	return nodeChainDigest(domain, s)
 }
 
 func (q NodeChainRequest) validateShape() error {
-	if (q.Schema != 1 && q.Schema != 2 && q.Schema != 3 && q.Schema != 4 && q.Schema != 5 && q.Schema != 6) || !nonce.MatchString(q.SessionID) || !proofID.MatchString(q.EntryNodeID) || !proofID.MatchString(q.SourceSHA256) ||
+	if (q.Schema != 1 && q.Schema != 2 && q.Schema != 3 && q.Schema != 4 && q.Schema != 5 && q.Schema != 6 && q.Schema != 8) || !nonce.MatchString(q.SessionID) || !proofID.MatchString(q.EntryNodeID) || !proofID.MatchString(q.SourceSHA256) ||
 		!proofID.MatchString(q.DescriptorSHA256) || !proofID.MatchString(q.DNSPolicySHA256) || !proofID.MatchString(q.Epoch) ||
 		!nodeChainPrivateAddress(q.Peer) || q.AcquireExpiresAt <= 0 || q.Port < 1024 || q.Port > 65535 ||
 		!validMemberCount(q.Schema, len(q.Users)) || len(q.Users) > NodeChainMaximumMembers && len(q.LocalPacketPublicKeys) != 1 {
 		return nodeChainCaptureError
 	}
+	if q.HasRegisteredFronts() {
+		expected, err := q.registeredFronts(len(q.Users))
+		if err != nil || !slices.Equal(expected, q.Users) {
+			return nodeChainCaptureError
+		}
+	}
 	if q.Schema == 1 {
 		if len(q.LocalPacketPublicKeys) != len(q.Users) || len(q.LocalPacketPositions) != 0 {
+			return nodeChainCaptureError
+		}
+	} else if q.Schema == 8 {
+		if len(q.Users) < 2 || len(q.LocalPacketPublicKeys) != 1 || len(q.LocalPacketPositions) != 1 || q.LocalPacketPositions[0] != 0 {
 			return nodeChainCaptureError
 		}
 	} else if q.Schema == 6 {
@@ -323,6 +406,9 @@ func (q NodeChainRequest) Validate(source NodeChainDescriptor) error {
 	digest, err := source.Digest()
 	if err != nil || q.validateShape() != nil || q.Schema != source.Schema || q.EntryNodeID != source.EntryNodeID || q.SourceSHA256 != source.SourceSHA256 ||
 		q.DescriptorSHA256 != digest || q.DNSPolicySHA256 != source.DNSPolicySHA256 || len(q.Users) != len(source.Members) {
+		return nodeChainCaptureError
+	}
+	if source.Schema == 8 && (q.LocalPacketPublicKeys[0] != source.ExternalFinal.EntryClientPublicKey || !slices.Contains(source.ExternalFinal.EntryPeerAddresses, q.Peer)) {
 		return nodeChainCaptureError
 	}
 	if source.Schema == 6 {
@@ -378,6 +464,8 @@ func (q NodeChainRequest) Digest() (string, error) {
 		domain = "routervpn-server-node-chain-request-v5"
 	} else if q.Schema == 6 {
 		domain = "routervpn-server-node-chain-request-v6"
+	} else if q.Schema == 8 {
+		domain = "routervpn-server-node-chain-request-v8"
 	}
 	return nodeChainDigest(domain, q)
 }

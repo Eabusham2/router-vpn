@@ -53,6 +53,14 @@ func captureSelectedDraftPreview(catalog *desktopNodeChainCandidateCatalog, posi
 		return err
 	}
 	original := e.original.policy.OriginalChain()
+	if e.preparation.RequiresDesktopExternalFinalExecutionObserver() {
+		source, err := e.preparation.OriginalExternalFinalSource()
+		if err != nil || source != original {
+			return errors.New("selected draft changed its original public exit source")
+		}
+		catalog.plan, err = original.NewMultipleImportedCandidatePlan(position, catalog.inventory)
+		return err
+	}
 	if e.multiplePhysical != nil {
 		source, err := e.preparation.OriginalMultipleImportedSource()
 		if err != nil || source != original {

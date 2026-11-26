@@ -148,20 +148,27 @@ func captureDesktopNodeChain(ctx context.Context, root string, control common.Ro
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		var input, endpoint, identity string
-		var err error
-		if schema == 8 && i == len(members)-1 {
-			input, endpoint, identity, err = capture.compileExternalFinal(ctx, member, &total)
-		} else {
-			input, endpoint, identity, err = capture.compileMember(ctx, member, &total, func() applexray.Lookup {
-				if i == 0 {
-					return lookup
-				}
-				return nil
-			}())
+		var bootstrap applexray.Lookup
+		if i == 0 {
+			bootstrap = lookup
 		}
+		input, endpoint, identity, err := capture.compileMember(ctx, member, &total, bootstrap)
 		if err != nil {
 			return nil, err
+		}
+		if schema == 8 && i == len(members)-1 {
+			// The final's standalone import owns its literal transport and saved
+			// DNS. Attach the exact entry already captured at position zero,
+			// using the same representation the independent operator registers.
+			standaloneSize := len(input)
+			input, err = mobilemultihop.NodeChainExternalFinalFromEntry(source.Nodes[0], input)
+			if err != nil {
+				return nil, err
+			}
+			total += len(input) - standaloneSize
+			if total > mobilemultihop.NodeChainInputLimit {
+				return nil, errors.New("ordered external final exceeds the complete source bound")
+			}
 		}
 		if i == 0 {
 			capture.endpoint = endpoint

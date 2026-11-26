@@ -24,7 +24,8 @@ func (q NodeChainCandidateIPCRequest) Validate() error {
 }
 func DecodeNodeChainCandidateIPCRequest(raw []byte) (NodeChainCandidateIPCRequest, error) {
 	var q NodeChainCandidateIPCRequest
-	if decodeNodeChainJSON(raw, &q, NodeChainCandidateIPCMaximumBytes) != nil || q.Validate() != nil {
+	if decodeNodeChainJSON(raw, &q, NodeChainCandidateIPCMaximumBytes) != nil ||
+		q.Capture.Lease.Request.HasRegisteredFronts() || q.Validate() != nil {
 		return NodeChainCandidateIPCRequest{}, errNodeChainCandidate
 	}
 	q.Capture = q.Capture.Clone()

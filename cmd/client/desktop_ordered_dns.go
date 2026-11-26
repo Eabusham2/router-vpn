@@ -42,7 +42,7 @@ func proveDesktopOrderedDNS(ctx context.Context, a *app, observed observedConnec
 		return result, true
 	}
 	_, meta, capture, err := owner.launch.chain.readPolicy()
-	if err != nil || !desktopNodeChainMetadataMatchesSelection(meta, selection) || len(meta.Prefixes) != len(selection.Nodes) ||
+	if err != nil || !owner.launch.chain.metadataMatchesSelection(meta) || len(meta.Prefixes) != len(selection.Nodes) ||
 		meta.ExternalFinal != nil && graph.ControlID != selection.Control.ID || meta.ExternalFinal == nil && graph.ControlID != "" {
 		return result, true
 	}

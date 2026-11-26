@@ -118,9 +118,11 @@ final class RouterVPNNodeChainExecutionRegistry: @unchecked Sendable {
     /// by the provider's original engine/proof callback. A different process
     /// cannot acknowledge the absence of an older process's native capsule.
     func observe(_ data: Data?, request: Request, epoch: UUID) -> Data? {
-        guard request.operation == "ordered-execution-owner", let data, data.count <= 20 * 1024,
+        guard request.operation == "ordered-execution-owner", let data, data.count <= IOSOrderedLastBounds.envelope(IOSOrderedLastBounds.maximum),
               var fields = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(fields.keys) == Set(["schema", "kind", "request_id", "session_id", "source_sha256", "preparation_config_sha256", "last"]),
+              let record = fields["last"] as? String, IOSOrderedLastBounds.stored(record),
+              data.count <= IOSOrderedLastBounds.envelope(forStored: record),
               fields["kind"] as? String == "routervpn-ordered-execution-last", fields["request_id"] as? String == request.request else { return nil }
         lock.lock(); defer { lock.unlock() }
         guard generation == epoch else { return nil }
@@ -143,7 +145,7 @@ final class RouterVPNNodeChainExecutionRegistry: @unchecked Sendable {
         let owner = restoreOwnerValue as? String, last = lastValue as? String
         guard (temporaryOwner == nil) == (temporary == nil), (restoreValue == nil) == (token == nil),
               (restoreOwnerValue == nil) == (owner == nil), (lastValue == nil) == (last == nil),
-              last == nil || !(last?.isEmpty ?? true) && (last?.utf8.count ?? 0) <= 16 * 1024,
+              last.map(IOSOrderedLastBounds.stored) ?? true,
               last == nil || token == nil && owner == nil,
               token == nil && owner == nil && last == nil || executionSourcePresent else { throw issue() }
         return Start(admission: try beginStart(temporaryOwner: temporary, restoreToken: token, restoreOwner: owner),
@@ -262,6 +264,6 @@ private func validToken(_ value: String) -> Bool {
     value.utf8.count == 32 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
 }
 private func encode(_ fields: [String: Any]) -> Data? {
-    guard let data = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]), data.count <= 20 * 1024 else { return nil }
+    guard let data = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]), data.count <= IOSOrderedLastBounds.envelope(forStored: fields["last"] as? String) else { return nil }
     return data
 }

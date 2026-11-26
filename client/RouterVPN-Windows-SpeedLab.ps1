@@ -411,17 +411,46 @@ function global:Get-RouterVPNOrderedSelected {
         if(-not(Test-RouterVPNOrderedNumber $extended 9 96 -Integer)-or$null-ne(Get-RouterVPNOrderedValue $Capture 'extended_local_nodes')){throw 'Invalid retained extended execution inventory.'}
         $limit=[Math]::Max(16384,512+1536*[int]$extended)
     }
-    if($Raw-isnot[string]-or-not$Raw-or[Text.Encoding]::UTF8.GetByteCount($Raw)-gt$limit){throw 'The selected measurement lost its complete native capture.'}
+    if($Raw-isnot[string]-or-not$Raw-or[Text.Encoding]::UTF8.GetByteCount($Raw)-gt[Math]::Max(65536,$limit)){throw 'The selected measurement lost its complete native capture.'}
     try{$Selected=$Raw|ConvertFrom-Json -ErrorAction Stop}catch{throw 'The selected measurement capture is invalid.'}
     $Keys=@(Get-RouterVPNOrderedKeys $Selected);$Expected=@('schema','source_sha256','config_sha256','generation_sha256','selected_execution','nodes')
     $Multiple=$Keys-ccontains'multiple_imported'
+    $External=$Keys-ccontains'external_final'
     if($Multiple){$Expected+='multiple_imported'}
-    if($Keys.Count-ne$Expected.Count-or@($Keys|Where-Object{$Expected-cnotcontains$_}).Count-ne0-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Selected 'schema') 1 1 -Integer)){throw 'The selected measurement capture is incomplete.'}
+    if($External){$Expected+='external_final'}
+    if($Multiple-and$External){throw 'The selected measurement mixed original route families.'}
+    $rawLimit=if($External){65536}else{$limit}
+    if([Text.Encoding]::UTF8.GetByteCount($Raw)-gt$rawLimit-or$Keys.Count-ne$Expected.Count-or@($Keys|Where-Object{$Expected-cnotcontains$_}).Count-ne0-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Selected 'schema') 1 1 -Integer)){throw 'The selected measurement capture is incomplete.'}
     foreach($Key in @('source_sha256','config_sha256','generation_sha256')){
         if((Get-RouterVPNOrderedValue $Selected $Key)-isnot[string]-or[string](Get-RouterVPNOrderedValue $Selected $Key)-cne[string](Get-RouterVPNOrderedValue $Capture $Key)){throw 'The selected measurement changed its source identity.'}
     }
     $Execution=Get-RouterVPNOrderedValue $Selected 'selected_execution';$Nodes=Get-RouterVPNOrderedValue $Selected 'nodes'
-    if($Execution-cnotin@('local','server')-or$Nodes-isnot[array]-or$Nodes.Count-lt2-or($null-eq$extended-and$Nodes.Count-gt8)-or($null-ne$extended-and(-not$Multiple-or$Nodes.Count-ne$extended))){throw 'The selected measurement changed its original inventory.'}
+    if($Execution-cnotin@('local','server')-or$Nodes-isnot[array]-or$Nodes.Count-lt2-or($External-and$Nodes.Count-lt3)-or($null-eq$extended-and$Nodes.Count-gt8)-or($null-ne$extended-and((-not$Multiple-and-not$External)-or$Nodes.Count-ne$extended))){throw 'The selected measurement changed its original inventory.'}
+    # Cache only the structural verdict for this immutable JSON string and its
+    # paired control. Each caller receives a fresh parse; mutable returned rows
+    # can never become another call's retained validation authority. The source
+    # digests, schema, byte bound and outer depth are checked above every time.
+    $cachedRaw=Get-Variable RouterVPNOrderedSelectedValidatedRaw -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    $cachedControl=Get-Variable RouterVPNOrderedSelectedValidatedControl -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    $control=Get-RouterVPNOrderedValue $Capture 'profile_id'
+    if($cachedRaw-is[string]-and$cachedControl-is[string]-and$control-is[string]-and
+       [String]::Equals($Raw,$cachedRaw,[StringComparison]::Ordinal)-and[String]::Equals($control,$cachedControl,[StringComparison]::Ordinal)){return ,$Selected}
+    if($External){
+        $Original=Get-RouterVPNOrderedValue $Selected 'external_final'
+        $OriginalKeys=@(Get-RouterVPNOrderedKeys $Original)
+        $ExpectedOriginal=@('schema','original_source_sha256','entry_source_sha256','entry_start_layer','dns_owner','final_transport_sha256','registered_final_source_sha256','public','source_authenticator')
+        $Public=Get-RouterVPNOrderedValue $Original 'public'
+        if($OriginalKeys.Count-ne9-or@($OriginalKeys|Where-Object{$ExpectedOriginal-cnotcontains$_}).Count-ne0-or
+           -not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Original 'schema') 8 8 -Integer)-or
+           (Get-RouterVPNOrderedValue $Original 'entry_start_layer')-cnotin@('off','aes-256-gcm','aes-256-gcm+xor-whitening')-or
+           (Get-RouterVPNOrderedValue $Original 'dns_owner')-cnotin@('entry-home','external-final')-or
+           $Public-isnot[array]-or$Public.Count-ne($Nodes.Count-1)-or
+           (Get-RouterVPNOrderedValue $Nodes[0] 'node_id')-cne(Get-RouterVPNOrderedValue $Capture 'profile_id')){throw 'The selected external exit lost its original entry or source inventory.'}
+        foreach($Key in @('original_source_sha256','entry_source_sha256','final_transport_sha256','registered_final_source_sha256','source_authenticator')){
+            $Seal=Get-RouterVPNOrderedValue $Original $Key
+            if($Seal-isnot[string]-or$Seal-cnotmatch'\A[0-9a-f]{64}\z'){throw 'The selected external exit lost its source commitment.'}
+        }
+    }
     if($Multiple){
         $Original=Get-RouterVPNOrderedValue $Selected 'multiple_imported'
         $OriginalKeys=@(Get-RouterVPNOrderedKeys $Original)
@@ -434,24 +463,29 @@ function global:Get-RouterVPNOrderedSelected {
     $PublicIndex=0
     $HasEarlierPublic=$false
     $IDs=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $Tags=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     for($Position=0;$Position-lt$Nodes.Count;$Position++){
         $Node=$Nodes[$Position];$NodeKeys=@(Get-RouterVPNOrderedKeys $Node);$ExpectedNode=@('node_id','position','role','kind')
         $Role=if($Position-eq0){'entry'}elseif($Position-eq($Nodes.Count-1)){'exit'}else{'intermediate'}
         $ID=Get-RouterVPNOrderedValue $Node 'node_id';$Kind=Get-RouterVPNOrderedValue $Node 'kind'
-        if($NodeKeys.Count-ne4-or@($NodeKeys|Where-Object{$ExpectedNode-cnotcontains$_}).Count-ne0-or-not(Test-RouterVPNOrderedText $ID)-or-not$IDs.Add($ID)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Node 'position') $Position $Position -Integer)-or(Get-RouterVPNOrderedValue $Node 'role')-cne$Role-or($Kind-cne'private-node'-and-not($Kind-ceq'public-path'-and$Nodes.Count-ge3-and$Position-gt0-and$Position-lt($Nodes.Count-1)-and($Multiple-or$Position-eq($Nodes.Count-2))))){throw 'The selected measurement changed an original hop.'}
+        $KindOK=if($External){$Kind-ceq$(if($Position-eq0){'private-node'}else{'public-path'})}else{$Kind-ceq'private-node'-or($Kind-ceq'public-path'-and$Nodes.Count-ge3-and$Position-gt0-and$Position-lt($Nodes.Count-1)-and($Multiple-or$Position-eq($Nodes.Count-2)))}
+        if($NodeKeys.Count-ne4-or@($NodeKeys|Where-Object{$ExpectedNode-cnotcontains$_}).Count-ne0-or-not(Test-RouterVPNOrderedText $ID)-or-not$IDs.Add($ID)-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Node 'position') $Position $Position -Integer)-or(Get-RouterVPNOrderedValue $Node 'role')-cne$Role-or-not$KindOK-or($External-and$ID-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z')){throw 'The selected measurement changed an original hop.'}
         if($null -ne $extended -and $Position -eq 1 -and $Kind -cne 'public-path'){throw 'The extended selected inventory changed the first imported position.'}
-        if($Multiple-and$Kind-ceq'public-path'){
+        if(($Multiple-or$External)-and$Kind-ceq'public-path'){
             if($PublicIndex-ge$Public.Count){throw 'The selected measurement lost an imported source.'}
             $Row=$Public[$PublicIndex];$RowKeys=@(Get-RouterVPNOrderedKeys $Row)
             $Tag=Get-RouterVPNOrderedValue $Row 'tag';$Seal=Get-RouterVPNOrderedValue $Row 'source_sha256'
             if($RowKeys.Count-ne3-or@($RowKeys|Where-Object{$_-cnotin@('position','tag','source_sha256')}).Count-ne0-or
                -not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Row 'position') $Position $Position -Integer)-or
-               $Tag-isnot[string]-or$Tag-cnotmatch'^[!-~]{1,128}$'-or$Seal-isnot[string]-or$Seal-cnotmatch'^[0-9a-f]{64}$'){throw 'The selected measurement changed an imported source.'}
+               $Tag-isnot[string]-or$Tag-cnotmatch'\A[!-~]{1,128}\z'-or$Seal-isnot[string]-or$Seal-cnotmatch'\A[0-9a-f]{64}\z'-or($External-and-not$Tags.Add($Tag))){throw 'The selected measurement changed an imported source.'}
             if($Position-lt($Nodes.Count-2)){$HasEarlierPublic=$true}
             $PublicIndex++
         }
     }
     if($Multiple-and(-not$HasEarlierPublic-or$PublicIndex-ne$Public.Count)){throw 'The selected measurement changed its imported route family.'}
+    if($External-and($PublicIndex-ne$Public.Count-or($Execution-ceq'server'-and(Get-RouterVPNOrderedValue $Public[-1] 'source_sha256')-cne(Get-RouterVPNOrderedValue $Original 'registered_final_source_sha256')))){throw 'The selected external exit changed its registered final authority.'}
+    $script:RouterVPNOrderedSelectedValidatedRaw=$Raw
+    $script:RouterVPNOrderedSelectedValidatedControl=$control
     return ,$Selected
 }
 function global:Assert-RouterVPNOrderedSelectedNode {
@@ -488,6 +522,17 @@ function global:Assert-RouterVPNOrderedNode {
     $Extended=Get-RouterVPNOrderedValue $Capture 'extended_local_nodes'
     $PublicMember=[string](Get-RouterVPNOrderedValue $Node 'kind')-ceq'public-path'
     $externalExit=Get-RouterVPNOrderedValue $Capture 'external_final_node_id'
+    $Selected=Get-RouterVPNOrderedSelected $Capture
+    if($null-ne$Selected-and@(Get-RouterVPNOrderedKeys $Selected)-ccontains'external_final'){
+        Assert-RouterVPNOrderedCapture $Capture
+        Assert-RouterVPNOrderedSelectedNode $Capture $Node $Count
+        $id=Get-RouterVPNOrderedValue $Node 'node_id'
+        $method=if($PublicMember){'routed-https-response-after-tls'}else{'routed-private-response-including-connection'}
+        if($Count-lt3-or$Count-gt96-or$Position-lt0-or$Position-ge$Count-or$id-isnot[string]-or$id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'-or
+           (Get-RouterVPNOrderedValue $Node 'role')-cne$Role-or-not(Test-RouterVPNOrderedNumber (Get-RouterVPNOrderedValue $Node 'position') $Position $Position -Integer)-or
+           (Get-RouterVPNOrderedValue $Node 'measurement')-cne$method){throw 'The selected external-final row changed its source position or timing method.'}
+        return
+    }
     if($null -ne $externalExit){
         Assert-RouterVPNOrderedCapture $Capture
         $id=Get-RouterVPNOrderedValue $Node 'node_id'

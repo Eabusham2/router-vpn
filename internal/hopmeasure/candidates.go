@@ -93,12 +93,13 @@ type candidateCompletion struct {
 }
 
 type CandidateService struct {
-	service        *Service
-	prefix         CandidatePrefix
-	targets        []CandidateTarget
-	response       func(context.Context, CandidateTarget, func() error) error
-	publicResponse func(context.Context, CandidateTarget, func() error, func() error) error
-	completion     candidateCompletion // protected by service.mu
+	service                  *Service
+	prefix                   CandidatePrefix
+	targets                  []CandidateTarget
+	response                 func(context.Context, CandidateTarget, func() error) error
+	publicResponse           func(context.Context, CandidateTarget, func() error, func() error) error
+	registeredPublicResponse func(context.Context, CandidateTarget) (time.Duration, error)
+	completion               candidateCompletion // protected by service.mu
 }
 
 func candidateText(value string) bool {
@@ -180,8 +181,26 @@ func NewPublicResponseCandidatesContext(ctx context.Context, engine CandidateEng
 	return service, err
 }
 
+// NewRegisteredPublicResponseCandidatesContext retains the registered worker's
+// authenticated post-TLS duration. Transport to its control front is outside
+// the response timing interval, just as it is for the Local HTTPS owner.
+func NewRegisteredPublicResponseCandidatesContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, limit int, authority PublicResponseCandidateAuthority, response func(context.Context, CandidateTarget) (time.Duration, error)) (*CandidateService, error) {
+	if authority == nil || response == nil || limit <= 0 || limit > 40<<20 {
+		return nil, ErrStale
+	}
+	count := authority.PublicResponseCandidateDepth(prefix.Position, prefix.ID, prefix.Tag)
+	if count < 3 || count > 96 || prefix.Position < 1 || prefix.Position >= count-1 {
+		return nil, ErrStale
+	}
+	s, err := newPrefixCandidatesContext(ctx, engine, prefix, targets, limit, count)
+	if err == nil {
+		s.registeredPublicResponse = response
+	}
+	return s, err
+}
+
 func (s *CandidateService) measurement() string {
-	if s.publicResponse != nil {
+	if s.publicResponse != nil || s.registeredPublicResponse != nil {
 		return CandidatePublicResponseMeasurement
 	}
 	if s.response != nil {
@@ -258,6 +277,10 @@ func (s *CandidateService) StartContext(ctx context.Context, request, candidateI
 	return errors.New("candidate is outside the original source inventory")
 }
 
+// RegisteredPublicCandidateIntervalLimit bounds the original remote HTTPS
+// observation and its serialized successful measurements.
+const RegisteredPublicCandidateIntervalLimit = 2500 * time.Millisecond
+
 func (s *CandidateService) run(ctx context.Context, request string, target CandidateTarget) {
 	service := s.service
 	verify := func() error {
@@ -268,7 +291,8 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 	}
 	result := Result{ID: target.ID, Role: "candidate", Kind: "tcp-connect", Label: fmt.Sprintf("TCP connection to candidate through node %d", s.prefix.Position+1)}
 	phase := "TCP connection"
-	if s.publicResponse != nil {
+	public := s.measurement() == CandidatePublicResponseMeasurement
+	if public {
 		phase = "public exit HTTPS response"
 		result.Kind = "public-exit-response"
 		result.Label = fmt.Sprintf("Verified public exit HTTPS response through node %d and candidate", s.prefix.Position+1)
@@ -285,14 +309,14 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 			if failure = service.phase(ctx, request, fmt.Sprintf("candidate: %s %d/%d", phase, len(samples)+1, LatencyBenchmarkSamples)); failure != nil {
 				break
 			}
-			probe, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
+			probe, cancel := context.WithTimeout(ctx, RegisteredPublicCandidateIntervalLimit)
 			var interval Interval
 			var clockErr error
 			begin := func() error {
 				interval, clockErr = StartInterval()
 				return clockErr
 			}
-			if s.publicResponse == nil {
+			if !public {
 				_ = begin()
 			}
 			var connection net.Conn
@@ -302,7 +326,14 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 				elapsed, elapsedErr = interval.Milliseconds()
 				return elapsedErr
 			}
-			if s.publicResponse != nil {
+			if s.registeredPublicResponse != nil {
+				var duration time.Duration
+				duration, dialErr = s.registeredPublicResponse(probe, target)
+				elapsed = float64(duration) / float64(time.Millisecond)
+				if duration <= 0 || duration > RegisteredPublicCandidateIntervalLimit {
+					elapsedErr = errMeasurementClock
+				}
+			} else if s.publicResponse != nil {
 				dialErr = s.publicResponse(probe, target, begin, complete)
 			} else if clockErr == nil && s.response != nil {
 				dialErr = s.response(probe, target, complete)
@@ -319,8 +350,8 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 			probeErr := probe.Err()
 			cancel()
 			failure = errors.Join(clockErr, dialErr, elapsedErr, closeErr, probeErr)
-			if failure != nil || connection == nil && s.response == nil && s.publicResponse == nil || elapsed <= 0 || math.IsNaN(elapsed) || math.IsInf(elapsed, 0) {
-				if s.response != nil && len(samples) == 0 && errors.Is(dialErr, ErrCandidateNotRegistered) && ctx.Err() == nil && probeErr == nil && clockErr == nil && closeErr == nil {
+			if failure != nil || connection == nil && s.response == nil && !public || elapsed <= 0 || math.IsNaN(elapsed) || math.IsInf(elapsed, 0) {
+				if (s.response != nil || s.registeredPublicResponse != nil) && len(samples) == 0 && errors.Is(dialErr, ErrCandidateNotRegistered) && ctx.Err() == nil && probeErr == nil && clockErr == nil && closeErr == nil {
 					result.CandidateDisposition = CandidateNotRegistered
 					failure = ErrCandidateNotRegistered
 				} else {
@@ -347,7 +378,7 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 		}
 		mean /= float64(len(sorted) - 2*trim)
 		result.Benchmark = &LatencyBenchmark{Schema: 1, Measurement: s.measurement(), Attempts: LatencyBenchmarkSamples, Distribution: distribution(samples), TrimmedMean: mean}
-		if s.publicResponse != nil {
+		if public {
 			result.Benchmark.Endpoint = CandidatePublicResponseEndpoint
 		}
 		result.Ready = true

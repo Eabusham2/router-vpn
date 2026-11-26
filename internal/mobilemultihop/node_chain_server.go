@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"sync/atomic"
 
 	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/multihoprelay"
@@ -50,6 +51,7 @@ type NodeChainServerDestination struct {
 }
 
 type NodeChainServerDNSCapture struct {
+	EntryHome      *NodeChainServerHomeDNS      `json:"entry_home,omitempty"`
 	Binding        NodeChainServerBinding       `json:"binding"`
 	PolicySHA256   string                       `json:"policy_sha256"`
 	PolicyJSON     string                       `json:"policy_json"`
@@ -145,6 +147,7 @@ func (r NodeChainServerFrontRoute) AllowsResolvedDestination(network, original, 
 // opens no socket and proves no connectivity. The worker owns the separate
 // authenticated front and must not forward while proofs are pending.
 type NodeChainServerPolicy struct {
+	externalFinal                                  *nodeChainExternalFinalServerScope
 	multiple                                       *nodeChainMultipleImportedServerScope
 	openvpnMiddle                                  *nodeChainOpenVPNMember
 	openvpn                                        *nodeChainOpenVPNServerScope
@@ -609,6 +612,9 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 	if err := p.validateCapture(); err != nil {
 		return nil, err
 	}
+	if p.multiple != nil {
+		p.multiple.rememberDeepPrivateFinal(p)
+	}
 	return p, nil
 }
 
@@ -631,8 +637,29 @@ func (p *NodeChainServerPolicy) captureSeal() string {
 }
 
 func (p *NodeChainServerPolicy) validateCapture() error {
+	if p != nil && p.externalFinal != nil && p.externalFinal.original != nil {
+		if !p.externalFinal.matches(p) {
+			return nodeChainServerError
+		}
+		return nil
+	}
+	if p != nil && p.multiple != nil && p.multiple.verified != nil {
+		s := p.multiple
+		if p.externalFinal != nil || s.policy != p || !s.verified.matches(p, s.members) || !s.original() {
+			return nodeChainServerError
+		}
+		return nil
+	}
 	if p == nil || p.carrier != nil && !p.carrier.sealed() || p.seal == "" || p.captureSeal() != p.seal || p.descriptor.Validate() != nil ||
 		len(p.nodes) != len(p.proofs) || len(p.proofs) != len(p.proofTargets) {
+		return nodeChainServerError
+	}
+
+	if p.descriptor.Schema == 8 {
+		if !p.externalFinal.current(p) {
+			return nodeChainServerError
+		}
+	} else if p.externalFinal != nil {
 		return nodeChainServerError
 	}
 
@@ -706,14 +733,32 @@ func (p *NodeChainServerPolicy) validateCapture() error {
 }
 
 func (p *NodeChainServerPolicy) binding(capture multihoprelay.NodeChainCapture) (NodeChainServerBinding, error) {
-	if p.validateCapture() != nil || capture.Validate() != nil || !reflect.DeepEqual(capture.Source, p.descriptor) {
+	if p.validateCapture() != nil {
+		return NodeChainServerBinding{}, nodeChainServerError
+	}
+	var registered *atomic.Pointer[nodeChainRegisteredCaptureBinding]
+	if p.externalFinal != nil {
+		registered = &p.externalFinal.bound
+	} else if p.multiple != nil && p.multiple.verified != nil && capture.Request.HasRegisteredFronts() {
+		registered = &p.multiple.bound
+	}
+	if registered != nil {
+		if cached := registered.Load(); cached != nil && reflect.DeepEqual(cached.capture, capture) {
+			return cached.binding, nil
+		}
+	}
+	if !reflect.DeepEqual(capture.Source, p.descriptor) {
 		return NodeChainServerBinding{}, nodeChainServerError
 	}
 	digest, err := capture.Digest()
 	if err != nil {
 		return NodeChainServerBinding{}, nodeChainServerError
 	}
-	return NodeChainServerBinding{p.sourceSHA, digest, p.configSHA}, nil
+	binding := NodeChainServerBinding{p.sourceSHA, digest, p.configSHA}
+	if registered != nil {
+		registered.Store(&nodeChainRegisteredCaptureBinding{capture.Clone(), binding})
+	}
+	return binding, nil
 }
 
 func (p *NodeChainServerPolicy) Source() string       { return p.sourceJSON }
@@ -751,6 +796,10 @@ func (p *NodeChainServerPolicy) DNSCapture(capture multihoprelay.NodeChainCaptur
 		return NodeChainServerDNSCapture{}, err
 	}
 	result := p.dns
+	if result.EntryHome != nil {
+		h := *result.EntryHome
+		result.EntryHome = &h
+	}
 	result.Binding = binding
 	result.Destinations = append([]NodeChainServerDestination(nil), result.Destinations...)
 	return result, nil
@@ -777,7 +826,9 @@ func (p *NodeChainServerPolicy) FrontRoutes(capture multihoprelay.NodeChainCaptu
 		if route.Final {
 			route.UDPOverTCPVersion = 2
 			route.BlockIPv6, route.BlockedCIDRs = p.blockIPv6, append([]string(nil), p.blockedCIDRs...)
-			route.Destinations = append(route.Destinations, p.dns.Destinations...)
+			if p.dns.EntryHome == nil {
+				route.Destinations = append(route.Destinations, p.dns.Destinations...)
+			}
 		}
 		result[index] = route
 	}

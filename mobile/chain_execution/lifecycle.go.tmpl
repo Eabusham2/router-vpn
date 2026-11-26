@@ -239,7 +239,9 @@ func (m *RouterNodeChainExecution) runWithFactory(server *CommandServer, factory
 			return err
 		}
 		var original *mobilemultihop.NodeChainExecutionPolicy
-		if m.prep.RequiresMultipleImportedExecutionObserver() {
+		if m.prep.RequiresExternalFinalExecutionObserver() {
+			original, err = m.restore.mobile.OriginalExternalFinalPolicyContext(startup)
+		} else if m.prep.RequiresMultipleImportedExecutionObserver() {
 			original, err = m.restore.mobile.OriginalMultipleImportedPolicyContext(startup)
 		} else if m.prep.RequiresOpenVPNExecutionObserver() {
 			original, err = m.restore.mobile.OriginalOpenVPNPolicyContext(startup)

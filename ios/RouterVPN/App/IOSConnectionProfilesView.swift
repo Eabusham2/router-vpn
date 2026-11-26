@@ -322,7 +322,7 @@ private enum IOSConnectionProfileStore {
         let publicExit = profiles.last?.normalizedNodeKind == "external"
         guard (2...IOSMultihopNodeSelection.physicalTraversalDepth).contains(profiles.count),
               let final = publicExit ? profiles.first : profiles.last, final.normalizedNodeKind == "router-vpn",
-              let nodes = final.multihopNodes, !publicExit || IOSMultihopNodeSelection.externalExitReferences(nodes, controlID: final.id, execution: final.multihopExecution),
+              let nodes = final.multihopNodes, !publicExit || final.multihopExecution == "local" && IOSMultihopNodeSelection.externalExitReferences(nodes, controlID: final.id, execution: final.multihopExecution),
               nodes.count == profiles.count, nodes.last?.mode == "shadowsocks",
               let execution = final.multihopExecution, ["local", "server", "auto"].contains(execution),
               nodes.map(\.id) == profiles.map(\.id) else { throw issue("The proposed future chain lost its complete original policies.") }

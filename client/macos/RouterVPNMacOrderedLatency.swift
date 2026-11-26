@@ -69,11 +69,13 @@ struct RouterVPNOrderedCapture: Codable, Equatable {
         }
         guard let text = selected_capture else { return nil }
         let captureLimit = extended_original_nodes.map { max(16384, 512 + 1536 * $0) } ?? 8192
-        guard !text.isEmpty, text.utf8.count <= captureLimit, let data = text.data(using: .utf8),
+        guard !text.isEmpty, text.utf8.count <= max(65536, captureLimit), let data = text.data(using: .utf8),
               let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              text.utf8.count <= (object.keys.contains("external_final") ? 65536 : captureLimit),
               let rawNodes = object["nodes"] as? [[String: Any]], RouterVPNSelectedPublicInventory.valid(object, nodes: rawNodes),
               RouterVPNSelectedPublicInventory.selectedSize(extended_original_nodes, capture: object, nodes: rawNodes),
-              rawNodes.allSatisfy({ Set($0.keys) == Set(["node_id", "position", "role", "kind"]) }) else {
+              rawNodes.allSatisfy({ Set($0.keys) == Set(["node_id", "position", "role", "kind"]) }),
+              !object.keys.contains("external_final") || rawNodes.first?["node_id"] as? String == profile_id else {
             throw orderedLatencyIssue("The selected measurement lost its complete native capture.")
         }
         let value = try JSONDecoder().decode(RouterVPNOrderedSelectedCapture.self, from: data)
@@ -150,6 +152,8 @@ struct RouterVPNOrderedSelectedCapture: Decodable {
     let nodes: [Node]
     struct Imported: Decodable { let schema: Int }
     let multiple_imported: Imported?
+    struct ExternalFinal: Decodable { let schema: Int }
+    let external_final: ExternalFinal?
 }
 
 struct RouterVPNOrderedLatencyNode: Decodable, Equatable {
@@ -166,6 +170,17 @@ struct RouterVPNOrderedLatencyNode: Decodable, Equatable {
     func validate(count: Int = 3, multipleImported: Bool = false, extendedLocalCount: Int? = nil, extendedOriginalCount: Int? = nil, pairedLocal: Bool = false, pairedPrefixNodes: Int? = nil, localRoles: [String]? = nil, customEntry: Self? = nil, externalFinal: RouterVPNOrderedCapture? = nil) throws {
         let expectedRole = position == 0 ? "entry" : position == count - 1 ? "exit" : "intermediate"
         let isPublic = kind == "public-path"
+        if let capture = externalFinal, let selected = try capture.selected(), selected.external_final != nil {
+            try capture.validate()
+            try capture.validateNode(self, count: count)
+            guard (3...96).contains(count), position >= 0, position < count, role == expectedRole,
+                  node_id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
+                  receiptKind(count: count) == selected.selected_execution,
+                  measurement == (isPublic ? "routed-https-response-after-tls" : "routed-private-response-including-connection") else {
+                throw orderedLatencyIssue("The selected external-final hop changed its timing method or source position.")
+            }
+            return
+        }
         if let capture = externalFinal, capture.external_final_node_id != nil {
             try capture.validate()
             try capture.validateNode(self, count: count)

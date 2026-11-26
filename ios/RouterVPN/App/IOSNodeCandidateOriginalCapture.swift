@@ -17,6 +17,7 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
         }
     }
     func selectedResponse(in proofs: [Self]) -> Bool {
+        if metric == "routed-public-candidate-response" { return supported(in: proofs) }
         guard (3...IOSMultihopNodeSelection.physicalTraversalDepth).contains(proofs.count), position > 0, position < proofs.count - 1,
               proofs[position] == self, metric == "routed-candidate-response",
               IOSMultihopNodeSelection.supportsNativePrefix(proofs.first?.mode ?? ""), proofs.dropFirst().allSatisfy({ $0.mode == "shadowsocks" }),

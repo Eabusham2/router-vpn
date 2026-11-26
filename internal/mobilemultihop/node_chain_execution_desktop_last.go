@@ -19,7 +19,14 @@ func (last NodeChainExecutionLast) ValidateDesktopProjection(projection *NodeCha
 // proves only this saved choice; it must never rerun Compare.
 func NewDesktopNodeChainExecutionLastPreparation(original *DesktopNodeChainPolicy, execution, saved string) (*NodeChainExecutionPreparation, error) {
 	p, err := NewDesktopNodeChainExecutionPreparation(original, execution)
-	if err != nil || saved == "" {
+	if err != nil {
+		return nil, err
+	}
+	return p.withDesktopExecutionLast(saved)
+}
+
+func (p *NodeChainExecutionPreparation) withDesktopExecutionLast(saved string) (*NodeChainExecutionPreparation, error) {
+	if p == nil || saved == "" || p.desktop == nil {
 		return nil, nodeChainExecutionError
 	}
 	last, err := ParseNodeChainExecutionLast(saved, p)

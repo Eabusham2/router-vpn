@@ -64,13 +64,21 @@ struct IOSNodeChainCapture {
         return try compile(bundles: bundles, selectionExecution: requested, multipleExecution: true)
     }
 
-    private static func compile(bundles: [Data], selectionExecution: String, openVPNExecution: Bool = false, multipleExecution: Bool = false) throws -> Self {
+    static func compileOriginalForExternalFinalExecution(bundles: [Data], requested: String) throws -> Self {
+        guard ["server", "auto"].contains(requested) else { throw issue("Choose Server or Compare for this imported exit.") }
+        return try compile(bundles: bundles, selectionExecution: requested, externalFinalExecution: true)
+    }
+
+    private static func compile(bundles: [Data], selectionExecution: String, openVPNExecution: Bool = false, multipleExecution: Bool = false, externalFinalExecution: Bool = false) throws -> Self {
         guard (2...IOSMultihopNodeSelection.physicalTraversalDepth).contains(bundles.count) else { throw issue("Capture every ordered node before compiling the chain.") }
         // The final captured profile owns the exact selected order. It is
         // never inferred from map labels or from the current UI selection.
         let exitRoot = try object(bundles[bundles.count - 1], maximum: 32 * 1024 * 1024)
         let exitProfiles = exitRoot["routerProfiles"] as? [[String: Any]]
         let publicExit = exitProfiles?.first { $0["id"] as? String == exitRoot["selectedRouterID"] as? String }?["node_kind"] as? String == "external"
+        guard selectionExecution == "local" || publicExit == externalFinalExecution else {
+            throw issue("The selected execution requires its original paired control and final node.")
+        }
         let finalRoot = publicExit ? try object(bundles[0], maximum: 32 * 1024 * 1024) : exitRoot
         guard let finalID = finalRoot["selectedRouterID"] as? String,
               let finalProfiles = finalRoot["routerProfiles"] as? [[String: Any]],
@@ -85,11 +93,11 @@ struct IOSNodeChainCapture {
             }
             return IOSMultihopNodeSelection(id: id, mode: mode)
         }
-        guard selectedNodes.count <= IOSMultihopNodeSelection.maximumNodes || (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.extendedOriginalModes(selectedNodes.map(\.mode), execution: selectionExecution) else {
+        guard selectedNodes.count <= IOSMultihopNodeSelection.maximumNodes || (selectionExecution == "local" || multipleExecution || externalFinalExecution) && IOSMultihopNodeSelection.extendedOriginalModes(selectedNodes.map(\.mode), execution: selectionExecution) else {
             throw issue("This source cannot extend the selected route beyond eight members.")
         }
         if publicExit && !IOSMultihopNodeSelection.externalExitReferences(selectedNodes, controlID: finalID, execution: selectionExecution) {
-            throw issue("An imported final requires the original Local packet entry and distinct literal Shadowsocks sources.")
+            throw issue("An imported final requires the original paired packet entry and distinct literal Shadowsocks sources.")
         }
         let importedEntry = selectionExecution == "local" && IOSMultihopNodeSelection.usesLocalImportedEntry(selectedNodes)
         if multipleExecution && !IOSMultihopNodeSelection.supportsMultipleImportedExecution(selectedNodes) {
@@ -188,7 +196,7 @@ struct IOSNodeChainCapture {
             try? returned?.close()
             throw failure ?? issue("The selected ordered native graph is unavailable.")
         }
-        do { return try Self(plan: plan, selectionExecution: selectionExecution, originalSource: source, openVPNExecution: openVPNExecution, multipleExecution: multipleExecution) }
+        do { return try Self(plan: plan, selectionExecution: selectionExecution, originalSource: source, openVPNExecution: openVPNExecution, multipleExecution: multipleExecution, externalFinalExecution: externalFinalExecution) }
         catch { try? plan.close(); throw error }
     }
 
@@ -209,11 +217,11 @@ struct IOSNodeChainCapture {
     }
 
     // Inspect the retained original source without constructing another native plan.
-    init(plan: LibboxRouterNodeChain, selectionExecution: String = "local", openVPNExecution: Bool = false, multipleExecution: Bool = false) throws {
-        try self.init(plan: plan, selectionExecution: selectionExecution, originalSource: nil, openVPNExecution: openVPNExecution, multipleExecution: multipleExecution)
+    init(plan: LibboxRouterNodeChain, selectionExecution: String = "local", openVPNExecution: Bool = false, multipleExecution: Bool = false, externalFinalExecution: Bool = false) throws {
+        try self.init(plan: plan, selectionExecution: selectionExecution, originalSource: nil, openVPNExecution: openVPNExecution, multipleExecution: multipleExecution, externalFinalExecution: externalFinalExecution)
     }
 
-    private init(plan: LibboxRouterNodeChain, selectionExecution: String, originalSource: String?, openVPNExecution: Bool, multipleExecution: Bool) throws {
+    private init(plan: LibboxRouterNodeChain, selectionExecution: String, originalSource: String?, openVPNExecution: Bool, multipleExecution: Bool, externalFinalExecution: Bool) throws {
         guard ["local", "server", "auto"].contains(selectionExecution) else { throw Self.issue("The ordered source lost its explicit execution selection.") }
         var failure: NSError?
         let returned: String? = plan.launchInput(&failure)
@@ -227,9 +235,10 @@ struct IOSNodeChainCapture {
               root["original_config_sha256"] as? String == plan.configSHA256(),
               let nodes = root["nodes"] as? [String],
               let identitySources = root["identity_sources"] as? [String], identitySources.count == nodes.count,
-              (2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.extendedLocalSource(root["schema"] as? Int, execution: "local", count: nodes.count, identities: identitySources, allowPairedStreams: selectionExecution == "local", selectedPrivateStream: multipleExecution) && Int(plan.extendedLocalNodeCount()) == nodes.count,
+              (2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || (selectionExecution == "local" || multipleExecution || externalFinalExecution) && IOSMultihopNodeSelection.extendedLocalSource(root["schema"] as? Int, execution: "local", count: nodes.count, identities: identitySources, allowPairedStreams: selectionExecution == "local", selectedPrivateStream: multipleExecution) && Int(plan.extendedLocalNodeCount()) == nodes.count,
               identitySources.allSatisfy({ $0.utf8.count <= 16 * 1024 * 1024 }),
-              let schema = root["schema"] as? Int, schema == 1 || (schema == 2 || schema == 5 || schema == 6 && (selectionExecution == "local" || multipleExecution)) && nodes.count >= 3 || schema == 7 && selectionExecution == "local" && nodes.count == 3 || schema == 8 && selectionExecution == "local" && nodes.count >= 3,
+              let schema = root["schema"] as? Int, schema == 1 || (schema == 2 || schema == 5 || schema == 6 && (selectionExecution == "local" || multipleExecution)) && nodes.count >= 3 || schema == 7 && selectionExecution == "local" && nodes.count == 3 || schema == 8 && (selectionExecution == "local" || externalFinalExecution) && nodes.count >= 3,
+              !externalFinalExecution || schema == 8 && ["server", "auto"].contains(selectionExecution),
               !multipleExecution || schema == 6 && ["server", "auto"].contains(selectionExecution),
               !openVPNExecution || schema == 5 && ["server", "auto"].contains(selectionExecution) else {
             throw Self.issue("The native chain returned another source or platform owner.")

@@ -46,6 +46,8 @@ func (a *app) orderedLiveResponse(parent context.Context, graph activeMultihopGr
 	var nonce string
 	var at int64
 	var prefix string
+	var selectedPublic *hopmeasure.Hop
+	var serverPublic bool
 	if launch.chain.execution == nil {
 		result, exchangeErr := exchangeDesktopNodeChainOperation(ctx, launch, current, nil, samples)
 		if errors.Is(exchangeErr, errDesktopNodeChainMeasurementPending) && result.Request != "" {
@@ -100,6 +102,15 @@ func (a *app) orderedLiveResponse(parent context.Context, graph activeMultihopGr
 		if err := selectedCurrent(ctx); err != nil {
 			return output, err
 		}
+		if capture.ExternalFinal != nil {
+			public := capture.ExternalFinal.Public
+			last := nodes[len(nodes)-1]
+			if len(public) != len(nodes)-1 || public[len(public)-1].Position != last.Position || last.Role != "exit" || last.Kind != "public-path" || last.NodeID != exit.ID {
+				return output, errors.New("selected public exit response changed its original last hop")
+			}
+			selectedPublic = &hopmeasure.Hop{ID: last.NodeID, Kind: last.Kind, Tag: public[len(public)-1].Tag, Label: last.Label}
+			serverPublic = capture.Execution == "server"
+		}
 		prefix = " " + capture.Execution
 		status, at = result.Status, result.CompletedAt
 	}
@@ -110,7 +121,9 @@ func (a *app) orderedLiveResponse(parent context.Context, graph activeMultihopGr
 	if frozen[0].Profile.NodeKind == "external" {
 		endpoints[0].Kind = "public-path"
 	}
-	if frozen[len(frozen)-1].Profile.NodeKind == "external" {
+	if selectedPublic != nil {
+		endpoints[1] = *selectedPublic
+	} else if frozen[len(frozen)-1].Profile.NodeKind == "external" {
 		_, meta, _, err := launch.chain.readLaunchPolicy()
 		if err != nil || launch.chain.execution != nil || !desktopNodeChainMetadataMatchesSelection(meta, launch.chain.selection) ||
 			meta.ExternalFinal == nil || launch.chain.selection.Native == nil || launch.chain.selection.Native.chain == nil ||
@@ -120,7 +133,11 @@ func (a *app) orderedLiveResponse(parent context.Context, graph activeMultihopGr
 		endpoints[1].Kind, endpoints[1].Tag = "public-path", meta.FinalTag
 		endpoints[1].Label = fmt.Sprintf("Cumulative path through custom node %d of %d → Cloudflare edge", len(frozen), len(frozen))
 	}
-	measured, err := hopmeasure.OrderedResponseLatencies(status, nonce, samples, endpoints)
+	read := hopmeasure.OrderedResponseLatencies
+	if serverPublic {
+		read = hopmeasure.OrderedExternalFinalServerResponseLatencies
+	}
+	measured, err := read(status, nonce, samples, endpoints)
 	if err != nil {
 		return output, err
 	}

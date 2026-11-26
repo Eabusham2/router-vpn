@@ -151,7 +151,7 @@ func orderedDraftProposalWithMode(execution string, members []desktopNodeChainMe
 	if len(members) < 2 || len(members) >= mobilemultihop.NodeChainExtendedLocalMaximumNodes || position < 0 || position >= len(members)-1 {
 		return control, nil, errors.New("the measured candidate cannot be inserted at this position")
 	}
-	if desktopNodeChainHasExternalFinal(members) && (execution != "local" || position != 0 && !desktopPublicCandidateMembers(members, execution, position) || mode != "shadowsocks" || !desktopNodeChainImportedExecutionMiddle(candidate)) {
+	if desktopNodeChainHasExternalFinal(members) && (!validDesktopOrderedExecution(execution) || position != 0 && !desktopPublicCandidateMembers(members, execution, position) || mode != "shadowsocks" || !desktopNodeChainImportedExecutionMiddle(candidate)) {
 		return control, nil, errors.New("the external-final draft requires an original literal SS2022 candidate through its captured prefix")
 	}
 	rows := nodeChainSelectedReferences(members)

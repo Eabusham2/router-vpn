@@ -305,9 +305,12 @@ final class AndroidStartupPolicy {
      * current discovery, proof, TUN, MTU result or reusable response lease. */
     static final class OrderedLast {
         private final String controlID,members,pathSHA,requested;
+        private final int localBytes,nativeBytes;
         private final Map<String,Object> preferences;
         private OrderedLast(AndroidNodeStore.ChainCapture source,String pathSHA,Map<String,Object> preferences)throws Exception {
             controlID=source.control.id;members=orderedMembers(source);this.pathSHA=pathSHA;requested=source.execution;
+            localBytes=localLastLimit(source.members.size(),members);
+            nativeBytes=source.executionLastLimit();
             this.preferences=Collections.unmodifiableMap(new LinkedHashMap<>(preferences));
         }
     }
@@ -346,14 +349,15 @@ final class AndroidStartupPolicy {
             if("local".equals(record.requested)){
                 if(!nativeRecord.isEmpty())return false;
             }else{
-                if(nativeRecord.isEmpty()||nativeRecord.getBytes(StandardCharsets.UTF_8).length>16*1024)return false;
+                if(nativeRecord.isEmpty()||nativeRecord.getBytes(StandardCharsets.UTF_8).length>record.nativeBytes)return false;
                 io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(nativeRecord);
                 JSONObject nativeChoice=new JSONObject(nativeRecord);
                 if(!record.requested.equals(nativeChoice.getString("setting"))||!selected.equals(nativeChoice.getString("execution")))return false;
                 receipt.put("requested_execution",record.requested).put("native_last",nativeRecord);
             }
             byte[] bytes=receipt.toString().getBytes(StandardCharsets.UTF_8);
-            if(bytes.length>("local".equals(record.requested)?MAX_LAST:MAX_ORDERED_LAST))return false;
+            int limit="local".equals(record.requested)?record.localBytes:orderedLastEnvelopeLimit(record.nativeBytes,record.localBytes);
+            if(bytes.length>limit)return false;
             synchronized(AndroidHomeStateStore.class){
                 AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
                 if(captured==null||captured.sessionId.isEmpty()||!captured.sessionId.equals(home.sessionId)
@@ -362,7 +366,9 @@ final class AndroidStartupPolicy {
                         ||!record.controlID.equals(home.activeNodeId)||!record.members.equals(home.activeChain)
                         ||!home.activeEntryId.isEmpty()||!home.activeExitId.isEmpty()||!home.activeExternalId.isEmpty()
                         ||AndroidHomeStateStore.emergencyDisconnectPending(context)||!record.preferences.equals(selectionPreferences(context)))return false;
-                AndroidPrivateFileStore.write(new File(context.getApplicationContext().getFilesDir(),ORDERED_LAST_FILE),bytes,MAX_ORDERED_LAST);
+                // The storage transaction also checks the previous file, which
+                // can belong to a different valid route with a larger Last.
+                AndroidPrivateFileStore.write(new File(context.getApplicationContext().getFilesDir(),ORDERED_LAST_FILE),bytes,orderedLastEnvelopeLimit(64*1024,MAX_ORDERED_LAST));
                 return true;
             }
         }catch(Exception unavailable){return false;}
@@ -370,17 +376,20 @@ final class AndroidStartupPolicy {
 
     private static OrderedStartup requireLastOrdered(Context context,AndroidNodeStore.ChainCapture source)throws Exception {
         try{
-            String raw=AndroidTorProfile.strictText(AndroidPrivateFileStore.read(new File(context.getApplicationContext().getFilesDir(),ORDERED_LAST_FILE),MAX_ORDERED_LAST));
+            boolean local="local".equals(source.execution);
+            String members=orderedMembers(source);
+            int localLimit=localLastLimit(source.members.size(),members);
+            int limit=local?localLimit:orderedLastEnvelopeLimit(source.executionLastLimit(),localLimit);
+            String raw=AndroidTorProfile.strictText(AndroidPrivateFileStore.read(new File(context.getApplicationContext().getFilesDir(),ORDERED_LAST_FILE),limit));
             io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(raw);
             JSONObject receipt=new JSONObject(raw);Object schema=receipt.opt("schema");
-            boolean local="local".equals(source.execution);
             if(!(schema instanceof Integer||schema instanceof Long)||((Number)schema).longValue()!=(local?1:2)
-                    ||receipt.length()!=(local?5:7)||local&&raw.getBytes(StandardCharsets.UTF_8).length>MAX_LAST)
+                    ||receipt.length()!=(local?5:7))
                 throw new IllegalStateException("The historical ordered schema does not match the saved execution.");
             for(String field:new String[]{"control_id","nodes_json","path_sha256","selected_execution"})
                 if(!(receipt.opt(field) instanceof String))throw new IllegalStateException("Last requires exact historical text fields.");
             String selected=receipt.getString("selected_execution"),nativeRecord="";
-            if(!source.control.id.equals(receipt.getString("control_id"))||!orderedMembers(source).equals(receipt.getString("nodes_json"))
+            if(!source.control.id.equals(receipt.getString("control_id"))||!members.equals(receipt.getString("nodes_json"))
                     ||!orderedPathIdentity(source).equals(receipt.getString("path_sha256"))
                     ||!Arrays.asList("local","server").contains(selected)||!"auto".equals(source.execution)&&!source.execution.equals(selected))
                 throw new IllegalStateException("The historical ordered choice differs from its complete original sources.");
@@ -405,13 +414,24 @@ final class AndroidStartupPolicy {
 
     private static void requireOrderedChoice(Context context,AndroidNodeStore.ChainCapture source)throws Exception {
         SharedPreferences saved=prefs(context);String raw=saved.getString("multihop_nodes","");
+        JSONArray original=AndroidNodeStore.orderedSelection(source.control.profile());
         if(!"router-vpn".equals(saved.getString("selected_kind","router-vpn"))||!source.control.id.equals(saved.getString("selected_id",""))
                 ||!saved.getBoolean("multihop_on",false)||!source.execution.equals(saved.getString("multihop_execution","local"))
-                ||!"router-vpn".equals(saved.getString("multihop_entry_kind","router-vpn"))||raw.isEmpty()||raw.length()>MAX_LAST)
+                ||!"router-vpn".equals(saved.getString("multihop_entry_kind","router-vpn"))||raw.isEmpty()
+                ||raw.getBytes(StandardCharsets.UTF_8).length>localLastLimit(source.members.size(),original.toString()))
             throw new IllegalStateException("The saved ordered startup selection lost its exact requested execution or source.");
         io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON("{\"nodes\":"+raw+"}");
-        if(!canonical(new JSONArray(raw)).equals(canonical(AndroidNodeStore.orderedSelection(source.control.profile()))))
+        if(!canonical(new JSONArray(raw)).equals(canonical(original)))
             throw new IllegalStateException("The saved ordered modes or member order changed.");
+    }
+
+    private static int localLastLimit(int count,String members){
+        if(count<=8 || count>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH)return MAX_LAST;
+        return Math.min(MAX_ORDERED_LAST,MAX_LAST+JSONObject.quote(members).getBytes(StandardCharsets.UTF_8).length);
+    }
+
+    private static int orderedLastEnvelopeLimit(int nativeBytes,int localBytes){
+        return nativeBytes<=16*1024?MAX_ORDERED_LAST:localBytes+2*nativeBytes;
     }
 
     private static String orderedMembers(AndroidNodeStore.ChainCapture source)throws Exception {

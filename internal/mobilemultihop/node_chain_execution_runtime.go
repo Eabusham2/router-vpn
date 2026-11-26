@@ -22,6 +22,7 @@ type NodeChainExecutionSelectionEpochEngine interface {
 type NodeChainExecutionProgress struct {
 	NodeChainProgress
 	Comparison routechoice.Result `json:"comparison"`
+	ExitIP     string             `json:"external_final_ip,omitempty"`
 }
 
 // The runtime owns proofs and exact remote attempts; the host owns the one
@@ -58,6 +59,7 @@ type nodeChainExecutionTrial struct {
 	mu                         sync.Mutex
 	runtime                    *NodeChainExecutionRuntime
 	execution, tag, target, id string
+	exitIP                     string
 	selectionEpoch             uint64
 	lifetime                   context.Context
 	cancel                     context.CancelFunc
@@ -73,6 +75,11 @@ type nodeChainExecutionTrial struct {
 func NewNodeChainExecutionRuntime(projection *NodeChainExecutionProjection, engine NodeChainExecutionEngine) (*NodeChainExecutionRuntime, error) {
 	if projection.validateCapture() != nil || engine == nil {
 		return nil, nodeChainExecutionError
+	}
+	if projection.preparation.RequiresExternalFinalExecutionObserver() {
+		if _, ok := engine.(NodeChainExternalFinalExecutionObserver); !ok {
+			return nil, nodeChainExecutionError
+		}
 	}
 	if projection.preparation.RequiresMultipleImportedExecutionObserver() {
 		if _, ok := engine.(NodeChainMultipleImportedExecutionObserver); !ok {
@@ -117,6 +124,21 @@ func (r *NodeChainExecutionRuntime) current(ctx context.Context, trial *nodeChai
 	if !r.identityMatches(identity) || trial != nil && (active != trial || trial.lifetime.Err() != nil) {
 		return nodeChainExecutionError
 	}
+	// The native selected observer reads the typed public source, actual
+	// members, DNS and ingress inside the same selector generation. Keep
+	// the independent shared source reads on both sides of that call.
+	var originalPublic *NodeChain
+	if _, ok := r.engine.(nodeChainObservedSelection); ok && selected && r.projection.policy.externalFinal != nil {
+		// projection.validateCapture above verified this exact preparation
+		// and every mutable member. No native call intervenes.
+		binding := r.projection.policy.externalFinal
+		originalPublic = binding.local
+		if originalPublic == nil || binding.preparation != r.projection.preparation || originalPublic != r.projection.policy.local {
+			return nodeChainExecutionError
+		}
+	} else if err := r.projection.preparation.observeExternalFinalExecution(ctx, r.engine); err != nil {
+		return err
+	}
 	if err := r.observeMultipleImportedExecutionCurrentContext(ctx); err != nil {
 		return err
 	}
@@ -134,29 +156,12 @@ func (r *NodeChainExecutionRuntime) current(ctx context.Context, trial *nodeChai
 			return err
 		}
 	}
-	observed, err := r.engine.ObserveChainContext(ctx)
-	if err != nil {
+	if err := r.observeTrialSelection(ctx, identity, trial, selected); err != nil {
 		return err
 	}
-	if observed != identity {
-		return nodeChainExecutionError
-	}
-	if selected {
-		if trial == nil {
-			return nodeChainExecutionError
-		}
-		tag, err := r.engine.SelectedContext(ctx)
-		if err != nil {
-			return err
-		}
-		if tag != trial.tag {
-			return nodeChainExecutionError
-		}
-		epoch, err := r.engine.(NodeChainExecutionSelectionEpochEngine).SelectionEpochContext(ctx)
-		if err != nil {
-			return err
-		}
-		if epoch == 0 || epoch != trial.selectionEpoch {
+	if originalPublic != nil {
+		again, err := r.projection.preparation.OriginalExternalFinalSource()
+		if err != nil || again != originalPublic {
 			return nodeChainExecutionError
 		}
 	}
@@ -164,6 +169,54 @@ func (r *NodeChainExecutionRuntime) current(ctx context.Context, trial *nodeChai
 	valid := r.identity == identity && (trial == nil || r.active == trial) && !r.closed
 	r.mu.Unlock()
 	if !valid || r.retired.Load() || ctx.Err() != nil {
+		return nodeChainExecutionError
+	}
+	return nil
+}
+
+// Native engines can observe identity, the selected tag and the epoch in
+// one read bracketed by the same selector generation. Other adapters retain
+// their individual original-owner observations.
+type nodeChainObservedSelection interface {
+	ObserveExternalFinalSelectionContext(context.Context, *NodeChain) (NodeChainIdentity, string, uint64, error)
+}
+
+func (r *NodeChainExecutionRuntime) observeTrialSelection(ctx context.Context, identity NodeChainIdentity, trial *nodeChainExecutionTrial, selected bool) error {
+	if selected && trial == nil {
+		return nodeChainExecutionError
+	}
+	if observer, ok := r.engine.(nodeChainObservedSelection); ok && selected && r.projection.policy.externalFinal != nil {
+		actual, tag, epoch, err := observer.ObserveExternalFinalSelectionContext(ctx, r.projection.policy.local)
+		if err != nil {
+			return err
+		}
+		if actual != identity || tag != trial.tag || epoch == 0 || epoch != trial.selectionEpoch {
+			return nodeChainExecutionError
+		}
+		return nil
+	}
+	observed, err := r.engine.ObserveChainContext(ctx)
+	if err != nil {
+		return err
+	}
+	if observed != identity {
+		return nodeChainExecutionError
+	}
+	if !selected {
+		return nil
+	}
+	tag, err := r.engine.SelectedContext(ctx)
+	if err != nil {
+		return err
+	}
+	if tag != trial.tag {
+		return nodeChainExecutionError
+	}
+	epoch, err := r.engine.(NodeChainExecutionSelectionEpochEngine).SelectionEpochContext(ctx)
+	if err != nil {
+		return err
+	}
+	if epoch == 0 || epoch != trial.selectionEpoch {
 		return nodeChainExecutionError
 	}
 	return nil
@@ -313,6 +366,10 @@ func (r *NodeChainExecutionRuntime) Run(parent context.Context) (failure error) 
 	r.mu.Lock()
 	r.identity = identity
 	r.mu.Unlock()
+	if err := r.checkExternalFinalRetirement(ctx); err != nil {
+		finish()
+		return err
+	}
 	if err := r.admitMultipleImportedExecutionRestoreContext(ctx); err != nil {
 		finish()
 		return err
@@ -379,7 +436,7 @@ func (r *NodeChainExecutionRuntime) Run(parent context.Context) (failure error) 
 		return err
 	}
 	s.mu.Lock()
-	checkedAt, prefixes := s.checkedAt, append([]NodeChainPrefixProgress(nil), s.prefixes...)
+	checkedAt, exitIP, prefixes := s.checkedAt, s.exitIP, append([]NodeChainPrefixProgress(nil), s.prefixes...)
 	s.mu.Unlock()
 	r.mu.Lock()
 	if r.retired.Load() || activation.Err() != nil || r.active != s {
@@ -387,7 +444,7 @@ func (r *NodeChainExecutionRuntime) Run(parent context.Context) (failure error) 
 		return nodeChainExecutionError
 	}
 	r.checkedAt = checkedAt
-	r.progress = NodeChainExecutionProgress{NodeChainProgress: NodeChainProgress{Stage: "selected", Complete: true, Ready: true, Execution: s.execution, Prefixes: prefixes, DNSProven: true, PublicProven: true}, Comparison: cloneNodeChainExecutionResult(result)}
+	r.progress = NodeChainExecutionProgress{NodeChainProgress: NodeChainProgress{Stage: "selected", Complete: true, Ready: true, Execution: s.execution, Prefixes: prefixes, DNSProven: true, PublicProven: true}, Comparison: cloneNodeChainExecutionResult(result), ExitIP: exitIP}
 	r.watchDone = make(chan struct{})
 	watch := r.watchDone
 	r.mu.Unlock()
@@ -443,6 +500,9 @@ func (r *NodeChainExecutionRuntime) Progress() NodeChainExecutionProgress {
 	if r.retired.Load() || r.closed || r.checkedAt.IsZero() || time.Since(r.checkedAt) > r.proofLifetime() {
 		result.Ready = false
 	}
+	if !result.Ready {
+		result.ExitIP = ""
+	}
 	return result
 }
 func (r *NodeChainExecutionRuntime) proofLifetime() time.Duration {
@@ -483,12 +543,13 @@ func (r *NodeChainExecutionRuntime) watch(s *nodeChainExecutionTrial, lifetime c
 			cancel()
 			if failure == nil {
 				s.mu.Lock()
-				at, prefixes := s.checkedAt, append([]NodeChainPrefixProgress(nil), s.prefixes...)
+				at, exitIP, prefixes := s.checkedAt, s.exitIP, append([]NodeChainPrefixProgress(nil), s.prefixes...)
 				s.mu.Unlock()
 				r.mu.Lock()
 				if !r.retired.Load() && r.active == s {
 					r.checkedAt = at
 					r.progress.Prefixes = prefixes
+					r.progress.ExitIP = exitIP
 				}
 				r.mu.Unlock()
 			}
@@ -501,7 +562,18 @@ func (r *NodeChainExecutionRuntime) watch(s *nodeChainExecutionTrial, lifetime c
 	_ = s.Close(cleanup)
 }
 
-func (r *NodeChainExecutionRuntime) HealthyContext(ctx context.Context) (failure error) {
+func (r *NodeChainExecutionRuntime) HealthyContext(ctx context.Context) error {
+	return r.healthyContext(ctx, nil, NodeChainIdentity{}, nil)
+}
+
+// A native public-exit measurement can observe the open gate inside the
+// original selector generation. Both source reads and the normal retirement
+// join still surround the complete native observation.
+type nodeChainObservedOpenSelection interface {
+	ObserveExternalFinalOpenSelectionContext(context.Context, *NodeChain) (NodeChainIdentity, string, uint64, bool, error)
+}
+
+func (r *NodeChainExecutionRuntime) healthyContext(ctx context.Context, expected *nodeChainExecutionTrial, identity NodeChainIdentity, observer nodeChainObservedOpenSelection) (failure error) {
 	if r == nil || ctx == nil {
 		return nodeChainExecutionError
 	}
@@ -510,7 +582,7 @@ func (r *NodeChainExecutionRuntime) HealthyContext(ctx context.Context) (failure
 	}
 	// An observation belongs only to its original live runtime. Once retired,
 	// even its failure cleanup must not touch a same-Box resumed owner.
-	if r.retired.Load() || r.closed {
+	if r.retired.Load() || r.closed || expected != nil && (r.active != expected || r.identity != identity) {
 		r.mu.Unlock()
 		return nodeChainExecutionError
 	}
@@ -530,6 +602,26 @@ func (r *NodeChainExecutionRuntime) HealthyContext(ctx context.Context) (failure
 	}()
 	if !ready || s == nil || at.IsZero() || time.Since(at) > r.proofLifetime() {
 		return nodeChainExecutionError
+	}
+	if observer != nil {
+		if expected == nil || r.projection.validateCapture() != nil || r.projection.policy.externalFinal == nil || !r.identityMatches(identity) || s.lifetime.Err() != nil {
+			return nodeChainExecutionError
+		}
+		source := r.projection.policy.local
+		actual, tag, epoch, open, err := observer.ObserveExternalFinalOpenSelectionContext(ctx, source)
+		if err != nil || !open || actual != identity || tag != s.tag || epoch == 0 || epoch != s.selectionEpoch {
+			return errors.Join(err, nodeChainExecutionError)
+		}
+		if r.projection.validateCapture() != nil || r.projection.policy.local != source {
+			return nodeChainExecutionError
+		}
+		r.mu.Lock()
+		current := r.active == expected && r.identity == identity && !r.closed
+		r.mu.Unlock()
+		if !current || r.retired.Load() || s.lifetime.Err() != nil || ctx.Err() != nil {
+			return nodeChainExecutionError
+		}
+		return s.cachedReady(ctx)
 	}
 	if err := r.current(ctx, s, true); err != nil {
 		return err
@@ -636,6 +728,12 @@ func (s *nodeChainExecutionTrial) Verify(ctx context.Context) error {
 	if err := s.runtime.current(ctx, s, true); err != nil {
 		return err
 	}
+	return s.verifyCurrent(ctx)
+}
+
+// The caller has just observed this selected trial. Obtain the fresh
+// nonce-bound response, then observe the original selection again.
+func (s *nodeChainExecutionTrial) verifyCurrent(ctx context.Context) error {
 	if err := s.cachedReady(ctx); err != nil {
 		return err
 	}

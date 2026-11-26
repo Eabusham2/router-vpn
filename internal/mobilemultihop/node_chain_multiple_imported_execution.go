@@ -143,11 +143,18 @@ func (p *NodeChainExecutionPreparation) OriginalMultipleImportedSource() (*NodeC
 	return p.multiple.source, nil
 }
 
+func (p *NodeChainExecutionPreparation) extendedExecutionOriginal() (*NodeChain, error) {
+	if p.RequiresExternalFinalExecutionObserver() {
+		return p.OriginalExternalFinalSource()
+	}
+	return p.OriginalMultipleImportedSource()
+}
+
 // ExtendedOriginalNodeCount is construction metadata for the exact original
 // multi-import preparation. A stopped or unproved runtime grants no traffic
 // authority through this read.
 func (p *NodeChainExecutionPreparation) ExtendedOriginalNodeCount() int {
-	original, err := p.OriginalMultipleImportedSource()
+	original, err := p.extendedExecutionOriginal()
 	if err != nil {
 		return 0
 	}
@@ -155,7 +162,7 @@ func (p *NodeChainExecutionPreparation) ExtendedOriginalNodeCount() int {
 }
 
 func (p *NodeChainExecutionPreparation) ExtendedOriginalStatusLimit() int {
-	original, err := p.OriginalMultipleImportedSource()
+	original, err := p.extendedExecutionOriginal()
 	if err != nil {
 		return 0
 	}
@@ -227,6 +234,9 @@ func (p *NodeChainExecutionPolicy) importedPublicAt(position int) bool {
 	if p == nil || p.local == nil || position < 0 || position >= len(p.local.nodes) {
 		return false
 	}
+	if p.externalFinal != nil {
+		return position > 0 && p.source.Schema == 8 && p.source.Server.Schema == 8 && p.externalFinal.local == p.local && p.local.importedNodes.members[position] != nil
+	}
 	if p.multiple != nil {
 		return p.source.Schema == 6 && p.source.Server.Schema == 6 && p.multiple.local == p.local && p.local.importedSSMemberAt(position) != nil
 	}
@@ -236,6 +246,9 @@ func (p *NodeChainExecutionPolicy) importedPublicAt(position int) bool {
 func (p *NodeChainExecutionPolicy) importedExpectedPublicIPAt(position int) string {
 	if !p.importedPublicAt(position) {
 		return ""
+	}
+	if p.externalFinal != nil {
+		return p.local.importedNodes.members[position].selection.ExpectedPublicIP
 	}
 	if p.multiple != nil {
 		return p.local.importedSSMemberAt(position).selection.ExpectedPublicIP

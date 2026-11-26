@@ -127,7 +127,7 @@ func readValidatedDesktopNodeChainLaunchState(ctx context.Context, launch *deskt
 		clear(raw)
 	}
 	if err != nil || config != actual || meta.ConfigSHA256 != launch.configSHA256 || meta.SessionID != launch.mtuSession ||
-		meta.ProfileID != launch.profileID || launch.policyProfileID != selection.Control.ID || !desktopNodeChainMetadataMatchesSelection(meta, selection) ||
+		meta.ProfileID != launch.profileID || launch.policyProfileID != selection.Control.ID || !owner.metadataMatchesSelection(meta) ||
 		meta.Mode != launch.mode || meta.OriginalSourceSHA256 != selection.Native.source || launch.root != selection.Native.root ||
 		launch.endpoint != selection.Native.endpoint {
 		return empty, errors.Join(err, errors.New("ordered native launch changed its sealed derived graph or original authority"))

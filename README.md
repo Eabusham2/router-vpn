@@ -11,7 +11,7 @@ Router VPN is MIT-licensed open-source software. See [LICENSE](LICENSE) and [thi
 ## Downloads and project status
 
 - [Releases](https://github.com/Eabusham2/router-vpn/releases) contain versioned client packages, `RouterVPN-RELEASE.json`, and `SHA256SUMS`. Releases are identified by the complete source commit; a prerelease label means testing and deployment acceptance are still required.
-- [Build all Router VPN release gates](https://github.com/Eabusham2/router-vpn/actions/workflows/build-all.yml) is the publishing workflow. A failed or incomplete run does not provide a new validated release.
+- [Router VPN Release](https://github.com/Eabusham2/router-vpn/actions/workflows/build-all.yml) is the manual publishing workflow and requires successful CI for the same commit. A failed or incomplete run does not provide a new validated release.
 - [Installation guide](docs/INSTALL-PORTAINER.md), [full user guide](docs/CURRENT-GUIDE.md), and [current platform status](docs/CURRENT-STATUS.md) explain deployment, operation, and remaining limitations.
 
 Use client packages, server images, and generated Compose from the same verified commit. Do not combine an older release with a newer `main` snapshot. Download checksums from that release and verify the selected archive before installation. The iOS/iPadOS IPA is unsigned and requires compatible signing and provisioning; it is not an App Store installation.
@@ -24,11 +24,11 @@ Use your own host address, LAN subnet, DNS server, and WAN interface. `AI_BOARD_
 
 ## Normal setup — no giant ZIP required
 
-1. Choose one verified exact `main` SHA and use the generated `RouterVPN-production-compose-<sha>` artifact from the **Exact-SHA production compose** workflow after the same-SHA ARM64 image and release gates are green. The tracked `server/portainer-current.yaml` is only the reproducible image-only **template/baseline**; see `docs/PRODUCTION-RELEASE.md`.
+1. Choose one verified exact `main` SHA and use the generated `RouterVPN-production-compose-<sha>` artifact from the **Router VPN Release** workflow after its same-SHA ARM64 images, production Compose, and package publishing jobs are green. The tracked `server/portainer-current.yaml` is only the reproducible image-only **template/baseline**; see `docs/PRODUCTION-RELEASE.md`.
 2. On the home LAN open the Setup Center at `http://AI_BOARD_IP:8786/`.
 3. Use its ASUS section to inspect current SSH/JFFS forwarding state before changing anything; preserve unrelated hooks.
 4. Install the generic Router VPN app for the device once, then link/import one or more private router/node bundles independently.
-5. Start with Raw tunnel / Base Auto, verify the exact selected home node/public exit, then use AUTO, SMART AUTO, CUSTOM or another validated logical mode.
+5. Start with SMART AUTO and Base Auto, then verify the exact selected home node and public exit. Use the mode controls when you want a specific validated transport or CUSTOM path.
 
 The Setup Center checks the exact-SHA GitHub Release first, then the matching GitHub Actions artifact. Router-local client fallback is **Windows/Portable only**: if a matching Windows x64/ARM64 installed or Portable package is unavailable, the AI Board may build only that requested generic Windows package from the approved same-image inputs and validate the package. The completed package and its build workspace stay available for 30 minutes from READY. Repeat or interrupted downloads keep the original deadline. Cancel, Delete now, and service shutdown trigger immediate cleanup. macOS and Linux require matching same-SHA artifacts or source built in their proper native build environments; the AI Board is never used as a substitute native macOS/Linux build host. Android and iOS/iPadOS never use router-local builds. The production Portainer server stack itself remains exact-SHA image-only and never silently falls back to a moving source build.
 

@@ -130,22 +130,32 @@ type capturedEntryLayer struct {
 // CombineExtendedLayeredExternalPlans verifies the independently captured
 // outer Start Layer before the single original packet endpoint and SS suffix.
 func CombineExtendedLayeredExternalPlans(config string, actual int, prefixes []*Plan, originalTags []string, outerTag, layer string) (*Plan, error) {
-	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(prefixes) != len(originalTags) ||
-		!extendedLocalMTUTag.MatchString(outerTag) || outerTag == originalTags[0] {
+	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(prefixes) != len(originalTags) {
 		return nil, errors.New("layered public exit MTU requires its original entry and complete prefix inventory")
 	}
-	entry, _, _ := strings.Cut(originalTags[0], "-node-")
+	bound, err := originalExternalEntryLayer(originalTags[0], outerTag, layer)
+	if err != nil {
+		return nil, err
+	}
+	return combinePlans(config, actual, prefixes, originalTags, 1, true, bound)
+}
+
+func originalExternalEntryLayer(entryTag, outerTag, layer string) (*capturedEntryLayer, error) {
+	if !extendedLocalMTUTag.MatchString(entryTag) || !extendedLocalMTUTag.MatchString(outerTag) || entryTag == outerTag {
+		return nil, errors.New("layered public exit MTU requires its original outer transport")
+	}
+	entry, _, _ := strings.Cut(entryTag, "-node-")
 	outer, _, _ := strings.Cut(outerTag, "-node-")
+	if entry != outer {
+		return nil, errors.New("outer MTU transport belongs to a different captured entry")
+	}
 	kind := "shadowsocks"
 	if layer == "aes-256-gcm+xor-whitening" {
 		kind = "routervpn-aes-xor"
 	} else if layer != "aes-256-gcm" {
 		return nil, errors.New("layered public exit MTU lost the selected entry layer")
 	}
-	if entry != outer {
-		return nil, errors.New("outer MTU transport belongs to a different captured entry")
-	}
-	return combinePlans(config, actual, prefixes, originalTags, 1, true, &capturedEntryLayer{outerTag, kind})
+	return &capturedEntryLayer{outerTag, kind}, nil
 }
 
 func combinePlans(config string, actual int, prefixes []*Plan, originalTags []string, packets int, mixed bool, layer *capturedEntryLayer) (*Plan, error) {

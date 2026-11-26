@@ -51,6 +51,9 @@ func NewDesktopNodeChainExecutionAdoptionRecord(p *NodeChainExecutionProjection,
 		PhysicalSourceSHA256: meta.SourceSHA256, TransferSHA256: transfer, Identity: identity,
 		Server: p.policy.source.Server, Request: p.policy.source.Request, FirstPort: p.policy.source.FirstPort, LastPort: p.policy.source.LastPort}
 	// Detach the descriptor/request slices from the sealed runtime policy.
+	if p.preparation.RequiresDesktopExternalFinalExecutionObserver() {
+		r.Kind = "routervpn-node-chain-external-final-execution-adoption-v1"
+	}
 	raw, err := json.Marshal(r)
 	r = empty
 	if err != nil || len(raw) > DesktopNodeChainExecutionAdoptionRecordLimit || json.Unmarshal(raw, &r) != nil {
@@ -67,9 +70,14 @@ func ParseDesktopNodeChainExecutionAdoptionRecord(raw []byte, preparation *NodeC
 	bad := func() (*NodeChainExecutionProjection, NodeChainIdentity, error) {
 		return nil, NodeChainIdentity{}, nodeChainExecutionError
 	}
+	expectedKind := "routervpn-node-chain-execution-adoption-v1"
+	version := 1
+	if preparation.RequiresDesktopExternalFinalExecutionObserver() {
+		expectedKind, version = "routervpn-node-chain-external-final-execution-adoption-v1", 8
+	}
 	if preparation.validateCapture() != nil || preparation.desktop == nil || !proofID.MatchString(transfer) ||
 		len(raw) == 0 || len(raw) > DesktopNodeChainExecutionAdoptionRecordLimit || json.Unmarshal(raw, &r) != nil ||
-		r.Schema != 1 || r.Kind != "routervpn-node-chain-execution-adoption-v1" || r.TransferSHA256 != transfer ||
+		r.Schema != 1 || r.Kind != expectedKind || r.TransferSHA256 != transfer ||
 		r.PreparationSourceSHA256 != preparation.SourceSHA256() || r.PreparationConfigSHA256 != preparation.ConfigSHA256() {
 		return bad()
 	}
@@ -77,12 +85,17 @@ func ParseDesktopNodeChainExecutionAdoptionRecord(raw []byte, preparation *NodeC
 	if err != nil || !bytes.Equal(raw, canonical) {
 		return bad()
 	}
-	source, err := json.Marshal(NodeChainExecutionSource{Schema: 1, Execution: preparation.Execution(), LocalSource: preparation.LocalSource(),
+	source, err := json.Marshal(NodeChainExecutionSource{Schema: version, Execution: preparation.Execution(), LocalSource: preparation.LocalSource(),
 		Server: r.Server, Request: r.Request, FirstPort: r.FirstPort, LastPort: r.LastPort})
 	if err != nil {
 		return bad()
 	}
-	policy, err := NewNodeChainExecutionPolicy(string(source))
+	var policy *NodeChainExecutionPolicy
+	if version == 8 {
+		policy, err = NewNodeChainExternalFinalExecutionPolicy(preparation, string(source))
+	} else {
+		policy, err = NewNodeChainExecutionPolicy(string(source))
+	}
 	clear(source)
 	if err != nil {
 		return bad()

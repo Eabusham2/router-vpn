@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/netip"
 	"reflect"
+	"slices"
 )
 
 const externalFinalInputKind = "routervpn-node-chain-external-final"
@@ -231,9 +232,18 @@ func externalFinalProofs(proofs []NodeChainProof) bool {
 	return true
 }
 
+// The source constructor checks every field of every proof. A frozen proof row
+// may reuse that classification only while the complete inventory still matches.
+func (r *nodeChainImportedNodes) externalFinalProofsCurrent(c *NodeChain) bool {
+	if r.localSeal != nil {
+		return r.localSeal.owner == c && r.localSeal.externalFinalProofs && slices.Equal(r.localSeal.proofs, c.proofs)
+	}
+	return externalFinalProofs(c.proofs)
+}
+
 func (c *NodeChain) HasExternalFinal() bool {
 	return c != nil && c.importedNodes != nil && c.importedNodes.externalFinal && c.importedNodes.owner == c &&
-		c.importedNodes.self == c.importedNodes && c.sourceJSON == c.importedNodes.sourceJSON && externalFinalProofs(c.proofs)
+		c.importedNodes.self == c.importedNodes && c.sourceJSON == c.importedNodes.sourceJSON && c.importedNodes.externalFinalProofsCurrent(c)
 }
 
 func (c *NodeChain) finalPreferences() map[string]any {

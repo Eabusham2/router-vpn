@@ -180,7 +180,7 @@ final class AndroidOrderedPathSelection {
     }
 
     private boolean externalExitPrefix() throws Exception {
-        if (!"local".equals(execution) || members.isEmpty()) return false;
+        if (members.isEmpty()) return false;
         Member first=members.get(0);
         if (!catalog.selectedId.equals(first.source.id) || first.source.imported || !hasMode(first.source,"wg")
                 || !first.source.supportsExternalExitEntryLayer()) return false;
@@ -385,7 +385,7 @@ final class AndroidOrderedPathSelection {
                 for(int i=0;i<members.size()-1;i++)if(members.get(i).source.imported||!List.of("wg","awg2-fast","awg2-strong").contains(members.get(i).mode))
                     throw new IllegalStateException("Hysteria2 execution requires only original paired packet prefixes.");
             }
-            if(schema>6||schema==3&&(members.size()<3||members.size()>8)||schema==4&&(members.size()<3||members.size()>8)||schema==5&&(members.size()<3||members.size()>8)||!hysteriaFinal&&!"shadowsocks".equals(members.get(members.size()-1).mode))
+            if(schema>6&&schema!=8||schema==3&&(members.size()<3||members.size()>8)||schema==4&&(members.size()<3||members.size()>8)||schema==5&&(members.size()<3||members.size()>8)||!hysteriaFinal&&!"shadowsocks".equals(members.get(members.size()-1).mode))
                 throw new IllegalStateException("Server and Compare require paired packet prefixes before the Shadowsocks 2022 final or an original paired Hysteria2 final with its own authenticated Start Layer. Imported middle paths retain their Shadowsocks 2022 final; a Shadowsocks hostname requires at least four nodes.");
             for(Member member:members)if(member.source.imported) {
                 AndroidStandardExitStore.Entry imported=member.source.external();

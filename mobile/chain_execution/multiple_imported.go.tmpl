@@ -20,36 +20,45 @@ const routerNodeChainMultipleImportedExecutionLaunchKind = "routervpn-node-chain
 
 type routerNodeMultipleImportedExecutionServerKey struct{}
 type routerNodeMultipleImportedExecutionServerOwner struct {
-	self        *routerNodeMultipleImportedExecutionServerOwner
-	plan        *RouterNodeChainExecution
-	preparation *mobilemultihop.NodeChainExecutionPreparation
-	source      *mobilemultihop.NodeChain
-	registry    *outbound.Registry
-	server      *CommandServer
-	started     *daemon.StartedService
+	self          *routerNodeMultipleImportedExecutionServerOwner
+	plan          *RouterNodeChainExecution
+	preparation   *mobilemultihop.NodeChainExecutionPreparation
+	source        *mobilemultihop.NodeChain
+	registry      *outbound.Registry
+	server        *CommandServer
+	started       *daemon.StartedService
+	externalFinal bool
 }
 
 // The sealed Local envelope remains original; its projection is never stripped.
 func RouterNodeChainMultipleImportedExecutionFromLaunch(input, execution string) (*RouterNodeChainExecution, error) {
+	return routerNodeImportedExecutionFromLaunch(input, execution, mobilemultihop.NewNodeChainMultipleImportedExecutionPreparation)
+}
+
+func routerNodeImportedExecutionFromLaunch(input, execution string, prepare func(*mobilemultihop.NodeChain, string) (*mobilemultihop.NodeChainExecutionPreparation, error)) (*RouterNodeChainExecution, error) {
 	original, err := mobilemultihop.ParseNodeChainLaunchInput(input)
 	if err != nil {
 		return nil, err
 	}
-	prep, err := mobilemultihop.NewNodeChainMultipleImportedExecutionPreparation(original, execution)
+	prep, err := prepare(original, execution)
 	if err != nil {
 		return nil, err
 	}
 	return &RouterNodeChainExecution{prep: prep}, nil
 }
 func NewRouterNodeChainMultipleImportedExecutionLaunch(input string) (*RouterNodeChainExecution, error) {
+	return routerNodeImportedExecutionLaunch(input, routerNodeChainMultipleImportedExecutionLaunchKind, mobilemultihop.ParseNodeChainMultipleImportedExecutionPreparation)
+}
+
+func routerNodeImportedExecutionLaunch(input, kind string, parse func(string) (*mobilemultihop.NodeChainExecutionPreparation, error)) (*RouterNodeChainExecution, error) {
 	if len(input) == 0 || len(input) > mobilemultihop.NodeChainInputLimit {
 		return nil, errRouterNodeChainExecution
 	}
 	var launch routerNodeChainExecutionLaunch
-	if json.Unmarshal([]byte(input), &launch) != nil || launch.Kind != routerNodeChainMultipleImportedExecutionLaunchKind || (launch.Schema != 1 && launch.Schema != 2) {
+	if json.Unmarshal([]byte(input), &launch) != nil || launch.Kind != kind || (launch.Schema != 1 && launch.Schema != 2) {
 		return nil, errRouterNodeChainExecution
 	}
-	prep, err := mobilemultihop.ParseNodeChainMultipleImportedExecutionPreparation(launch.Source)
+	prep, err := parse(launch.Source)
 	if err != nil {
 		return nil, err
 	}
@@ -74,6 +83,10 @@ func NewRouterNodeChainMultipleImportedExecutionLaunch(input string) (*RouterNod
 }
 func RouterNodeChainMultipleImportedExecutionFromLast(input, execution, lastJSON string) (*RouterNodeChainExecution, error) {
 	m, err := RouterNodeChainMultipleImportedExecutionFromLaunch(input, execution)
+	return routerNodeImportedExecutionFromLast(m, err, lastJSON)
+}
+
+func routerNodeImportedExecutionFromLast(m *RouterNodeChainExecution, err error, lastJSON string) (*RouterNodeChainExecution, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -88,10 +101,13 @@ func RouterNodeChainMultipleImportedExecutionFromLast(input, execution, lastJSON
 // The typed execution plan creates the exact caller-local registry and binds
 // the preparation before the host receives an otherwise ordinary CommandServer.
 // The host must retain this returned handle, BindNative, then Start it.
-func (m *RouterNodeChainExecution) newMultipleImportedCommandServer(handler CommandServerHandler, platform PlatformInterface) (*CommandServer, error) {
+func (m *RouterNodeChainExecution) newImportedCommandServer(handler CommandServerHandler, platform PlatformInterface, externalFinal bool) (*CommandServer, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
-	if m == nil || m.prep == nil || handler == nil || platform == nil || (!m.prep.RequiresMultipleImportedExecutionObserver() || m.prep.RequiresDesktopMultipleImportedExecutionObserver()) {
+	if m == nil || m.prep == nil || handler == nil || platform == nil {
+		return nil, errRouterNodeChainExecution
+	}
+	if externalFinal != m.prep.RequiresExternalFinalExecutionObserver() || !externalFinal && (!m.prep.RequiresMultipleImportedExecutionObserver() || m.prep.RequiresDesktopMultipleImportedExecutionObserver()) {
 		return nil, errRouterNodeChainExecution
 	}
 	if err := adapter.RouterVPNLockContext(ctx, &m.mu); err != nil {
@@ -101,7 +117,7 @@ func (m *RouterNodeChainExecution) newMultipleImportedCommandServer(handler Comm
 	if m.retired.Load() || m.started || m.native.Load() != nil || m.state.Load() != nil || m.multipleServer.Load() != nil || m.openvpnServer.Load() != nil || m.connectServer.Load() != nil || m.socksServer.Load() != nil {
 		return nil, errRouterNodeChainExecution
 	}
-	source, err := m.prep.OriginalMultipleImportedSource()
+	source, err := m.originalImportedExecutionSource(externalFinal)
 	if err != nil {
 		return nil, err
 	}
@@ -109,11 +125,15 @@ func (m *RouterNodeChainExecution) newMultipleImportedCommandServer(handler Comm
 	registry := include.OutboundRegistry()
 	native = service.ContextWith[option.OutboundOptionsRegistry](native, registry)
 	native = service.ContextWith[adapter.OutboundRegistry](native, registry)
-	native, err = box.RouterVPNNodeMultipleImportedExecutionContext(native, m.prep)
+	if externalFinal {
+		native, err = box.RouterVPNNodeExternalFinalExecutionContext(native, m.prep)
+	} else {
+		native, err = box.RouterVPNNodeMultipleImportedExecutionContext(native, m.prep)
+	}
 	if err != nil {
 		return nil, err
 	}
-	owner := &routerNodeMultipleImportedExecutionServerOwner{plan: m, preparation: m.prep, source: source, registry: registry}
+	owner := &routerNodeMultipleImportedExecutionServerOwner{plan: m, preparation: m.prep, source: source, registry: registry, externalFinal: externalFinal}
 	owner.self = owner
 	native = context.WithValue(native, routerNodeMultipleImportedExecutionServerKey{}, owner)
 	server := newCommandServerWithContext(handler, platform, native)
@@ -125,7 +145,7 @@ func RouterNodeChainMultipleImportedExecutionNewCommandServer(m *RouterNodeChain
 	if m == nil {
 		return nil, errRouterNodeChainExecution
 	}
-	return m.newMultipleImportedCommandServer(handler, platform)
+	return m.newImportedCommandServer(handler, platform, false)
 }
 func (m *RouterNodeChainExecution) requireMultipleImportedServer(ctx context.Context, server *CommandServer) error {
 	if m == nil || ctx == nil || ctx.Err() != nil {
@@ -137,19 +157,27 @@ func (m *RouterNodeChainExecution) requireMultipleImportedServer(ctx context.Con
 		}
 		return nil // Existing untyped instance readback grants no preparation authority.
 	}
-	if !m.prep.RequiresMultipleImportedExecutionObserver() {
+	externalFinal := m.prep.RequiresExternalFinalExecutionObserver()
+	if !externalFinal && !m.prep.RequiresMultipleImportedExecutionObserver() {
 		if m.multipleServer.Load() != nil {
 			return errRouterNodeChainExecution
 		}
 		return nil
 	}
 	owner := m.multipleServer.Load()
-	if owner == nil || owner.self != owner || owner.plan != m || owner.preparation != m.prep || server == nil || server.ctx == nil || owner.server != server || owner.started == nil || server.StartedService != owner.started || server.ctx.Value(routerNodeMultipleImportedExecutionServerKey{}) != owner || service.FromContext[adapter.OutboundRegistry](server.ctx) != owner.registry || service.FromContext[option.OutboundOptionsRegistry](server.ctx) != owner.registry {
+	if owner == nil || owner.externalFinal != externalFinal || owner.self != owner || owner.plan != m || owner.preparation != m.prep || server == nil || server.ctx == nil || owner.server != server || owner.started == nil || server.StartedService != owner.started || server.ctx.Value(routerNodeMultipleImportedExecutionServerKey{}) != owner || service.FromContext[adapter.OutboundRegistry](server.ctx) != owner.registry || service.FromContext[option.OutboundOptionsRegistry](server.ctx) != owner.registry {
 		return errRouterNodeChainExecution
 	}
-	original, err := m.prep.OriginalMultipleImportedSource()
+	original, err := m.originalImportedExecutionSource(externalFinal)
 	if err != nil || original != owner.source {
 		return errors.Join(err, errRouterNodeChainExecution)
 	}
 	return ctx.Err()
+}
+
+func (m *RouterNodeChainExecution) originalImportedExecutionSource(externalFinal bool) (*mobilemultihop.NodeChain, error) {
+	if externalFinal {
+		return m.prep.OriginalExternalFinalSource()
+	}
+	return m.prep.OriginalMultipleImportedSource()
 }

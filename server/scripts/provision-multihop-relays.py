@@ -683,7 +683,10 @@ def compile_tor_source(raw, alias, node):
 
 def node_chain_source_digest(canonical, schema):
     """Match the shared source domain and Go's JSON string encoding exactly."""
-    domain = 'routervpn-server-node-chain-source-v' + str(schema)
+    return node_chain_text_digest('routervpn-server-node-chain-source-v' + str(schema), canonical)
+
+
+def node_chain_text_digest(domain, canonical):
     encoded = json.dumps([domain, canonical], ensure_ascii=False, allow_nan=False, separators=(',', ':'))
     for character, escaped in (('&', '\\u0026'), ('<', '\\u003c'), ('>', '\\u003e'),
                                ('\u2028', '\\u2028'), ('\u2029', '\\u2029')):
@@ -698,10 +701,7 @@ def compile_node_chain_source(raw, node):
         if not raw or len(raw) > MAX_NODE_CHAIN_SOURCE_BYTES:
             raise bad
         source = decode(raw)
-        fields = {'schema', 'entry_id', 'entry_node_id', 'entry_mode', 'nodes', 'identity_sources'}
-        if isinstance(source, dict) and type(source.get('schema')) is int and source['schema'] == 5:
-            fields.add('openvpn_pairing')
-        if not isinstance(source, dict) or set(source) != fields:
+        if not isinstance(source, dict) or set(source) != node_chain_source_fields(source.get('schema')):
             raise bad
         payload = json.dumps(dict(entry_node_id=node, source=source), ensure_ascii=False,
                              allow_nan=False, separators=(',', ':')).encode('utf-8')
@@ -715,9 +715,19 @@ def compile_node_chain_source(raw, node):
         raise bad from None
 
 
+def node_chain_source_fields(schema):
+    fields = {'schema', 'entry_id', 'entry_node_id', 'entry_mode', 'nodes'}
+    if schema == 8:
+        return fields | {'external_final', 'dns_policy', 'entry_block_ipv6', 'entry_blocked_cidrs'}
+    fields.add('identity_sources')
+    if schema == 5:
+        fields.add('openvpn_pairing')
+    return fields
+
+
 def node_chain_member_limit(schema):
     # The client entry is separate from the operator-owned suffix.
-    return 95 if schema == 6 else 7
+    return 95 if schema in (6, 8) else 7
 
 
 def compiled_node_chain_source(raw, node, original=None):
@@ -731,18 +741,17 @@ def compiled_node_chain_source(raw, node, original=None):
             raise bad
         reference, canonical = compiled['reference'], compiled['source_json']
         descriptor_fields = {'schema', 'entry_id', 'entry_node_id', 'entry_mode', 'source_sha256', 'dns_policy_sha256', 'members'}
+        if isinstance(reference, dict) and reference.get('schema') == 8:
+            descriptor_fields.add('external_final')
         if not isinstance(reference, dict) or set(reference) != descriptor_fields or not isinstance(canonical, str):
             raise bad
         body = canonical.encode('utf-8')
         if not body or len(body) > MAX_NODE_CHAIN_SOURCE_BYTES:
             raise bad
         captured = decode(body)
-        source_fields = {'schema', 'entry_id', 'entry_node_id', 'entry_mode', 'nodes', 'identity_sources'}
-        if isinstance(captured, dict) and type(captured.get('schema')) is int and captured['schema'] == 5:
-            source_fields.add('openvpn_pairing')
-        if (not isinstance(captured, dict) or set(captured) != source_fields or
+        if (not isinstance(captured, dict) or set(captured) != node_chain_source_fields(captured.get('schema')) or
                 original is not None and captured != original or
-                type(captured.get('schema')) is not int or captured['schema'] not in (1, 2, 3, 4, 5, 6)):
+                type(captured.get('schema')) is not int or captured['schema'] not in (1, 2, 3, 4, 5, 6, 8)):
             raise bad
         if any(reference.get(key) != captured.get(key) for key in ('schema', 'entry_id', 'entry_node_id', 'entry_mode')) or captured['entry_node_id'] != node:
             raise bad
@@ -755,6 +764,19 @@ def compiled_node_chain_source(raw, node, original=None):
             raise bad
         member_fields = {'position', 'profile_id', 'node_id', 'mode', 'start_layer'}
         optional_fields = {'client_public_key', 'server_public_key', 'node_kind', 'proof_kind', 'source_sha256', 'expected_public_ip', 'openvpn_pair_sha256'}
+        if captured['schema'] == 8:
+            binding = reference['external_final']
+            if (len(members) < 2 or not isinstance(binding, dict) or binding != captured['external_final'] or
+                    set(binding) != {'entry_source_sha256', 'entry_start_layer', 'entry_client_public_key', 'entry_peer_addresses', 'dns_owner', 'local_final_source_sha256', 'final_transport_sha256'} or
+                    binding['dns_owner'] not in ('entry-home', 'external-final') or
+                    binding['entry_start_layer'] not in ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening') or
+                    not all(isinstance(binding[key], str) and re.fullmatch('[0-9a-f]{64}', binding[key])
+                            for key in ('entry_source_sha256', 'local_final_source_sha256', 'final_transport_sha256')) or
+                    not isinstance(binding['entry_client_public_key'], str) or not isinstance(captured['dns_policy'], dict) or
+                    type(captured['entry_block_ipv6']) is not bool or not isinstance(captured['entry_blocked_cidrs'], list)):
+                raise bad
+            member_fields |= {'node_kind', 'proof_kind', 'source_sha256', 'expected_public_ip'}
+            optional_fields = set()
         if captured['schema'] == 6:
             optional_fields.add('stream_identity_sha256')
         for position, member in enumerate(members, 1):
@@ -762,6 +784,25 @@ def compiled_node_chain_source(raw, node, original=None):
                     type(member['position']) is not int or member['position'] != position or
                     any(not isinstance(value, str) for key, value in member.items() if key != 'position')):
                 raise bad
+            if captured['schema'] == 8:
+                original_member = captured['nodes'][position-1]
+                if (not isinstance(original_member, str) or
+                        node_chain_text_digest('routervpn-node-chain-imported-member-v1', original_member) != member['source_sha256'] or
+                        member['node_id'] != '' or member['node_kind'] != 'external' or member['proof_kind'] != 'public-path' or
+                        member['mode'] != 'shadowsocks' or member['start_layer'] != 'off' or
+                        external_public_literal(member['expected_public_ip']) != member['expected_public_ip']):
+                    raise bad
+                standalone = decode(original_member.encode())
+                if (not isinstance(standalone, dict) or set(standalone) != {'kind', 'schema', 'config', 'capture'} or
+                        standalone['kind'] != 'routervpn-node-chain-imported-member' or type(standalone['schema']) is not int or
+                        standalone['schema'] != 1 or not isinstance(standalone['capture'], str)):
+                    raise bad
+                selection = decode(standalone['capture'].encode())
+                if (not isinstance(selection, dict) or selection.get('exit_id') != member['profile_id'] or
+                        selection.get('expected_public_ip') != member['expected_public_ip'] or
+                        selection.get('predecessor_config') not in ('', None) or selection.get('entry_tag') not in ('', None) or
+                        selection.get('entry') is not None or selection.get('execution') is not None):
+                    raise bad
         # Positional keys, exact node identities, selected DNS and every other
         # descriptor field remain owned by the native compiler and checker.
         return reference, body
@@ -806,10 +847,10 @@ def compile_node_chain_plan(path, node):
         plan_snapshot = private_snapshot(path, 64 << 10)
         plan = decode(plan_snapshot[1])
         if (not isinstance(plan, dict) or set(plan) != {'schema', 'entry', 'members'} or
-                type(plan['schema']) is not int or plan['schema'] not in (1, 3, 4, 5, 6) or
+                type(plan['schema']) is not int or plan['schema'] not in (1, 3, 4, 5, 6, 8) or
                 not isinstance(plan['members'], list) or not 1 <= len(plan['members']) <= node_chain_member_limit(plan['schema'])):
             raise bad
-        if plan['schema'] in (3, 4, 5, 6) and len(plan['members']) < 2:
+        if plan['schema'] in (3, 4, 5, 6, 8) and len(plan['members']) < 2:
             raise bad
         snapshots = {plan_snapshot[0]: plan_snapshot}
         captured_bytes = len(plan_snapshot[1])
@@ -844,18 +885,24 @@ def compile_node_chain_plan(path, node):
             return result
 
         resolved = dict(schema=plan['schema'], entry_node_id=node, entry=selection(plan['entry']), members=[])
-        for member in plan['members']:
+        for position, member in enumerate(plan['members'], 1):
             if not isinstance(member, dict):
                 raise bad
-            if set(member) == {'imported'}:
-                imported = member['imported']
+            if plan['schema'] == 8:
+                role = 'external_final' if position == len(plan['members']) else 'imported'
+                if set(member) != {role}:
+                    raise bad
+            else:
+                role = 'imported'
+            if set(member) == {role}:
+                imported = member[role]
                 if not isinstance(imported, dict) or set(imported) != {'capture_file'}:
                     raise bad
                 original = decode(capture(imported['capture_file'], MAX_NODE_CHAIN_SOURCE_BYTES))
                 if (not isinstance(original, dict) or set(original) != {'config', 'capture'} or
                         any(not isinstance(value, str) or not value for value in original.values())):
                     raise bad
-                resolved['members'].append({'imported': original})
+                resolved['members'].append({role: original})
             elif set(member) == {'openvpn'}:
                 value = member['openvpn']
                 if (plan['schema'] != 5 or not isinstance(value, dict) or

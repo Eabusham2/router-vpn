@@ -2,7 +2,7 @@
 
 `server/portainer-current.yaml` is the tracked, image-only production **template/baseline**. It intentionally contains one previously approved exact runtime SHA so the tracked file is reproducible and validates as a real Compose file. It is not proof that its embedded SHA equals a newer source commit.
 
-For a release, GitHub Actions workflow **Exact-SHA production compose** runs `deploy/materialize-production-compose.py` against that template and produces:
+For a release, the **Materialize exact-head production compose** job in the manual [Router VPN Release workflow](../.github/workflows/build-all.yml) runs `deploy/materialize-production-compose.py` against that template and produces:
 
 ```text
 RouterVPN-Portainer-<40-character-release-SHA>.yaml
@@ -16,9 +16,9 @@ The materializer changes only Router VPN custom GHCR image tags and `ROUTER_VPN_
 Use a generated production compose only when all of these are true for the **same SHA**:
 
 1. `main` points at that SHA.
-2. Exact-head source/native/release workflows are green.
-3. `Publish ARM64 Portainer images` succeeded for that SHA.
-4. `Exact-SHA production compose` succeeded for that SHA.
+2. `Router VPN CI` and the complete `Router VPN Release` run are green for that SHA.
+3. Every `Build and publish ARM64 images` matrix job succeeded for that SHA.
+4. The release's `Materialize exact-head production compose` job succeeded for that SHA.
 5. The generated compose artifact checksum passes.
 6. The generated file's Router VPN image tags and `ROUTER_VPN_GITHUB_SHA` all equal that SHA.
 7. `server/scripts/verify-production-compose.py` accepts the generated YAML.

@@ -373,19 +373,19 @@ enum RouterVPNOrderedNodes {
             throw issue("The ordered path or selected exit changed. Reopen its editor.")
         }
         let externalFinal = rows.first?["id"] == selection.selectedNodeID
-        if externalFinal && (selection.execution != "local" || !externalFinalPath(rows, control: selection.selectedNodeID, profiles: profiles)) {
-            throw issue("An external exit requires the selected WireGuard or AmneziaWG entry and linked literal Shadowsocks imports in Local.")
+        if externalFinal && !externalFinalPath(rows, control: selection.selectedNodeID, profiles: profiles) {
+            throw issue("An external exit requires the original paired WireGuard or AmneziaWG entry and independently linked literal Shadowsocks hops.")
         }
         let localImported = selection.execution == "local" && (externalFinal || localImportedPath(rows, profiles: profiles))
         let multipleImported = selection.execution != "local" && localImportedPath(rows, profiles: profiles, selectedExecution: true)
-        guard rows.count <= 8 || localImported || multipleImported || extendedPairedPath(rows, execution: selection.execution, profiles: profiles) else { throw issue("For a longer Local route, choose paired WireGuard nodes or paired WireGuard/AWG2 nodes followed by literal Shadowsocks 2022 imports. End at a paired Shadowsocks node and use Start Layer Off throughout. Longer Server or Compare routes require a single WireGuard, AWG2 Fast, or AWG2 Strong entry before the imports.") }
-        if selection.execution != "local" && multipleImportedShape(rows) && !multipleImported { throw issue("Each imported Shadowsocks interior must support the selected execution.") }
+        guard rows.count <= 8 || externalFinal || localImported || multipleImported || extendedPairedPath(rows, execution: selection.execution, profiles: profiles) else { throw issue("For a longer Local route, choose paired WireGuard nodes or paired WireGuard/AWG2 nodes followed by literal Shadowsocks 2022 imports. End at a paired Shadowsocks node and use Start Layer Off throughout. Longer Server or Compare routes require a single WireGuard, AWG2 Fast, or AWG2 Strong entry before the imports.") }
+        if !externalFinal && selection.execution != "local" && multipleImportedShape(rows) && !multipleImported { throw issue("Each imported Shadowsocks interior must support the selected execution.") }
         for (position, row) in rows.enumerated() {
             let id = row["id"]!
             let matches = profiles.filter { $0["id"] as? String == id }
             guard matches.count == 1 else { throw issue("An ordered source is missing.") }
             let importedMode = importedMiddleMode(matches[0])
-            guard importedMode == nil || selection.execution == "local" || multipleImported || importedExecutionPrefixes(rows, profiles: profiles) || connectExecutionTrio(rows, profiles: profiles) || socksExecutionTrio(rows, profiles: profiles) || openVPNExecutionPath(rows, profiles: profiles) else { throw issue("This imported ordered path has not enabled native Server or Compare execution.") }
+            guard externalFinal || importedMode == nil || selection.execution == "local" || multipleImported || importedExecutionPrefixes(rows, profiles: profiles) || connectExecutionTrio(rows, profiles: profiles) || socksExecutionTrio(rows, profiles: profiles) || openVPNExecutionPath(rows, profiles: profiles) else { throw issue("This imported ordered path has not enabled native Server or Compare execution.") }
             guard externalFinal || (importedMode != nil ? (importedPosition(importedMode!, position: position, count: rows.count) || (localImported || multipleImported) && (localSSPosition(importedMode!, position: position, count: rows.count) || position == 0 && customEntryShape(rows))) && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!) || (localImported || multipleImported) && row["mode"] == "shadowsocks")) else { throw issue("The ordered source kind or position changed.") }
             if position == rows.count - 1 && !externalFinal {
                 guard finalProfile(matches[0], mode: row["mode"]!) else { throw issue("Choose a paired final transport supported by its captured settings. Hysteria2 keeps its own Start Layer.") }
@@ -478,13 +478,13 @@ struct RouterVPNOrderedNodeDraft {
     }
     var nodes: [[String: String]] { prefixes.enumerated().map { ["id": $0.element, "mode": modes[$0.offset]] } + [["id": externalExit ?? control, "mode": finalMode]] }
     mutating func chooseExternalExit(_ id: String) throws {
-        guard execution == "local", candidates.contains(id), !prefixes.contains(id),
+        guard ["local", "server", "auto"].contains(execution), candidates.contains(id), !prefixes.contains(id),
               let exit = capturedCatalog.first(where: { $0["id"] as? String == id }), RouterVPNOrderedNodes.literalExternal(exit, final: true),
               let entry = capturedCatalog.first(where: { $0["id"] as? String == control }), RouterVPNOrderedNodes.externalFinalEntry(entry),
               prefixes.filter({ $0 != control }).allSatisfy({ member in
                   capturedCatalog.contains { $0["id"] as? String == member && RouterVPNOrderedNodes.literalExternal($0, final: false) }
               }), prefixes.count < RouterVPNOrderedNodes.physicalTraversalDepth - 1 || externalExit != nil else {
-            throw RouterVPNOrderedNodes.issue("Choose a separate literal Shadowsocks exit and use only literal Shadowsocks imports after the selected WireGuard or AmneziaWG entry in Local.")
+            throw RouterVPNOrderedNodes.issue("Choose a separate literal Shadowsocks exit and keep the original paired WireGuard or AmneziaWG entry before the linked Shadowsocks hops.")
         }
         if externalExit == nil { prefixes.insert(control, at: 0); modes.insert("wg", at: 0) }
         externalExit = id
@@ -523,7 +523,7 @@ struct RouterVPNOrderedNodeDraft {
     }
     var hasRoomForMeasuredHop: Bool {
         if externalExit != nil {
-            return nodes.count < RouterVPNOrderedNodes.physicalTraversalDepth && execution == "local" &&
+            return nodes.count < RouterVPNOrderedNodes.physicalTraversalDepth && ["local","server","auto"].contains(execution) &&
                 RouterVPNOrderedNodes.externalFinalPath(nodes,control:control,profiles:capturedCatalog)
         }
         if prefixes.count >= 7 && prefixes.count < RouterVPNOrderedNodes.physicalTraversalDepth - 1 &&
@@ -537,7 +537,7 @@ struct RouterVPNOrderedNodeDraft {
     func canMeasure(after index: Int) -> Bool {
         guard modes.indices.contains(index) else { return false }
         if externalExit != nil {
-            return execution == "local" && RouterVPNOrderedNodes.externalFinalPath(nodes,control:control,profiles:capturedCatalog)
+            return ["local","server","auto"].contains(execution) && (index > 0 || execution == "local") && RouterVPNOrderedNodes.externalFinalPath(nodes,control:control,profiles:capturedCatalog)
         }
         if ["server","auto"].contains(execution), index >= 1, modes[index] == "shadowsocks", RouterVPNOrderedNodes.prefixModes.contains(modes.first ?? ""), finalMode == "shadowsocks" {
             if nodes.count == 3 {
@@ -823,7 +823,8 @@ extension ProductWindowController {
             let pairedHysteria = RouterVPNOrderedNodes.pairedHysteriaExecutionPath(selection.orderedNodes, profiles: current["profiles"] as? [[String: Any]] ?? [])
             let pairedSS = RouterVPNOrderedNodes.pairedSSExecutionPath(selection.orderedNodes, profiles: current["profiles"] as? [[String: Any]] ?? [])
             let multipleImported = selection.execution != "local" && RouterVPNOrderedNodes.multipleImportedShape(selection.orderedNodes)
-            let executionCapability = multipleImported ? "ordered_multiple_imported_executions" : pairedSS && selection.execution != "local" ? "ordered_paired_ss_executions" : pairedHysteria && selection.execution != "local" ? "ordered_hysteria_executions" : openVPNPath && selection.execution != "local" ? "ordered_openvpn_executions" : (socksTrio && selection.execution != "local" ? "ordered_socks_trio_executions" : (connectTrio && selection.execution != "local" ? "ordered_connect_trio_executions" : (importedPrefixes && selection.execution != "local" ? "ordered_imported_trio_executions" : "ordered_executions")))
+            let externalFinal = RouterVPNOrderedNodes.externalFinalShape(selection.orderedNodes, control: selection.selectedNodeID)
+            let executionCapability = externalFinal ? "ordered_external_final_executions" : multipleImported ? "ordered_multiple_imported_executions" : pairedSS && selection.execution != "local" ? "ordered_paired_ss_executions" : pairedHysteria && selection.execution != "local" ? "ordered_hysteria_executions" : openVPNPath && selection.execution != "local" ? "ordered_openvpn_executions" : (socksTrio && selection.execution != "local" ? "ordered_socks_trio_executions" : (connectTrio && selection.execution != "local" ? "ordered_connect_trio_executions" : (importedPrefixes && selection.execution != "local" ? "ordered_imported_trio_executions" : "ordered_executions")))
             guard let enabled = capabilities["ordered_nodes_supported"] as? NSNumber,
                   CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue,
                   let executions = capabilities[executionCapability] as? [String], executions.contains(selection.execution) else {
@@ -1427,7 +1428,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         candidates.setAccessibilityLabel("Available linked entry and hop nodes")
         for id in draft.candidates { candidates.addItem(withTitle: "\(draft.names[id] ?? id) · \(id)"); candidates.lastItem?.representedObject = id }
         let add = NSStackView(); add.orientation = .horizontal; add.spacing = 8; add.addArrangedSubview(candidates); add.addArrangedSubview(NSButton(title: "Add entry / hop", target: self, action: #selector(addHop)))
-        if draft.execution == "local" && draft.capturedCatalog.contains(where: { RouterVPNOrderedNodes.literalExternal($0, final: true) }) {
+        if draft.capturedCatalog.contains(where: { RouterVPNOrderedNodes.literalExternal($0, final: true) }) {
             add.addArrangedSubview(NSButton(title: "Use as external exit", target: self, action: #selector(chooseExternalExit)))
         }
         root.addArrangedSubview(add)

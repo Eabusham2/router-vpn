@@ -12,6 +12,7 @@ const NodeChainExecutionGateTag = "routervpn-chain-application"
 // source before entry-authenticated discovery is available. It grants no
 // application forwarding and contains no guessed server source or port.
 type NodeChainExecutionPreparationSource struct {
+	ExternalFinalLocalLaunch    string                           `json:"external_final_local_launch,omitempty"`
 	DesktopMultipleImported     *DesktopNodeChainMetadata        `json:"desktop_multiple_imported,omitempty"`
 	MultipleImportedLocalLaunch string                           `json:"multiple_imported_local_launch,omitempty"`
 	DesktopOpenVPN              *DesktopNodeChainMetadata        `json:"desktop_openvpn,omitempty"`
@@ -57,6 +58,7 @@ type NodeChainExecutionTransition struct {
 }
 
 type NodeChainExecutionPreparation struct {
+	externalFinal                                  *nodeChainExternalFinalExecutionBinding
 	sourceJSON, sourceSHA, config, configSHA, seal string
 	source                                         NodeChainExecutionPreparationSource
 	local                                          *NodeChain
@@ -138,12 +140,12 @@ func newNodeChainExecutionPreparationOwnedMultiple(localSource, execution string
 	if len(typedOpenVPNDesktop) == 1 {
 		openvpnDesktop = typedOpenVPNDesktop[0]
 	}
-	return newNodeChainExecutionPreparationOwnedFamilies(localSource, execution, desktop, mobile, local, connect, socks, connectDesktop, socksDesktop, openvpn, multiple, openvpnDesktop, nil)
+	return newNodeChainExecutionPreparationOwnedFamilies(localSource, execution, desktop, mobile, local, connect, socks, connectDesktop, socksDesktop, openvpn, multiple, openvpnDesktop, nil, nil)
 }
 
 // Closed family constructors retain their exact original physical owner. A
 // generic metadata field cannot supply either typed desktop adjunct.
-func newNodeChainExecutionPreparationOwnedFamilies(localSource, execution string, desktop *DesktopNodeChainPolicy, mobile *nodeChainExecutionMobileProjection, local *NodeChain, connect *NodeChainCONNECTSource, socks *NodeChainSOCKSSource, connectDesktop *nodeChainCONNECTExecutionDesktop, socksDesktop *nodeChainSOCKSExecutionDesktop, openvpn, multiple *NodeChain, openvpnDesktop *nodeChainOpenVPNExecutionDesktop, multipleDesktop *nodeChainMultipleImportedExecutionDesktop) (*NodeChainExecutionPreparation, error) {
+func newNodeChainExecutionPreparationOwnedFamilies(localSource, execution string, desktop *DesktopNodeChainPolicy, mobile *nodeChainExecutionMobileProjection, local *NodeChain, connect *NodeChainCONNECTSource, socks *NodeChainSOCKSSource, connectDesktop *nodeChainCONNECTExecutionDesktop, socksDesktop *nodeChainSOCKSExecutionDesktop, openvpn, multiple *NodeChain, openvpnDesktop *nodeChainOpenVPNExecutionDesktop, multipleDesktop *nodeChainMultipleImportedExecutionDesktop, externalFinal *nodeChainExternalFinalExecutionBinding) (*NodeChainExecutionPreparation, error) {
 	if multipleDesktop != nil && (multiple == nil || mobile != nil || desktop != nil || connectDesktop != nil || socksDesktop != nil || openvpnDesktop != nil) {
 		return nil, nodeChainExecutionError
 	}
@@ -160,6 +162,14 @@ func newNodeChainExecutionPreparationOwnedFamilies(localSource, execution string
 	}
 	var err error
 	p := &NodeChainExecutionPreparation{source: NodeChainExecutionPreparationSource{Schema: 1, Execution: execution, LocalSource: localSource}, local: local, desktop: desktop, mobile: mobile}
+	if externalFinal != nil {
+		if externalFinal.local != local || connect != nil || socks != nil || openvpn != nil || multiple != nil || desktop != nil && (desktop.original != local || !desktop.chain.HasExternalFinal() || mobile != nil) || mobile != nil && mobile.externalFinal == nil || connectDesktop != nil || socksDesktop != nil || openvpnDesktop != nil || multipleDesktop != nil {
+			return nil, nodeChainExecutionError
+		}
+		p.externalFinal = externalFinal
+		externalFinal.preparation = p
+		p.source.Schema, p.source.ExternalFinalLocalLaunch = 8, externalFinal.launch
+	}
 	if connect != nil {
 		p.source.Schema = 4
 		p.connect = &nodeChainCONNECTExecutionBinding{source: connect, local: local, preparation: p}
@@ -266,7 +276,7 @@ func newNodeChainExecutionPreparationOwnedFamilies(localSource, execution string
 			selected = row
 		}
 	}
-	if selected == nil || selected["detour"] != SelectorTag {
+	if selected == nil || selected["detour"] != externalFinal.resolverTag() {
 		return nil, nodeChainExecutionError
 	}
 	raw, err = json.Marshal(graph)
@@ -282,18 +292,24 @@ func newNodeChainExecutionPreparationOwnedFamilies(localSource, execution string
 	p.discovery = NodeChainExecutionDiscoveryCapture{p.sourceSHA, p.configSHA, local.proofs[0],
 		predecessorText(entry.profile, "router_api"), predecessorText(entry.profile, "api_token"), "tcp", api.Host}
 	resolver, _ := json.Marshal(selected)
-	var finalGraph map[string]any
-	if exactJSON([]byte(local.nodes[len(local.nodes)-1].config), &finalGraph, 4<<20) != nil {
-		return nil, nodeChainExecutionError
-	}
-	dnsRaw, err := json.Marshal(finalGraph["dns"])
-	if err != nil {
-		return nil, nodeChainExecutionError
+	dnsPolicySHA := ""
+	if externalFinal != nil {
+		dnsPolicySHA = externalFinal.policySHA
+	} else {
+		var finalGraph map[string]any
+		if exactJSON([]byte(local.nodes[len(local.nodes)-1].config), &finalGraph, 4<<20) != nil {
+			return nil, nodeChainExecutionError
+		}
+		dnsRaw, err := json.Marshal(finalGraph["dns"])
+		if err != nil {
+			return nil, nodeChainExecutionError
+		}
+		dnsPolicySHA = externalDigest(dnsRaw)
 	}
 	dns := local.DNSCapture()
 	dns.SourceSHA256, dns.ConfigSHA256, dns.FinalTag = p.sourceSHA, p.configSHA, SelectorTag
 	dns.ResolverSHA256 = externalDigest(resolver)
-	p.dns = NodeChainExecutionDNSCapture{"local", SelectorTag, final, externalDigest(dnsRaw), dns}
+	p.dns = NodeChainExecutionDNSCapture{"local", SelectorTag, final, dnsPolicySHA, dns}
 	p.physical, err = local.PhysicalEgress()
 	if err != nil {
 		return nil, nodeChainExecutionError
@@ -384,11 +400,17 @@ func (p *NodeChainExecutionPreparation) captureSeal() string {
 }
 
 func (p *NodeChainExecutionPreparation) validateCapture() error {
-	if p == nil || p.seal == "" || p.captureSeal() != p.seal || p.local == nil || len(p.local.proofs) == 0 || p.socks == nil && p.connect == nil && p.openvpn == nil && p.multiple == nil && !p.packetDesktop.localCurrent(p) && !p.originalPreparationSeal.localPacketCurrent(p) && p.local.validateCapture() != nil || p.local.openVPNMiddle != nil && p.openvpn == nil ||
+	if p == nil || p.seal == "" || p.captureSeal() != p.seal || p.local == nil || len(p.local.proofs) == 0 || p.socks == nil && p.connect == nil && p.openvpn == nil && p.multiple == nil && p.externalFinal == nil && !p.packetDesktop.localCurrent(p) && !p.originalPreparationSeal.localPacketCurrent(p) && p.local.validateCapture() != nil || p.local.openVPNMiddle != nil && p.openvpn == nil ||
 		p.discovery.Entry != p.local.proofs[0] || p.dns.DNS.SourceSHA256 != p.sourceSHA || p.dns.DNS.ConfigSHA256 != p.configSHA {
 		return nodeChainExecutionError
 	}
-	if p.multiple != nil {
+	if p.externalFinal != nil {
+		if !p.externalFinal.current(p) {
+			return nodeChainExecutionError
+		}
+	} else if p.source.Schema == 8 || p.source.ExternalFinalLocalLaunch != "" {
+		return nodeChainExecutionError
+	} else if p.multiple != nil {
 		if p.multiple.validate(p, p.local) != nil {
 			return nodeChainExecutionError
 		}
@@ -468,7 +490,7 @@ func (p *NodeChainExecutionPreparation) BindExecution(policy *NodeChainExecution
 		!reflect.DeepEqual(p.physical, policy.physical) || p.dns.DNSPolicySHA256 != policy.source.Server.DNSPolicySHA256 {
 		return nil, nodeChainExecutionError
 	}
-	if p.connect != policy.connect || p.socks != policy.socks || p.openvpn != policy.openvpn || p.multiple != policy.multiple {
+	if p.externalFinal != policy.externalFinal || p.connect != policy.connect || p.socks != policy.socks || p.openvpn != policy.openvpn || p.multiple != policy.multiple {
 		return nil, nodeChainExecutionError
 	}
 	if p.mobile != nil && p.mobile.executionSource != policy.Source() {
@@ -571,13 +593,13 @@ func (p *NodeChainExecutionProjection) captureSeal() string {
 }
 func (p *NodeChainExecutionProjection) validateCapture() error {
 	if p == nil || p.seal == "" || p.seal != p.captureSeal() || p.policy == nil || p.policy.validateCapture() != nil ||
-		(p.policy.connect == nil && p.policy.socks == nil && p.policy.openvpn == nil && p.policy.multiple == nil && p.preparation.validateCapture() != nil) ||
+		(p.policy.connect == nil && p.policy.socks == nil && p.policy.openvpn == nil && p.policy.multiple == nil && p.policy.externalFinal == nil && p.preparation.validateCapture() != nil) ||
 		(p.policy.connect != nil && p.preparation != p.policy.connect.preparation) ||
 		(p.policy.socks != nil && p.preparation != p.policy.socks.preparation) ||
 		(p.policy.openvpn != nil && p.preparation != p.policy.openvpn.preparation) ||
-		(p.policy.multiple != nil && p.preparation != p.policy.multiple.preparation) ||
+		(p.policy.multiple != nil && p.preparation != p.policy.multiple.preparation) || (p.policy.externalFinal != nil && p.policy.externalFinal.preparation != p.preparation) ||
 		p.transition.PreparationSourceSHA256 != p.preparation.sourceSHA || p.transition.PreparationConfigSHA256 != p.preparation.configSHA ||
-		p.transition.SourceSHA256 != p.policy.sourceSHA || p.transition.ConfigSHA256 != p.hash || externalDigest([]byte(p.config)) != p.hash {
+		p.transition.SourceSHA256 != p.policy.sourceSHA || p.transition.ConfigSHA256 != p.hash || !(p.originalSeal != nil && p.originalSeal.owner == p && p.originalSeal.config == p.config && p.originalSeal.hash == p.hash) && externalDigest([]byte(p.config)) != p.hash {
 		return nodeChainExecutionError
 	}
 	return nil

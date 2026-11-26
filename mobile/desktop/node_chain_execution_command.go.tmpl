@@ -39,6 +39,8 @@ func routerVPNNodeChainExecutionCommandCapture(files *routerVPNExternalFiles, se
 		prep, err = mobilemultihop.ParseDesktopNodeChainSOCKSExecutionPreparation(string(raw))
 	} else if string(header.Schema) == "4" {
 		prep, err = mobilemultihop.ParseDesktopNodeChainCONNECTExecutionPreparation(string(raw))
+	} else if string(header.Schema) == "8" {
+		prep, err = mobilemultihop.ParseDesktopNodeChainExternalFinalExecutionPreparation(string(raw))
 	} else if string(header.Schema) == "6" {
 		prep, err = mobilemultihop.ParseDesktopNodeChainMultipleImportedExecutionPreparation(string(raw))
 	} else if string(header.Schema) == "5" {

@@ -75,6 +75,12 @@ func (p *NodeChainExecutionProjection) newPacketCandidatePlan(position int, inve
 		return nil, nodeChainExecutionError
 	}
 
+	if binding := p.policy.externalFinal; binding != nil {
+		if position != 0 || p.preparation.externalFinal != binding || binding.local != p.policy.local {
+			return nil, nodeChainExecutionError
+		}
+		return binding.local.NewMultipleImportedCandidatePlan(position, inventory)
+	}
 	if binding := p.policy.multiple; binding != nil {
 		if p.preparation.multiple != binding || binding.preparation != p.preparation ||
 			binding.local != p.policy.local || binding.owners != p.policy.local.importedNodes {
@@ -100,6 +106,10 @@ func (p *NodeChainExecutionPreparation) SupportsCompareLocalResponseCandidate(po
 			p.local.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement
 	}
 	return p.local.compareLocalResponsePrefix(position)
+}
+
+func (p *NodeChainExecutionPreparation) SupportsCompareLocalPublicResponseCandidate(position int) bool {
+	return p != nil && p.externalFinal != nil && p.Execution() == "auto" && p.SupportsServerPublicResponseCandidate(position)
 }
 
 func (c *NodeChain) compareLocalResponsePrefix(position int) bool {
@@ -140,7 +150,12 @@ func (r *NodeChainExecutionRuntime) newExecutionCandidatePlanContext(ctx context
 	}
 	var plan *NodeChainCandidatePlan
 	var err error
-	if localInterior && r.projection.preparation.SupportsCompareLocalResponseCandidate(position) {
+	if localInterior && r.projection.preparation.SupportsCompareLocalPublicResponseCandidate(position) {
+		if r.projection.policy.externalFinal != r.projection.preparation.externalFinal {
+			return nil, nodeChainExecutionError
+		}
+		plan, err = r.projection.policy.local.NewMultipleImportedCandidatePlan(position, inventory)
+	} else if localInterior && r.projection.preparation.SupportsCompareLocalResponseCandidate(position) {
 		original := r.projection.policy.local
 		binding := r.projection.preparation.multiple
 		if binding == nil {
@@ -186,6 +201,8 @@ func (p *NodeChainExecutionCandidatePlan) digest() string {
 	kind := "routervpn-selected-execution-entry-candidates-v1"
 	if p.plan.measurement == hopmeasure.CandidatePrivateResponseMeasurement {
 		kind = "routervpn-selected-compare-local-private-response-candidates-v1"
+	} else if p.plan.measurement == hopmeasure.CandidatePublicResponseMeasurement {
+		kind = "routervpn-selected-compare-local-public-response-candidates-v1"
 	} else if p.localInterior {
 		kind = "routervpn-selected-execution-local-interior-candidates-v1"
 	}
@@ -219,6 +236,9 @@ func (p *NodeChainExecutionCandidatePlan) validate() error {
 // Entry and Local-interior plans share ownership, not admission. The sealed
 // kind and original packet plan prevent either constructor from widening the other.
 func (p *NodeChainExecutionCandidatePlan) validPosition() bool {
+	if p.plan.measurement == hopmeasure.CandidatePublicResponseMeasurement {
+		return p.localInterior && p.trial.execution == "local" && p.preparation.SupportsCompareLocalPublicResponseCandidate(p.plan.prefix.Position)
+	}
 	if p.plan.measurement == hopmeasure.CandidatePrivateResponseMeasurement {
 		return p.localInterior && p.trial.execution == "local" && p.preparation.SupportsCompareLocalResponseCandidate(p.plan.prefix.Position)
 	}
@@ -272,7 +292,7 @@ func (p *NodeChainExecutionCandidatePlan) NewMeasurementContext(ctx context.Cont
 	e := &nodeChainExecutionEntryCandidateEngine{base: base, plan: p, owner: owner}
 	var service *hopmeasure.CandidateService
 	var err error
-	if p.plan.measurement == hopmeasure.CandidatePrivateResponseMeasurement {
+	if p.plan.measurement == hopmeasure.CandidatePrivateResponseMeasurement || p.plan.measurement == hopmeasure.CandidatePublicResponseMeasurement {
 		service, err = p.plan.newService(ctx, e, p.capture)
 	} else {
 		service, err = hopmeasure.NewCapturedPrefixCandidatesContext(ctx, e, hopmeasure.CandidatePrefix{

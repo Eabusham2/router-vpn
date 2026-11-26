@@ -1,6 +1,9 @@
 package mobilemultihop
 
-import "reflect"
+import (
+	"reflect"
+	"sync/atomic"
+)
 
 // This scope belongs to the original operator policy. It never supplies the
 // omitted client entry, a measured outer packet capacity, or a live socket.
@@ -15,6 +18,8 @@ type nodeChainMultipleImportedServerScope struct {
 	inputs             []string
 	closures           []*externalPredecessor
 	firstPacket        int
+	verified           *nodeChainRegisteredServerSnapshot
+	bound              atomic.Pointer[nodeChainRegisteredCaptureBinding]
 }
 
 func NewNodeChainMultipleImportedServerPolicy(source string) (*NodeChainServerPolicy, error) {
@@ -53,6 +58,21 @@ func (s *nodeChainMultipleImportedServerScope) freeze(p *NodeChainServerPolicy, 
 		return nodeChainServerError
 	}
 	return nil
+}
+
+// Only this extended family has an all-imported stream suffix ending at the
+// separately paired original private agent. Packet carriers and private
+// intermediate streams retain their existing full validation path.
+func (s *nodeChainMultipleImportedServerScope) rememberDeepPrivateFinal(p *NodeChainServerPolicy) {
+	if len(s.members) < NodeChainMaximumNodes || p.carrier != nil {
+		return
+	}
+	for _, m := range s.members[:len(s.members)-1] {
+		if m == nil {
+			return
+		}
+	}
+	s.verified = snapshotRegisteredServer(p, s.members)
 }
 
 func (s *nodeChainMultipleImportedServerScope) original() bool {
@@ -165,6 +185,12 @@ func (s *nodeChainMultipleImportedServerScope) completePhysicalEgress(projection
 func (p *NodeChainServerPolicy) importedSSMemberAt(position int) *nodeChainImportedMember {
 	if p == nil || position < 0 || position >= len(p.nodes) {
 		return nil
+	}
+	if p.externalFinal != nil {
+		if len(p.externalFinal.members) != len(p.nodes) {
+			return nil
+		}
+		return p.externalFinal.members[position]
 	}
 	if p.multiple != nil {
 		if len(p.multiple.members) != len(p.nodes) {

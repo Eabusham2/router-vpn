@@ -27,7 +27,9 @@ func (o *NodeChainExecutionDiscoveryOwner) PlanOriginalContext(ctx context.Conte
 	}
 	var projection *NodeChainExecutionProjection
 	var err error
-	if o.prep.mobile != nil && o.prep.mobile.multiple != nil {
+	if o.prep.mobile != nil && o.prep.mobile.externalFinal != nil {
+		projection, err = o.prep.bindExternalFinalMobileOriginal(ctx, original)
+	} else if o.prep.mobile != nil && o.prep.mobile.multiple != nil {
 		projection, err = o.prep.bindMultipleImportedMobileOriginal(ctx, original)
 	} else if o.prep.mobile != nil && o.prep.mobile.openvpn != nil {
 		projection, err = o.prep.bindOpenVPNMobileOriginal(ctx, original)

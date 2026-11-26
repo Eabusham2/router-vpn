@@ -215,7 +215,6 @@ static gboolean linux_ordered_multiple_imported_shape_v1(JsonArray *nodes) {
 
 static gboolean linux_ordered_execution_v1(LinuxOrderedSelectionV1 *selection, const char *execution) {
     if (selection == NULL || (g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0 && g_strcmp0(execution, "auto") != 0)) return FALSE;
-    if (linux_ordered_external_final_shape_v1(selection->nodes, selection->control) && strcmp(execution, "local")) return FALSE;
     if (json_array_get_length(selection->nodes) > 8 && !linux_ordered_extended_selected_shape_v1(selection->nodes) &&
         ((!linux_ordered_extended_paired_shape_v1(selection->nodes) && !linux_ordered_extended_mixed_shape_v1(selection->nodes)) || strcmp(execution, "local") != 0)) return FALSE;
     if (strcmp(execution, "local") != 0 && !linux_ordered_multiple_imported_shape_v1(selection->nodes)) for (guint i = 0; i + 1 < json_array_get_length(selection->nodes); i++) {
@@ -419,7 +418,7 @@ static gboolean linux_ordered_openvpn_execution_layers_v1(const LinuxOrderedSele
 static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selection, JsonObject *catalog) {
     if (selection == NULL || strcmp(selection->control, linux_ordered_string_v1(catalog, "selected_id")) != 0) return FALSE;
     if (linux_ordered_external_final_shape_v1(selection->nodes, selection->control)) {
-        if (strcmp(selection->execution, "local")) return FALSE;
+        if (strcmp(selection->execution, "local") && strcmp(selection->execution, "server") && strcmp(selection->execution, "auto")) return FALSE;
         guint count = json_array_get_length(selection->nodes);
         for (guint i = 0; i < count; i++) {
             JsonObject *row = json_array_get_object_element(selection->nodes, i);
@@ -495,7 +494,10 @@ static gboolean linux_ordered_measurement_prefix_v1(const LinuxOrderedSelectionV
     if (!selection || position < 0 || !linux_ordered_current_v1(selection, catalog)) return FALSE;
     guint count = json_array_get_length(selection->nodes);
     if ((guint)position + 1 >= count) return FALSE;
-    if (linux_ordered_external_final_shape_v1(selection->nodes, selection->control)) return !strcmp(selection->execution,"local");
+    if (linux_ordered_external_final_shape_v1(selection->nodes, selection->control)) {
+        return !strcmp(selection->execution, "local") ||
+               (position >= 1 && (!strcmp(selection->execution, "server") || !strcmp(selection->execution, "auto")));
+    }
     const char *mode = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, position), "mode");
     if (!strcmp(mode, "shadowsocks")) {
         JsonObject *first = json_array_get_object_element(selection->nodes, 0), *final = json_array_get_object_element(selection->nodes, count - 1);
@@ -808,6 +810,7 @@ static gboolean linux_ordered_same_path_v1(const LinuxOrderedSelectionV1 *commit
 }
 
 static const char *linux_ordered_execution_capability_v1(const LinuxOrderedSelectionV1 *selection) {
+    if (linux_ordered_external_final_shape_v1(selection->nodes, selection->control)) return "ordered_external_final_executions";
     if (strcmp(selection->execution, "local") != 0 && linux_ordered_multiple_imported_shape_v1(selection->nodes)) return "ordered_multiple_imported_executions";
     guint count = json_array_get_length(selection->nodes);
     if (strcmp(selection->execution, "local") != 0 && count >= 2 && count <= 8 &&
@@ -842,8 +845,11 @@ static gboolean linux_ordered_connect_v1(LinuxUnifiedV8 *unified) {
     gboolean admitted = FALSE;
     for (guint i = 0; executions != NULL && i < json_array_get_length(executions); i++) {
         JsonNode *value = json_array_get_element(executions, i);
-        if (value != NULL && JSON_NODE_HOLDS_VALUE(value) && json_node_get_value_type(value) == G_TYPE_STRING &&
-            g_strcmp0(json_node_get_string(value), selection->execution) == 0) admitted = TRUE;
+        if (value == NULL || !JSON_NODE_HOLDS_VALUE(value) || json_node_get_value_type(value) != G_TYPE_STRING) {
+            valid = FALSE;
+            break;
+        }
+        if (g_strcmp0(json_node_get_string(value), selection->execution) == 0) admitted = TRUE;
     }
     valid = valid && admitted;
     JsonNode *current = valid ? linux_ordered_read_v1("/api/profiles") : NULL;
@@ -1008,10 +1014,11 @@ static void linux_ordered_choose_external_exit_v1(GtkButton *button, gpointer da
     LinuxOrderedEditorV1 *editor = data;
     JsonObject *catalog = json_node_get_object(editor->catalog);
     const char *id = gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->candidate));
+    const char *execution = gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->execution));
     if (!linux_ordered_editable_v1(editor) || !id || !linux_ordered_external_final_profile_v1(external_source_profile_v24(catalog, id)) ||
         !linux_ordered_paired_layer_v1(external_source_profile_v24(catalog, editor->control), TRUE) ||
-        g_strcmp0(gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->execution)), "local")) {
-        gtk_label_set_text(GTK_LABEL(editor->status), "Choose a linked literal Shadowsocks exit with a paired WireGuard or AmneziaWG entry in Local.");
+        (g_strcmp0(execution, "local") && g_strcmp0(execution, "server") && g_strcmp0(execution, "auto"))) {
+        gtk_label_set_text(GTK_LABEL(editor->status), "Choose a linked literal Shadowsocks exit with the original paired WireGuard or AmneziaWG entry.");
         return;
     }
     for (guint i = editor->external_exit ? 1u : 0u; i < editor->ids->len; i++) {
@@ -1184,7 +1191,7 @@ static void linux_ordered_measure_next_v1(GtkButton *button, gpointer data) {
         char *body = linux_ordered_connect_body_v1(selection);
         linux_ordered_present_measurement_v1(editor->owned->unified->app, GTK_WINDOW(editor->dialog), body, position);
         g_free(body);
-    } else gtk_label_set_text(GTK_LABEL(editor->status), "Choose a packet prefix with room for another hop, or a supported Local Shadowsocks import.");
+    } else gtk_label_set_text(GTK_LABEL(editor->status), "Choose a packet prefix with room for another hop, or a supported Shadowsocks prefix.");
     linux_ordered_selection_free_v1(selection);
 }
 

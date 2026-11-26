@@ -62,7 +62,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         source.requireCurrent();
         measurement=metric;
         boolean publicResponse="routed-public-candidate-response".equals(metric);
-        if(publicResponse && (!"local".equals(source.execution) || !source.members.get(source.members.size()-1).imported))throw new IllegalStateException("A public exit response requires the original Local imported route.");
+        if(publicResponse && (!java.util.List.of("local","server","auto").contains(source.execution) || !source.members.get(source.members.size()-1).imported))throw new IllegalStateException("A public exit response requires the original imported exit.");
         if(!publicResponse&&!"routed-candidate-response".equals(metric)&&!"routed-tcp-connect".equals(metric))throw new IllegalStateException("This prefix has no supported candidate measurement; no score is available.");
         nodes=new AndroidNodeStore(context);external=new AndroidStandardExitStore(context);
         signature=currentSignature();
@@ -151,7 +151,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
                 || session.candidateExecutionOwner() != executionOwner || session.candidateServer() != server
                 || !session.capture.ownsSelectedCandidatePrefix(originalSource, prefix))
             throw new IllegalStateException("This selected route has no retained packet stop at the requested position.");
-        if ("routed-candidate-response".equals(measurement) && (!originalSource.execution.equals(executionOwner.requestedExecution())
+        if (!"routed-tcp-connect".equals(measurement) && (!originalSource.execution.equals(executionOwner.requestedExecution())
                 || !AndroidNodeChainCapture.selectedResponseWinner(originalSource.execution, executionOwner.execution())))
             throw new IllegalStateException("This response requires the original active Server or Compare selection.");
         return originalSource.members.get(prefix).profileId;

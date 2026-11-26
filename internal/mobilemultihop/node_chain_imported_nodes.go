@@ -98,7 +98,7 @@ func (r *nodeChainImportedNodes) originalOwnersCurrent(c *NodeChain) bool {
 		len(r.policies) != len(r.members) || len(r.hostnames) != len(r.members) {
 		return false
 	}
-	if r.externalFinal && !externalFinalProofs(c.proofs) {
+	if r.externalFinal && !r.externalFinalProofsCurrent(c) {
 		return false
 	}
 	if r.customEntry && (len(r.members) != 3 || r.members[0] == nil || r.members[1] == nil) {
@@ -365,7 +365,11 @@ func (c *NodeChain) ExtendedLocalNodeCount() int {
 // and at most two loaded latencies. The conservative row allowance includes
 // the full original profile ID and the longest finite JSON number encodings.
 func (c *NodeChain) ExtendedLocalStatusLimit() int {
-	if count := c.ExtendedLocalNodeCount(); count != 0 {
+	return extendedNodeChainStatusLimit(c.ExtendedLocalNodeCount())
+}
+
+func extendedNodeChainStatusLimit(count int) int {
+	if count > NodeChainMaximumNodes && count <= NodeChainExtendedLocalMaximumNodes {
 		return max(16384, 512+1536*count)
 	}
 	return 0

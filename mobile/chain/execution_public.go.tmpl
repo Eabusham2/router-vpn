@@ -31,7 +31,13 @@ func (e *RouterVPNNodeChainExecutionEngine) dialImportedPublicContext(ctx contex
 		return nil, errRouterVPNExecutionOwner
 	}
 	var ipv6 bool
-	if e.prep.RequiresMultipleImportedExecutionObserver() {
+	if e.prep.RequiresExternalFinalExecutionObserver() {
+		members, allowIPv6, err := state.projection.ExternalFinalPublicMeasurementCaptures(execution)
+		if err != nil || !slices.ContainsFunc(members, func(member mobilemultihop.NodeChainPublicMeasurementCapture) bool { return member.Tag == tag }) {
+			return nil, errRouterVPNExecutionOwner
+		}
+		ipv6 = allowIPv6
+	} else if e.prep.RequiresMultipleImportedExecutionObserver() {
 		members, allowIPv6, err := state.projection.ImportedPublicMeasurementCaptures(execution)
 		if err != nil || !slices.ContainsFunc(members, func(member mobilemultihop.NodeChainPublicMeasurementCapture) bool { return member.Tag == tag }) {
 			return nil, errRouterVPNExecutionOwner

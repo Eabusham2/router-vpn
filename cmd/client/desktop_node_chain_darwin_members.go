@@ -24,7 +24,10 @@ func newDesktopMacOSNodeChainSelection(chain *desktopNodeChainLaunch) (desktopMa
 		return empty, bad
 	}
 	if len(chain.selection.Nodes) > common.MultihopMaximumNodes {
-		if schema, err := desktopNodeChainSourceSchema(chain.selection.Nodes); err != nil || schema != 6 && (schema != 1 && schema != 8 || chain.macOSFamily() != macosprocess.NodeChainFamily) {
+		schema, err := desktopNodeChainSourceSchema(chain.selection.Nodes)
+		family := chain.macOSFamily()
+		if err != nil || !(schema == 6 || schema == 1 && family == macosprocess.NodeChainFamily ||
+			schema == 8 && (family == macosprocess.NodeChainFamily || family == macosprocess.NodeChainExecutionFamily)) {
 			return empty, bad
 		}
 	}
@@ -69,10 +72,32 @@ func newDesktopMacOSNodeChainSelection(chain *desktopNodeChainLaunch) (desktopMa
 		Session: meta.SessionID, Source: meta.SourceSHA256, Config: meta.ConfigSHA256, HomeLAN: meta.HomeLANAccess, Policy: meta.KillSwitchPolicy,
 		MembersJSON: string(raw), MembersSHA256: hex.EncodeToString(digest[:])}
 	if meta.ExternalFinal != nil {
-		if !desktopNodeChainMetadataMatchesSelection(meta, chain.selection) || capture.Family != macosprocess.NodeChainFamily {
+		if !chain.metadataMatchesSelection(meta) || len(meta.Prefixes) != len(chain.selection.Nodes) {
 			return empty, bad
 		}
-		capture.Schema, capture.ControlProfileID = 4, chain.selection.Control.ID
+		switch capture.Family {
+		case macosprocess.NodeChainFamily:
+			capture.Schema = 4
+		case macosprocess.NodeChainExecutionFamily:
+			capture.Schema = 5
+		default:
+			return empty, bad
+		}
+		capture.ControlProfileID = chain.selection.Control.ID
+		for position, node := range chain.selection.Nodes {
+			proof := meta.Prefixes[position]
+			layer := node.Profile.StartLayer
+			if layer == "" {
+				layer = "off"
+			}
+			if proof.ProfileID != node.Profile.ID || proof.Mode != node.Mode || proof.StartLayer != layer ||
+				position > 0 && (layer != "off" || proof.NodeKind != "external" || proof.Kind != "public-path") {
+				return empty, bad
+			}
+		}
+		if layer := meta.Prefixes[0].StartLayer; layer != "off" || capture.Schema == 5 {
+			capture.EntryStartLayer = layer
+		}
 	}
 	if !capture.valid() {
 		return empty, bad

@@ -34,6 +34,12 @@ func init() {
 	}}
 	command.Flags().StringVar(&directory, "runtime-dir", "", "Original private ordered lease directory")
 	mainCommand.AddCommand(command)
+	var checkDir string
+	check := &cobra.Command{Use: "routervpn-node-chain-check", Short: "Check one registered public-exit configuration", Args: cobra.NoArgs, SilenceUsage: true, SilenceErrors: true, RunE: func(cmd *cobra.Command, _ []string) error {
+		return routerVPNCheckExternalFinalSource(cmd.Context(), globalCtx, checkDir)
+	}}
+	check.Flags().StringVar(&checkDir, "runtime-dir", "", "Private staged source and validation capture")
+	mainCommand.AddCommand(check)
 }
 func routerVPNRunNodeChainRelay(ctx context.Context, directory string, input io.Reader, output io.Writer, factory func(context.Context, *os.Root, string, multihoprelay.NodeChainCapture) (routerVPNNodeChainRelayOwner, error)) error {
 	return routerVPNRunNodeChainRelayWithDiagnostics(ctx, directory, input, output, os.Stderr, factory)
@@ -60,7 +66,7 @@ func routerVPNRunNodeChainRelayWithDiagnostics(ctx context.Context, directory st
 	if err != nil {
 		return bad
 	}
-	capture, err := multihoprelay.DecodeNodeChainCapture(raw)
+	capture, err := routerVPNReadInitialNodeChainCapture(root, raw)
 	clear(raw)
 	if err != nil {
 		return bad
@@ -109,7 +115,7 @@ func routerVPNRunNodeChainRelayWithDiagnostics(ctx context.Context, directory st
 			return bad
 		}
 		if frame.Operation == "candidate-prepare" || frame.Operation == "candidate-status" || frame.Operation == "candidate-close" {
-			request, err := multihoprelay.DecodeNodeChainCandidateIPCRequest(scanner.Bytes())
+			request, err := multihoprelay.DecodeNodeChainCandidateWorkerRequest(scanner.Bytes(), capture)
 			if err != nil {
 				return bad
 			}
@@ -174,7 +180,12 @@ func routerVPNRunNodeChainRelayWithDiagnostics(ctx context.Context, directory st
 			}
 			continue
 		}
-		if encoder.Encode(response) != nil {
+		if capture.Request.HasRegisteredFronts() && response.Receipt != nil {
+			frame, err := multihoprelay.MarshalNodeChainWorkerResponse(response, capture)
+			if err != nil || encoder.Encode(json.RawMessage(frame)) != nil {
+				return bad
+			}
+		} else if encoder.Encode(response) != nil {
 			return bad
 		}
 	}

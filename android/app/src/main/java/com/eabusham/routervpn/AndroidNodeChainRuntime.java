@@ -239,7 +239,7 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
             if("local".equals(capture.execution)){
                 if(!lastRecord.isEmpty())throw new IllegalStateException("A Local path cannot borrow another execution's Last choice.");
             }else{
-                if(lastRecord.isEmpty()||lastRecord.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>16*1024)
+                if(lastRecord.isEmpty()||lastRecord.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>capture.executionLastLimit())
                     throw new IllegalStateException("Server or Compare Last requires its exact saved native choice.");
                 io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(lastRecord);
                 org.json.JSONObject choice=new org.json.JSONObject(lastRecord);

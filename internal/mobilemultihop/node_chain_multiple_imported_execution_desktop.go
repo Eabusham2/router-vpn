@@ -67,7 +67,7 @@ func NewDesktopNodeChainMultipleImportedExecutionPreparation(original *DesktopNo
 	d := &nodeChainMultipleImportedExecutionDesktop{original: original, source: original.original, native: original.chain, inputs: original.inputs, metadata: metadata, physicalMetadata: physicalMetadata, capture: capture}
 	d.self = d
 	d.seal = d.captureSeal()
-	p, err := newNodeChainExecutionPreparationOwnedFamilies(d.source.sourceJSON, execution, nil, nil, d.source, nil, nil, nil, nil, nil, d.source, nil, d)
+	p, err := newNodeChainExecutionPreparationOwnedFamilies(d.source.sourceJSON, execution, nil, nil, d.source, nil, nil, nil, nil, nil, d.source, nil, d, nil)
 	if err != nil || d.physical.Validate() != nil {
 		return nil, nodeChainExecutionError
 	}

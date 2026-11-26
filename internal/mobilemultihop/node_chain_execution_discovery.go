@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +36,11 @@ type NodeChainExecutionDiscoveryOwner struct {
 func NewNodeChainExecutionDiscoveryOwner(prep *NodeChainExecutionPreparation, engine NodeChainExecutionDiscoveryEngine) (*NodeChainExecutionDiscoveryOwner, error) {
 	if prep.validateCapture() != nil || engine == nil {
 		return nil, nodeChainExecutionError
+	}
+	if prep.RequiresExternalFinalExecutionObserver() {
+		if _, ok := engine.(NodeChainExternalFinalExecutionObserver); !ok {
+			return nil, nodeChainExecutionError
+		}
 	}
 	if prep.RequiresMultipleImportedExecutionObserver() {
 		if _, ok := engine.(NodeChainMultipleImportedExecutionObserver); !ok {
@@ -74,6 +80,9 @@ func NewNodeChainExecutionDiscoveryOwner(prep *NodeChainExecutionPreparation, en
 func (o *NodeChainExecutionDiscoveryOwner) current(ctx context.Context) error {
 	if o == nil || ctx == nil || ctx.Err() != nil || o.io.closed.Load() || o.prep.validateCapture() != nil {
 		return nodeChainExecutionError
+	}
+	if err := o.prep.observeExternalFinalExecution(ctx, o.engine); err != nil {
+		return err
 	}
 	if err := o.prep.observeMultipleImportedExecutionContext(ctx, o.engine); err != nil {
 		return err
@@ -251,6 +260,9 @@ func (p *NodeChainExecutionPreparation) policyForDiscovery(descriptor multihopre
 	if p.validateCapture() != nil {
 		return nil, nodeChainExecutionError
 	}
+	if p.externalFinal != nil && !p.externalFinal.matches(descriptor) || p.externalFinal == nil && descriptor.Schema == 8 {
+		return nil, nodeChainExecutionError
+	}
 	digest, err := descriptor.Digest()
 	if err != nil {
 		return nil, err
@@ -267,7 +279,7 @@ func (p *NodeChainExecutionPreparation) policyForDiscovery(descriptor multihopre
 			imported := position == len(p.local.nodes)-2 && p.local.importedMiddle != nil && descriptor.Schema == 2 && p.connect == nil && p.socks == nil
 			typed := position == len(p.local.nodes)-2 && (p.socks != nil && p.local.socksSource == p.socks.source && descriptor.Schema == 3 || p.connect != nil && p.local.connectSource == p.connect.source && descriptor.Schema == 4 || p.openvpn != nil && p.local.openVPNMiddle == p.openvpn.middle && descriptor.Schema == 5)
 			multiple := p.multiple != nil && descriptor.Schema == 6 && p.local.importedSSMemberAt(position) != nil
-			if !imported && !typed && !multiple {
+			if !imported && !typed && !multiple && p.externalFinal == nil {
 				return nil, nodeChainExecutionError
 			}
 			continue
@@ -280,23 +292,33 @@ func (p *NodeChainExecutionPreparation) policyForDiscovery(descriptor multihopre
 			return nil, err
 		}
 		request.LocalPacketPublicKeys = append(request.LocalPacketPublicKeys, key)
-		if descriptor.Schema == 2 || descriptor.Schema == 3 || descriptor.Schema == 4 || descriptor.Schema == 5 || descriptor.Schema == 6 {
+		if descriptor.Schema == 2 || descriptor.Schema == 3 || descriptor.Schema == 4 || descriptor.Schema == 5 || descriptor.Schema == 6 || descriptor.Schema == 8 {
 			request.LocalPacketPositions = append(request.LocalPacketPositions, position)
 		}
 	}
-	for _, member := range descriptor.Members {
-		username, err := randomHex(24)
+	if p.externalFinal != nil {
+		request, err = multihoprelay.NewExternalFinalFrontCredentials(request, len(descriptor.Members))
 		if err != nil {
 			return nil, err
 		}
-		password, err := randomHex(24)
-		if err != nil {
-			return nil, err
+	} else {
+		for _, member := range descriptor.Members {
+			username, err := randomHex(24)
+			if err != nil {
+				return nil, err
+			}
+			password, err := randomHex(24)
+			if err != nil {
+				return nil, err
+			}
+			request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: member.Position, Username: username, Password: password})
 		}
-		request.Users = append(request.Users, multihoprelay.NodeChainUser{Position: member.Position, Username: username, Password: password})
 	}
 	source := NodeChainExecutionSource{Schema: 1, Execution: p.source.Execution, LocalSource: p.source.LocalSource,
 		Server: descriptor.Clone(), Request: request, FirstPort: discovery.FirstPort, LastPort: discovery.LastPort}
+	if p.externalFinal != nil {
+		source.Schema = 8
+	}
 	if p.multiple != nil {
 		source.Schema = 6
 	}
@@ -306,18 +328,42 @@ func (p *NodeChainExecutionPreparation) policyForDiscovery(descriptor multihopre
 	if p.socks != nil {
 		source.Schema = 3
 	}
-	raw, err := json.Marshal(source)
-	if err != nil {
-		return nil, err
-	}
 	if p.connect != nil {
 		source.Schema = 4
-		raw, err = json.Marshal(source)
+	}
+	compile := func() (*NodeChainExecutionPolicy, error) {
+		raw, err := json.Marshal(source)
 		if err != nil {
 			return nil, err
 		}
+		return newNodeChainExecutionPolicyFamilyExternalFinal(string(raw), p.connect, p.socks, p.openvpn, p.multiple, p.externalFinal)
 	}
-	policy, err := newNodeChainExecutionPolicyFamilyMultiple(string(raw), p.connect, p.socks, p.openvpn, p.multiple)
+	// Preserve the existing expanded format whenever every mandatory frame fits.
+	// A large request can be recognized before the first source compilation.
+	var policy *NodeChainExecutionPolicy
+	deepPrivate := source.Schema == 6 && len(descriptor.Members) > multihoprelay.NodeChainMaximumMembers
+	if deepPrivate {
+		body, sizeErr := nodeChainStatusRequest(source.Request, strings.Repeat("0", 64))
+		if sizeErr != nil {
+			return nil, sizeErr
+		}
+		if len(body) > multihoprelay.NodeChainLeaseRequestMaximumBytes {
+			err = errNodeChainControlCapacity
+		}
+		clear(body)
+	}
+	if err == nil {
+		policy, err = compile()
+	}
+	if deepPrivate && errors.Is(err, errNodeChainControlCapacity) {
+		clear(source.Request.Users)
+		source.Request.Users = nil
+		source.Request, err = multihoprelay.NewExtendedPrivateFrontCredentials(source.Request, len(descriptor.Members))
+		if err != nil {
+			return nil, err
+		}
+		policy, err = compile()
+	}
 	if err != nil {
 		return nil, err
 	}

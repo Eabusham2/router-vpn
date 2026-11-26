@@ -28,7 +28,7 @@ func (p *NodeChainExecutionProjection) MTUPlan() (NodeChainMTUPlan, error) {
 	}
 	bound, err := local.MTUPlan()
 	localConfig := local.config
-	if m := p.preparation.mobile; m != nil && (m.connect != nil || m.socks != nil || m.openvpn != nil || m.multiple != nil) {
+	if m := p.preparation.mobile; m != nil && (m.connect != nil || m.socks != nil || m.openvpn != nil || m.multiple != nil || m.externalFinal != nil) {
 		localConfig = m.config()
 		bound, err = nodeChainProjectedMTUPlan(localConfig, local.proofs, nodeChainProjection{TargetOS: m.readback.TargetOS, RestoredMTU: m.readback.MTU})
 	}
@@ -77,7 +77,7 @@ func (p *NodeChainExecutionProjection) PlanForMTU(config string, actual int) (*m
 	route := current["route"].(map[string]any)
 	originalLocal := p.policy.local
 	extended := len(originalLocal.proofs) > NodeChainMaximumNodes
-	if extended && (p.policy.multiple == nil || originalLocal.ExtendedLocalNodeCount() != len(originalLocal.proofs) || len(config) > NodeChainInputLimit/len(originalLocal.proofs)) {
+	if extended && (p.policy.multiple == nil && p.policy.externalFinal == nil || originalLocal.ExtendedLocalNodeCount() != len(originalLocal.proofs) || len(config) > NodeChainInputLimit/len(originalLocal.proofs)) {
 		return nil, nodeChainExecutionError
 	}
 	var plans []*mobilemtu.Plan
@@ -94,7 +94,14 @@ func (p *NodeChainExecutionProjection) PlanForMTU(config string, actual int) (*m
 		plans = append(plans, plan)
 	}
 	var combined *mobilemtu.Plan
-	if extended && originalLocal.extendedAWGSelectedSource() {
+	if p.policy.externalFinal != nil {
+		first := originalLocal.proofs[0]
+		outer := ""
+		if first.StartLayer != "off" {
+			outer = nodeChainNamespace(0, first.SourceSHA256, "node", NativeStartLayerTag)
+		}
+		combined, err = mobilemtu.CombineExternalFinalExecutionPlans(config, actual, plans, originalLocal.PrefixTags(), first.Mode, outer, first.StartLayer)
+	} else if extended && originalLocal.extendedAWGSelectedSource() {
 		combined, err = mobilemtu.CombineExtendedAWGExecutionPlans(config, actual, plans, originalLocal.PrefixTags())
 	} else if extended {
 		combined, err = mobilemtu.CombineExtendedExecutionPlans(config, actual, plans, originalLocal.PrefixTags())

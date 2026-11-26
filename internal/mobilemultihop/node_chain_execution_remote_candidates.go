@@ -34,15 +34,19 @@ type NodeChainExecutionRemoteCandidatePlan struct {
 }
 
 func (r *NodeChainExecutionRuntime) NewRemoteCandidatePlanContext(ctx context.Context, position int, inventory string) (*NodeChainExecutionRemoteCandidatePlan, error) {
-	return r.remoteCandidatePlanContext(ctx, position, inventory, false)
+	return r.remoteCandidatePlanContext(ctx, position, inventory, hopmeasure.CandidateTCPMeasurement)
 }
 
 // NewRemoteResponseCandidatePlanContext can acquire only the selected original
 // Server trial's provisioned stream challenge operation.
 func (r *NodeChainExecutionRuntime) NewRemoteResponseCandidatePlanContext(ctx context.Context, position int, inventory string) (*NodeChainExecutionRemoteCandidatePlan, error) {
-	return r.remoteCandidatePlanContext(ctx, position, inventory, true)
+	return r.remoteCandidatePlanContext(ctx, position, inventory, hopmeasure.CandidatePrivateResponseMeasurement)
 }
-func (r *NodeChainExecutionRuntime) remoteCandidatePlanContext(ctx context.Context, position int, inventory string, response bool) (*NodeChainExecutionRemoteCandidatePlan, error) {
+func (r *NodeChainExecutionRuntime) NewRemotePublicResponseCandidatePlanContext(ctx context.Context, position int, inventory string) (*NodeChainExecutionRemoteCandidatePlan, error) {
+	return r.remoteCandidatePlanContext(ctx, position, inventory, hopmeasure.CandidatePublicResponseMeasurement)
+}
+
+func (r *NodeChainExecutionRuntime) remoteCandidatePlanContext(ctx context.Context, position int, inventory, measurement string) (*NodeChainExecutionRemoteCandidatePlan, error) {
 	if ctx == nil || r == nil || position < 1 || r.engine == nil || !reflect.TypeOf(r.engine).Comparable() {
 		return nil, nodeChainExecutionError
 	}
@@ -63,7 +67,13 @@ func (r *NodeChainExecutionRuntime) remoteCandidatePlanContext(ctx context.Conte
 	descriptor := r.projection.policy.Descriptor()
 	var packet *NodeChainCandidatePlan
 	var err error
-	if response {
+	if measurement == hopmeasure.CandidatePublicResponseMeasurement {
+		original := r.projection.policy.local
+		if !descriptor.PublicCandidateResponsePrefix(position) || !r.projection.preparation.SupportsServerPublicResponseCandidate(position) || r.projection.policy.externalFinal != r.projection.preparation.externalFinal {
+			return nil, nodeChainExecutionError
+		}
+		packet, err = original.NewMultipleImportedCandidatePlan(position, inventory)
+	} else if measurement == hopmeasure.CandidatePrivateResponseMeasurement {
 		if !r.projection.preparation.SupportsServerResponseCandidate(position) || !descriptor.CandidateResponsePrefix(position) {
 			return nil, nodeChainExecutionError
 		}
@@ -85,7 +95,7 @@ func (r *NodeChainExecutionRuntime) remoteCandidatePlanContext(ctx context.Conte
 	if err != nil {
 		return nil, err
 	}
-	if response != (packet.measurement == hopmeasure.CandidatePrivateResponseMeasurement) {
+	if measurement != hopmeasure.CandidateTCPMeasurement && packet.measurement != measurement || measurement == hopmeasure.CandidateTCPMeasurement && packet.measurement != "" {
 		return nil, nodeChainExecutionError
 	}
 	p := &NodeChainExecutionRemoteCandidatePlan{runtime: r, projection: r.projection, trial: trial, identity: identity, engine: r.engine, packet: packet}
@@ -150,7 +160,9 @@ func (p *NodeChainExecutionRemoteCandidatePlan) NewMeasurementContext(ctx contex
 	prefix := hopmeasure.CandidatePrefix{Position: p.packet.prefix.Position, ID: p.packet.prefix.ProfileID, Tag: p.packet.prefix.Tag, CaptureSHA256: p.capture}
 	var service *hopmeasure.CandidateService
 	var err error
-	if p.packet.measurement != hopmeasure.CandidatePrivateResponseMeasurement {
+	if p.packet.measurement == hopmeasure.CandidatePublicResponseMeasurement {
+		service, err = hopmeasure.NewRegisteredPublicResponseCandidatesContext(ctx, e, prefix, p.packet.targets, NodeChainInputLimit, p.packet, e.publicResponse)
+	} else if p.packet.measurement != hopmeasure.CandidatePrivateResponseMeasurement {
 		service, err = hopmeasure.NewCapturedPrefixCandidatesContext(ctx, e, prefix, p.packet.targets, NodeChainInputLimit)
 	} else if prefix.Position >= NodeChainMaximumNodes-1 {
 		service, err = hopmeasure.NewExtendedResponseCandidatesContext(ctx, e, prefix, p.packet.targets, NodeChainInputLimit, p.packet, e.response)
@@ -454,4 +466,68 @@ func (e *nodeChainExecutionRemoteCandidateEngine) response(ctx context.Context, 
 		return nil
 	}
 	return nodeChainExecutionError
+}
+
+func (p *NodeChainExecutionPreparation) SupportsServerPublicResponseCandidate(position int) bool {
+	return p != nil && p.externalFinal != nil && p.validateCapture() == nil && (p.Execution() == "server" || p.Execution() == "auto") &&
+		p.local.candidatePrefixMeasurementValidated(position) == hopmeasure.CandidatePublicResponseMeasurement
+}
+
+func (e *nodeChainExecutionRemoteCandidateEngine) publicResponse(ctx context.Context, target hopmeasure.CandidateTarget) (elapsed time.Duration, result error) {
+	e.mu.Lock()
+	op := e.operation
+	e.mu.Unlock()
+	if op == nil || op.target != target || e.plan.packet.measurement != hopmeasure.CandidatePublicResponseMeasurement {
+		return 0, nodeChainExecutionError
+	}
+	if err := op.lock(ctx); err != nil {
+		return 0, err
+	}
+	absent := op.absent && !op.prepared && !op.closed && op.ctx.Err() == nil
+	capture := op.native.Clone()
+	op.gate <- struct{}{}
+	if absent {
+		if err := e.current(ctx); err != nil {
+			return 0, err
+		}
+		return 0, hopmeasure.ErrCandidateNotRegistered
+	}
+	nonce, err := randomHex(16)
+	if err != nil {
+		return 0, err
+	}
+	challenge, err := externalFinalPublicChallenge(capture, nonce)
+	if err != nil {
+		return 0, err
+	}
+	conn, err := e.Dial(ctx, e.plan.packet.prefix.Tag, target.Address)
+	if conn != nil {
+		defer func() { result = errors.Join(result, conn.Close()) }()
+	}
+	if err != nil || conn == nil {
+		return 0, errors.Join(err, nodeChainExecutionError)
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok || conn.SetDeadline(deadline) != nil {
+		return 0, nodeChainExecutionError
+	}
+	interrupt := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer interrupt()
+	frame := nonce + challenge
+	if n, err := io.WriteString(conn, frame); err != nil || n != len(frame) {
+		return 0, errors.Join(err, io.ErrShortWrite)
+	}
+	var reply [80]byte
+	if _, err := io.ReadFull(conn, reply[:]); err != nil {
+		return 0, err
+	}
+	elapsed, err = readExternalFinalPublicResponse(capture, nonce, string(reply[:]))
+	if err != nil {
+		return 0, err
+	}
+	var tail [1]byte
+	if n, err := conn.Read(tail[:]); n != 0 || err != io.EOF {
+		return 0, nodeChainExecutionError
+	}
+	return elapsed, ctx.Err()
 }

@@ -49,7 +49,7 @@ func (p *NodeChainExecutionProjection) validateTUNReadback(value NodeChainExecut
 	if p.preparation.mobile != nil && value.TargetOS != p.preparation.mobile.readback.TargetOS {
 		return nodeChainExecutionError
 	}
-	final := p.policy.local.nodes[len(p.policy.local.nodes)-1].profile
+	final := p.policy.local.finalPreferences()
 	fixed, err := fixedMTU(final)
 	jumbo, jumboErr := externalJumboPreference(final)
 	if err != nil || jumboErr != nil || fixed != 0 && value.MTU != fixed || jumbo && value.MTU != bound.Original {

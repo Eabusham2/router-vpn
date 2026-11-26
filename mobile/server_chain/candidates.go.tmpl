@@ -51,9 +51,13 @@ func (source routerVPNServerChainCandidateFile) current(root *os.Root, name stri
 // The original operation grants one TCP handshake. A response grant instead
 // sends one worker-constructed challenge to the registered private agent. Both
 // use the captured prefix and close each sample without forwarding user traffic.
+type routerVPNServerChainCandidateResponder interface {
+	Reply(context.Context, multihoprelay.NodeChainCandidateCapture, net.Conn, string, string, func(context.Context, net.Conn, string, string, string) (net.Conn, error)) (string, error)
+}
+
 type routerVPNServerChainCandidate struct {
 	prepareDone                           chan struct{}
-	response                              *mobilemultihop.NodeChainServerCandidateResponder
+	response                              routerVPNServerChainCandidateResponder
 	responseFile                          routerVPNServerChainCandidateFile
 	nonces                                map[string]bool
 	reads                                 int
@@ -87,21 +91,10 @@ func (n *routerVPNServerChain) NewCandidateOperation(ctx context.Context, c mult
 	if err != nil || other != nil || digest != requested {
 		return nil, errServerChainFront
 	}
-	acquire := n.policy.CandidateTarget
-	if c.Request.Schema == 2 {
-		acquire = n.policy.ResponseCandidateTarget
-	}
-	target, err := acquire(c)
-	if err != nil {
-		return nil, err
-	}
-	tag, address, err := target.Read(n.policy, c)
-	if err != nil || n.outputs[tag] == nil {
-		return nil, errServerChainFront
-	}
-	var responder *mobilemultihop.NodeChainServerCandidateResponder
+	var responder routerVPNServerChainCandidateResponder
+	var public *mobilemultihop.NodeChainServerPublicCandidateResponder
 	var responseFile routerVPNServerChainCandidateFile
-	if c.Request.Schema == 2 {
+	if c.Request.Schema == 2 || c.Request.Schema == 3 {
 		if n.root == nil {
 			return nil, errServerChainFront
 		}
@@ -111,11 +104,32 @@ func (n *routerVPNServerChain) NewCandidateOperation(ctx context.Context, c mult
 		if err != nil {
 			return nil, errServerChainFront
 		}
-		responder, err = mobilemultihop.NewNodeChainServerCandidateResponder(c, string(input))
+		if c.Request.Schema == 3 {
+			public, err = mobilemultihop.NewNodeChainServerPublicCandidateResponder(c, string(input))
+			responder = public
+		} else {
+			responder, err = mobilemultihop.NewNodeChainServerCandidateResponder(c, string(input))
+		}
 		clear(input)
 		if err != nil {
 			return nil, errServerChainFront
 		}
+	}
+	var target *mobilemultihop.NodeChainServerCandidateTarget
+	switch c.Request.Schema {
+	case 3:
+		target, err = n.policy.PublicResponseCandidateTarget(c, public)
+	case 2:
+		target, err = n.policy.ResponseCandidateTarget(c)
+	default:
+		target, err = n.policy.CandidateTarget(c)
+	}
+	if err != nil {
+		return nil, err
+	}
+	tag, address, err := target.Read(n.policy, c)
+	if err != nil || n.outputs[tag] == nil {
+		return nil, errServerChainFront
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -158,7 +172,7 @@ func (op *routerVPNServerChainCandidate) current(ctx context.Context) bool {
 	if ctx == nil || ctx.Err() != nil || !op.original() || op.ctx.Err() != nil || !time.Now().Before(time.UnixMilli(op.capture.Request.DeadlineAt)) {
 		return false
 	}
-	if op.capture.Request.Schema == 2 {
+	if op.capture.Request.Schema == 2 || op.capture.Request.Schema == 3 {
 		if op.response == nil || !op.responseFile.current(op.owner.root, op.capture.ResponseSourceFile()) {
 			return false
 		}
@@ -445,7 +459,8 @@ func (op *routerVPNServerChainCandidate) connect(ctx context.Context, conn net.C
 	if op.response == nil {
 		return nil
 	}
-	// The authenticated stream has one fixed 96-byte challenge and one 64-byte MAC.
+	// Each response grant receives one fixed 96-byte challenge. The private reply
+	// is a 64-byte MAC. The public reply also binds its measured HTTPS interval.
 	// Neither client bytes nor a client-provided destination enter the inner HTTP request.
 	if err := conn.SetDeadline(deadline); err != nil {
 		return err
@@ -472,7 +487,11 @@ func (op *routerVPNServerChainCandidate) connect(ctx context.Context, conn net.C
 		return cipher.DialConn(raw, M.ParseSocksaddr(address))
 	}
 	reply, err := op.response.Reply(bounded, op.capture, remote, nonce, string(frame[32:]), wrap)
-	if err != nil || len(reply) != 64 || !op.current(bounded) {
+	replyBytes := 64
+	if op.capture.Request.Schema == 3 {
+		replyBytes = 80
+	}
+	if err != nil || len(reply) != replyBytes || !op.current(bounded) {
 		return errServerChainFront
 	}
 	if n, err := io.WriteString(conn, reply); err != nil || n != len(reply) {

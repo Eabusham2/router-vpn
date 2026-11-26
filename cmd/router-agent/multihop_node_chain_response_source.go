@@ -11,7 +11,7 @@ import (
 )
 
 func (r *relayNodeChainExecRunner) originalCandidateSource(ctx context.Context, c multihoprelay.NodeChainCandidateCapture) (string, func() bool, error) {
-	if r == nil || ctx == nil || ctx.Err() != nil || c.Validate() != nil || c.Request.Schema != 2 {
+	if r == nil || ctx == nil || ctx.Err() != nil || c.Validate() != nil || (c.Request.Schema != 2 && c.Request.Schema != 3) {
 		return "", nil, multihoprelay.ErrUnavailable
 	}
 	knownID := false
@@ -22,12 +22,17 @@ func (r *relayNodeChainExecRunner) originalCandidateSource(ctx context.Context, 
 		if d.EntryNodeID != c.Lease.Source.EntryNodeID {
 			continue
 		}
+		if c.Request.Schema == 3 && !d.SameExternalFinalEntry(c.Lease.Source) {
+			continue
+		}
 		for _, member := range d.Members {
 			if member.ProfileID != c.Request.CandidateID {
 				continue
 			}
 			knownID = true
-			if member.NodeKind != "" || member.Mode != "shadowsocks" || member.StartLayer != "off" {
+			if member.Mode != "shadowsocks" || member.StartLayer != "off" ||
+				c.Request.Schema == 2 && member.NodeKind != "" ||
+				c.Request.Schema == 3 && (member.NodeKind != "external" || member.ProofKind != "public-path" || member.SourceSHA256 != c.Request.CandidateSourceSHA256) {
 				continue
 			}
 			path := filepath.Join(r.sources, d.SourceSHA256+".json")
@@ -46,7 +51,12 @@ func (r *relayNodeChainExecRunner) originalCandidateSource(ctx context.Context, 
 			if err != nil || e != nil || actual != expected {
 				return "", nil, multihoprelay.ErrUnavailable
 			}
-			input, err := policy.CandidateResponseInput(c)
+			var input string
+			if c.Request.Schema == 3 {
+				input, err = policy.PublicCandidateResponseInput(c)
+			} else {
+				input, err = policy.CandidateResponseInput(c)
+			}
 			if err != nil {
 				continue
 			}

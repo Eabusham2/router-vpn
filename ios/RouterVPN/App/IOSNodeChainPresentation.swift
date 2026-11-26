@@ -126,7 +126,11 @@ enum IOSNodeChainPresentation {
                   let requested = preparation["execution"] as? String, ["server", "auto"].contains(requested),
                   let source = preparation["local_source"] as? String else { return nil }
             let path: [IOSNodePathPoint]?
-            if kind == "routervpn-node-chain-multiple-imported-execution-preparation-input", preparation["schema"] as? Int == 6 {
+            if kind == "routervpn-node-chain-external-final-execution-preparation-input", preparation["schema"] as? Int == 8 {
+                guard Set(preparation.keys) == Set(["schema", "execution", "local_source", "external_final_local_launch"]),
+                      let original = preparation["external_final_local_launch"] as? String else { return nil }
+                path = captured(source: Data(original.utf8), bundleData: identity.bundleData, externalFinalExecution: requested)
+            } else if kind == "routervpn-node-chain-multiple-imported-execution-preparation-input", preparation["schema"] as? Int == 6 {
                 guard Set(preparation.keys) == Set(["schema", "execution", "local_source", "multiple_imported_local_launch"]),
                       let rawLocal = preparation["multiple_imported_local_launch"] as? String,
                       let sealed = try? JSONSerialization.jsonObject(with: Data(rawLocal.utf8)) as? [String: Any],
@@ -153,7 +157,7 @@ enum IOSNodeChainPresentation {
         return path
     }
 
-    static func captured(source: Data, bundleData: Data) -> [IOSNodePathPoint]? {
+    static func captured(source: Data, bundleData: Data, externalFinalExecution: String? = nil) -> [IOSNodePathPoint]? {
         guard !source.isEmpty, source.count <= 40 * 1024 * 1024 else { return nil }
         if let root = try? JSONSerialization.jsonObject(with: source) as? [String: Any], root["schema"] as? Int == 4 {
             return capturedCONNECT(source: source, bundleData: bundleData)
@@ -167,11 +171,12 @@ enum IOSNodeChainPresentation {
               bundle.routerProfiles.filter({ $0.id == bundle.selectedRouterID }).count == 1,
               let control = bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }),
               let launch = try? JSONDecoder().decode(Launch.self, from: source),
+              externalFinalExecution == nil || (launch.schema == 8 && externalFinalExecution == control.multihopExecution && ["server","auto"].contains(externalFinalExecution ?? "")),
               (launch.schema == 1 || (launch.schema == 2 || launch.schema == 5 || launch.schema == 6 || launch.schema == 8) && launch.nodes.count >= 3 || launch.schema == 7 && launch.nodes.count == 3), launch.kind == "routervpn-node-chain-launch-input", launch.execution == "local",
               launch.target_os == nil, launch.projection_kind == nil, launch.session_id == nil, launch.restored_mtu == nil,
               launch.source_sha256.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
               launch.config_sha256.range(of: "\\A[0-9a-f]{64}\\z", options: .regularExpression) != nil,
-              launch.original_config_sha256 == launch.config_sha256, (2...8).contains(launch.nodes.count) || IOSMultihopNodeSelection.extendedLocalSource(launch.schema, execution: control.multihopExecution, count: launch.nodes.count, identities: launch.identity_sources, allowPairedStreams: control.multihopExecution == "local") else { return nil }
+              launch.original_config_sha256 == launch.config_sha256, (2...8).contains(launch.nodes.count) || IOSMultihopNodeSelection.extendedLocalSource(launch.schema, execution: externalFinalExecution == nil ? control.multihopExecution : launch.execution, count: launch.nodes.count, identities: launch.identity_sources, allowPairedStreams: control.multihopExecution == "local") else { return nil }
         if launch.schema == 7 {
             guard let identities = launch.identity_sources, identities.count == 3, identities[0].isEmpty,
                   identities[1].isEmpty, !identities[2].isEmpty, control.multihopExecution == "local" else { return nil }
@@ -200,7 +205,9 @@ enum IOSNodeChainPresentation {
             }
             profiles.append(profile); nodes.append(.init(id: profile.id, mode: mode))
         }
-        guard launch.schema != 7 || IOSMultihopNodeSelection.usesLocalImportedEntry(nodes), (launch.schema == 8 ? profiles.first : profiles.last) == control, control.multihopNodes == nodes else { return nil }
+        var expectedControl = control
+        if externalFinalExecution != nil { expectedControl.startupMode = nil; expectedControl.autoConnect = nil }
+        guard launch.schema != 7 || IOSMultihopNodeSelection.usesLocalImportedEntry(nodes), (launch.schema == 8 ? profiles.first : profiles.last) == expectedControl, control.multihopNodes == nodes else { return nil }
         return planned(selected: control, catalog: profiles)
     }
 

@@ -55,7 +55,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         guard let first = try await reply("candidate-open", request: owner, prefix: String(prefix), deadline: deadline).metadata else { throw IOSNodeCandidateResult.issue() }
         try requireCurrent()
         var pages = try IOSCandidateMetadataPages(first, inventoryBytes: inventoryBytes, legacyLimit: 32768, family: family,
-            selectedResponse: selectedResponse.map { ($0.position, $0.profile_id) })
+            selectedResponse: selectedResponse.map { ($0.position, $0.profile_id) }, selectedResponseMetric: selectedResponse?.metric ?? "routed-candidate-response")
         while let offset = pages.nextOffset {
             try requireCurrent()
             guard let raw = try await reply("candidate-metadata-page", request: owner, candidate: String(offset), deadline: deadline).metadata else { throw IOSNodeCandidateResult.issue() }
@@ -119,10 +119,10 @@ private final class IOSCandidateReply: @unchecked Sendable {
         let proposal_source_sha256: String?, proposal_config_sha256: String?
         var eligiblePrefixes: [IOSNodeCandidatePrefix] {
             proofs.filter { prefix in
-                if prefix.metric == "routed-public-candidate-response" {
-                    return requested_execution == nil && execution == nil && candidate_positions == nil && prefix.supported(in: proofs)
+                if prefix.metric == "routed-public-candidate-response", requested_execution == nil {
+                    return execution == nil && candidate_positions == nil && prefix.supported(in: proofs)
                 }
-                if let requested_execution, prefix.metric == "routed-candidate-response" {
+                if let requested_execution, ["routed-candidate-response", "routed-public-candidate-response"].contains(prefix.metric) {
                     return (requested_execution == "auto" && execution == "local" || ["server", "auto"].contains(requested_execution) && execution == "server") && candidate_positions?.contains(prefix.position) == true &&
                         prefix.selectedResponse(in: proofs)
                 }
@@ -285,9 +285,19 @@ private final class IOSCandidateReply: @unchecked Sendable {
                         guard info.source_sha256 == temporary.sourceSHA256, info.config_sha256 == temporary.configSHA256,
                               info.proofs == temporary.prefixes else { throw CancellationError() }
                     }
+                    let selectedResponse = info.requested_execution != nil && ["routed-candidate-response", "routed-public-candidate-response"].contains(info.proofs[position].metric)
+                    var filterLaunch = binding.identity.nodeChainSource
+                    if selectedResponse, info.proofs[position].metric == "routed-public-candidate-response" {
+                        guard let input = binding.identity.nodeChainExecutionSource,
+                              let launch = try JSONSerialization.jsonObject(with: input) as? [String: Any],
+                              let raw = launch["source"] as? String,
+                              let preparation = try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
+                              preparation["schema"] as? Int == 8,
+                              let original = preparation["external_final_local_launch"] as? String else { throw IOSNodeCandidateResult.issue() }
+                        filterLaunch = Data(original.utf8)
+                    }
                     let capture = try IOSNodeCandidateCapture.make(request: owner, prefixPosition: position, proofs: info.proofs,
-                        chainSource: info.source_sha256, chainConfig: info.config_sha256, selectedResponse: info.requested_execution != nil && info.proofs[position].metric == "routed-candidate-response",
-                        originalLaunch: binding.identity.nodeChainSource)
+                        chainSource: info.source_sha256, chainConfig: info.config_sha256, selectedResponse: selectedResponse, originalLaunch: filterLaunch)
                     let owned = try IOSNodeCandidateTransaction(epoch: info.session_id, owner: owner,
                         send: { op, request, candidate, prefix, deadline in
                             try await self.send(binding.connection, operation: op, request: request, epoch: info.session_id,
@@ -302,7 +312,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                             try capture.requireCurrent()
                             try temporary?.requireLive()
                         }
-                        let response = info.eligiblePrefixes.first { $0.position == position && $0.metric == "routed-candidate-response" }
+                        let response = info.eligiblePrefixes.first { $0.position == position && ["routed-candidate-response", "routed-public-candidate-response"].contains($0.metric) }
                         let metadata = try await owned.open(prefix: position, inventoryBytes: capture.source.inventory.data.count,
                             family: info.requested_execution == nil ? .ordinary : .selected, selectedResponse: response, current: current)
                         try current()
@@ -321,16 +331,8 @@ private final class IOSCandidateReply: @unchecked Sendable {
                             lastRequest = request
                             try current()
                             let now = Int64(Date().timeIntervalSince1970 * 1000)
-                            let receipt: IOSNodeCandidateResult?, benchmark: IOSNodeCandidateResult.Benchmark?
-                            if metadata.execution == "server", metadata.metric == "routed-candidate-response" {
-                                let original = try JSONDecoder().decode(IOSNodeCandidateResult.self, from: raw)
-                                receipt = original
-                                benchmark = try original.selectedServerScore(request: request, target: target, metadata: metadata, now: now)
-                            } else {
-                                receipt = try? JSONDecoder().decode(IOSNodeCandidateResult.self, from: raw)
-                                benchmark = try? receipt?.score(request: request, target: target, metadata: metadata, now: now)
-                            }
-                            if let receipt, let benchmark {
+                            if let (receipt, benchmark) = try IOSNodeCandidateResult.measuredScore(raw,
+                                request: request, target: target, metadata: metadata, now: now, selectedPublic: capture.prefix) {
                                 let score = Score(id: target.id, name: String(row.name.prefix(100)), receipt: receipt, benchmark: benchmark)
                                 if temporary == nil { self.scores.append(score) } else { detachedScores.append(score) }
                             }
@@ -342,7 +344,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                             guard (temporary == nil ? self.scores : capturedScores).contains(where: { $0.token == score.token }),
                                   let target = metadata.targets.first(where: { $0.id == score.id }) else { throw IOSNodeCandidateResult.issue() }
                             _ = try score.receipt.score(request: score.receipt.request_id, target: target, metadata: metadata,
-                                now: Int64(Date().timeIntervalSince1970 * 1000))
+                                now: Int64(Date().timeIntervalSince1970 * 1000), selectedPublic: capture.prefix)
                         }
                         let observedRequest = lastRequest
                         let compileProposal: (Score, Bool) async throws -> IOSNodeCandidateProposal = { score, retainFinal in
@@ -519,7 +521,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
             guard let target = metadata.targets.first(where: { $0.id == score.id }),
                   let row = capture.rows.first(where: { $0.id == score.id }) else { throw IOSNodeCandidateResult.issue() }
             _ = try score.receipt.score(request: score.receipt.request_id, target: target, metadata: metadata,
-                now: Int64(Date().timeIntervalSince1970 * 1000))
+                now: Int64(Date().timeIntervalSince1970 * 1000), selectedPublic: capture.prefix)
             if offersNamedProfile {
                 let original = try temporary.originalForProposal()
                 defer { try? original.close() }
@@ -647,8 +649,8 @@ struct IOSNodeCandidatesCard: View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Candidate measurements", systemImage: "point.3.connected.trianglepath.dotted").font(.headline)
             Text(model.connected && !model.iosCandidateTesting ?
-                 "WireGuard and AWG prefixes measure TCP connection time. A supported Local Shadowsocks 2022 prefix measures authenticated responses from each paired candidate’s private agent. Each score is the 10% trimmed mean of 50 samples of one metric." :
-                 "Choose a selected-prefix test or a complete saved Local path test. Each measures 50 TCP connections or 50 private-agent responses, according to the captured prefix. The VPN returns to Disconnected before you choose a future profile.")
+                 "WireGuard and AWG prefixes measure TCP connection time. Shadowsocks 2022 prefixes measure private-agent responses for paired candidates or verified HTTPS exit responses for imported candidates. Server measurements require a registered candidate. Each score is the 10% trimmed mean of 50 samples." :
+                 "Choose a selected-prefix test or a complete saved Local path test. Each measures 50 TCP connections, private-agent responses or verified public HTTPS responses, according to the captured prefix. The VPN returns to Disconnected before you choose a future profile.")
                 .font(.caption).foregroundStyle(.secondary)
             Picker("Retained prefix", selection: $probe.selectedPrefix) {
                 ForEach(probe.prefixes, id: \.position) { prefix in Text("\(prefix.position + 1) • \(prefix.profile_id) • \(prefix.mode)").tag(prefix.position) }

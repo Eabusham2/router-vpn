@@ -70,6 +70,10 @@ func compileNodeChainClosuresWithServerScope(nodes []nodeChainGraphMember, closu
 }
 
 func compileNodeChainGraph(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress, connect nodeChainCapturedTransportScope, server *nodeChainMultipleImportedServerScope, closed *NodeChainCandidatePlan) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
+	return compileNodeChainGraphWithHome(nodes, closures, expected, connect, server, closed, nil)
+}
+
+func compileNodeChainGraphWithHome(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress, connect nodeChainCapturedTransportScope, server *nodeChainMultipleImportedServerScope, closed *NodeChainCandidatePlan, home *NodeChainServerHomeDNS) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 	bad := errors.New("ordered chain lost a complete captured node closure")
 	fail := func(err error) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 		return "", nil, NodeChainDNSCapture{}, nil, err
@@ -101,6 +105,12 @@ func compileNodeChainGraph(nodes []nodeChainGraphMember, closures []*externalPre
 	route["final"] = SelectorTag
 	graph := map[string]any{"log": last.graph["log"], "inbounds": []any{tun},
 		"outbounds": []any{}, "endpoints": []any{}, "route": route, "dns": dns}
+	if home != nil {
+		if connect != nil || server != nil || closed != nil || len(nodes) < 2 || !nodes[len(nodes)-1].imported {
+			return fail(bad)
+		}
+		graph["outbounds"] = []any{home.outbound()}
+	}
 	proofs := make([]NodeChainProof, 0, len(nodes))
 	servers := []any{}
 	for position, closure := range closures {
@@ -150,7 +160,9 @@ func compileNodeChainGraph(nodes []nodeChainGraphMember, closures []*externalPre
 		for _, raw := range originalDNS["servers"].([]any) {
 			server := raw.(map[string]any)
 			server["tag"] = dnsNames[predecessorText(server, "tag")]
-			if node.externalHome && server["detour"] == externalEntryTag && position == len(nodes)-1 && len(proofs) > 0 {
+			if home != nil && position == len(nodes)-1 && server["detour"] == externalEntryTag {
+				server["detour"] = NodeChainServerEntryHomeTag
+			} else if node.externalHome && server["detour"] == externalEntryTag && position == len(nodes)-1 && len(proofs) > 0 {
 				server["detour"] = proofs[0].Tag
 			} else if original, exists := server["detour"]; exists {
 				tag, ok := original.(string)
@@ -213,6 +225,7 @@ func compileNodeChainGraph(nodes []nodeChainGraphMember, closures []*externalPre
 	if err != nil {
 		return fail(err)
 	}
+	traversal.serverHome = home
 	for _, proof := range proofs {
 		physical, err = traversal.physical([]string{"tcp", "udp"}, nil, proof.Tag, false)
 		if err != nil || !aggregate && !nodeChainSamePhysical(physical, expected) {
@@ -230,7 +243,9 @@ func compileNodeChainGraph(nodes []nodeChainGraphMember, closures []*externalPre
 	}
 	selected := predecessorText(dns, "final")
 	resolverDetour := proofs[resolverPosition].Tag
-	if nodes[resolverPosition].externalHome {
+	if home != nil {
+		resolverDetour = NodeChainServerEntryHomeTag
+	} else if nodes[resolverPosition].externalHome {
 		resolverDetour = proofs[0].Tag
 	}
 	var resolver map[string]any

@@ -367,7 +367,7 @@ func validateDesktopNodeChainCandidateStatus(plan desktopCandidateDescription, i
 	return validateDesktopNodeChainCandidateReceipt(plan, id, status, now, false)
 }
 
-func validateDesktopNodeChainCandidateReceipt(plan desktopCandidateDescription, id string, status hopmeasure.CandidateStatus, now time.Time, allowServerNoScore bool) error {
+func validateDesktopNodeChainCandidateReceipt(plan desktopCandidateDescription, id string, status hopmeasure.CandidateStatus, now time.Time, registeredServer bool) error {
 	bad := errors.New("candidate result did not retain its exact original prefix and source")
 	if plan == nil {
 		return bad
@@ -410,9 +410,13 @@ func validateDesktopNodeChainCandidateReceipt(plan desktopCandidateDescription, 
 	if r.ID != id || r.Role != "candidate" || r.Kind != kind || r.Idle != nil || r.Response != nil || r.Download != nil || r.Upload != nil {
 		return bad
 	}
-	if allowServerNoScore && metric == hopmeasure.CandidatePrivateResponseMeasurement && !r.Ready && r.Failure != "" && r.Benchmark == nil &&
-		(r.CandidateDisposition == "" || r.CandidateDisposition == hopmeasure.CandidateNotRegistered && r.Failure == hopmeasure.ErrCandidateNotRegistered.Error()) {
-		return nil
+	if registeredServer && desktopCandidateResponseMetric(metric) && !r.Ready && r.Failure != "" && r.Benchmark == nil {
+		if r.CandidateDisposition == hopmeasure.CandidateNotRegistered && r.Failure == hopmeasure.ErrCandidateNotRegistered.Error() {
+			return nil
+		}
+		if metric == hopmeasure.CandidatePrivateResponseMeasurement && r.CandidateDisposition == "" {
+			return nil
+		}
 	}
 	if !r.Ready || r.Failure != "" || r.Benchmark == nil || r.CandidateDisposition != "" {
 		return bad
@@ -422,6 +426,9 @@ func validateDesktopNodeChainCandidateReceipt(plan desktopCandidateDescription, 
 		return bad
 	}
 	d := b.Distribution
+	if registeredServer && metric == hopmeasure.CandidatePublicResponseMeasurement && (d.Max > float64(hopmeasure.RegisteredPublicCandidateIntervalLimit.Milliseconds()) || d.Jitter > float64(hopmeasure.RegisteredPublicCandidateIntervalLimit.Milliseconds())) {
+		return bad
+	}
 	finite := func(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) && v > 0 }
 	if d.Samples != hopmeasure.LatencyBenchmarkSamples || !finite(d.Min) || !finite(d.Median) || !finite(d.Average) || !finite(d.P90) || !finite(d.Max) || !finite(b.TrimmedMean) ||
 		math.IsNaN(d.Jitter) || math.IsInf(d.Jitter, 0) || d.Jitter < 0 || d.Min > d.Median || d.Median > d.P90 || d.P90 > d.Max || d.Average < d.Min || d.Average > d.Max || b.TrimmedMean < d.Min || b.TrimmedMean > d.Max {

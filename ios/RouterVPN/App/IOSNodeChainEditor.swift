@@ -15,7 +15,7 @@ struct IOSNodeChainDraft {
     var firstEditablePrefix: Int { hasExternalFinal ? 1 : 0 }
 
     mutating func chooseExternalFinal(_ exit: RouterProfile, profiles: [RouterProfile], execution: String) throws {
-        guard execution == "local", IOSImportedShadowsocksSource.eligibleLiteral(exit), exit.id != controlID,
+        guard ["local", "server", "auto"].contains(execution), IOSImportedShadowsocksSource.eligibleLiteral(exit), exit.id != controlID,
               let entry = profiles.first(where: { $0.id == controlID }),
               IOSMultihopNodeSelection.supportsExternalExitEntry(entry) else {
             throw IOSMultihopNodeSelection.issue("Choose a literal Shadowsocks 2022 exit and a paired WireGuard or AWG2 entry with its saved Start Layer.")
@@ -75,7 +75,7 @@ struct IOSNodeChainDraft {
                       let matches = linked.filter { $0.id == node.id }
                       guard matches.count == 1, let profile = matches.first else { return false }
                       return i == 0 ? IOSMultihopNodeSelection.supportsExternalExitEntry(profile) : IOSImportedShadowsocksSource.eligibleLiteral(profile)
-                  }) else { throw IOSMultihopNodeSelection.issue("Select the complete Local route and its original literal Shadowsocks imports before measuring this prefix.") }
+                  }) else { throw IOSMultihopNodeSelection.issue("Select the complete route and its original literal Shadowsocks imports before measuring this prefix.") }
             return nodes
         }
         let hasIndependentHostname = IOSMultihopNodeSelection.hasIndependentHostname(nodes, profiles: linked)
@@ -158,6 +158,14 @@ struct IOSNodeChainDraft {
             throw IOSMultihopNodeSelection.issue("Choose a different linked node for each position.")
         }
         nodes[position].id = id
+    }
+
+    func externalExecutionEligible(profiles: [RouterProfile], bundle: ClientBundle?) -> Bool {
+        guard hasExternalFinal, canSave, externalEntryModes(in: bundle).contains(nodes[0].mode) else { return false }
+        return nodes.dropFirst().allSatisfy { node in
+            let originals = profiles.filter { $0.id == node.id }
+            return originals.count == 1 && IOSImportedShadowsocksSource.eligibleLiteral(originals[0])
+        }
     }
 
     func externalEntryModes(in bundle: ClientBundle?) -> [String] {
@@ -381,7 +389,7 @@ enum IOSNodeChainEditorVisible {
     static func candidates(_ profiles: [RouterProfile], nodes: [IOSMultihopNodeSelection], position: Int, execution: String = "local") -> [RouterProfile] {
         guard nodes.indices.contains(position), position < nodes.count - 1 else { return [] }
         if let final = nodes.last, profiles.contains(where: { $0.id == final.id && IOSImportedShadowsocksSource.eligibleLiteral($0) }) {
-            guard execution == "local" else { return [] }
+            guard ["local", "server", "auto"].contains(execution) else { return [] }
             return unique(profiles).filter { profile in
                 position == 0 ? profile.id == nodes.first?.id && profile.normalizedNodeKind == "router-vpn" :
                     IOSImportedShadowsocksSource.eligibleLiteral(profile) && !nodes.enumerated().contains { $0.offset != position && $0.element.id == profile.id }

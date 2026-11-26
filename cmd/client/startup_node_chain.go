@@ -271,7 +271,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 }
 
 func (a *app) loadStartupNodeChainReceipt(selected string) (*startupSelection, bool, error) {
-	raw, err := readPrivateRegular(a.startupStatePath(), 64<<10)
+	raw, err := readPrivateRegular(a.startupStatePath(), 64<<10+desktopSelectedExtendedCaptureLimit)
 	if err != nil {
 		return nil, false, err
 	}
@@ -289,6 +289,13 @@ func (a *app) loadStartupNodeChainReceipt(selected string) (*startupSelection, b
 	var selection startupSelection
 	if err := json.Unmarshal(raw, &selection); err != nil {
 		return nil, ordered, err
+	}
+	if len(raw) > 64<<10 {
+		chain := selection.NodeChain
+		if chain == nil || chain.Schema != 8 || chain.Execution == "local" || len(chain.Nodes) <= common.MultihopMaximumNodes ||
+			len(raw) > 64<<10+desktopSelectedCaptureBound(len(chain.Nodes), 0) {
+			return nil, ordered, errors.New("ordered Last exceeds its original source limit")
+		}
 	}
 	if selection.RouterID != selected {
 		if ordered {

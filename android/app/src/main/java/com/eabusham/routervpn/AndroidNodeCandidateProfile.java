@@ -70,10 +70,10 @@ final class AndroidNodeCandidateProfile {
                 throw new IllegalStateException("The authenticated response lost its original stream or paired candidate.");
             if(publicResponse) AndroidNodeChainCapture.requireLiteralImportedSS(candidate);
             if (!"local".equals(execution)) {
-                if (!"auto".equals(execution) && !"server".equals(execution)) throw unavailable("A selected private response needs the original Server or Compare selection.");
+                if (!"auto".equals(execution) && !"server".equals(execution)) throw unavailable("A selected candidate response needs the original Server or Compare selection.");
                 for (AndroidNodeStore.ChainSource member : original.members) {
-                    if (candidate.profileId.equals(member.profileId) || candidate.proofId.equals(member.proofId))
-                        throw unavailable("Choose a paired node distinct from every original route member.");
+                    if (candidate.profileId.equals(member.profileId) || !candidate.proofId.isEmpty() && candidate.proofId.equals(member.proofId))
+                        throw unavailable("Choose a node distinct from every original route member.");
                 }
             }
             if(insert&&original.members.size()>=AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH)

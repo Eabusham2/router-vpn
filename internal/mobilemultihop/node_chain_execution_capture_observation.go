@@ -11,6 +11,7 @@ import (
 type nodeChainExecutionPreparationSeal struct {
 	packet                                         *nodeChainMultipleImportedLocalSeal
 	owner                                          *NodeChainExecutionPreparation
+	externalFinal                                  *nodeChainExternalFinalExecutionBinding
 	source                                         NodeChainExecutionPreparationSource
 	kind                                           string
 	metadata                                       DesktopNodeChainMetadata
@@ -42,16 +43,23 @@ func (p *NodeChainExecutionPreparation) plainPacketPreparation() bool {
 		p.source.DesktopOpenVPN == nil && p.source.DesktopMultipleImported == nil && ordinaryExecutionPacketGraph(p.local)
 }
 
+func (p *NodeChainExecutionPreparation) plainExternalFinalPreparation() bool {
+	return p.externalFinal != nil && p.externalFinal.preparation == p && p.externalFinal.local == p.local &&
+		p.desktop == nil && p.mobile == nil && p.source.Schema == 8 && p.source.Desktop == nil &&
+		p.source.DesktopSOCKS == nil && p.source.DesktopCONNECT == nil && p.source.DesktopOpenVPN == nil &&
+		p.source.DesktopMultipleImported == nil && p.connect == nil && p.socks == nil && p.openvpn == nil && p.multiple == nil
+}
+
 func (p *NodeChainExecutionPreparation) rememberPreparationSeal() {
 	kind, metadata := p.typedDesktopMetadata()
 	var captured DesktopNodeChainMetadata
 	if metadata != nil {
 		captured = metadata.clone()
-	} else if !p.plainPacketPreparation() {
+	} else if !p.plainPacketPreparation() && !p.plainExternalFinalPreparation() {
 		return
 	}
 	p.originalPreparationSeal = &nodeChainExecutionPreparationSeal{
-		owner: p, source: p.source, kind: kind, metadata: captured, discovery: p.discovery,
+		owner: p, externalFinal: p.externalFinal, source: p.source, kind: kind, metadata: captured, discovery: p.discovery,
 		dns: p.dns, physical: slices.Clone(p.physical), sourceJSON: p.sourceJSON, sourceSHA: p.sourceSHA,
 		config: p.config, configSHA: p.configSHA, seal: p.seal,
 	}
@@ -72,7 +80,7 @@ func (s *nodeChainExecutionPreparationSeal) matches(p *NodeChainExecutionPrepara
 	}
 	kind, metadata := p.typedDesktopMetadata()
 	if metadata == nil {
-		return p.plainPacketPreparation()
+		return p.plainPacketPreparation() || s.externalFinal != nil && s.externalFinal == p.externalFinal && p.plainExternalFinalPreparation()
 	}
 	return kind == s.kind && sameDesktopNodeChainMetadata(*metadata, s.metadata)
 }

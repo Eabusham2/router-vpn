@@ -102,3 +102,10 @@ func (m *RouterNodeChain) ValidateMultipleImportedLatencyCapture(raw string) err
 	}
 	return m.chain.ValidateMultipleImportedLatencyCapture(raw)
 }
+
+func (m *RouterNodeChain) ValidateExternalFinalLatencyCapture(raw string) error {
+	if m == nil || m.self != m || m.chain == nil {
+		return errors.New("ordered public-exit latency capture lost its original Local chain")
+	}
+	return m.chain.ValidateExternalFinalLatencyCapture(raw)
+}

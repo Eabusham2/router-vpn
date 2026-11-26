@@ -59,6 +59,7 @@ NATIVE += r'''
 public func LibboxRouterNodeChainCONNECTExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:AnyObject,_ platform:AnyObject,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{error?.pointee=NSError(domain:"UnrelatedCONNECTExecutionFactory",code:1);return nil}
 public func LibboxRouterNodeChainSOCKSExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:AnyObject,_ platform:AnyObject,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{error?.pointee=NSError(domain:"UnrelatedSOCKSExecutionFactory",code:1);return nil}
 public func LibboxRouterNodeChainMultipleImportedExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:AnyObject,_ platform:AnyObject,_ failure:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{failure?.pointee=NSError(domain:"ForeignExecutionFamily",code:1);return nil}
+public func LibboxRouterNodeChainExternalFinalExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:AnyObject,_ platform:AnyObject,_ failure:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{failure?.pointee=NSError(domain:"ForeignExecutionFamily",code:1);return nil}
 public func LibboxRouterNodeChainOpenVPNExecutionNewCommandServer(_ plan:LibboxRouterNodeChainExecution,_ handler:AnyObject,_ platform:AnyObject,_ error:UnsafeMutablePointer<NSError?>?)->LibboxCommandServer?{error?.pointee=NSError(domain:"UnrelatedOpenVPNExecutionFactory",code:1);return nil}
 public func LibboxRouterNodeChainExecutionNewLatencyBenchmark(_ plan:LibboxRouterNodeChainExecution,_ server:LibboxCommandServer,_ measurement:LibboxRouterHopMeasurement,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterOrderedLatency?{error?.pointee=NSError(domain:"UnrelatedExecutionLatencyFactory",code:1);return nil}
 '''
@@ -67,7 +68,7 @@ SOURCE=r'''
 // provides only the immutable fields consumed by this actual native host.
 final class IOSNodeChainExecutionCapture: @unchecked Sendable {
  typealias Member=IOSNodeChainCapture.Member
- let isMultipleImported=false;let isCONNECT=false,isSOCKS=false,isOpenVPN=false,members:[Member]=[],requested="server"
+ let isExternalFinal=false,isMultipleImported=false;let isCONNECT=false,isSOCKS=false,isOpenVPN=false,members:[Member]=[],requested="server"
  // This host owns an explicit Server trial with no captured members or imported response stop.
  func responsePositions(for winner:String)->[Int] { [] }
  func candidatePositions(for winner:String)->[Int] {

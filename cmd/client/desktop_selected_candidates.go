@@ -180,8 +180,8 @@ func exchangeDesktopSelectedCandidateObserved(parent context.Context, catalog *d
 	deadline, _ := ctx.Deadline()
 	operation := "selected-packet-candidate-50"
 	if sourceMetadata.Measurement != "" {
-		if sourceMetadata.Measurement != hopmeasure.CandidatePrivateResponseMeasurement || descriptor.responseOperation(sourceMetadata.Position, ready.Progress.Execution) == "" {
-			return empty, errors.New("private response requires its original eligible selected owner")
+		if !desktopCandidateResponseMetric(sourceMetadata.Measurement) || descriptor.responseOperation(sourceMetadata.Position, ready.Progress.Execution) == "" {
+			return empty, errors.New("candidate response requires its original eligible selected owner")
 		}
 		operation = descriptor.responseOperation(sourceMetadata.Position, ready.Progress.Execution)
 	}
@@ -585,6 +585,12 @@ func retireDesktopSelectedCandidateCaptured(ctx context.Context, launch *desktop
 }
 
 func (d *desktopSelectedCandidateDescriptor) responseOperation(pos int, winner string) string {
+	if winner == "local" && d.preparation.SupportsCompareLocalPublicResponseCandidate(pos) {
+		return "selected-local-public-response-50"
+	}
+	if winner == "server" && d.serverResponse && d.preparation.SupportsServerPublicResponseCandidate(pos) {
+		return "selected-server-public-response-50"
+	}
 	if winner == "local" && d.preparation.SupportsCompareLocalResponseCandidate(pos) {
 		return "selected-local-private-response-50"
 	}

@@ -158,7 +158,7 @@ func (owner *routerVPNNodeChainExecutionRuntime) captureMeasurement(ctx context.
 	if !ok || runtime == nil {
 		return nil, routerVPNExternalFailure
 	}
-	raw, err := owner.files.read("node-chain-execution-ready.json", mobilemultihop.DesktopNodeChainExecutionReadyRecordLimit)
+	raw, err := owner.files.read("node-chain-execution-ready.json", int64(owner.prep.DesktopReadyRecordLimit()))
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +294,7 @@ func (m *routerVPNDesktopExecutionMeasurement) readyCurrent(ctx context.Context)
 	if err := m.current(ctx); err != nil {
 		return err
 	}
-	raw, err := m.owner.files.read("node-chain-execution-ready.json", mobilemultihop.DesktopNodeChainExecutionReadyRecordLimit)
+	raw, err := m.owner.files.read("node-chain-execution-ready.json", int64(m.owner.prep.DesktopReadyRecordLimit()))
 	if err != nil {
 		return err
 	}

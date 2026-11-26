@@ -53,7 +53,10 @@ func (q NodeChainCandidateRequest) Clone() NodeChainCandidateRequest {
 	return q
 }
 func (q NodeChainCandidateRequest) Validate() error {
-	if (q.Schema != 1 && q.Schema != 2) || q.Lease.validateShape() != nil || !proofID.MatchString(q.OwnerID) || !proofID.MatchString(q.CaptureSHA256) || !proofID.MatchString(q.Operation) || !proofID.MatchString(q.ExecutionSHA256) || !nonce.MatchString(q.Trial) || q.SelectionEpoch == 0 || !proofID.MatchString(q.InventorySHA256) || q.Position < 1 || (q.Schema == 1 && q.Position >= NodeChainMaximumMembers || q.Position >= NodeChainExtendedMaximumMembers) || !ident.MatchString(q.CandidateID) || !proofID.MatchString(q.CandidateSourceSHA256) || !nodeChainCandidateAddress(q.Address) || q.DeadlineAt <= 0 || !proofID.MatchString(q.Password) {
+	if (q.Schema != 1 && q.Schema != 2 && q.Schema != 3) || q.Lease.validateShape() != nil || !proofID.MatchString(q.OwnerID) || !proofID.MatchString(q.CaptureSHA256) || !proofID.MatchString(q.Operation) || !proofID.MatchString(q.ExecutionSHA256) || !nonce.MatchString(q.Trial) || q.SelectionEpoch == 0 || !proofID.MatchString(q.InventorySHA256) || q.Position < 1 || (q.Schema == 1 && q.Position >= NodeChainMaximumMembers || q.Position >= NodeChainExtendedMaximumMembers) || !ident.MatchString(q.CandidateID) || !proofID.MatchString(q.CandidateSourceSHA256) || !nodeChainCandidateAddress(q.Address) || q.DeadlineAt <= 0 || !proofID.MatchString(q.Password) {
+		return errNodeChainCandidate
+	}
+	if (q.Schema == 3) != (q.Lease.Schema == 8) || q.Schema == 3 && q.Position >= len(q.Lease.Users) {
 		return errNodeChainCandidate
 	}
 	if q.Schema == 2 && (q.Lease.Schema != 2 && q.Lease.Schema != 6 || q.Position >= len(q.Lease.Users)) {
@@ -70,14 +73,21 @@ func (q NodeChainCandidateRequest) Digest() (string, error) {
 	if q.Validate() != nil {
 		return "", errNodeChainCandidate
 	}
+	if q.Schema == 3 {
+		return nodeChainDigest("routervpn-public-final-candidate-request-v3", q)
+	}
 	return nodeChainDigest("routervpn-node-chain-candidate-request-v1", q)
 }
 func DecodeNodeChainCandidateRequest(raw []byte) (NodeChainCandidateRequest, error) {
 	var q NodeChainCandidateRequest
-	if decodeNodeChainJSON(raw, &q, NodeChainCandidateMaximumBytes) != nil || q.Validate() != nil {
+	if decodeNodeChainJSON(raw, &q, NodeChainCandidateMaximumBytes) == nil && !q.Lease.HasRegisteredFronts() && q.Validate() == nil {
+		return q.Clone(), nil
+	}
+	var compact nodeChainPublicCandidateRequest
+	if decodeNodeChainJSON(raw, &compact, NodeChainCandidateMaximumBytes) != nil {
 		return NodeChainCandidateRequest{}, errNodeChainCandidate
 	}
-	return q.Clone(), nil
+	return compact.restore()
 }
 
 // This private worker capture is derived by the original lease manager. Member
@@ -105,6 +115,15 @@ func (c NodeChainCandidateCapture) Validate() error {
 		if !nodeChainPacketMode(c.Member.Mode) || c.Member.NodeKind != "" {
 			return errNodeChainCandidate
 		}
+	} else if q.Schema == 3 {
+		if !c.Lease.Source.PublicCandidateResponsePrefix(q.Position) || q.CandidateID == c.Lease.Source.EntryID {
+			return errNodeChainCandidate
+		}
+		for _, m := range c.Lease.Source.Members {
+			if q.CandidateID == m.ProfileID || q.CandidateSourceSHA256 == m.SourceSHA256 {
+				return errNodeChainCandidate
+			}
+		}
 	} else if !c.Lease.Source.CandidateResponsePrefix(q.Position) {
 		return errNodeChainCandidate
 	}
@@ -122,6 +141,13 @@ func (s NodeChainDescriptor) CandidateResponsePrefix(position int) bool {
 		(m.NodeKind == "external" && m.ProofKind == "public-path" || s.PrivateStreamAt(position))
 }
 
+// Only a public intermediate prefix of the original public-final lease can
+// host this measurement. A registered candidate still owns its SS credentials,
+// exact target and independent expected public address.
+func (s NodeChainDescriptor) PublicCandidateResponsePrefix(position int) bool {
+	return s.Schema == 8 && position >= 1 && position < len(s.Members) && s.Validate() == nil
+}
+
 // Username is unique to this server-generated operation owner. A client may
 // reuse its proposed password, but never the prior operation's wire identity.
 func (c NodeChainCandidateCapture) Username() string {
@@ -133,6 +159,9 @@ func (c NodeChainCandidateCapture) Username() string {
 func (c NodeChainCandidateCapture) Digest() (string, error) {
 	if c.Validate() != nil {
 		return "", errNodeChainCandidate
+	}
+	if c.Request.Schema == 3 {
+		return nodeChainDigest("routervpn-public-final-candidate-capture-v3", c)
 	}
 	return nodeChainDigest("routervpn-node-chain-candidate-capture-v1", c)
 }
@@ -300,8 +329,13 @@ func DecodeNodeChainCandidateCloseAcknowledgement(raw []byte, q NodeChainCandida
 }
 
 func (c NodeChainCandidateCapture) ResponseSourceFile() string {
-	if c.Request.Schema != 2 || c.Validate() != nil {
-		return ""
+	if c.Validate() == nil {
+		switch c.Request.Schema {
+		case 2:
+			return "candidate-response-" + c.OperationOwnerID + ".json"
+		case 3:
+			return "public-candidate-response-" + c.OperationOwnerID + ".json"
+		}
 	}
-	return "candidate-response-" + c.OperationOwnerID + ".json"
+	return ""
 }

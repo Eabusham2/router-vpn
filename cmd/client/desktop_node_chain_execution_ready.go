@@ -68,7 +68,7 @@ func (e *desktopNodeChainExecutionLaunch) readReadyContext(ctx context.Context, 
 	if err := e.projectionPhysicalCurrent(projection); err != nil {
 		return empty, errors.New("execution adoption replaced its retained preparation owner")
 	}
-	heartbeat, err := readDesktopRuntimeFileContext(ctx, launch, "node-chain-execution-ready.json", mobilemultihop.DesktopNodeChainExecutionReadyRecordLimit)
+	heartbeat, err := readDesktopRuntimeFileContext(ctx, launch, "node-chain-execution-ready.json", int64(e.preparation.DesktopReadyRecordLimit()))
 	if err != nil {
 		return empty, err
 	}

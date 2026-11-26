@@ -91,7 +91,7 @@ func readDesktopOrderedLatencyViewHistory(a *app, view desktopOrderedLatencyView
 		receipts = history.Receipts
 	} else {
 		selected, nodes, err := decodeDesktopSelectedLatencyCapture(view.Capture.SelectedCaptureJSON)
-		if err != nil || !reflect.DeepEqual(nodes, view.Nodes) {
+		if err != nil || !reflect.DeepEqual(nodes, view.Nodes) || (selected.ExternalFinal != nil) != (view.externalFinalSource != nil) || view.externalFinalSource != nil && view.externalFinalSource.ValidateExternalFinalLatencyCapture(view.Capture.SelectedCaptureJSON) != nil {
 			return nil, errors.New("selected history lost its complete current inventory")
 		}
 		history, err := readDesktopSelectedLatencyHistory(a)
@@ -105,7 +105,8 @@ func readDesktopOrderedLatencyViewHistory(a *app, view desktopOrderedLatencyView
 			}
 			// History may be from an earlier generation, but never from another
 			// choice, source, configuration, node inventory or timing meaning.
-			if old.Execution == selected.Execution && old.SourceSHA256 == selected.SourceSHA256 &&
+			if (old.ExternalFinal != nil) == (selected.ExternalFinal != nil) && (view.externalFinalSource == nil || view.externalFinalSource.ValidateExternalFinalLatencyCapture(row.Capture) == nil) &&
+				old.Execution == selected.Execution && old.SourceSHA256 == selected.SourceSHA256 &&
 				old.ConfigSHA256 == selected.ConfigSHA256 && reflect.DeepEqual(old.MultipleImported, selected.MultipleImported) && reflect.DeepEqual(oldNodes, nodes) {
 				receipts = append(receipts, row.Receipt)
 			}

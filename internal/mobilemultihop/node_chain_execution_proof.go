@@ -129,14 +129,19 @@ func (s *nodeChainExecutionTrial) proveDNS(parent context.Context) error {
 }
 
 func (s *nodeChainExecutionTrial) proveExternal(parent context.Context, target string) (time.Duration, error) {
+	elapsed, _, err := s.proveExternalAddress(parent, target)
+	return elapsed, err
+}
+
+func (s *nodeChainExecutionTrial) proveExternalAddress(parent context.Context, target string) (time.Duration, string, error) {
 	if !nodeChainExecutionTarget(target) {
-		return 0, nodeChainExecutionError
+		return 0, "", nodeChainExecutionError
 	}
 	ctx, cancel := context.WithTimeout(parent, 8*time.Second)
 	defer cancel()
 	nonce, err := randomHex(16)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	captureInterval := hopmeasure.StartInterval
 	if s.runtime.testInterval != nil {
@@ -144,9 +149,9 @@ func (s *nodeChainExecutionTrial) proveExternal(parent context.Context, target s
 	}
 	started, err := captureInterval()
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
-	_, err = s.proofIO.run(ctx, func(call context.Context, operation *leaseStopIO) ([]byte, error) {
+	observed, err := s.proofIO.run(ctx, func(call context.Context, operation *leaseStopIO) ([]byte, error) {
 		data, err := externalProofHTTP(call, func(dialCtx context.Context, tag, address string) (net.Conn, error) {
 			return s.retainDial(operation, dialCtx, tag, address)
 		}, s.tag, target+"?routervpn_proof="+nonce, "", s.runtime.testTLS)
@@ -159,15 +164,17 @@ func (s *nodeChainExecutionTrial) proveExternal(parent context.Context, target s
 				address, count = strings.TrimSpace(strings.TrimPrefix(line, "ip=")), count+1
 			}
 		}
-		if count != 1 || !externalPublicIP(address) {
+		policy := s.runtime.projection.policy
+		if count != 1 || !externalPublicIP(address) || policy.externalFinal != nil && address != policy.importedExpectedPublicIPAt(len(policy.local.nodes)-1) {
 			return nil, nodeChainExecutionError
 		}
-		return nil, nil
+		return []byte(address), nil
 	})
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
-	return started.Duration()
+	elapsed, err := started.Duration()
+	return elapsed, string(observed), err
 }
 
 func (s *nodeChainExecutionTrial) proveComplete(ctx context.Context) error {
@@ -182,7 +189,7 @@ func (s *nodeChainExecutionTrial) proveComplete(ctx context.Context) error {
 			return err
 		}
 		row := NodeChainPrefixProgress{Position: proof.Position, ProfileID: proof.ProfileID, ResponseMS: float64(elapsed) / float64(time.Millisecond), Proven: true}
-		if s.runtime.projection.policy.multiple != nil && s.runtime.projection.policy.importedPublicAt(i) && proof.Kind == "public-path" {
+		if (s.runtime.projection.policy.multiple != nil || s.runtime.projection.policy.externalFinal != nil) && s.runtime.projection.policy.importedPublicAt(i) && proof.Kind == "public-path" {
 			row.Kind, row.Label = "public-path", nodeChainMultipleImportedExecutionPublicLabel
 		}
 		if s.runtime.projection.policy.openvpn != nil && s.runtime.projection.policy.importedPublicAt(i) {
@@ -193,7 +200,8 @@ func (s *nodeChainExecutionTrial) proveComplete(ctx context.Context) error {
 	if err := s.proveDNS(ctx); err != nil {
 		return err
 	}
-	if _, err := s.proveExternal(ctx, Targets[0]); err != nil {
+	_, exit, err := s.proveExternalAddress(ctx, Targets[0])
+	if err != nil {
 		return err
 	}
 	if s.execution == "server" {
@@ -208,6 +216,20 @@ func (s *nodeChainExecutionTrial) proveComplete(ctx context.Context) error {
 	defer s.mu.Unlock()
 	if s.closed || s.lifetime.Err() != nil || ctx.Err() != nil {
 		return nodeChainExecutionError
+	}
+	if s.runtime.projection.policy.externalFinal != nil {
+		if s.execution == "server" {
+			if s.attempt == nil {
+				return nodeChainExecutionError
+			}
+			s.attempt.mu.Lock()
+			matched := !s.attempt.stopped && s.attempt.receipt.ExitIP == exit
+			s.attempt.mu.Unlock()
+			if !matched {
+				return nodeChainExecutionError
+			}
+		}
+		s.exitIP = exit
 	}
 	s.prefixes = rows
 	s.checkedAt = time.Now()

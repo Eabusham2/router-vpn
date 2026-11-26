@@ -8,28 +8,45 @@ enum IOSNodeChainExecutionLocalSource {
     case ordinary(IOSNodeChainCapture)
     case openvpn(IOSNodeChainCapture)
     case multipleImported(IOSNodeChainCapture)
+    case externalFinal(IOSNodeChainCapture)
     case connect(IOSNodeChainCONNECTCapture)
     case socks(IOSNodeChainSOCKSCapture)
 
+    var isExternalFinal: Bool { if case .externalFinal = self { return true }; return false }
+    var controlMember: IOSNodeChainCapture.Member { isExternalFinal ? members[0] : members[members.count - 1] }
     var isMultipleImported: Bool { if case .multipleImported = self { return true }; return false }
+    var lastRecordLimit: Int {
+        let count = members.count
+        guard count > 8 else { return IOSOrderedLastBounds.ordinary }
+        if isExternalFinal { return IOSOrderedLastBounds.record(registered: true, members: count) }
+        guard isMultipleImported, IOSMultihopNodeSelection.supportsNativePrefix(members[0].mode),
+              members.dropFirst().allSatisfy({ $0.mode == "shadowsocks" }),
+              let profiles = try? members.map({ try JSONDecoder().decode(RouterProfile.self, from: Data($0.profileJSON.utf8)) }),
+              let layout = IOSMultihopNodeSelection.localStreamLayout(members.map { .init(id: $0.id, mode: $0.mode) },
+                  execution: selectionExecution, profiles: profiles), layout.paired.isEmpty, layout.hostname == nil else { return IOSOrderedLastBounds.ordinary }
+        return IOSOrderedLastBounds.record(registered: true, members: count)
+    }
     var isOpenVPN: Bool { if case .openvpn = self { return true }; return false }
     var isCONNECT: Bool { if case .connect = self { return true }; return false }
     var isSOCKS: Bool { if case .socks = self { return true }; return false }
-    var members: [IOSNodeChainCapture.Member] { switch self { case .ordinary(let v), .openvpn(let v), .multipleImported(let v): return v.members; case .connect(let v): return v.members; case .socks(let v): return v.members } }
-    var strict: Bool { switch self { case .ordinary(let v), .openvpn(let v), .multipleImported(let v): return v.strict; case .connect(let v): return v.strict; case .socks(let v): return v.strict } }
-    var homeLANAccess: Bool { switch self { case .ordinary(let v), .openvpn(let v), .multipleImported(let v): return v.homeLANAccess; case .connect(let v): return v.homeLANAccess; case .socks(let v): return v.homeLANAccess } }
-    var finalProfile: [String: Any] { switch self { case .ordinary(let v), .openvpn(let v), .multipleImported(let v): return v.finalProfile; case .connect(let v): return v.finalProfile; case .socks(let v): return v.finalProfile } }
-    var selectionExecution: String { switch self { case .ordinary(let v), .openvpn(let v), .multipleImported(let v): return v.selectionExecution; case .connect(let v): return v.selectionExecution; case .socks(let v): return v.selectionExecution } }
-    var launchInput: String { switch self { case .ordinary(let v), .openvpn(let v), .multipleImported(let v): return v.launchInput; case .connect(let v): return v.source; case .socks(let v): return v.source } }
-    var sourceSHA256: String { switch self { case .ordinary(let v), .openvpn(let v), .multipleImported(let v): return v.sourceSHA256; case .connect(let v): return v.sourceSHA256; case .socks(let v): return v.sourceSHA256 } }
-    func close() throws { switch self { case .ordinary(let v), .openvpn(let v), .multipleImported(let v): try v.plan.close(); case .connect(let v): try v.plan.close(); case .socks(let v): try v.plan.close() } }
+    var members: [IOSNodeChainCapture.Member] { switch self { case .ordinary(let v), .openvpn(let v), .multipleImported(let v), .externalFinal(let v): return v.members; case .connect(let v): return v.members; case .socks(let v): return v.members } }
+    var strict: Bool { switch self { case .ordinary(let v), .openvpn(let v), .multipleImported(let v), .externalFinal(let v): return v.strict; case .connect(let v): return v.strict; case .socks(let v): return v.strict } }
+    var homeLANAccess: Bool { switch self { case .ordinary(let v), .openvpn(let v), .multipleImported(let v), .externalFinal(let v): return v.homeLANAccess; case .connect(let v): return v.homeLANAccess; case .socks(let v): return v.homeLANAccess } }
+    var finalProfile: [String: Any] { switch self { case .ordinary(let v), .openvpn(let v), .multipleImported(let v), .externalFinal(let v): return v.finalProfile; case .connect(let v): return v.finalProfile; case .socks(let v): return v.finalProfile } }
+    var selectionExecution: String { switch self { case .ordinary(let v), .openvpn(let v), .multipleImported(let v), .externalFinal(let v): return v.selectionExecution; case .connect(let v): return v.selectionExecution; case .socks(let v): return v.selectionExecution } }
+    var launchInput: String { switch self { case .ordinary(let v), .openvpn(let v), .multipleImported(let v), .externalFinal(let v): return v.launchInput; case .connect(let v): return v.source; case .socks(let v): return v.source } }
+    var sourceSHA256: String { switch self { case .ordinary(let v), .openvpn(let v), .multipleImported(let v), .externalFinal(let v): return v.sourceSHA256; case .connect(let v): return v.sourceSHA256; case .socks(let v): return v.sourceSHA256 } }
+    func close() throws { switch self { case .ordinary(let v), .openvpn(let v), .multipleImported(let v), .externalFinal(let v): try v.plan.close(); case .connect(let v): try v.plan.close(); case .socks(let v): try v.plan.close() } }
 
     static func compile(bundles: [Data], requested: String) throws -> Self {
         guard let last = bundles.last, let root = try JSONSerialization.jsonObject(with: last) as? [String: Any],
               let id = root["selectedRouterID"] as? String, let profiles = root["routerProfiles"] as? [[String: Any]],
               profiles.filter({ $0["id"] as? String == id }).count == 1,
-              let final = profiles.first(where: { $0["id"] as? String == id }),
-              let nodes = final["multihop_nodes"] as? [[String: Any]] else { throw IOSNodeChainCONNECTCapture.issue() }
+              let final = profiles.first(where: { $0["id"] as? String == id }) else { throw IOSNodeChainCONNECTCapture.issue() }
+        if final["node_kind"] as? String == "external" {
+            return .externalFinal(try IOSNodeChainCapture.compileOriginalForExternalFinalExecution(bundles: bundles, requested: requested))
+        }
+        guard let nodes = final["multihop_nodes"] as? [[String: Any]] else { throw IOSNodeChainCONNECTCapture.issue() }
         if nodes.contains(where: { ["http-connect", "https-connect"].contains($0["mode"] as? String ?? "") }) {
             return .connect(try IOSNodeChainCONNECTCapture.compileOriginalForExecution(bundles: bundles, requested: requested))
         }
@@ -49,10 +66,11 @@ enum IOSNodeChainExecutionLocalSource {
         return .ordinary(try IOSNodeChainCapture.compileOriginalForExecution(bundles: bundles, requested: requested))
     }
 
-    static func open(_ original: String, requested: String, openVPNLocalLaunch: String? = nil, multipleLocalLaunch: String? = nil) throws -> Self {
+    static func open(_ original: String, requested: String, openVPNLocalLaunch: String? = nil, multipleLocalLaunch: String? = nil, externalFinalLocalLaunch: String? = nil) throws -> Self {
         guard let root = try JSONSerialization.jsonObject(with: Data(original.utf8)) as? [String: Any] else { throw IOSNodeChainCONNECTCapture.issue() }
         guard (root["schema"] as? Int == 5) == (openVPNLocalLaunch != nil),
-              (root["schema"] as? Int == 6) == (multipleLocalLaunch != nil) else { throw IOSNodeChainCONNECTCapture.issue() }
+              (root["schema"] as? Int == 6) == (multipleLocalLaunch != nil),
+              (root["schema"] as? Int == 8) == (externalFinalLocalLaunch != nil) else { throw IOSNodeChainCONNECTCapture.issue() }
         if root["schema"] as? Int == 4 {
             return .connect(try IOSNodeChainCONNECTCapture.open(original, selectionExecution: requested))
         }
@@ -61,10 +79,13 @@ enum IOSNodeChainExecutionLocalSource {
         }
         var failure: NSError?
         let returned: LibboxRouterNodeChain?
-        if let sealed = multipleLocalLaunch ?? openVPNLocalLaunch { returned = LibboxRouterNodeChainLaunch(sealed, &failure) }
+        if let sealed = externalFinalLocalLaunch ?? multipleLocalLaunch ?? openVPNLocalLaunch { returned = LibboxRouterNodeChainLaunch(sealed, &failure) }
         else { returned = LibboxNewRouterNodeChain(original, &failure) }
         guard let plan = returned, failure == nil else { try? returned?.close(); throw failure ?? IOSNodeChainCONNECTCapture.issue() }
         do {
+            if externalFinalLocalLaunch != nil {
+                return .externalFinal(try IOSNodeChainCapture(plan: plan, selectionExecution: requested, externalFinalExecution: true))
+            }
             if multipleLocalLaunch != nil {
                 return .multipleImported(try IOSNodeChainCapture(plan: plan, selectionExecution: requested, multipleExecution: true))
             }
@@ -77,10 +98,12 @@ enum IOSNodeChainExecutionLocalSource {
     }
 
     func newExecution(_ requested: String, _ failure: inout NSError?) -> LibboxRouterNodeChainExecution? {
+        if isExternalFinal { return LibboxRouterNodeChainExternalFinalExecutionFromLaunch(launchInput, requested, &failure) }
         if isMultipleImported { return LibboxRouterNodeChainMultipleImportedExecutionFromLaunch(launchInput, requested, &failure) }
         return isOpenVPN ? LibboxRouterNodeChainOpenVPNExecutionFromLaunch(launchInput, requested, &failure) : isSOCKS ? LibboxNewRouterNodeChainSOCKSExecution(launchInput, requested, &failure) : isCONNECT ? LibboxNewRouterNodeChainCONNECTExecution(launchInput, requested, &failure) : LibboxRouterNodeChainExecutionFromLaunch(launchInput, requested, &failure)
     }
     func fromLast(_ requested: String, _ record: String, _ failure: inout NSError?) -> LibboxRouterNodeChainExecution? {
+        if isExternalFinal { return LibboxRouterNodeChainExternalFinalExecutionFromLast(launchInput, requested, record, &failure) }
         if isMultipleImported { return LibboxRouterNodeChainMultipleImportedExecutionFromLast(launchInput, requested, record, &failure) }
         return isOpenVPN ? LibboxRouterNodeChainOpenVPNExecutionFromLast(launchInput, requested, record, &failure) : isSOCKS ? LibboxRouterNodeChainSOCKSExecutionFromLast(launchInput, requested, record, &failure) : isCONNECT ? LibboxRouterNodeChainCONNECTExecutionFromLast(launchInput, requested, record, &failure) : LibboxRouterNodeChainExecutionFromLast(launchInput, requested, record, &failure)
     }
@@ -107,14 +130,17 @@ final class IOSNodeChainExecutionCapture {
     private var closed = false
 
     var members: [IOSNodeChainCapture.Member] { local.members }
+    let lastRecordLimit: Int
     var strict: Bool { local.strict }
     var homeLANAccess: Bool { local.homeLANAccess }
     var finalProfile: [String: Any] { local.finalProfile }
     var startupTimeout: TimeInterval { 120 }
     var isOpenVPN: Bool { local.isOpenVPN }
     var isMultipleImported: Bool { local.isMultipleImported }
+    var isExternalFinal: Bool { local.isExternalFinal }
+    var controlMember: IOSNodeChainCapture.Member { local.controlMember }
     var candidatePositions: [Int] {
-        members.indices.filter { position in
+        return members.indices.filter { position in
             let member = members[position]
             return position < members.count - 1 && (position == 0 || !isSOCKS && !isCONNECT)
                 && ["wg", "awg2-fast", "awg2-strong"].contains(member.mode)
@@ -125,8 +151,13 @@ final class IOSNodeChainExecutionCapture {
 
     // Preview the original geometry. The live native owner separately verifies its
     // winning epoch and requires the selected server to supply matching candidates.
+    var candidateResponseMetric: String { isExternalFinal ? "routed-public-candidate-response" : "routed-candidate-response" }
     func responsePositions(for winner: String) -> [Int] {
         guard (requested == "auto" && winner == "local") || (["server", "auto"].contains(requested) && winner == "server") else { return [] }
+        if case .externalFinal(let capture) = local {
+            guard capture.sourceSchema == 8, (3...IOSMultihopNodeSelection.physicalTraversalDepth).contains(members.count) else { return [] }
+            return Array(1..<(members.count - 1))
+        }
         if case .multipleImported(let capture) = local {
             guard capture.sourceSchema == 6,
                   let profiles = try? members.map({ try JSONDecoder().decode(RouterProfile.self, from: Data($0.profileJSON.utf8)) }) else { return [] }
@@ -142,7 +173,8 @@ final class IOSNodeChainExecutionCapture {
     }
 
     func candidatePositions(for winner: String) -> [Int] {
-        candidatePositions + responsePositions(for: winner)
+        if isExternalFinal && !(winner == "server" || requested == "auto" && winner == "local") { return [] }
+        return candidatePositions + responsePositions(for: winner)
     }
 
     var isCONNECT: Bool { local.isCONNECT }
@@ -164,15 +196,20 @@ final class IOSNodeChainExecutionCapture {
     /// The parser compares read-only metadata with the independently reproduced sealed Local registry.
     /// Only the live latency facade can validate its own selection epoch and joined native receipt.
     var multipleImportedBenchmarkValidator: (([String]) throws -> Void)? {
-        guard isMultipleImported else { return nil }
-        let sealed = local.launchInput
-        return { captures in try Self.validateMultipleImportedBenchmark(sealed, captures: captures) }
+        guard isMultipleImported || isExternalFinal else { return nil }
+        let sealed = local.launchInput, externalFinal = isExternalFinal
+        return { captures in try Self.validateMultipleImportedBenchmark(sealed, captures: captures, externalFinal: externalFinal) }
     }
-    private static func validateMultipleImportedBenchmark(_ localLaunch: String, captures: [String]) throws {
+    private static func validateMultipleImportedBenchmark(_ localLaunch: String, captures: [String], externalFinal: Bool) throws {
         var failure: NSError?
         let returned = LibboxRouterNodeChainLaunch(localLaunch, &failure)
         guard let plan = returned, failure == nil else { try? returned?.close(); throw failure ?? issue("The original imported route could not be reopened.") }
-        do { for capture in captures { try plan.validateMultipleImportedLatencyCapture(capture) } }
+        do {
+            for capture in captures {
+                if externalFinal { try plan.validateExternalFinalLatencyCapture(capture) }
+                else { try plan.validateMultipleImportedLatencyCapture(capture) }
+            }
+        }
         catch { try? plan.close(); throw error }
         try plan.close()
     }
@@ -185,13 +222,14 @@ final class IOSNodeChainExecutionCapture {
         guard let original = preparation["local_source"] as? String, let requested = preparation["execution"] as? String,
               ["server", "auto"].contains(requested) else { throw issue("The original execution selection is missing.") }
         var failure: NSError?
-        let local = try IOSNodeChainExecutionLocalSource.open(original, requested: requested, openVPNLocalLaunch: preparation["openvpn_local_launch"] as? String, multipleLocalLaunch: preparation["multiple_imported_local_launch"] as? String)
+        let local = try IOSNodeChainExecutionLocalSource.open(original, requested: requested, openVPNLocalLaunch: preparation["openvpn_local_launch"] as? String, multipleLocalLaunch: preparation["multiple_imported_local_launch"] as? String, externalFinalLocalLaunch: preparation["external_final_local_launch"] as? String)
         do {
-            guard try canonical(IOSNodeChainCapture.executionProfile(selectedProfile)) == canonical(local.finalProfile) else {
+            guard try canonical(IOSNodeChainCapture.executionProfile(selectedProfile)) == canonical(local.controlMember.profile) else {
                 throw issue("The selected final node changed its private execution source.")
             }
             failure = nil
-            let returned = local.isMultipleImported ? LibboxNewRouterNodeChainMultipleImportedExecutionLaunch(input, &failure)
+            let returned = local.isExternalFinal ? LibboxNewRouterNodeChainExternalFinalExecutionLaunch(input, &failure)
+                : local.isMultipleImported ? LibboxNewRouterNodeChainMultipleImportedExecutionLaunch(input, &failure)
                 : local.isOpenVPN ? LibboxNewRouterNodeChainOpenVPNExecutionLaunch(input, &failure) : local.isSOCKS ? LibboxNewRouterNodeChainSOCKSExecutionLaunch(input, &failure) : local.isCONNECT ? LibboxNewRouterNodeChainCONNECTExecutionLaunch(input, &failure) : LibboxNewRouterNodeChainExecutionLaunch(input, &failure)
             guard let plan = returned, failure == nil else {
                 try? returned?.close()
@@ -214,6 +252,7 @@ final class IOSNodeChainExecutionCapture {
     private init(local: IOSNodeChainExecutionLocalSource, requested: String, plan: LibboxRouterNodeChainExecution, ordinaryInput: String?, expected: String?, lastRecord: String?) throws {
         guard requested == "server" || requested == "auto", local.selectionExecution == requested else { throw Self.issue("The requested execution changed.") }
         guard expected == nil || expected == "server" || requested == "auto" && expected == "local" else { throw Self.issue("The retained concrete execution is invalid.") }
+        lastRecordLimit = local.lastRecordLimit
         self.local = local; self.requested = requested; self.plan = plan; self.expectedExecution = expected; self.lastRecord = lastRecord
         source = try Self.bounded(plan.source(), limit: IOSNodeChainCapture.maximumInputBytes)
         var failure: NSError?
@@ -225,15 +264,16 @@ final class IOSNodeChainExecutionCapture {
         sourceSHA256 = plan.sourceSHA256(); configSHA256 = plan.configSHA256()
         let preparation = try Self.object(source, limit: IOSNodeChainCapture.maximumInputBytes)
         let launch = try Self.object(launchInput, limit: IOSNodeChainCapture.maximumInputBytes)
-        let preparationFields = local.isMultipleImported ? ["schema", "execution", "local_source", "multiple_imported_local_launch"] : local.isOpenVPN ? ["schema", "execution", "local_source", "openvpn_local_launch"] : ["schema", "execution", "local_source"]
-        guard Set(preparation.keys) == Set(preparationFields), preparation["schema"] as? Int == (local.isMultipleImported ? 6 : local.isOpenVPN ? 5 : local.isSOCKS ? 3 : local.isCONNECT ? 4 : 1),
+        let preparationFields = local.isExternalFinal ? ["schema", "execution", "local_source", "external_final_local_launch"] : local.isMultipleImported ? ["schema", "execution", "local_source", "multiple_imported_local_launch"] : local.isOpenVPN ? ["schema", "execution", "local_source", "openvpn_local_launch"] : ["schema", "execution", "local_source"]
+        guard Set(preparation.keys) == Set(preparationFields), preparation["schema"] as? Int == (local.isExternalFinal ? 8 : local.isMultipleImported ? 6 : local.isOpenVPN ? 5 : local.isSOCKS ? 3 : local.isCONNECT ? 4 : 1),
               !local.isOpenVPN || preparation["openvpn_local_launch"] as? String == local.launchInput,
+              !local.isExternalFinal || preparation["external_final_local_launch"] as? String == local.launchInput,
               !local.isMultipleImported || preparation["multiple_imported_local_launch"] as? String == local.launchInput,
               preparation["execution"] as? String == requested, plan.requestedExecution() == requested,
               plan.localSourceSHA256() == local.sourceSHA256, Self.hex(sourceSHA256),
               configSHA256 == SHA256.hash(data: Data(config.utf8)).map({ String(format: "%02x", $0) }).joined(),
               Self.launchFields(launch, lastRecord: lastRecord),
-              launch["kind"] as? String == (local.isMultipleImported ? "routervpn-node-chain-multiple-imported-execution-preparation-input" : local.isOpenVPN ? "routervpn-node-chain-openvpn-execution-preparation-input" : local.isSOCKS ? "routervpn-node-chain-socks-execution-preparation-input" : local.isCONNECT ? "routervpn-node-chain-connect-execution-preparation-input" : "routervpn-node-chain-execution-preparation-input"),
+              launch["kind"] as? String == (local.isExternalFinal ? "routervpn-node-chain-external-final-execution-preparation-input" : local.isMultipleImported ? "routervpn-node-chain-multiple-imported-execution-preparation-input" : local.isOpenVPN ? "routervpn-node-chain-openvpn-execution-preparation-input" : local.isSOCKS ? "routervpn-node-chain-socks-execution-preparation-input" : local.isCONNECT ? "routervpn-node-chain-connect-execution-preparation-input" : "routervpn-node-chain-execution-preparation-input"),
               launch["source"] as? String == source, launch["source_sha256"] as? String == sourceSHA256,
               launch["config_sha256"] as? String == configSHA256,
               let localSource = preparation["local_source"] as? String else {
@@ -244,12 +284,12 @@ final class IOSNodeChainExecutionCapture {
         // Embedded Local schema two identifies the imported SS member. It is
         // independent of the ordinary execution and saved Last launch schemas.
         guard Set(returned.keys) == Set(["schema", "execution", "nodes", "identity_sources"]),
-              let schema = original["schema"] as? Int, local.isMultipleImported ? schema == 6 : local.isOpenVPN ? schema == 5 : local.isSOCKS ? schema == 3 : local.isCONNECT ? schema == 4 : (schema == 1 || schema == 2),
+              let schema = original["schema"] as? Int, local.isExternalFinal ? schema == 8 : local.isMultipleImported ? schema == 6 : local.isOpenVPN ? schema == 5 : local.isSOCKS ? schema == 3 : local.isCONNECT ? schema == 4 : (schema == 1 || schema == 2),
               returned["schema"] as? Int == schema, returned["execution"] as? String == "local",
               let nodes = returned["nodes"] as? [String], schema != 3 || (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count),
               schema != 4 || (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count),
               schema != 5 || (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count),
-              schema != 6 || (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || nodes.count > IOSMultihopNodeSelection.maximumNodes && Int(plan.extendedOriginalNodeCount()) == nodes.count,
+              (schema != 6 && schema != 8) || (3...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || nodes.count > IOSMultihopNodeSelection.maximumNodes && Int(plan.extendedOriginalNodeCount()) == nodes.count,
               let identities = returned["identity_sources"] as? [String],
               nodes == original["nodes"] as? [String], identities == original["identity_sources"] as? [String] else {
             throw Self.issue("Server execution requires the exact complete member order and independent private identities.")
@@ -295,8 +335,8 @@ final class IOSNodeChainExecutionCapture {
         var failure: NSError?
         let returned: String? = plan.captureLastJSON(&failure)
         guard failure == nil, let returned else { throw failure ?? Self.issue("The current native execution returned no Last record.") }
-        let raw = try Self.bounded(returned, limit: 16 * 1024)
-        let record = try Self.object(raw, limit: 16 * 1024)
+        let raw = try Self.bounded(returned, limit: lastRecordLimit)
+        let record = try Self.object(raw, limit: lastRecordLimit)
         guard record["execution"] as? String == selected else { throw Self.issue("Last changed the proved concrete execution.") }
         failure = nil
         let validation = local.fromLast(requested, raw, &failure)
@@ -312,8 +352,8 @@ final class IOSNodeChainExecutionCapture {
     static func reopenLast(_ input: String, selectedProfile: [String: Any], record: String) throws -> IOSNodeChainExecutionCapture {
         let original = try reopen(input, selectedProfile: selectedProfile)
         defer { try? original.close() }
-        let raw = try bounded(record, limit: 16 * 1024)
-        let value = try object(raw, limit: 16 * 1024)
+        let raw = try bounded(record, limit: original.lastRecordLimit)
+        let value = try object(raw, limit: original.lastRecordLimit)
         guard let selected = value["execution"] as? String, ["local", "server"].contains(selected) else { throw issue("Last has no original concrete execution.") }
         var failure: NSError?
         let returned = original.local.fromLast(original.requested, raw, &failure)
@@ -342,9 +382,9 @@ final class IOSNodeChainExecutionCapture {
         guard let original = preparation["local_source"] as? String,
               let requested = preparation["execution"] as? String else { throw issue("The original Last selection is missing.") }
         var failure: NSError?
-        let local = try IOSNodeChainExecutionLocalSource.open(original, requested: requested, openVPNLocalLaunch: preparation["openvpn_local_launch"] as? String, multipleLocalLaunch: preparation["multiple_imported_local_launch"] as? String)
+        let local = try IOSNodeChainExecutionLocalSource.open(original, requested: requested, openVPNLocalLaunch: preparation["openvpn_local_launch"] as? String, multipleLocalLaunch: preparation["multiple_imported_local_launch"] as? String, externalFinalLocalLaunch: preparation["external_final_local_launch"] as? String)
         defer { try? local.close() }
-        guard try canonical(IOSNodeChainCapture.executionProfile(selectedProfile)) == canonical(local.finalProfile) else { throw issue("The selected final node changed before Last.") }
+        guard try canonical(IOSNodeChainCapture.executionProfile(selectedProfile)) == canonical(local.controlMember.profile) else { throw issue("The selected final node changed before Last.") }
         failure = nil
         let ordinary = local.newExecution(requested, &failure)
         defer { try? ordinary?.close() }
@@ -375,7 +415,7 @@ final class IOSNodeChainExecutionCapture {
     private func freshLocalSource() throws -> IOSNodeChainExecutionLocalSource {
         let preparation = try Self.object(source, limit: IOSNodeChainCapture.maximumInputBytes)
         guard let input = preparation["local_source"] as? String else { throw Self.issue("The complete original Local source is missing.") }
-        return try IOSNodeChainExecutionLocalSource.open(input, requested: requested, openVPNLocalLaunch: preparation["openvpn_local_launch"] as? String, multipleLocalLaunch: preparation["multiple_imported_local_launch"] as? String)
+        return try IOSNodeChainExecutionLocalSource.open(input, requested: requested, openVPNLocalLaunch: preparation["openvpn_local_launch"] as? String, multipleLocalLaunch: preparation["multiple_imported_local_launch"] as? String, externalFinalLocalLaunch: preparation["external_final_local_launch"] as? String)
     }
 
     final class Restoration {
@@ -391,7 +431,7 @@ final class IOSNodeChainExecutionCapture {
 
         func makeCapture(ordinaryInput: String, selectedProfile: [String: Any]) throws -> IOSNodeChainExecutionCapture {
             guard ordinaryInput == original.ordinaryLaunchInput,
-                  try IOSNodeChainExecutionCapture.canonical(IOSNodeChainCapture.executionProfile(selectedProfile)) == IOSNodeChainExecutionCapture.canonical(original.finalProfile) else {
+                  try IOSNodeChainExecutionCapture.canonical(IOSNodeChainCapture.executionProfile(selectedProfile)) == IOSNodeChainExecutionCapture.canonical(original.controlMember.profile) else {
                 throw IOSNodeChainExecutionCapture.issue("The original ordered source changed before temporary restore.")
             }
             original.lock.lock(); let closed = original.closed; original.lock.unlock()
@@ -427,7 +467,7 @@ final class IOSNodeChainExecutionCapture {
     private static func launchFields(_ launch: [String: Any], lastRecord: String?) -> Bool {
         let ordinary = Set(["kind", "schema", "source", "source_sha256", "config_sha256"])
         if let lastRecord {
-            return !lastRecord.isEmpty && lastRecord.utf8.count <= 16 * 1024 &&
+            return IOSOrderedLastBounds.stored(lastRecord) &&
                 Set(launch.keys) == ordinary.union(["last"]) && launch["schema"] as? Int == 2 &&
                 launch["last"] as? String == lastRecord
         }

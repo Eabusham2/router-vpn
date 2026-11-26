@@ -110,7 +110,9 @@ func (m *RouterNodeChainExecution) LaunchInput() (string, error) {
 		return "", errRouterNodeChainExecution
 	}
 	launch := routerNodeChainExecutionLaunch{Kind: routerNodeChainExecutionLaunchKind, Schema: 1, Source: m.Source(), SourceSHA256: m.SourceSHA256(), ConfigSHA256: m.ConfigSHA256()}
-	if m.prep.RequiresMultipleImportedExecutionObserver() {
+	if m.prep.RequiresExternalFinalExecutionObserver() {
+		launch.Kind = routerNodeChainExternalFinalExecutionLaunchKind
+	} else if m.prep.RequiresMultipleImportedExecutionObserver() {
 		launch.Kind = routerNodeChainMultipleImportedExecutionLaunchKind
 	}
 	if m.prep.RequiresOpenVPNExecutionObserver() {

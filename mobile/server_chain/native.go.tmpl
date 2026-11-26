@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ type routerVPNServerChainFile struct {
 	limit  int64
 }
 type routerVPNServerChain struct {
+	home                   *routerVPNServerHomeDNSOutbound
 	candidateOwnerSelf     *routerVPNServerChain
 	candidate              *routerVPNServerChainCandidate
 	candidateAttempts      map[string]multihoprelay.NodeChainCandidateCapture
@@ -123,6 +125,109 @@ func (n *routerVPNServerChain) closeTransportContext(ctx context.Context) error 
 	return nil
 }
 
+// A compact capture names its immutable registration. Reopen the separate
+// private source and compile its descriptor before accepting any worker input.
+func routerVPNReadInitialNodeChainCapture(root *os.Root, raw []byte) (multihoprelay.NodeChainCapture, error) {
+	c, err := multihoprelay.DecodeNodeChainCapture(raw)
+	if err == nil || !multihoprelay.NodeChainUsesRegisteredCapture(raw) {
+		return c, err
+	}
+	private, err := routerVPNServerChainRead(root, "node-chain-source.json", mobilemultihop.NodeChainInputLimit)
+	if err != nil {
+		return multihoprelay.NodeChainCapture{}, err
+	}
+	defer clear(private)
+	var policy *mobilemultihop.NodeChainServerPolicy
+	if multihoprelay.NodeChainRegisteredCaptureSchema(raw) == 6 {
+		policy, err = mobilemultihop.NewNodeChainMultipleImportedServerPolicy(string(private))
+	} else {
+		policy, err = mobilemultihop.NewNodeChainExternalFinalServerPolicy(string(private))
+	}
+	if err != nil {
+		return multihoprelay.NodeChainCapture{}, err
+	}
+	return multihoprelay.DecodeNodeChainRegisteredCapture(raw, policy.Descriptor())
+}
+
+// Registration checks construct and close an unstarted Box. The Home resolver
+// receives its source-bound transport options, with no live network or lease
+// owner. Only the runtime constructor can give that transport a socket.
+func routerVPNCheckExternalFinalSource(parent, base context.Context, directory string) error {
+	bad := errors.New("registered public-exit configuration failed native validation")
+	if parent == nil || parent.Err() != nil || base == nil || !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
+		return bad
+	}
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0700 {
+		return bad
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return bad
+	}
+	defer root.Close()
+	actual, err := root.Stat(".")
+	if err != nil || !os.SameFile(info, actual) {
+		return bad
+	}
+	n := &routerVPNServerChain{root: root, directory: directory, directoryInfo: info, files: make(map[string]routerVPNServerChainFile)}
+	n.candidateOwnerSelf = n
+	raw, err := n.captureFile("node-chain-capture.json", multihoprelay.NodeChainCaptureMaximumBytes)
+	if err != nil {
+		return bad
+	}
+	defer clear(raw)
+	private, err := n.captureFile("node-chain-source.json", mobilemultihop.NodeChainInputLimit)
+	if err != nil {
+		return bad
+	}
+	policy, err := mobilemultihop.NewNodeChainExternalFinalServerPolicy(string(private))
+	clear(private)
+	if err != nil {
+		return bad
+	}
+	var capture multihoprelay.NodeChainCapture
+	if multihoprelay.NodeChainUsesRegisteredCapture(raw) {
+		capture, err = multihoprelay.DecodeNodeChainRegisteredCapture(raw, policy.Descriptor())
+	} else {
+		capture, err = multihoprelay.DecodeNodeChainCapture(raw)
+	}
+	if err != nil || capture.Source.Schema != 8 || capture.Source.ExternalFinal == nil {
+		return bad
+	}
+	config, err := policy.NativeConfig(capture)
+	if err != nil {
+		return bad
+	}
+	selected, err := policy.DNSCapture(capture)
+	if err != nil || selected.Binding.SourceSHA256 != capture.Source.SourceSHA256 {
+		return bad
+	}
+	owned, cancel := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(base)))
+	defer cancel()
+	stop := context.AfterFunc(parent, cancel)
+	defer stop()
+	if selected.EntryHome != nil {
+		registry := include.OutboundRegistry()
+		registerRouterVPNServerHomeOptions(registry, *selected.EntryHome, nil, routerVPNServerHomeRoute{})
+		owned = service.ContextWith[option.OutboundOptionsRegistry](owned, registry)
+		owned = service.ContextWith[adapter.OutboundRegistry](owned, registry)
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](owned, []byte(config))
+	if err != nil || len(options.Inbounds) != 0 || !n.sourceCurrent(true) || parent.Err() != nil {
+		return bad
+	}
+	instance, err := box.New(box.Options{Context: owned, Options: options})
+	if err != nil {
+		return bad
+	}
+	closeErr := instance.Close()
+	if closeErr != nil || !n.sourceCurrent(true) || parent.Err() != nil {
+		return bad
+	}
+	return nil
+}
+
 func routerVPNNewServerChain(parent context.Context, root *os.Root, directory string, capture multihoprelay.NodeChainCapture) (result routerVPNNodeChainRelayOwner, failure error) {
 	return routerVPNNewServerChainWithListener(parent, globalCtx, root, directory, capture, (&net.ListenConfig{}).Listen)
 }
@@ -153,7 +258,12 @@ func routerVPNNewServerChainWithListener(parent, base context.Context, root *os.
 	if err != nil {
 		return result, bad
 	}
-	actual, err := multihoprelay.DecodeNodeChainCapture(raw)
+	var actual multihoprelay.NodeChainCapture
+	if capture.Request.HasRegisteredFronts() {
+		actual, err = multihoprelay.DecodeNodeChainRegisteredCapture(raw, capture.Source)
+	} else {
+		actual, err = multihoprelay.DecodeNodeChainCapture(raw)
+	}
 	clear(raw)
 	actualDigest, _ := actual.Digest()
 	captureDigest, _ := capture.Digest()
@@ -165,7 +275,9 @@ func routerVPNNewServerChainWithListener(parent, base context.Context, root *os.
 	if err != nil {
 		return result, bad
 	}
-	if capture.Source.Schema == 6 {
+	if capture.Source.Schema == 8 {
+		n.policy, err = mobilemultihop.NewNodeChainExternalFinalServerPolicy(string(raw))
+	} else if capture.Source.Schema == 6 {
 		n.policy, err = mobilemultihop.NewNodeChainMultipleImportedServerPolicy(string(raw))
 	} else if capture.Source.Schema == 5 {
 		n.policy, err = mobilemultihop.NewNodeChainOpenVPNServerPolicy(string(raw))
@@ -235,6 +347,16 @@ func routerVPNNewServerChainWithListener(parent, base context.Context, root *os.
 		return result, bad
 	}
 
+	if n.dnsCapture.EntryHome != nil {
+		stage = "paired-home-owner"
+		registry := include.OutboundRegistry()
+		owned, err = registerRouterVPNServerHomeDNS(owned, n, registry)
+		if err != nil {
+			return result, err
+		}
+		owned = service.ContextWith[option.OutboundOptionsRegistry](owned, registry)
+		owned = service.ContextWith[adapter.OutboundRegistry](owned, registry)
+	}
 	if capture.Source.Schema == 3 {
 		stage = "socks-owner"
 		n.socks, err = ownedSOCKS.NewServerCapture(owned, n.policy, capture)
@@ -286,6 +408,14 @@ func routerVPNNewServerChainWithListener(parent, base context.Context, root *os.
 			return result, bad
 		}
 		n.outputs[proof.Tag] = outbound
+	}
+	if n.dnsCapture.EntryHome != nil {
+		actual, found, readErr := adapter.RouterVPNOutboundContext(initialize, n.box.Outbound(), mobilemultihop.NodeChainServerEntryHomeTag)
+		home, ok := actual.(*routerVPNServerHomeDNSOutbound)
+		if readErr != nil || !found || !ok || home == nil || home.owner != n || !home.valid(initialize) {
+			return result, errServerChainFront
+		}
+		n.home = home
 	}
 	if capture.Source.Schema == 5 {
 		stage = "openvpn-owner"
@@ -405,6 +535,16 @@ func (n *routerVPNServerChain) nativeCurrent(ctx context.Context) bool {
 		n.cancel()
 		return false
 	}
+	if n.dnsCapture.EntryHome != nil {
+		home, found, err := adapter.RouterVPNOutboundContext(ctx, n.box.Outbound(), mobilemultihop.NodeChainServerEntryHomeTag)
+		if err != nil || !found || n.home == nil || n.home != home || !n.home.valid(ctx) {
+			n.cancel()
+			return false
+		}
+	} else if n.home != nil {
+		n.cancel()
+		return false
+	}
 	inbounds, err := adapter.RouterVPNInboundsContext(ctx, n.box.Inbound())
 	if err != nil || len(inbounds) != 0 {
 		return false
@@ -437,6 +577,11 @@ func (n *routerVPNServerChain) ObserveServerContext(ctx context.Context) (mobile
 			failure = errors.Join(failure, n.ctx.Err())
 		}
 		return mobilemultihop.NodeChainServerBinding{}, routerVPNServerChainAtStage("native-admission", failure)
+	}
+	if n.home != nil {
+		if err := n.home.currentRoute(ctx); err != nil {
+			return mobilemultihop.NodeChainServerBinding{}, routerVPNServerChainAtStage("entry-home-route", err)
+		}
 	}
 	if n.carrier != nil {
 		if err := n.carrier.CurrentContext(ctx); err != nil {
@@ -472,11 +617,19 @@ func (n *routerVPNServerChain) ProveServerDNSContext(ctx context.Context, dns mo
 	if !reflect.DeepEqual(dns, n.dnsCapture) || !n.nativeCurrent(ctx) {
 		return errServerChainFront
 	}
+	if n.home != nil {
+		if err := n.home.currentRoute(ctx); err != nil {
+			return err
+		}
+	}
 	if err := n.box.RouterVPNServerChainDNSProof(ctx, n.dnsOwner); err != nil {
 		return err
 	}
 	if !n.nativeCurrent(ctx) {
 		return errServerChainFront
+	}
+	if n.home != nil {
+		return n.home.currentRoute(ctx)
 	}
 	return nil
 }
@@ -661,6 +814,9 @@ func (n *routerVPNServerChain) Snapshot(ctx context.Context, nonce string) (mult
 		r.TrafficAllowed = true
 		r.DNSProven = n.proof.DNSProven
 		r.PublicProven = n.proof.PublicProven
+		if n.capture.Source.Schema == 8 {
+			r.ExitIP = n.proof.ExitIP
+		}
 		r.ProofAt = n.proof.ProvenAt.UnixMilli()
 		for _, row := range n.proof.Prefixes {
 			prefix := multihoprelay.NodeChainPrefixReceipt{Position: row.Proof.Position, ProfileID: row.Proof.ProfileID, NodeID: row.Proof.NodeID, Mode: row.Proof.Mode, Proven: true, ResponseMS: row.ResponseMS}

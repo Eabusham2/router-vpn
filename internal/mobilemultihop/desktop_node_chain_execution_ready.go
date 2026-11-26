@@ -50,7 +50,17 @@ func (r DesktopNodeChainExecutionReadyRecord) Validate(p *NodeChainExecutionProj
 	if len(proofs) < 2 || len(progress.Prefixes) != len(proofs) {
 		return bad
 	}
-	if r.Schema != 1 || r.Kind != "routervpn-node-chain-execution-ready-v1" ||
+	kind := "routervpn-node-chain-execution-ready-v1"
+	public := p.preparation.RequiresDesktopExternalFinalExecutionObserver()
+	if public {
+		kind = "routervpn-node-chain-external-final-execution-ready-v1"
+		if progress.ExitIP != p.policy.importedExpectedPublicIPAt(len(proofs)-1) || !externalPublicIP(progress.ExitIP) {
+			return bad
+		}
+	} else if progress.ExitIP != "" {
+		return bad
+	}
+	if r.Schema != 1 || r.Kind != kind ||
 		r.SourceSHA256 != meta.SourceSHA256 || r.PreparationSourceSHA256 != p.preparation.SourceSHA256() ||
 		r.PreparationConfigSHA256 != p.preparation.ConfigSHA256() || r.TransferSHA256 != transfer ||
 		r.DNSConfigSHA256 != capture.SelectedDNS.ConfigSHA256 ||
@@ -64,8 +74,14 @@ func (r DesktopNodeChainExecutionReadyRecord) Validate(p *NodeChainExecutionProj
 	}
 	finite := func(v float64) bool { return v > 0 && !math.IsNaN(v) && !math.IsInf(v, 0) }
 	for i, row := range progress.Prefixes {
-		if row.Position != proofs[i].Position || row.ProfileID != proofs[i].ProfileID || !row.Proven || !finite(row.ResponseMS) ||
-			row.Kind != "" && row.Kind != "private-node" || row.Label != "" {
+		if row.Position != proofs[i].Position || row.ProfileID != proofs[i].ProfileID || !row.Proven || !finite(row.ResponseMS) {
+			return bad
+		}
+		if public && i > 0 {
+			if row.Kind != "public-path" || row.Label != nodeChainMultipleImportedExecutionPublicLabel || proofs[i].Kind != "public-path" {
+				return bad
+			}
+		} else if row.Kind != "" && row.Kind != "private-node" || row.Label != "" {
 			return bad
 		}
 	}
@@ -101,12 +117,23 @@ func (r DesktopNodeChainExecutionReadyRecord) Validate(p *NodeChainExecutionProj
 	return nil
 }
 
+// The registered heartbeat retains a proved row for every original member.
+func (p *NodeChainExecutionPreparation) DesktopReadyRecordLimit() int {
+	if p.RequiresDesktopMultipleImportedExecutionObserver() {
+		return p.desktopPrivateFinalReadyLimit()
+	}
+	if !p.RequiresDesktopExternalFinalExecutionObserver() {
+		return DesktopNodeChainExecutionReadyRecordLimit
+	}
+	return max(DesktopNodeChainExecutionReadyRecordLimit, p.ExtendedOriginalStatusLimit())
+}
+
 func CanonicalDesktopNodeChainExecutionReadyRecord(r DesktopNodeChainExecutionReadyRecord, p *NodeChainExecutionProjection, transfer string) ([]byte, error) {
 	if err := r.Validate(p, transfer); err != nil {
 		return nil, err
 	}
 	raw, err := json.Marshal(r)
-	if err != nil || len(raw) > DesktopNodeChainExecutionReadyRecordLimit {
+	if err != nil || len(raw) > p.preparation.DesktopReadyRecordLimit() {
 		return nil, errors.New("ordered execution heartbeat exceeds its private record bound")
 	}
 	return raw, nil
@@ -114,7 +141,7 @@ func CanonicalDesktopNodeChainExecutionReadyRecord(r DesktopNodeChainExecutionRe
 
 func ParseDesktopNodeChainExecutionReadyRecord(raw []byte, p *NodeChainExecutionProjection, transfer string) (DesktopNodeChainExecutionReadyRecord, error) {
 	var r DesktopNodeChainExecutionReadyRecord
-	if len(raw) == 0 || len(raw) > DesktopNodeChainExecutionReadyRecordLimit || json.Unmarshal(raw, &r) != nil {
+	if p == nil || len(raw) == 0 || len(raw) > p.preparation.DesktopReadyRecordLimit() || json.Unmarshal(raw, &r) != nil {
 		return r, errors.New("ordered execution heartbeat is not a bounded private record")
 	}
 	canonical, err := CanonicalDesktopNodeChainExecutionReadyRecord(r, p, transfer)
