@@ -276,33 +276,45 @@ func (b *DesktopLinuxNodeBaseline) ObserveRunning(ctx context.Context, expected 
 	defer cancel()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	if err := b.currentNamespace(ctx); err != nil {
-		return err
-	}
-	for _, physical := range selection.Interfaces {
-		if err := desktopLinuxCheckInterface(physical); err != nil {
+	checkPath := func() error {
+		if err := b.currentNamespace(ctx); err != nil {
 			return err
 		}
+		for _, physical := range selection.Interfaces {
+			if err := desktopLinuxCheckInterface(physical); err != nil {
+				return err
+			}
+		}
+		return ctx.Err()
 	}
-	before, err := b.netlink.generation(ctx)
-	if err != nil {
-		return err
-	}
-	rows, err := desktopLinuxNFTReadTable(ctx, b.nft.table())
-	if err != nil {
-		return err
-	}
-	if err := desktopLinuxRunningRowsWithLAN(b.prepared, rows, selection, b.homeLAN); err != nil {
-		return err
-	}
-	after, err := b.netlink.generation(ctx)
-	if err != nil || before != after || b.currentNamespace(ctx) != nil {
-		return errors.Join(err, errors.New("Linux running protection changed during its native snapshot"))
-	}
-	for _, physical := range selection.Interfaces {
-		if err := desktopLinuxCheckInterface(physical); err != nil {
+	// The original guardian may commit a tuple grant or renewal during the
+	// dump. Discard that full observation and require a fresh stable one
+	// within the same deadline. Every identity or inventory error is final.
+	for ctx.Err() == nil {
+		if err := checkPath(); err != nil {
 			return err
 		}
+		before, err := b.netlink.generation(ctx)
+		if err != nil {
+			return err
+		}
+		rows, err := desktopLinuxNFTReadTable(ctx, b.nft.table())
+		if err != nil {
+			return err
+		}
+		if err := desktopLinuxRunningRowsWithLAN(b.prepared, rows, selection, b.homeLAN); err != nil {
+			return err
+		}
+		after, err := b.netlink.generation(ctx)
+		if err != nil {
+			return err
+		}
+		if err := checkPath(); err != nil {
+			return err
+		}
+		if before == after {
+			return ctx.Err()
+		}
 	}
-	return ctx.Err()
+	return errors.Join(ctx.Err(), errors.New("Linux running protection changed during its native snapshot"))
 }
