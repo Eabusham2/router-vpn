@@ -1112,13 +1112,18 @@ jobs:
               assert labels(original)["org.opencontainers.image.source-tree"] == tree
               assert labels(original)["org.opencontainers.image.source"] == "https://github.com/Eabusham2/router-vpn"
               assert original["Config"]["Entrypoint"] == ["/usr/local/bin/router-vpn-agent"]
-              nid = run("network", "create", "--internal", "--driver", "bridge", "--label", label, scope)
+              existing = run("network", "ls", "-q", "--no-trunc").split()
+              occupied = [ipaddress.ip_network(item["Subnet"]) for identity in existing
+                          for item in (inspect("network", identity)["IPAM"].get("Config") or []) if item.get("Subnet")]
+              subnet = next(candidate for candidate in ipaddress.ip_network("198.18.0.0/15").subnets(new_prefix=29)
+                            if not any(other.version == 4 and candidate.overlaps(other) for other in occupied))
+              nid = run("network", "create", "--internal", "--driver", "bridge", "--subnet", str(subnet), "--label", label, scope)
               network = inspect("network", nid)
               assert network["Id"] == nid and network["Internal"] and network["Name"] == scope
               assert labels(network)["routervpn.benchmark"] == scope and not network["Containers"]
               cidrs = [ipaddress.ip_network(item["Subnet"]) for item in network["IPAM"]["Config"]]
               cidrs = [item for item in cidrs if item.version == 4]
-              assert len(cidrs) == 1 and cidrs[0].num_addresses >= 8
+              assert cidrs == [subnet] and subnet.num_addresses == 8
               agent_ip, peer_ip, nonpeer_ip = [str(cidrs[0].network_address + i) for i in (2, 3, 4)]
               config = {"listen": agent_ip + ":8787", "token": token, "node_id": node,
                         "tunnel_cidrs": [peer_ip + "/32"], "wan_interface": "eth0",
@@ -1246,7 +1251,7 @@ jobs:
               assert augmented == "original private startup augmentation verified"
               assert inspect("image", ref)["Id"] == image
               proof = {"source_commit": sha, "source_tree": tree, "image_id": image,
-                       "network_id": nid, "agent_id": agent, "agent_ip": agent_ip, "private_startup_augmentation": True,
+                       "network_id": nid, "network_subnet": str(subnet), "agent_id": agent, "agent_ip": agent_ip, "private_startup_augmentation": True,
                        "scope": "installed agent HTTP/authentication; encrypted tunnel transport is qualified separately",
                        "results": results}
           except Exception as error:
