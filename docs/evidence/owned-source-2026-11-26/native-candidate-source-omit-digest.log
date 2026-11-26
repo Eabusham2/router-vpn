@@ -1,0 +1,8 @@
+=== RUN   TestServerChainCandidateCapturedRefusals
+=== RUN   TestServerChainCandidateCapturedRefusals/response-source-content
+    owner_test.go:87: edited response credential retained original candidate authority
+--- FAIL: TestServerChainCandidateCapturedRefusals (0.00s)
+    --- FAIL: TestServerChainCandidateCapturedRefusals/response-source-content (0.00s)
+FAIL
+FAIL	command-line-arguments	0.014s
+FAIL

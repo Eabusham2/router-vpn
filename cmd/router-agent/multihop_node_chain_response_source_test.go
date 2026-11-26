@@ -77,6 +77,12 @@ func TestServerStreamCandidateUsesExistingRegistration(t *testing.T) {
 		}
 	}
 	write(path)
+	// Acquire the same source through the active lease's shipping reader. An
+	// identical replacement may support a new lease, never the existing owner.
+	acquired, sourceCurrent, e := r.captureSource(policy.Descriptor(), descriptor.EntryNodeID)
+	if e != nil || acquired.Source() != policy.Source() || sourceCurrent == nil || !sourceCurrent() {
+		t.Fatal("active lease failed to capture its original registered file", e)
+	}
 	if _, _, err = r.originalCandidateSource(t.Context(), c); !errors.Is(err, multihoprelay.ErrCandidateNotRegistered) {
 		t.Fatal("candidate outside the registry must produce a specific no-authority outcome", err)
 	}
@@ -90,12 +96,47 @@ func TestServerStreamCandidateUsesExistingRegistration(t *testing.T) {
 	if _, _, err = r.originalCandidateSource(t.Context(), changed); err == nil || errors.Is(err, multihoprelay.ErrCandidateNotRegistered) {
 		t.Fatal("changed registered tuple became an allowed absence", err)
 	}
+	initial, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	write(path + ".new")
+	if err = os.Chtimes(path+".new", initial.ModTime(), initial.ModTime()); err != nil {
+		t.Fatal(err)
+	}
 	if err = os.Rename(path+".new", path); err != nil {
 		t.Fatal(err)
 	}
-	if current() {
-		t.Fatal("equal-byte file replacement kept original authority")
+	if current() || sourceCurrent() {
+		t.Fatal("equal-byte replacement retained original candidate or active lease authority")
+	}
+	renewed, freshCurrent, e := r.captureSource(policy.Descriptor(), descriptor.EntryNodeID)
+	if e != nil || renewed.Source() != policy.Source() || !freshCurrent() {
+		t.Fatal("new acquisition could not capture the separately installed source", e)
+	}
+	// Even on the same inode, whitespace and restored timestamps cannot donate a
+	// different original byte stream that the compiler normalizes identically.
+	padded := []byte(policy.Source() + " ")
+	if err = os.WriteFile(path, padded, 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, exactCurrent, e := r.captureSource(policy.Descriptor(), descriptor.EntryNodeID)
+	if e != nil || !exactCurrent() {
+		t.Fatal("valid original private source was not captured", e)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	padded[len(padded)-1] = '\n'
+	if err = os.WriteFile(path, padded, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if _, e = r.source(policy.Descriptor(), descriptor.EntryNodeID); e != nil || exactCurrent() {
+		t.Fatal("normalized private bytes substituted for original file", e)
 	}
 	if err = os.Chmod(path, 0644); err != nil {
 		t.Fatal(err)

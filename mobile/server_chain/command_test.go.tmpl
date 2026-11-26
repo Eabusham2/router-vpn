@@ -90,6 +90,7 @@ func serverChainCommandDirectory(t *testing.T, capture multihoprelay.NodeChainCa
 	return directory
 }
 func TestServerChainCommandPendingAndRetryingOriginalStop(t *testing.T) {
+	t.Run("private-source-generation", serverChainPrivateSourceGeneration)
 	for _, partial := range []bool{false, true} {
 		t.Run(map[bool]string{false: "native-owner", true: "partial-construction"}[partial], func(t *testing.T) {
 			c := serverChainCommandCapture(t)
@@ -242,5 +243,51 @@ func TestServerChainCommandAmbiguousCaptureNeverCreatesOwner(t *testing.T) {
 				t.Fatal("ambiguous staged capture acquired or acknowledged an owner")
 			}
 		})
+	}
+}
+
+func serverChainPrivateSourceGeneration(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	info, err := root.Stat(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := &routerVPNServerChain{root: root, directory: dir, directoryInfo: info, files: make(map[string]routerVPNServerChainFile)}
+	const name = "node-chain-source.json"
+	for _, path := range []string{name, "node-chain-capture.json", "replacement"} {
+		if err := os.WriteFile(filepath.Join(dir, path), []byte("original bytes"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{name, "node-chain-capture.json"} {
+		if _, err := n.captureFile(path, 1024); err != nil {
+			t.Fatal(err)
+		}
+	}
+	original := n.files[name].info
+	body, opened, err := routerVPNServerChainReadOriginal(root, name, 1024, original)
+	if err != nil || string(body) != "original bytes" || !os.SameFile(opened, original) || !n.sourceCurrent(true) {
+		t.Fatal("original source generation is unavailable", err)
+	}
+	replacement := filepath.Join(dir, "replacement")
+	if err := os.Chtimes(replacement, original.ModTime(), original.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, filepath.Join(dir, name)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := routerVPNServerChainReadOriginal(root, name, 1024, original); err == nil {
+		t.Fatal("reopened equal-byte generation passed the retained descriptor")
+	}
+	if n.sourceCurrent(false) || n.sourceCurrent(true) {
+		t.Fatal("substituted source generation remained current")
 	}
 }

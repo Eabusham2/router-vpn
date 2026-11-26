@@ -11,6 +11,7 @@ import (
 	M "github.com/sagernet/sing/common/metadata"
 	"net"
 	"net/netip"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -154,7 +155,55 @@ func TestServerChainCandidateInitialObservationJoined(t *testing.T) {
 		t.Fatal("held original observation did not retire after joining", err)
 	}
 }
+func serverChainResponseSourceContent(t *testing.T) {
+	root, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	const name = "candidate-source.json"
+	original := []byte(`{"captured":"original"}`)
+	if err := root.WriteFile(name, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	raw, capture, err := routerVPNReadCandidateSource(root, name, int64(len(original)))
+	if err != nil || string(raw) != string(original) || !capture.current(root, name) {
+		t.Fatal("original candidate source unavailable", err)
+	}
+	clear(raw)
+	changed := []byte(`{"captured":"altered!"}`)
+	if len(changed) != len(original) {
+		t.Fatal("test changed source length")
+	}
+	if err := root.WriteFile(name, changed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Chtimes(name, capture.info.ModTime(), capture.info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	info, err := root.Stat(name)
+	if err != nil || !os.SameFile(info, capture.info) || info.Size() != capture.info.Size() || !info.ModTime().Equal(capture.info.ModTime()) {
+		t.Fatal("fixture did not preserve the original file generation, size and time", err)
+	}
+	if capture.current(root, name) {
+		t.Fatal("edited response credential retained original candidate authority")
+	}
+	if err := root.WriteFile("replacement", original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Rename("replacement", name); err != nil {
+		t.Fatal(err)
+	}
+	if err := root.Chtimes(name, capture.info.ModTime(), capture.info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if capture.current(root, name) {
+		t.Fatal("equal-byte replacement retained original candidate authority")
+	}
+}
+
 func TestServerChainCandidateCapturedRefusals(t *testing.T) {
+	t.Run("response-source-content", serverChainResponseSourceContent)
 	for _, name := range []string{"hostname", "other-target", "foreign-peer", "expired", "copied-handle"} {
 		t.Run(name, func(t *testing.T) {
 			_, op := serverChainCandidateBoundary(t)

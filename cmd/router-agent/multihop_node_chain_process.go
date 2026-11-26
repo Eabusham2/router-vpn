@@ -95,43 +95,58 @@ func captureRelayNodeChainImage(path string) (*os.File, os.FileInfo, string, err
 	return file, before, hex.EncodeToString(hash.Sum(nil)), nil
 }
 func (r *relayNodeChainExecRunner) source(source multihoprelay.NodeChainDescriptor, node string) (*mobilemultihop.NodeChainServerPolicy, error) {
+	policy, _, err := r.captureSource(source, node)
+	return policy, err
+}
+
+// The live lease keeps the original registered file identity for its lifetime.
+// Matching canonical policy alone would allow an equal-byte replacement to
+// adopt an existing worker. Continue to recompile the exact registered bytes.
+func (r *relayNodeChainExecRunner) captureSource(source multihoprelay.NodeChainDescriptor, node string) (*mobilemultihop.NodeChainServerPolicy, func() bool, error) {
 	bad := errors.New("private ordered server source is unavailable or changed")
 	if r == nil || source.Validate() != nil || source.EntryNodeID != node {
-		return nil, bad
+		return nil, nil, bad
 	}
-	raw, err := readPrivilegedState(filepath.Join(r.sources, source.SourceSHA256+".json"), mobilemultihop.NodeChainInputLimit)
+	path := filepath.Join(r.sources, source.SourceSHA256+".json")
+	raw, original, err := readNodeChainRegistration(path, nil)
 	if err != nil {
-		return nil, bad
+		return nil, nil, bad
 	}
 	defer clear(raw)
-	var policy *mobilemultihop.NodeChainServerPolicy
-	if source.Schema == 6 {
-		policy, err = mobilemultihop.NewNodeChainMultipleImportedServerPolicy(string(raw))
-	} else if source.Schema == 5 {
-		policy, err = mobilemultihop.NewNodeChainOpenVPNServerPolicy(string(raw))
-	} else if source.Schema == 3 {
-		policy, err = mobilemultihop.NewNodeChainSOCKSServerPolicy(string(raw))
-	} else if source.Schema == 4 {
-		policy, err = mobilemultihop.NewNodeChainCONNECTServerPolicy(string(raw))
-	} else {
-		policy, err = mobilemultihop.NewNodeChainServerPolicy(string(raw))
+	parse := func(raw []byte) (*mobilemultihop.NodeChainServerPolicy, error) {
+		policy, err := parsePrivateNodeChainServerSource(raw)
+		if err != nil {
+			return nil, bad
+		}
+		actual, err := policy.Descriptor().Digest()
+		expected, _ := source.Digest()
+		if err != nil || actual != expected {
+			return nil, bad
+		}
+		return policy, nil
 	}
+	policy, err := parse(raw)
 	if err != nil {
-		return nil, bad
+		return nil, nil, bad
 	}
-	actual, err := policy.Descriptor().Digest()
-	expected, _ := source.Digest()
-	if err != nil || actual != expected {
-		return nil, bad
+	fingerprint := sha256.Sum256(raw)
+	current := func() bool {
+		raw, _, err := readNodeChainRegistration(path, original)
+		defer clear(raw)
+		if err != nil || sha256.Sum256(raw) != fingerprint {
+			return false
+		}
+		actual, err := parse(raw)
+		return err == nil && actual.Source() == policy.Source()
 	}
-	return policy, nil
+	return policy, current, nil
 }
 func (r *relayNodeChainExecRunner) StartChain(ctx context.Context, capture multihoprelay.NodeChainCapture) (multihoprelay.NodeChainProcess, error) {
 	bad := errors.New("owned ordered relay could not start")
 	if ctx == nil || ctx.Err() != nil || capture.Validate() != nil {
 		return nil, bad
 	}
-	policy, err := r.source(capture.Source, capture.Request.EntryNodeID)
+	policy, sourceCurrent, err := r.captureSource(capture.Source, capture.Request.EntryNodeID)
 	if err != nil {
 		return nil, bad
 	}
@@ -188,12 +203,14 @@ func (r *relayNodeChainExecRunner) StartChain(ctx context.Context, capture multi
 	if configureRelayProcess(command) != nil {
 		return p, bad
 	}
+	if !sourceCurrent() {
+		return p, bad
+	}
 	if err := p.start(command); err != nil {
 		return p, bad
 	}
 	p.current = func() bool {
-		actual, err := r.source(capture.Source, capture.Request.EntryNodeID)
-		if err != nil || actual.Source() != policy.Source() {
+		if !sourceCurrent() {
 			return false
 		}
 		current, err := os.Lstat(r.core)
@@ -411,6 +428,10 @@ func (p *relayNodeChainProcess) Bootstrap(ctx context.Context) error {
 	}
 	if err := p.lock(ctx); err != nil {
 		return err
+	}
+	if p.current != nil && !p.current() {
+		<-p.gate
+		return errors.New("original ordered source changed before bootstrap")
 	}
 	_, err = p.request(ctx, "bootstrap", nonce)
 	<-p.gate

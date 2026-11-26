@@ -206,6 +206,16 @@ func TestServerNodeChainIPCRealProcessJoinedReceipt(t *testing.T) {
 	if err != nil || r.Phase != multihoprelay.NodeChainPending || r.TrafficAllowed {
 		t.Fatal("pending child lost its closed front receipt", err)
 	}
+	p.current = func() bool { return false }
+	if err := p.Bootstrap(ctx); err == nil {
+		t.Fatal("revoked registration accepted bootstrap")
+	}
+	p.current = nil
+	nonce, _ = torIPCNonce()
+	r, err = p.Snapshot(ctx, nonce)
+	if err != nil || r.Phase != multihoprelay.NodeChainPending || r.TrafficAllowed {
+		t.Fatal("revoked registration sent bootstrap to the native child", err)
+	}
 	if err := p.Bootstrap(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -220,6 +230,7 @@ func TestServerNodeChainIPCRealProcessJoinedReceipt(t *testing.T) {
 	if err != nil || r.ProofAt != proofAt {
 		t.Fatal("status refreshed original proof time", err)
 	}
+	p.current = func() bool { return false }
 	if err := p.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}

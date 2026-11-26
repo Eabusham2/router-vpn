@@ -7,6 +7,7 @@ Neither this projection nor those seams grant production server authority.
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = 'protocol/routervpnamnezia/routervpn_imported_execution_process_test.go'
+NATIVE_LEASE_TARGET = 'protocol/routervpnamnezia/routervpn_imported_execution_native_lease_linux_test.go'
 SOURCES = ('cmd/router-agent/multihop_node_chain_process.go',
            'cmd/router-agent/multihop_tor_process.go', 'cmd/router-agent/relay_root.go',
            'cmd/router-agent/multihop_node_chain_lease.go',
@@ -27,6 +28,13 @@ def between(text, start, end):
 
 
 def copies():
+    files = _project_sources()
+    if set(files) != {TARGET, NATIVE_LEASE_TARGET}:
+        raise ValueError('Original relay process and native lease projection files are both required')
+    return files
+
+
+def _project_sources():
     values=[]
     for path in inputs()[1:]:
         if path.is_symlink() or not path.is_file():
@@ -87,5 +95,5 @@ import (
 '''
     native_lease = lease.replace('package main', 'package routervpnamnezia', 1).replace('"router-vpn/internal/multihoprelay"', '"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"').replace('(s *server)', '(s *nativeImportedAdmin)').replace('multihopNodeChainLeasePath', 'nativeImportedLeasePath')
     return {TARGET:(head+body).encode(),
-            'protocol/routervpnamnezia/routervpn_imported_execution_native_lease_linux_test.go':
+            NATIVE_LEASE_TARGET:
             ('//go:build linux && !android\n\n// Exact shipping lease handler; distinct fixture authentication receiver.\n'+native_lease).encode()}

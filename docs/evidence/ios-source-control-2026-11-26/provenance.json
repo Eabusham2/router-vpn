@@ -1,0 +1,34 @@
+{
+  "base_source": "d887c3006",
+  "verification_commits": [
+    "579e10e70417cd289cf92047552aa91387c5ece5",
+    "30c8ccd80e14c73d3a27cd64c14ead190c37cac3"
+  ],
+  "equivalent_main_repairs": [
+    "e327a95ca",
+    "c6773e15d"
+  ],
+  "hosted_failed_run": 45725960963,
+  "hosted_failed_job": 139595944983,
+  "boundary": "Source constructors and original compiled rejection controls; the hosted job failed before Xcode app build. This is not installed-device or IPA acceptance.",
+  "logs": [
+    {
+      "original_file": "current-d887-openvpn.log",
+      "original_sha256": "53d34aa50b1eafe6cd869bf524d8307455d2760adcbe545c083923aadfd8d9ea",
+      "original_bytes": 8964,
+      "retained_file": "current-d887-openvpn.log.gz"
+    },
+    {
+      "original_file": "current-d887-imported.log",
+      "original_sha256": "a780af23c9633efc4707e20d9c89e94845318e6410eb5c02237ef993e146da55",
+      "original_bytes": 8984,
+      "retained_file": "current-d887-imported.log.gz"
+    },
+    {
+      "original_file": "hosted-d887-ios.log",
+      "original_sha256": "4e67a597951fcaf6b932675bcac54be29368e6a40b488ef78fa8da041329b058",
+      "original_bytes": 401386,
+      "retained_file": "hosted-d887-ios.log.gz"
+    }
+  ]
+}

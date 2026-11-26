@@ -1,0 +1,30 @@
+{
+  "roots": 27,
+  "required_records": 138,
+  "executed_records": 138,
+  "commit": "50941426c3c34309a249afd1b1f042483671d4f8",
+  "race": true,
+  "src": {
+    "routervpn_server_chain_box.go": "fe181cd3c24542ded51541ada9cb63d9c6f7ab93102268ddb00ef43916823040",
+    "cmd/sing-box/routervpn_server_chain_candidates.go": "17e8f306c43caa773a4334668db5a72ca2b77eb69da4fe9a2f3f6221d6b56ebd",
+    "cmd/sing-box/routervpn_server_chain_candidates_test.go": "73db11b2f5c0b9c0e5340a7c46ffe573c7d6c1a333b8817f8c0b2de1339c31fb",
+    "cmd/sing-box/routervpn_server_chain_command.go": "e1c4a4f00ddbce3ac209725c5dc856fbce28c13e4065d9b2ce0507c96a6ed697",
+    "cmd/sing-box/routervpn_server_chain_command_test.go": "97de04d327321f75f3c7e15921e3d4df1cc96fcde783994554af03424dbe70eb",
+    "cmd/sing-box/routervpn_server_chain_diagnostic.go": "59bf20738a7e2941a7b3a7bf81824b272c59ee439af53f0281475f48060fa1f1",
+    "cmd/sing-box/routervpn_server_chain_diagnostic_test.go": "276d563cfd3e5cb0e9dcbde42e9c17ed6b5c3cd4e55340d6c03ef27d5ee9cd4b",
+    "cmd/sing-box/routervpn_server_chain_dns_owners.go": "2951dbd152485dd3e7cd430730e301b672ca459120b4448a7511f49361a32745",
+    "cmd/sing-box/routervpn_server_chain_dns_owners_test.go": "eed59416b023dcc812f1026f86fcb6f2bd7082ac2cfbc582fc67bc5d3d9c9de1",
+    "cmd/sing-box/routervpn_server_chain_front.go": "45b863019444abc0404a5cc51b4f5667e25022c742641cb8423a3a87cfabf388",
+    "cmd/sing-box/routervpn_server_chain_front_test.go": "b17bc1e1a4f393d08c9b931e478c9078df24dce8ed4d827e7b350bd1b6dd774c",
+    "cmd/sing-box/routervpn_server_chain_native.go": "c82b9b23827f09ebd67b3a94f665120ff8d3c59b9dfe7920490ae2fccced6d42",
+    "cmd/sing-box/routervpn_server_chain_native_test.go": "84cdc196123eaaf73f8c18c37a0cf138fb1efc6fbc3ef3d54aca740f9b26f881",
+    "cmd/sing-box/routervpn_server_chain_openvpn.go": "894cb30adbffed1d72e0e2132df77d9b8aa7b4cf376638271fa92de42e06e9c1",
+    "cmd/sing-box/routervpn_server_chain_openvpn_endpoint.go": "e2452de8caed740e12fe1d22f9ca30350ddd2ca17cbc8031109d2064bfa3c763",
+    "cmd/sing-box/routervpn_server_chain_openvpn_endpoint_stub.go": "694b0ee0e2e9fce1f0eb3c86fd45b40c9f4b962db2151cd91c8e07b22422016a",
+    "cmd/sing-box/routervpn_server_chain_openvpn_endpoint_stub_test.go": "15e8baea58c2948bf4e98c5edb06db8eb39556d6a7f73bf6db1c0911400f8f7d",
+    "cmd/sing-box/routervpn_server_chain_openvpn_test.go": "337d6d7778a7b210175b439ef6970002f818aaa845f43040859aab227f76e969",
+    "cmd/sing-box/routervpn_server_chain_resources.go": "190ed0550ecb075979c50b8b5414ee6500772e3515593bf3ffefd58dc2c36922",
+    "cmd/sing-box/routervpn_server_chain_resources_test.go": "b0a68144420f54d0268f2a4024a0ee0e17d457276ff24761fe7e925ed1622a56"
+  },
+  "image": "a3d46c3d1ef39f7a1a299067e2752ec7065b53dc5ee4f5ab76ba44f5ba62ac86"
+}

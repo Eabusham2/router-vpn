@@ -160,6 +160,7 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		"ordered_socks_trio_executions":        desktopSOCKSTrioExecutionChoices(),
 		"ordered_openvpn_executions":           desktopOpenVPNExecutionChoices(),
 		"ordered_multiple_imported_executions": desktopMultipleImportedExecutionChoices(),
+		"ordered_external_final_executions":    []string{"local"},
 		"ordered_hysteria_executions":          desktopHysteriaExecutionChoices(),
 		"ordered_paired_ss_executions":         desktopPairedSSExecutionChoices(),
 		"ordered_max_nodes":                    common.MultihopMaximumNodes,

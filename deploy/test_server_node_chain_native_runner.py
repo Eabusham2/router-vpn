@@ -59,6 +59,23 @@ class NativeServerChainRunner(unittest.TestCase):
  def test_complete_exact_inventory(self):
   receipt=RUN.verdict(output(success()),0)
   self.assertEqual(receipt['roots'],27);self.assertEqual(receipt['executed_records'],len(RUN.EXPECTED));self.assertGreater(len(RUN.EXPECTED),60)
+ def test_private_source_generation_is_mandatory(self):
+  name='TestServerChainCommandPendingAndRetryingOriginalStop/private-source-generation'
+  self.assertIn(name,RUN.EXPECTED)
+  rows=[row for row in success() if row.get('Test')!=name]
+  with self.assertRaises(ValueError):RUN.verdict(output(rows),0)
+ def test_candidate_source_content_is_mandatory(self):
+  name='TestServerChainCandidateCapturedRefusals/response-source-content'
+  self.assertIn(name,RUN.EXPECTED)
+  for action in ('run','pass'):
+   rows=[row for row in success() if not (row.get('Test')==name and row.get('Action')==action)]
+   with self.assertRaises(ValueError):RUN.verdict(output(rows),0)
+  source=(ROOT/'mobile/server_chain/candidates.go.tmpl').read_text()
+  capture=source.split('func (n *routerVPNServerChain) NewCandidateOperation(',1)[1].split('\nfunc ',1)[0]
+  self.assertIn('input, responseFile, err = routerVPNReadCandidateSource(n.root, name, mobilemultihop.NodeChainInputLimit)',capture)
+  self.assertIn('op.response, op.responseFile = responder, responseFile',capture)
+  current=source.split('func (op *routerVPNServerChainCandidate) current(',1)[1].split('\nfunc ',1)[0]
+  self.assertIn('if op.response == nil || !op.responseFile.current(op.owner.root, op.capture.ResponseSourceFile())',current)
  def test_missing_leaf_cannot_pass(self):
   name=RUN.ROOTS[3]+'/prefix-uot';rows=[r for r in success() if r.get('Test')!=name]
   with self.assertRaises(ValueError):RUN.verdict(output(rows),0)

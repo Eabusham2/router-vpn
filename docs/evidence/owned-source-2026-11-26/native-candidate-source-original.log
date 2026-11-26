@@ -1,0 +1,6 @@
+=== RUN   TestServerChainCandidateCapturedRefusals
+=== RUN   TestServerChainCandidateCapturedRefusals/response-source-content
+--- PASS: TestServerChainCandidateCapturedRefusals (0.00s)
+    --- PASS: TestServerChainCandidateCapturedRefusals/response-source-content (0.00s)
+PASS
+ok  	command-line-arguments	1.017s

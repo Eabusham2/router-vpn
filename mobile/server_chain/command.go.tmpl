@@ -184,25 +184,35 @@ func routerVPNRunNodeChainRelayWithDiagnostics(ctx context.Context, directory st
 	return nil
 }
 func routerVPNServerChainRead(root *os.Root, name string, limit int64) ([]byte, error) {
+	raw, _, err := routerVPNServerChainReadOriginal(root, name, limit, nil)
+	return raw, err
+}
+
+// The bytes and identity come from the same open file. On revalidation the
+// caller supplies the original identity before any bytes can be accepted.
+func routerVPNServerChainReadOriginal(root *os.Root, name string, limit int64, expected os.FileInfo) ([]byte, os.FileInfo, error) {
 	bad := errors.New("original ordered source is unavailable")
 	before, err := root.Lstat(name)
 	if err != nil || !before.Mode().IsRegular() || before.Mode().Perm() != 0600 || before.Size() <= 0 || before.Size() > limit {
-		return nil, bad
+		return nil, nil, bad
 	}
 	file, err := root.Open(name)
 	if err != nil {
-		return nil, bad
+		return nil, nil, bad
 	}
 	defer file.Close()
 	actual, err := file.Stat()
 	if err != nil || !os.SameFile(before, actual) {
-		return nil, bad
+		return nil, nil, bad
+	}
+	if expected != nil && !os.SameFile(actual, expected) {
+		return nil, nil, bad
 	}
 	raw, err := io.ReadAll(io.LimitReader(file, limit+1))
 	after, pathErr := root.Lstat(name)
 	if err != nil || pathErr != nil || int64(len(raw)) != before.Size() || !os.SameFile(before, after) || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
 		clear(raw)
-		return nil, bad
+		return nil, nil, bad
 	}
-	return raw, nil
+	return raw, actual, nil
 }

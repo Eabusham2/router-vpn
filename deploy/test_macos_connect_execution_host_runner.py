@@ -142,7 +142,15 @@ class ImportedExecutionHostGate(unittest.TestCase):
 
     def test_actual_shipping_process_projection(self):
         copies=GATE.PROJECTOR.copies()
-        self.assertEqual(tuple(copies),(GATE.PROJECTOR.TARGET,))
+        lease='protocol/routervpnamnezia/routervpn_imported_execution_native_lease_linux_test.go'
+        self.assertEqual(set(copies),{GATE.PROJECTOR.TARGET,lease})
+        self.assertTrue(copies[lease].startswith(b'//go:build linux && !android\n'))
+        self.assertIn(b'func (s *nativeImportedAdmin) multihopNodeChainLease(',copies[lease])
+        for missing in copies:
+            with self.subTest(missing=missing), patch.object(GATE.PROJECTOR,'_project_sources',return_value={k:v for k,v in copies.items() if k!=missing}), self.assertRaises(ValueError):
+                GATE.PROJECTOR.copies()
+        with patch.object(GATE.PROJECTOR,'_project_sources',return_value={**copies,'unexpected.go':b'package routervpnamnezia'}), self.assertRaises(ValueError):
+            GATE.PROJECTOR.copies()
         source=copies[GATE.PROJECTOR.TARGET].decode()
         for anchor in ('type importedExecutionProcess struct {', 'func (p *importedExecutionProcess) Stop(',
                        'func (s *importedExecutionAdmin) multihopNodeChainLease(',
@@ -161,7 +169,8 @@ class ImportedExecutionHostGate(unittest.TestCase):
             core=Path(temporary)
             preparer.copy_encrypted_peer_templates(core)
             self.assertEqual((core/GATE.PEER_TARGET).read_bytes(), (ROOT/GATE.PEER_TEMPLATE).read_bytes())
-            self.assertEqual((core/GATE.PROJECTOR.TARGET).read_bytes(), GATE.PROJECTOR.copies()[GATE.PROJECTOR.TARGET])
+            for target,original in GATE.PROJECTOR.copies().items():
+                self.assertEqual((core/target).read_bytes(),original)
             before={str(path.relative_to(core)):path.read_bytes() for path in core.rglob('*.go')}
             preparer.copy_encrypted_peer_templates(core)
             self.assertEqual(before,{str(path.relative_to(core)):path.read_bytes() for path in core.rglob('*.go')})

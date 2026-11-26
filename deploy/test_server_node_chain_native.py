@@ -35,7 +35,7 @@ ROOTS=('TestServerChainFrontPendingCannotForward','TestServerChainFrontOriginalC
  'TestServerChainCandidateCloseOwnership','TestServerChainCandidateExpiredAbsenceAcknowledgement')
 CHILDREN={
  ROOTS[3]:('wrong-password','foreign-user','no-auth','prefix-foreign-tuple','prefix-uot','legacy-uot','udp-associate','retired-proof'),
- ROOTS[5]:('native-owner','partial-construction'),ROOTS[7]:('duplicate','null','alias','foreign-request','linked-capture'),
+ ROOTS[5]:('native-owner','partial-construction','private-source-generation'),ROOTS[7]:('duplicate','null','alias','foreign-request','linked-capture'),
  ROOTS[8]:('none','private-first','private-after-good','loopback-after-good','ipv6-after-good','mapped-after-good','zoned','invalid','over-bound'),
  ROOTS[13]:('snapshot-bootstrap','construction','stop-retry'),
  ROOTS[15]:('private-after-good','loopback-after-good','disabled-ipv6','mapped','empty'),
@@ -46,7 +46,7 @@ CHILDREN={
  ROOTS[20]:('joined','late-front','front-worker-pending','proof-worker-pending','missing-receipt','foreign-original','foreign-error','unjoined-receipt','foreign-front'),
  ROOTS[21]:('explicit-stop','parent-cancel','lease-expiry','partial-construction','failed-close-retry','deadline-retains-original','bounded-cancel'),
  ROOTS[22]:('original','no-initial','nil-context','cancelled','expired','held-lock','pending-generation','pending-time','wrong-remote','wrong-network','under-capacity','reconnect','changed-time','capacity-up','capacity-down','remote-changed','caller-copy')}
-CHILDREN.update({ROOTS[23]:(), ROOTS[24]:('hostname','other-target','foreign-peer','expired','copied-handle'), ROOTS[25]:('copied-handle','replacement','failed-resource'), ROOTS[26]:('pruned-absence','retained-replacement','same-id-foreign-capture','wrong-packet-member')})
+CHILDREN.update({ROOTS[23]:(), ROOTS[24]:('hostname','other-target','foreign-peer','expired','copied-handle','response-source-content'), ROOTS[25]:('copied-handle','replacement','failed-resource'), ROOTS[26]:('pruned-absence','retained-replacement','same-id-foreign-capture','wrong-packet-member')})
 EXPECTED=set(ROOTS)|{root+'/'+child for root,children in CHILDREN.items() for child in children}
 PACKAGE='github.com/sagernet/sing-box/cmd/sing-box'
 
@@ -137,6 +137,8 @@ def run(core,go,tags,race=False,ldflags='',receipt=None):
  print(baseline.stdout,end='');result=verdict(baseline.stdout,baseline.returncode,baseline.stderr)
  file=core/'cmd/sing-box/routervpn_server_chain_front.go';original=file.read_text()
  controls=(
+ ('candidate-response-content',ROOTS[24]+'/response-source-content','edited response credential retained original candidate authority', [('return digest == source.digest && now.Size()', 'return digest != [sha256.Size]byte{} && now.Size()')]),
+ ('candidate-response-generation',ROOTS[24]+'/response-source-content','equal-byte replacement retained original candidate authority', [('root, name, source.info.Size(), source.info)', 'root, name, source.info.Size(), nil)')]),
  ('candidate-initial',ROOTS[23],'initial native observation ran before handshake reservation', [('if source.Addr != op.front.peer || destination.Fqdn != "" || destination.String() != op.address {','if !op.current(bounded) || source.Addr != op.front.peer || destination.Fqdn != "" || destination.String() != op.address {')]),
  ('prefix',ROOTS[3]+'/prefix-foreign-tuple','refusal reached captured/native routing', [('!route.AllowsResolvedDestination("tcp", original.String(), destination.String()) || ','false && !route.AllowsResolvedDestination("tcp", original.String(), destination.String()) || ')]),
  ('uot',ROOTS[3]+'/prefix-uot','prefix UoT negotiation was accepted', [('if !route.Final || route.UDPOverTCPVersion != 2 {','if false && (!route.Final || route.UDPOverTCPVersion != 2) {')]),

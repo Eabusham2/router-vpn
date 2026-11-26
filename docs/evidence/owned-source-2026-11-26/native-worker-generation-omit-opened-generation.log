@@ -1,0 +1,6 @@
+=== RUN   TestOriginalWorkerSourceGeneration
+    generation_test.go:118: reopened equal-byte generation passed the retained descriptor
+--- FAIL: TestOriginalWorkerSourceGeneration (0.00s)
+FAIL
+FAIL	_/tmp/routervpn-native-source-verification/worker-source-generation	0.021s
+FAIL

@@ -1,0 +1,4 @@
+=== RUN   TestOriginalWorkerSourceGeneration
+--- PASS: TestOriginalWorkerSourceGeneration (0.00s)
+PASS
+ok  	_/tmp/routervpn-native-source-verification/worker-source-generation	1.026s

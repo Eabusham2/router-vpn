@@ -329,13 +329,8 @@ func routerVPNNewServerChainWithListener(parent, base context.Context, root *os.
 	return result, nil
 }
 func (n *routerVPNServerChain) captureFile(name string, limit int64) ([]byte, error) {
-	raw, err := routerVPNServerChainRead(n.root, name, limit)
+	raw, info, err := routerVPNServerChainReadOriginal(n.root, name, limit, nil)
 	if err != nil {
-		return nil, err
-	}
-	info, err := n.root.Lstat(name)
-	if err != nil {
-		clear(raw)
 		return nil, err
 	}
 	hash := sha256.Sum256(raw)
@@ -357,7 +352,7 @@ func (n *routerVPNServerChain) sourceCurrent(full bool) bool {
 			return false
 		}
 		if full {
-			raw, err := routerVPNServerChainRead(n.root, name, captured.limit)
+			raw, _, err := routerVPNServerChainReadOriginal(n.root, name, captured.limit, captured.info)
 			if err != nil {
 				return false
 			}

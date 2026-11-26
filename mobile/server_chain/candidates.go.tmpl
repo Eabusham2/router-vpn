@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	ssclient "github.com/sagernet/sing-shadowsocks2"
@@ -19,13 +20,41 @@ import (
 	N "github.com/sagernet/sing/common/network"
 )
 
+// A response grant retains the identity and bytes of the same opened private
+// file. A replacement or in-place rewrite invalidates existing operations.
+type routerVPNServerChainCandidateFile struct {
+	info   os.FileInfo
+	digest [sha256.Size]byte
+}
+
+func routerVPNReadCandidateSource(root *os.Root, name string, limit int64) ([]byte, routerVPNServerChainCandidateFile, error) {
+	raw, info, err := routerVPNServerChainReadOriginal(root, name, limit, nil)
+	if err != nil {
+		return nil, routerVPNServerChainCandidateFile{}, err
+	}
+	return raw, routerVPNServerChainCandidateFile{info, sha256.Sum256(raw)}, nil
+}
+
+func (source routerVPNServerChainCandidateFile) current(root *os.Root, name string) bool {
+	if root == nil || source.info == nil {
+		return false
+	}
+	raw, now, err := routerVPNServerChainReadOriginal(root, name, source.info.Size(), source.info)
+	if err != nil {
+		return false
+	}
+	digest := sha256.Sum256(raw)
+	clear(raw)
+	return digest == source.digest && now.Size() == source.info.Size() && now.ModTime().Equal(source.info.ModTime())
+}
+
 // The original operation grants one TCP handshake. A response grant instead
 // sends one worker-constructed challenge to the registered private agent. Both
 // use the captured prefix and close each sample without forwarding user traffic.
 type routerVPNServerChainCandidate struct {
 	prepareDone                           chan struct{}
 	response                              *mobilemultihop.NodeChainServerCandidateResponder
-	responseFile                          os.FileInfo
+	responseFile                          routerVPNServerChainCandidateFile
 	nonces                                map[string]bool
 	reads                                 int
 	readDone                              chan struct{}
@@ -71,27 +100,20 @@ func (n *routerVPNServerChain) NewCandidateOperation(ctx context.Context, c mult
 		return nil, errServerChainFront
 	}
 	var responder *mobilemultihop.NodeChainServerCandidateResponder
-	var responseFile os.FileInfo
+	var responseFile routerVPNServerChainCandidateFile
 	if c.Request.Schema == 2 {
 		if n.root == nil {
 			return nil, errServerChainFront
 		}
 		name := c.ResponseSourceFile()
-		before, err := n.root.Lstat(name)
-		if err != nil {
-			return nil, errServerChainFront
-		}
-		input, err := routerVPNServerChainRead(n.root, name, mobilemultihop.NodeChainInputLimit)
+		var input []byte
+		input, responseFile, err = routerVPNReadCandidateSource(n.root, name, mobilemultihop.NodeChainInputLimit)
 		if err != nil {
 			return nil, errServerChainFront
 		}
 		responder, err = mobilemultihop.NewNodeChainServerCandidateResponder(c, string(input))
 		clear(input)
 		if err != nil {
-			return nil, errServerChainFront
-		}
-		responseFile, err = n.root.Lstat(name)
-		if err != nil || !os.SameFile(responseFile, before) || responseFile.Size() != before.Size() || !responseFile.ModTime().Equal(before.ModTime()) {
 			return nil, errServerChainFront
 		}
 	}
@@ -137,11 +159,7 @@ func (op *routerVPNServerChainCandidate) current(ctx context.Context) bool {
 		return false
 	}
 	if op.capture.Request.Schema == 2 {
-		if op.response == nil || op.responseFile == nil || op.owner.root == nil {
-			return false
-		}
-		now, err := op.owner.root.Lstat(op.capture.ResponseSourceFile())
-		if err != nil || now.Mode().Perm() != 0600 || !os.SameFile(op.responseFile, now) || now.Size() != op.responseFile.Size() || !now.ModTime().Equal(op.responseFile.ModTime()) {
+		if op.response == nil || !op.responseFile.current(op.owner.root, op.capture.ResponseSourceFile()) {
 			return false
 		}
 	}

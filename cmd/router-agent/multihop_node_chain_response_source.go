@@ -31,7 +31,7 @@ func (r *relayNodeChainExecRunner) originalCandidateSource(ctx context.Context, 
 				continue
 			}
 			path := filepath.Join(r.sources, d.SourceSHA256+".json")
-			raw, original, err := readNodeChainCandidateRegistration(path, nil)
+			raw, original, err := readNodeChainRegistration(path, nil)
 			if err != nil {
 				return "", nil, multihoprelay.ErrUnavailable
 			}
@@ -51,7 +51,7 @@ func (r *relayNodeChainExecRunner) originalCandidateSource(ctx context.Context, 
 				continue
 			}
 			current := func() bool {
-				raw, _, err := readNodeChainCandidateRegistration(path, original)
+				raw, _, err := readNodeChainRegistration(path, original)
 				defer clear(raw)
 				return err == nil && sha256.Sum256(raw) == fingerprint
 			}
@@ -67,7 +67,7 @@ func (r *relayNodeChainExecRunner) originalCandidateSource(ctx context.Context, 
 	return "", nil, multihoprelay.ErrUnavailable
 }
 
-func readNodeChainCandidateRegistration(path string, previous os.FileInfo) ([]byte, os.FileInfo, error) {
+func readNodeChainRegistration(path string, previous os.FileInfo) ([]byte, os.FileInfo, error) {
 	if err := validatePrivilegedStateFile(path, maxPrivilegedStateBytes); err != nil {
 		return nil, nil, err
 	}
