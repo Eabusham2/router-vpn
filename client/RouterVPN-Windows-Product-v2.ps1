@@ -37,7 +37,35 @@ function Control([string]$Name){return $Window.FindName($Name)}
 if($SelfTest){
  foreach($Name in @('StateText','RouterCombo','ModeCombo','MapCanvas','NodesGrid','ModesGrid','DnsSummary','DnsModeCombo','DnsProtocolCombo','DnsPresetCombo','DnsHostBox','DnsPortBox','DnsServerBox','DnsPathBox','DnsSaveButton','DnsRefreshButton','AdvancedSummary','MtuRetestButton','MultihopEntryCombo','MultihopExitCombo','MultihopExitModeCombo','MultihopConnectButton','MultihopSummary','DiagnosticsBox','TutorialButton','PairNodeButton','ImportNodeButton','ExternalDirectButton','ExternalViaEntryButton','DeleteNodeButton','SortCurrentButton','SortRecentButton','SortUsageButton','SortLatencyButton','SortNameButton','SelectLowestLatencyButton')){if(-not(Control $Name)){throw "Windows product self-test missing $Name"}}
  $Source=Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw
- foreach($Marker in @('/api/status','/api/profiles','/api/nodes?sort=','/api/logical-modes','/api/connect-logical','/api/session','/api/session/events','/api/multihop/status','/api/multihop/connect','/api/mtu/retest','effective_mtu_mbps','/api/emergency-stop','/api/profile/pair','/api/profile/import','/api/external-profile/import','/api/external-profile/connect','entry_id','/api/profile/delete','/api/dns/policy','layers_text','ping_text','traffic_text','speed_text','reason_text','DNS-over-HTTP/3','latitude','longitude','No real node coordinates','Select lowest measured','last_used_at','Forwarding','Settings','Help')){if($Source-notlike"*$Marker*"){throw "Windows product contract missing $Marker"}}
+ if(Control 'UnifiedShell'){
+  $Primary=@('UnifiedConnectButton','UnifiedKillSwitch','UnifiedForwardButton','UnifiedMultihop','UnifiedSettingsButton','UnifiedModeCombo','UnifiedDnsCombo')
+  try{
+   $Window.Show()
+   foreach($Size in @(@(640,480),@(1040,720))){
+    $Window.Width=$Size[0];$Window.Height=$Size[1];$Window.UpdateLayout()
+    foreach($Name in $Primary){
+     $Item=Control $Name
+     if($null-eq$Item-or-not$Item.IsVisible){throw "Windows layout missing visible $Name"}
+     $Item.BringIntoView();$Window.UpdateLayout()
+     $Window.Dispatcher.Invoke([Action]{},[Windows.Threading.DispatcherPriority]::Render)
+     if($Item.ActualWidth-lt20-or$Item.ActualHeight-lt16){throw "Windows layout has an unusable $Name"}
+     $Ancestor=[Windows.Media.VisualTreeHelper]::GetParent($Item)
+     while($null-ne$Ancestor-and$Ancestor-isnot[Windows.Controls.ScrollContentPresenter]){$Ancestor=[Windows.Media.VisualTreeHelper]::GetParent($Ancestor)}
+     if($null-eq$Ancestor){throw "Windows layout lost the scrollable controls for $Name"}
+     $Bounds=$Item.TransformToAncestor($Ancestor).TransformBounds([Windows.Rect]::new(0,0,$Item.ActualWidth,$Item.ActualHeight))
+     if($Bounds.Left-lt-1-or$Bounds.Top-lt-1-or$Bounds.Right-gt($Ancestor.ActualWidth+1)-or$Bounds.Bottom-gt($Ancestor.ActualHeight+1)){throw "Windows layout clips $Name at $($Size[0])x$($Size[1])"}
+    }
+    Write-Host "Windows native layout: $($Size[0])x$($Size[1]), $($Primary.Count) primary controls reachable"
+    if($env:ROUTERVPN_UI_EVIDENCE_DIR){
+     [void][IO.Directory]::CreateDirectory($env:ROUTERVPN_UI_EVIDENCE_DIR)
+     $Bitmap=[Windows.Media.Imaging.RenderTargetBitmap]::new([int]$Window.ActualWidth,[int]$Window.ActualHeight,96,96,[Windows.Media.PixelFormats]::Pbgra32);$Bitmap.Render($Window)
+     $Encoder=[Windows.Media.Imaging.PngBitmapEncoder]::new();$Encoder.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($Bitmap))
+     $Image=[IO.File]::Create((Join-Path $env:ROUTERVPN_UI_EVIDENCE_DIR "windows-$($Size[0])x$($Size[1]).png"))
+     try{$Encoder.Save($Image)}finally{$Image.Dispose()}
+    }
+   }
+  }finally{$Window.Close()}
+ }
  Write-Host 'Router VPN Windows product self-test: OK'
  exit 0
 }

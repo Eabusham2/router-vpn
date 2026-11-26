@@ -282,7 +282,9 @@ jobs:
         with: {name: RouterVPN-generic-release-candidate, path: artifacts}
       - name: Smoke-test packaged Windows launchers
         shell: pwsh
-        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
+        env:
+          ROUTER_VPN_ARCH: '${{ matrix.arch }}'
+          ROUTERVPN_UI_EVIDENCE_DIR: '${{ runner.temp }}/routervpn-ui'
         run: |
           $ErrorActionPreference='Stop'
           foreach($family in @('Windows','Portable-Windows')){
@@ -295,6 +297,13 @@ jobs:
             $p=Start-Process -FilePath (Join-Path $root $name) -ArgumentList '--self-test' -Wait -PassThru
             if($p.ExitCode -ne 0){throw "Packaged $family self-test failed"}
           }
+      - name: Save rendered Windows layouts
+        uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Windows-layout-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/routervpn-ui/*.png
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Execute packaged Windows WFP enforcement
         shell: pwsh
@@ -341,6 +350,41 @@ jobs:
           ROUTERVPN_ANDROID_CERT_SHA256: ${{ github.ref == 'refs/heads/main' && vars.ROUTERVPN_ANDROID_CERT_SHA256 || '' }}
           ROUTERVPN_ANDROID_REQUIRE_PRODUCTION: ${{ github.ref == 'refs/heads/main' && vars.ROUTERVPN_ANDROID_REQUIRE_PRODUCTION || '' }}
         run: python3 android/build-delivery.py
+      - name: Launch the packaged Android app
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'emulator' 'system-images;android-35;google_apis;x86_64'
+          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n routervpn-ci -k 'system-images;android-35;google_apis;x86_64' --force
+          test -e /dev/kvm
+          sudo chmod a+rw /dev/kvm
+          mkdir -p "$RUNNER_TEMP/android-ui"
+          "$ANDROID_HOME/emulator/emulator" -avd routervpn-ci -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader_indirect > "$RUNNER_TEMP/android-ui/emulator.log" 2>&1 &
+          emulator_pid=$!
+          trap 'adb emu kill >/dev/null 2>&1 || true; kill "$emulator_pid" >/dev/null 2>&1 || true' EXIT
+          timeout 180s adb wait-for-device
+          timeout 180s bash -c 'until [[ "$(adb shell getprop sys.boot_completed | tr -d "\r")" == 1 ]]; do sleep 2; done'
+          adb shell input keyevent 82
+          adb install -r android/app/build/outputs/routervpn/app-debug.apk
+          adb logcat -b crash -c
+          adb shell am start -W -n com.eabusham.routervpn/.ProductActivity
+          sleep 3
+          test -n "$(adb shell pidof com.eabusham.routervpn | tr -d '\r')"
+          adb shell dumpsys activity activities > "$RUNNER_TEMP/android-ui/activity.txt"
+          grep -E 'mResumedActivity|topResumedActivity' "$RUNNER_TEMP/android-ui/activity.txt" | grep -F com.eabusham.routervpn
+          adb shell uiautomator dump /sdcard/routervpn.xml
+          adb pull /sdcard/routervpn.xml "$RUNNER_TEMP/android-ui/layout.xml"
+          adb exec-out screencap -p > "$RUNNER_TEMP/android-ui/android-launch.png"
+          adb logcat -b crash -d > "$RUNNER_TEMP/android-ui/crash.log"
+          ! grep -F 'FATAL EXCEPTION' "$RUNNER_TEMP/android-ui/crash.log"
+      - name: Save Android launch evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: RouterVPN-Android-layout-${{ github.sha }}
+          path: ${{ runner.temp }}/android-ui
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-Android-release-candidate
@@ -399,6 +443,46 @@ jobs:
           python3 ../../server/scripts/mobile-artifact-provenance.py --name router-vpn-ios.ipa --path "$IPA" --sha "$GITHUB_SHA" --repo Eabusham2/router-vpn
       - name: Read back generated SDK APIs from the release Xcode build
         run: python3 deploy/verify-ios-generated-sdk.py --source-sha "$GITHUB_SHA" --output ios/RouterVPN/build/generated-sdk-receipt
+      - name: Build and launch iPhone and iPad simulators
+        timeout-minutes: 30
+        working-directory: ios/RouterVPN
+        run: |
+          set -euo pipefail
+          xcodebuild -project RouterVPN.xcodeproj -scheme RouterVPN -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath "$PWD/build/SimulatorDerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM='' ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA" INFOPLIST_KEY_RouterVPNSourceSHA="$GITHUB_SHA" build
+          mkdir -p "$RUNNER_TEMP/ios-ui"
+          xcrun simctl list devices available -j > "$RUNNER_TEMP/ios-ui/devices.json"
+          python3 - "$RUNNER_TEMP/ios-ui/devices.json" <<'PY' > "$RUNNER_TEMP/ios-ui/selected.txt"
+          import json, sys
+          devices = [device for group in json.load(open(sys.argv[1]))['devices'].values() for device in group if device.get('isAvailable')]
+          for family in ('iPhone', 'iPad'):
+              selected = next((device for device in devices if device['name'].startswith(family)), None)
+              if selected is None:
+                  raise SystemExit('No installed ' + family + ' simulator')
+              print(family.lower(), selected['udid'])
+          PY
+          while read -r family simulator; do
+            xcrun simctl boot "$simulator"
+            trap 'xcrun simctl shutdown "$simulator" >/dev/null 2>&1 || true' EXIT
+            xcrun simctl bootstatus "$simulator" -b
+            xcrun simctl install "$simulator" build/SimulatorDerivedData/Build/Products/Release-iphonesimulator/RouterVPN.app
+            launch="$(xcrun simctl launch "$simulator" com.eabusham.routervpn)"
+            printf '%s\n' "$launch" > "$RUNNER_TEMP/ios-ui/$family-launch.txt"
+            app_pid="$(printf '%s\n' "$launch" | awk '/: [0-9]+$/ {print $NF}')"
+            [[ "$app_pid" =~ ^[0-9]+$ ]]
+            sleep 3
+            kill -0 "$app_pid"
+            xcrun simctl io "$simulator" screenshot "$RUNNER_TEMP/ios-ui/$family-launch.png"
+            xcrun simctl shutdown "$simulator"
+          done < "$RUNNER_TEMP/ios-ui/selected.txt"
+          trap - EXIT
+      - name: Save iPhone and iPad launch evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: RouterVPN-iOS-layout-${{ github.sha }}
+          path: ${{ runner.temp }}/ios-ui
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-iOS-generated-sdk-${{ github.sha }}
@@ -429,10 +513,19 @@ jobs:
         shell: bash
         run: python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime darwin/amd64 darwin/arm64
       - name: Build native macOS packages
+        env:
+          ROUTERVPN_UI_EVIDENCE_DIR: '${{ runner.temp }}/routervpn-ui'
         run: |
           chmod +x client/macos/build-native-app.sh deploy/package-macos-native.sh
           ./deploy/package-macos-native.sh
           (cd dist/macos-native && shasum -a 256 -c SHA256SUMS)
+      - name: Save rendered macOS layouts
+        uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-macOS-layout-${{ github.sha }}
+          path: ${{ runner.temp }}/routervpn-ui/*.png
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-macOS-release-candidate

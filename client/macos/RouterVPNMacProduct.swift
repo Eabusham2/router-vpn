@@ -116,7 +116,9 @@ private final class ProductComparisonTransportDelegate: NSObject, URLSessionTask
 
 final class ProductAPI {
     private let session: URLSession
-    init() {
+    private let allowsRequests: Bool
+    init(allowsRequests: Bool = true) {
+        self.allowsRequests = allowsRequests
         let c = URLSessionConfiguration.ephemeral
         c.timeoutIntervalForRequest = 8
         // Ordinary transactions retain their shared resource ceiling;
@@ -189,6 +191,9 @@ final class ProductAPI {
         return URLSession(configuration: configuration, delegate: ProductComparisonTransportDelegate(), delegateQueue: nil)
     }
     private func perform(_ req: URLRequest, timeout: TimeInterval) throws -> Data {
+        guard allowsRequests else {
+            throw NSError(domain: "RouterVPNMac", code: 1, userInfo: [NSLocalizedDescriptionKey: "The layout self-test does not start a controller or make network requests."])
+        }
         guard MacProfileLoadTransaction.Store.standard.permitsRequest(req.httpMethod, path: req.url?.path ?? "") else {
             throw MacProfileLoadTransaction.issue("Finish or recover the pending connection profile Load before changing the VPN.")
         }
@@ -938,11 +943,47 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
 }
 
 func runProductSelfTest() -> Int32 {
-    let required = ["/api/status", "/api/profiles", "/api/nodes?sort=latency", "/api/logical-modes", "/api/auto", "/api/connect-logical", "/api/disconnect", "/api/profile/select", "/api/profile/latency", "/api/profile/pair", "/api/profile/import", "/api/external-profile/import", "/api/external-profile/connect", "entry_id", "/api/profile/delete", "/api/public-ip", "/api/dns/retest", "/api/dns/policy", "/api/mtu/retest", "/api/emergency-stop", "/api/session/events", "/api/multihop/status", "/api/multihop/connect", "/api/forward", "/api/forward/clear"]
-    let tabs = ["Home", "Nodes & Map", "Modes", "DNS", "Advanced", "Forwarding", "Settings", "Help"]
-    let parity = ["Added latency", "traffic", "speed loss", "readiness", "Home AdGuard", "Fastest measured", "DNS-over-HTTP/3"]
-    guard routerVPNProductBaseURL.absoluteString == "http://127.0.0.1:8788", routerVPNProductContractVersion == 3, required.count == 25, tabs.count == 8, parity.count == 7 else { return 2 }
-    print("Router VPN native macOS product self-test: OK")
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    app.finishLaunching()
+    let owner = ProductWindowController(api: ProductAPI(allowsRequests: false))
+    guard let window = owner.window, let content = window.contentView else { return 2 }
+    defer { owner.timer?.invalidate(); window.close() }
+    window.orderFront(nil)
+    let primary = ["unified-connect", "unified-kill-switch", "unified-forward-master",
+                   "unified-multihop-toggle", "unified-settings", "unified-mode-popup", "unified-dns-popup"]
+    for size in [NSSize(width: 720, height: 560), NSSize(width: 1050, height: 720)] {
+        window.setContentSize(size)
+        content.layoutSubtreeIfNeeded()
+        for id in primary {
+            guard let control = owner.findUnifiedView(id) as? NSControl,
+                  !control.isHidden, control.action != nil, control.target === owner else {
+                print("macOS layout self-test: missing or unbound \(id)"); return 2
+            }
+            _ = control.scrollToVisible(control.bounds)
+            content.layoutSubtreeIfNeeded()
+            let visible = control.visibleRect
+            guard control.bounds.width >= 20, control.bounds.height >= 16,
+                  visible.width >= control.bounds.width - 1,
+                  visible.height >= control.bounds.height - 1 else {
+                print("macOS layout self-test: clipped \(id) at \(Int(size.width))×\(Int(size.height))"); return 2
+            }
+        }
+        if let connect = owner.findUnifiedView("unified-connect") { _ = connect.scrollToVisible(connect.bounds) }
+        content.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        if let directory = ProcessInfo.processInfo.environment["ROUTERVPN_UI_EVIDENCE_DIR"] {
+            do {
+                let output = URL(fileURLWithPath: directory, isDirectory: true)
+                try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+                guard let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { return 2 }
+                content.cacheDisplay(in: content.bounds, to: bitmap)
+                guard let png = bitmap.representation(using: .png, properties: [:]) else { return 2 }
+                try png.write(to: output.appendingPathComponent("macos-\(Int(size.width))x\(Int(size.height)).png"), options: .atomic)
+            } catch { print("macOS layout image failed: \(error)"); return 2 }
+        }
+        print("macOS native layout: \(Int(size.width))×\(Int(size.height)), \(primary.count) primary controls reachable")
+    }
     return 0
 }
 

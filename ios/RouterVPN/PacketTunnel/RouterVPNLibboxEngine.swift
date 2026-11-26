@@ -1860,7 +1860,7 @@ final class RouterVPNLibboxEngine {
                   body["ready"] as? Bool == true, body["complete"] as? Bool == true,
                   body["execution"] as? String == "local", let prefixes = body["prefixes"] as? [[String: Any]],
                   ((2...8).contains(prefixes.count) || prefixes.count > 8 && prefixes.count == Int(plan.extendedLocalNodeCount())) else { throw retired() }
-            let importedEntry = plan.hasImportedEntry()
+            let importedEntry = plan.hasImportedEntry(), externalFinal = plan.hasExternalFinal()
             if importedEntry {
                 guard prefixes.count == 3, prefixes[0]["kind"] as? String == "public-path",
                       prefixes[1]["kind"] as? String == "public-path" else { throw retired() }
@@ -1876,7 +1876,7 @@ final class RouterVPNLibboxEngine {
                 if let expectedKinds, kind != expectedKinds[position] { throw retired() }
                 guard prefix["position"] as? Int == position, prefix["proven"] as? Bool == true,
                       let id = prefix["profile_id"] as? String, !id.isEmpty,
-                      kind == "private-node" || (kind == "public-path" && (importedEntry && position == 0 || position > 0 && position < prefixes.count - 1)) else { throw retired() }
+                      kind == "private-node" || (kind == "public-path" && (importedEntry && position == 0 || position > 0 && position < prefixes.count - 1 || externalFinal && position == prefixes.count - 1)) else { throw retired() }
                 return ["position": position, "node_id": id, "kind": kind]
             }
             guard current(owner) else { throw retired() }; return nodes
@@ -2210,7 +2210,7 @@ final class RouterVPNLibboxEngine {
             return Self.retiredMeasurements.start(probe, request: request, session: session, requiresLiveOwner: ordered,
                 maximumBytes: max(16384, Int(nodeChainExecution?.capture.plan.extendedOriginalStatusLimit() ?? nodeChain?.extendedLocalStatusLimit() ?? 0)))
         }
-        if operation == "hop-measure-response-start", nodeChainExecution?.capture.isExternalFinal == true {
+        if operation == "hop-measure-response-start", nodeChainExecution?.capture.isExternalFinal == true || nodeChain?.hasExternalFinal() == true {
             guard !starting, hopMeasurementExitID == nil, !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
             return Self.retiredMeasurements.start(probe, request: request, session: session, liveResponse: true, requiresLiveOwner: true)
         }
@@ -2228,6 +2228,7 @@ final class RouterVPNLibboxEngine {
         ownershipLock.lock()
         let probe = hopMeasurement, exitID = hopMeasurementExitID, owned = server, generation = ownershipGeneration
         let external = externalProofDelivery, tor = torProofDelivery, config = configContent, executionHost = nodeChainExecution
+        let localPlan = nodeChain, localDelivery = nodeChainDelivery, prefix = nodeCandidatePrefix
         let available = !permanentlyStopped && !starting && probe != nil && owned != nil
         ownershipLock.unlock()
         guard available,
@@ -2247,6 +2248,12 @@ final class RouterVPNLibboxEngine {
                         "requested": capture.requested, "selected": try capture.execution(), "nodes": capture.members.count] as [String: Any]
                 }
             } catch { return nil }
+        } else if let localPlan, localPlan.hasExternalFinal() {
+            guard localDelivery != nil, prefix == nil, localPlan.healthy(),
+                  let capture = try? IOSNodeChainCapture(plan: localPlan), capture.sourceSchema == 8,
+                  capture.selectionExecution == "local" else { return nil }
+            information["ordered_execution"] = ["source_sha256": capture.sourceSHA256, "config_sha256": capture.configSHA256,
+                "requested": "local", "selected": "local", "nodes": capture.members.count] as [String: Any]
         }
         if let exitID {
             guard (external != nil) != (tor != nil), !config.isEmpty,
@@ -2258,6 +2265,7 @@ final class RouterVPNLibboxEngine {
         ownershipLock.lock()
         let current = ownershipGeneration == generation && server === owned && hopMeasurement === probe &&
             externalProofDelivery === external && torProofDelivery === tor && nodeChainExecution === executionHost &&
+            nodeChain === localPlan && nodeChainDelivery === localDelivery && nodeCandidatePrefix === prefix &&
             hopMeasurementExitID == exitID && !permanentlyStopped && !starting
         ownershipLock.unlock()
         return current ? (try? JSONSerialization.data(withJSONObject: information)) : nil

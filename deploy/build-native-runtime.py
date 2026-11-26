@@ -8,7 +8,10 @@ connection time. A package may consume only a bundle with this exact receipt.
 """
 from pathlib import Path
 import argparse
+import base64
 import hashlib
+import http.client
+import http.server
 import importlib.util
 import json
 import os
@@ -16,10 +19,14 @@ import platform
 import re
 import shlex
 import shutil
+import socket
+import ssl
 import struct
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -650,8 +657,167 @@ def prepare_native_sources(source, xray, env):
     POLICY.AMNEZIA.verify(source)
 
 
+def smoke_protocols(binary, env):
+    """Exercise the built host engine over loopback, without host routes or TUN.
+
+    One actual HTTPS exchange traverses each selected proxy. Stopping its
+    server must make a fresh exchange fail while the target remains reachable.
+    This is protocol data-plane evidence, not device VPN or kernel leak proof.
+    """
+    with tempfile.TemporaryDirectory(prefix='routervpn-protocol-smoke-') as directory:
+        work = Path(directory)
+        certificate, key = work/'certificate.pem', work/'key.pem'
+        certificate_config = work/'certificate.cnf'
+        certificate_config.write_text('[req]\ndistinguished_name=subject\nprompt=no\nx509_extensions=server\n'
+                                      '[subject]\nCN=localhost\n[server]\nsubjectAltName=DNS:localhost\n'
+                                      'basicConstraints=critical,CA:TRUE\nkeyUsage=critical,digitalSignature,keyCertSign\n'
+                                      'extendedKeyUsage=serverAuth\n', encoding='ascii')
+        run(['openssl', 'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256',
+             '-nodes', '-sha256', '-keyout', key, '-out', certificate, '-days', '1',
+             '-config', certificate_config], env=env, timeout=20)
+        key.chmod(0o600)
+        token = os.urandom(32)
+
+        class Target(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = token + self.path.encode('ascii')
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                pass
+
+        target = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Target)
+        server_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server_tls.load_cert_chain(certificate, key)
+        target.socket = server_tls.wrap_socket(target.socket, server_side=True)
+        worker = threading.Thread(target=target.serve_forever, daemon=True)
+        worker.start()
+        client_tls = ssl.create_default_context(cafile=str(certificate))
+        target_port = target.server_address[1]
+
+        def exact(stream, count):
+            value = b''
+            while len(value) < count:
+                part = stream.recv(count-len(value))
+                if not part:
+                    raise ConnectionError('Native proxy closed its response')
+                value += part
+            return value
+
+        def exchange(proxy_port=None):
+            with socket.create_connection(('127.0.0.1', proxy_port or target_port), timeout=3) as stream:
+                if proxy_port is not None:
+                    stream.sendall(b'\x05\x01\x00')
+                    if exact(stream, 2) != b'\x05\x00':
+                        raise ConnectionError('Native SOCKS negotiation failed')
+                    stream.sendall(b'\x05\x01\x00\x01'+socket.inet_aton('127.0.0.1')+struct.pack('!H', target_port))
+                    reply = exact(stream, 4)
+                    if reply[:3] != b'\x05\x00\x00' or reply[3] not in (1, 3, 4):
+                        raise ConnectionError('Selected native protocol did not connect')
+                    exact(stream, (4 if reply[3] == 1 else 16 if reply[3] == 4 else exact(stream, 1)[0])+2)
+                with client_tls.wrap_socket(stream, server_hostname='localhost') as secured:
+                    path = '/'+os.urandom(16).hex()
+                    secured.sendall(('GET '+path+' HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n').encode('ascii'))
+                    response = http.client.HTTPResponse(secured)
+                    response.begin()
+                    if response.status != 200 or response.read(4096) != token+path.encode('ascii'):
+                        raise ValueError('Native protocol returned a different target or payload')
+
+        def port(kind=socket.SOCK_STREAM):
+            with socket.socket(socket.AF_INET, kind) as reservation:
+                reservation.bind(('127.0.0.1', 0))
+                return reservation.getsockname()[1]
+
+        def stop(process):
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+
+        try:
+            for protocol in ('socks', 'http', 'https', 'shadowsocks', 'hysteria2'):
+                upstream_port, proxy_port = port(socket.SOCK_DGRAM if protocol == 'hysteria2' else socket.SOCK_STREAM), port()
+                while upstream_port == proxy_port:
+                    proxy_port = port()
+                kind = 'http' if protocol == 'https' else protocol
+                inbound = {'type': kind, 'listen': '127.0.0.1', 'listen_port': upstream_port}
+                outbound = {'type': kind, 'tag': 'selected', 'server': '127.0.0.1', 'server_port': upstream_port}
+                password = base64.b64encode(os.urandom(32)).decode('ascii')
+                if protocol in ('socks', 'http', 'https'):
+                    inbound['users'] = [{'username': 'smoke', 'password': password}]
+                    outbound.update(username='smoke', password=password)
+                elif protocol == 'shadowsocks':
+                    inbound.update(method='2022-blake3-aes-256-gcm', password=password)
+                    outbound.update(method=inbound['method'], password=password)
+                else:
+                    inbound['users'] = [{'name': 'smoke', 'password': password}]
+                    outbound['password'] = password
+                    inbound['obfs'] = outbound['obfs'] = {'type': 'salamander', 'password': password}
+                if protocol in ('https', 'hysteria2'):
+                    inbound['tls'] = {'enabled': True, 'certificate_path': str(certificate), 'key_path': str(key)}
+                    outbound['tls'] = {'enabled': True, 'server_name': 'localhost', 'certificate_path': str(certificate)}
+                configurations = (
+                    {'inbounds': [inbound], 'outbounds': [{'type': 'direct', 'tag': 'target'}], 'route': {'final': 'target'}},
+                    {'inbounds': [{'type': 'socks', 'listen': '127.0.0.1', 'listen_port': proxy_port}], 'outbounds': [outbound], 'route': {'final': 'selected'}},
+                )
+                processes, logs = [], []
+                try:
+                    for role, configuration in zip(('server', 'client'), configurations):
+                        config_path, log_path = work/(protocol+'-'+role+'.json'), work/(protocol+'-'+role+'.log')
+                        configuration['log'] = {'level': 'error', 'timestamp': False}
+                        config_path.write_text(json.dumps(configuration), encoding='utf-8')
+                        config_path.chmod(0o600)
+                        log = log_path.open('wb'); logs.append(log)
+                        processes.append(subprocess.Popen([str(binary), 'run', '-c', str(config_path)], env=env, stdout=log, stderr=log))
+                    deadline = time.monotonic()+15
+                    while True:
+                        if any(process.poll() is not None for process in processes):
+                            raise RuntimeError('Native '+protocol+' process exited before its traffic check')
+                        try:
+                            exchange(proxy_port)
+                            break
+                        except (OSError, http.client.HTTPException):
+                            if time.monotonic() >= deadline:
+                                raise
+                            time.sleep(0.05)
+                    stop(processes[0])
+                    try:
+                        exchange(proxy_port)
+                    except (OSError, http.client.HTTPException):
+                        pass
+                    else:
+                        raise RuntimeError('Native '+protocol+' used a path after its selected upstream stopped')
+                    if processes[1].poll() is not None:
+                        raise RuntimeError('Native client exited during upstream failure')
+                    exchange()
+                    print('Native protocol traffic: '+protocol+' HTTPS payload passed; stopped upstream refused; direct control alive', flush=True)
+                except Exception:
+                    for role in ('server', 'client'):
+                        path = work/(protocol+'-'+role+'.log')
+                        if path.exists():
+                            sys.stderr.write(path.read_bytes()[-8192:].decode('utf-8', errors='replace'))
+                    raise
+                finally:
+                    for process in reversed(processes):
+                        stop(process)
+                    for log in logs:
+                        log.close()
+        finally:
+            target.shutdown(); target.server_close(); worker.join(timeout=5)
+            if worker.is_alive():
+                raise RuntimeError('Native protocol target did not stop')
+
+
 def build(target, destination, *, source=None, xray=None, pq=None, cache=None, tor_compiled=None, dnssec_compiled=None):
     env, policy = environment(target, compiler=True), digest()
+    host = ('darwin' if platform.system() == 'Darwin' else platform.system().lower())+'/'+{
+        'x86_64': 'amd64', 'AMD64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64', 'ARM64': 'arm64'}.get(platform.machine(), '')
     if target.startswith('windows/'):
         env = GO_SOCKETS.environment(env=env)
     native_acceptance = env.get('ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE', '')
@@ -667,6 +833,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists() and any(destination.iterdir()):
         reuse(destination, target, policy, env)
+        if target == host:
+            smoke_protocols(destination/binary_name(target), env)
         print('Reused verified complete native runtime '+target, flush=True)
         return destination
     if run(['go', 'env', 'GOVERSION'], env=env) != TOOLCHAIN:
@@ -700,8 +868,6 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
         stage.mkdir()
         binary = stage/binary_name(target)
         stage_cronet(source, stage, target, env)
-        host = ('darwin' if platform.system() == 'Darwin' else platform.system().lower())+'/'+{
-            'x86_64': 'amd64', 'AMD64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64', 'ARM64': 'arm64'}.get(platform.machine(), '')
         if target.startswith('linux/'):
             validator = DNSSEC.build(target, temp/'dnssec-bundle', compiled=dnssec_compiled, env=env)
             for name in DNSSEC.names(target):
@@ -744,6 +910,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             help_output = run([binary, 'routervpn-external', '--help'], env=env, timeout=20)
             if '--runtime-dir' not in help_output or '--session' not in help_output:
                 raise ValueError('Actual native engine omitted its captured external owner command')
+            smoke_protocols(binary, env)
         if destination.exists():
             destination.rmdir()
         os.replace(stage, destination)

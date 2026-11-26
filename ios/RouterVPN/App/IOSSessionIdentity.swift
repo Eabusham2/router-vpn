@@ -52,6 +52,14 @@ struct IOSSessionIdentity: Equatable, Sendable {
                 guard rawProfile == "shadowsocks", Self.extendedLocalMembers(source, nodes: nodes) else { throw Self.invalid() }
                 if nodes.count > 8 { capturedRows = nodes.count }
             }
+            if source["schema"] as? Int == 8 {
+                guard let digest = source["source_sha256"] as? String, let config = source["config_sha256"] as? String,
+                      source["original_config_sha256"] as? String == config,
+                      [digest, config].allSatisfy({ $0.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil }),
+                      let ids = Self.externalFinalIDs(nodes) else { throw Self.invalid() }
+                selectedSource = SelectedMeasurementSource(source: digest, config: config, requested: "local", ids: ids, privateStreamPositions: [], externalFinal: true)
+                capturedRows = nodes.count
+            }
         } else if engine == "multihop-libbox" || engine == "external-libbox" && entryBundleData != nil {
             guard let entryBundleData, !entryBundleData.isEmpty,
                   entryBundleData.count <= 32 * 1024 * 1024 else { throw Self.invalid() }
@@ -187,17 +195,8 @@ struct IOSSessionIdentity: Equatable, Sendable {
                       return value.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil
                   }) else { return false }
             if schema == 8 {
-                guard Self.extendedLocalMembers(sealed, nodes: nodes), let requested = source["execution"] as? String else { return false }
-                var ids: [String] = []
-                for (position, input) in nodes.enumerated() {
-                    guard let node = try? JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any] else { return false }
-                    let field = position == 0 ? "profile_json" : "capture"
-                    guard let raw = node[field] as? String, let original = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] else { return false }
-                    let profile = position == 0 ? original : original["profile"] as? [String: Any]
-                    guard let id = profile?["id"] as? String else { return false }
-                    ids.append(id)
-                }
-                guard Set(ids).count == ids.count else { return false }
+                guard Self.extendedLocalMembers(sealed, nodes: nodes), let requested = source["execution"] as? String,
+                      let ids = Self.externalFinalIDs(nodes) else { return false }
                 selectedSource = SelectedMeasurementSource(source: digest, config: config, requested: requested, ids: ids, privateStreamPositions: [], externalFinal: true)
                 capturedRows = nodes.count
                 return true
@@ -293,6 +292,19 @@ struct IOSSessionIdentity: Equatable, Sendable {
             }
         }
         return schema != 6 || hasImportedInterior
+    }
+
+    private static func externalFinalIDs(_ nodes: [String]) -> [String]? {
+        var ids: [String] = []
+        for (position, input) in nodes.enumerated() {
+            guard let node = try? JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any],
+                  let raw = node[position == 0 ? "profile_json" : "capture"] as? String,
+                  let original = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] else { return nil }
+            let profile = position == 0 ? original : original["profile"] as? [String: Any]
+            guard let id = profile?["id"] as? String, !id.isEmpty, id.utf8.count <= 128 else { return nil }
+            ids.append(id)
+        }
+        return Set(ids).count == ids.count ? ids : nil
     }
 
     // A session has the private launch record, not a profile editor or live

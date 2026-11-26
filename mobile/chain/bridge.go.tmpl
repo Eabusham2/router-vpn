@@ -59,6 +59,9 @@ func (m *RouterNodeChain) LaunchInput() (string, error) { return m.chain.LaunchI
 func (m *RouterNodeChain) HasImportedEntry() bool {
 	return m != nil && m.self == m && m.chain.HasImportedEntry()
 }
+func (m *RouterNodeChain) HasExternalFinal() bool {
+	return m != nil && m.self == m && m.chain != nil && m.chain.HasExternalFinal()
+}
 func (m *RouterNodeChain) ExtendedLocalNodeCount() int32 {
 	if m == nil || m.self != m {
 		return 0

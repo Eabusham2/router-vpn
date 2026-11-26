@@ -337,10 +337,10 @@ private final class IOSHopReply: @unchecked Sendable {
                         send: { operation in try await self.send(connection, operation: operation, id: id, session: hop.session_id, maximumBytes: limit) })
                     self.transaction = owned
                     try await owned.run(validate: { status in
-                        if let original, let selected = hop.ordered_execution {
-                            try status.validateSelectedThroughput(ids: original.ids, winner: selected.selected, privateStreamPositions: original.privateStreamPositions, externalFinal: original.externalFinal)
-                        } else if let localPath {
+                        if let localPath {
                             try status.validateLocalThroughput(path: localPath)
+                        } else if let original, let selected = hop.ordered_execution {
+                            try status.validateSelectedThroughput(ids: original.ids, winner: selected.selected, privateStreamPositions: original.privateStreamPositions, externalFinal: original.externalFinal)
                         }
                     }, current: {
                         await model.refreshTunnelStatus()

@@ -690,7 +690,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         String orderedResponseExitID(){
             synchronized(service.lock){
                 requireCurrent();
-                if(chain==null||chain.execution==null||!chain.capture.externalFinal||chain.candidatePrefix!=null||
+                if(chain==null||!chain.capture.externalFinal||chain.candidatePrefix!=null||
                         !nodeChainReady(chain)||!AndroidHomeStateStore.ownsNodeChain(service,chain.home))
                     throw new IllegalStateException("No captured ordered external final.");
                 AndroidNodeStore.ChainSource last=chain.source.members.get(chain.source.members.size()-1);
@@ -787,7 +787,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     static boolean hasOrderedExternalFinal(){
         LayeredVpnService service=currentService.get();
         AndroidNodeChainSession chain=service==null?null:service.nodeChainSession;
-        return chain!=null&&chain.execution!=null&&chain.capture.externalFinal&&chain.candidatePrefix==null;
+        return chain!=null&&chain.capture.externalFinal&&chain.candidatePrefix==null;
     }
     static HopMeasurementOwner captureHopMeasurement(String request)throws Exception{
         LayeredVpnService service=currentService.get();if(service==null||request==null||!request.matches("[0-9a-f]{32}"))throw new IllegalStateException("No captured path measurement session.");
