@@ -16,6 +16,17 @@ func DesktopLinuxNodePhysicalGraphSupported(mode, startLayer string) bool {
 	return startLayer == "" || startLayer == "off" || startLayer == "aes-256-gcm" || startLayer == "aes-256-gcm+xor-whitening"
 }
 
+// DesktopLinuxRetainedNodeGraphSupported also admits protected WG-PQ and Naive
+// H3 when the installed Linux controller owns the original connection. Their
+// SMART successors can then use the same journal, restore path and guardian.
+func DesktopLinuxRetainedNodeGraphSupported(mode, layer, protection string) bool {
+	if DesktopLinuxNodePhysicalGraphSupported(mode, layer) {
+		return true
+	}
+	return (mode == "wg-pq" || mode == "naive-h3") && (protection == "on-connect" || protection == "always") &&
+		DesktopNodePhysicalGraphSupported(mode, layer)
+}
+
 // DesktopNodePhysicalGraphSupported identifies the graph families admitted by
 // the native owned-socket composition. It is a capability gate, not a profile
 // constructor: callers still validate the sealed policy and complete Box.

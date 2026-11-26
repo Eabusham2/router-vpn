@@ -27,7 +27,7 @@ func routerVPNDesktopLinuxNodeLifecycleAvailable(policy *mobilemultihop.DesktopN
 	// Only exact admitted WG/AWG2/Shadowsocks/Hysteria2/ss-v2ray layers may
 	// enter this native TUN/nft/DNS lifecycle. The seal rederives each actual
 	// endpoint/outbound, credential, port and physical lower.
-	return meta.TargetOS == "linux" && mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(meta.Mode, meta.StartLayer)
+	return meta.TargetOS == "linux" && mobilemultihop.DesktopLinuxRetainedNodeGraphSupported(meta.Mode, meta.StartLayer, meta.KillSwitchPolicy)
 }
 
 func (s *Box) RouterVPNDesktopLinuxNodePreparePhysicalOwned(policy *mobilemultihop.DesktopNodePolicy) (*RouterVPNDesktopLinuxNodePreparation, error) {

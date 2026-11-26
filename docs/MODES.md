@@ -81,7 +81,9 @@ The 16 logical choices are:
 
 **SMART AUTO** gets connected first, remembers the last-good stack, tests declared simplifications/replacements, and restores the last-good path when a reduction fails.
 
-On an installed Linux client, SMART can test WireGuard from bundled WG-PQ or test Hysteria2 or Naive H2 from bundled Naive H3 when Kill Switch is Off. It checks that the previous firewall guard is absent and saves the working graph and tunnel MTU before stopping the original process. A failed trial must finish cleanup before SMART can restart and prove that saved path. With On-connect or Always, the wrapper retains its firewall guard and SMART keeps it running. A protected trial requires the initial WG-PQ or Naive H3 connection to start under the retained Linux controller. That path still needs an installed Linux test with real Rosenpass and WireGuard peers or an authenticated Naive H3 peer, including firewall continuity and rollback. A missing native package or installed controller also leaves the working predecessor in place.
+On Linux, SMART can try WireGuard from WG-PQ, or Hysteria2 and Naive H2 from Naive H3. With Kill Switch Off, the installed controller checks that the old firewall guard is absent and saves the working bundled graph and live tunnel MTU before stopping the wrapper. With On-connect or Always, a new connection on a native installation starts under the retained Linux controller. That owner can stage a successor, transfer protection and restore the captured source, selected DNS and live MTU if its trial fails. This applies to Start Layer Off, AES-256-GCM and AES-256-GCM with XOR whitening. A protected wrapper started under its earlier owner keeps its working connection when it cannot transfer its guard.
+
+The Linux release qualification exercises those transitions with independent peers, the packaged controller, stock PolicyKit, real TUN interfaces and kernel firewall observations. A release run must pass on both Linux architectures to qualify the full matrix.
 
 **CUSTOM** selects the lightest already-validated compatible stack containing every requested layer/property without unnecessary layers.
 

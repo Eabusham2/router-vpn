@@ -163,7 +163,7 @@ One source generation must prove source/security, recovered requirements, native
 `server/portainer-current.yaml` is a reviewed tracked baseline/template. Release workflows create a separate generated exact-SHA compose; they do not overwrite the tracked template merely because `main` moved.
 
 GitHub completion and whole-project release are distinct. After exact-head repository/artifact proof, continue through physical devices, selected-path/leak/network transitions, off-LAN paths, visual/DPI QA, private server features, live AI providers, applicable Apple provisioning/distribution, one deliberate exact-SHA production deployment, ASUS fail-open revalidation and final regression. macOS Developer ID signing/notarization remains optional polish when practical, as qualified in the original requirement; it cannot become a newly invented mandatory release gate. Legitimate iOS provisioning and truthful signing status remain required.
-Use `deploy/live-release-evidence.py` and `docs/LIVE-RELEASE-EVIDENCE.md` to bind those post-GitHub results to the same exact SHA; the tool refuses PASS without hashed live evidence and refuses whole-project final validation until every required live gate passes.
+Use [the live evidence recorder](../deploy/live-release-evidence.py) and [the production release contract](PRODUCTION-RELEASE.md#section-current-certification) to bind those post-GitHub results to the same exact SHA; the tool refuses PASS without hashed live evidence and refuses whole-project final validation until every required live gate passes.
 
 ## ASUS household safety
 

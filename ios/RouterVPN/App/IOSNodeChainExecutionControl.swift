@@ -124,7 +124,7 @@ import CoreFoundation
         let data = try await send(Self.encode(["operation": "ordered-execution-capture-release", "request_id": id,
             "session_id": observation.last.session, "owner_id": owner.uuidString, "capture_request_id": captureRequest,
             "process_id": observation.process, "registry_generation": observation.generation]))
-        let value = try Self.object(data, limit: 20 * 1024)
+        let value = try Self.object(data, limit: IOSOrderedLastBounds.envelope(forStored: nil))
         guard Set(value.keys) == Set(["schema", "kind", "request_id", "session_id", "owner_id", "capture_request_id", "released", "process_id", "registry_generation"]),
               value["schema"] as? Int == 1, value["kind"] as? String == "routervpn-ordered-execution-capture-release",
               value["request_id"] as? String == id, value["session_id"] as? String == observation.last.session,

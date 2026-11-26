@@ -21,12 +21,24 @@ import (
 // must use its actual installed Linux owner even when its package is missing;
 // verification failure never falls back to a differently owned legacy helper.
 func (a *app) desktopLinuxNodeConnectionSelected(profile common.RouterProfile, mode string) bool {
-	return a.desktopNodeConnectionHost() == nil && (mode == "shadowsocks" || mode == "wg" || mode == "awg2-fast" || mode == "awg2-strong" || mode == "hysteria2" || mode == "ss-v2ray" || mode == "naive-h2" || mode == "reality-vision" || mode == "reality-pq-vision" || mode == "reality-xhttp")
+	if a.desktopNodeConnectionHost() != nil {
+		return false
+	}
+	if mode == "wg-pq" || mode == "naive-h3" {
+		a.mu.Lock()
+		installed := a.localController != nil
+		a.mu.Unlock()
+		// A verified native package is selected from its receipt. A missing
+		// or altered file observed after selection still fails native preflight.
+		_, retained := desktopNodeOwners.Load(a)
+		return installed && (retained || desktopNodeNativeSelected(mode)) && mobilemultihop.DesktopLinuxRetainedNodeGraphSupported(mode, profile.StartLayer, desktopOwnedNodeProtectionPolicy(profile))
+	}
+	return (mode == "shadowsocks" || mode == "wg" || mode == "awg2-fast" || mode == "awg2-strong" || mode == "hysteria2" || mode == "ss-v2ray" || mode == "naive-h2" || mode == "reality-vision" || mode == "reality-pq-vision" || mode == "reality-xhttp")
 }
 
 func validateDesktopLinuxNodeConnection(profile common.RouterProfile, mode string, options [3]bool) error {
 	policy := desktopOwnedNodeProtectionPolicy(profile)
-	if !mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(mode, profile.StartLayer) || profile.External != nil ||
+	if !mobilemultihop.DesktopLinuxRetainedNodeGraphSupported(mode, profile.StartLayer, policy) || profile.External != nil ||
 		profile.NodeKind != "" && profile.NodeKind != "router-vpn" || policy != "off" && policy != "on-connect" && policy != "always" {
 		return errors.New("Linux retained connection requires a supported captured graph and exact Start Layer")
 	}

@@ -146,7 +146,7 @@ func validateDesktopCandidateCatalogStatus(c *desktopNodeChainCandidateCatalog, 
 		return validateDesktopSelectedCandidateStatus(c.selectedPlan, id, status, now)
 	}
 	if c.typedPlan != nil {
-		return validateDesktopNodeChainTypedCandidateStatus(c.typedPlan, id, status, now)
+		return validateDesktopNodeChainCandidateStatus(c.typedPlan, id, status, now)
 	}
 	return validateDesktopNodeChainCandidateStatus(c.plan, id, status, now)
 }

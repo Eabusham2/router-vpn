@@ -18,7 +18,9 @@ Recursive Local candidate timing retains the complete captured registry when a p
 
 Installed Linux clients can trial lighter transports from the bundled WG-PQ or Naive H3 wrapper with Kill Switch Off, after capturing the original graph and live tunnel MTU. A failed candidate must finish cleanup before the captured path can restart and earn a fresh proof. A firewall guard that appears during rollback is preserved. The single-node PQ startup and restoration budgets include the existing first-key window and remain bounded by the original connection operation.
 
-With On-connect or Always, SMART preserves the working wrapper when its guard cannot transfer to the retained controller. Completing that protected trial still requires the initial transport to use the retained Linux owner and an installed test of the actual peer, TUN, firewall continuity and rollback. Source captures and protocol-only checks do not complete that platform requirement. See [mode behavior](MODES.md).
+With On-connect or Always, a new WG-PQ or Naive H3 connection on an installed native Linux client starts under the retained controller. The same owner can then stage the lighter transport or restore the captured source, selected DNS and live MTU. Start Layer Off, AES-256-GCM and AES-256-GCM with XOR whitening retain their separate original credentials. An older protected wrapper keeps its working connection when its guard cannot transfer.
+
+The Linux release jobs qualify these transitions against independent protocol peers using the packaged controller, a real foreground login and stock PolicyKit authentication, actual TUN interfaces, and continuous firewall and leak observations. Each architecture runs 18 cases; the two architectures cover 36 complementary transport/layer/policy/outcome combinations. This source is not qualified until those installed checks pass on both targets. See [mode behavior](MODES.md).
 
 ## Verification and release
 

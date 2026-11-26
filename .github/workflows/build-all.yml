@@ -370,17 +370,25 @@ jobs:
           export ANDROID_USER_HOME="$RUNNER_TEMP/routervpn-android"
           export ANDROID_EMULATOR_HOME="$ANDROID_USER_HOME"
           export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
-          mkdir -p "$ANDROID_AVD_HOME" "$RUNNER_TEMP/android-ui"
+          install -d -m 700 "$ANDROID_USER_HOME" "$ANDROID_AVD_HOME" "$RUNNER_TEMP/android-ui"
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'emulator' 'system-images;android-35;google_apis;x86_64'
-          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n routervpn-ci -p "$ANDROID_AVD_HOME/routervpn-ci.avd" -k 'system-images;android-35;google_apis;x86_64' --force
-          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -Fx routervpn-ci
+          "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n routervpn-ci -p "$ANDROID_AVD_HOME/routervpn-ci.avd" -k 'system-images;android-35;google_apis;x86_64' --force <<<no
+          emulator="$ANDROID_HOME/emulator/emulator"
+          "$emulator" -list-avds | grep -Fx routervpn-ci
           test -e /dev/kvm
           sudo chmod a+rw /dev/kvm
-          "$ANDROID_HOME/emulator/emulator" -avd routervpn-ci -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader_indirect > "$RUNNER_TEMP/android-ui/emulator.log" 2>&1 &
+          export ANDROID_SERIAL=emulator-5554
+          "$emulator" -avd routervpn-ci -port 5554 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader > "$RUNNER_TEMP/android-ui/emulator.log" 2>&1 &
           emulator_pid=$!
-          trap 'adb emu kill >/dev/null 2>&1 || true; kill "$emulator_pid" >/dev/null 2>&1 || true' EXIT
-          timeout 180s bash -c 'until adb get-state >/dev/null 2>&1; do kill -0 "$1" || exit 1; sleep 2; done' _ "$emulator_pid" || { cat "$RUNNER_TEMP/android-ui/emulator.log" >&2; exit 1; }
-          timeout 180s bash -c 'until [[ "$(adb shell getprop sys.boot_completed | tr -d "\r")" == 1 ]]; do sleep 2; done'
+          trap 'timeout 5s adb emu kill >/dev/null 2>&1 || true; kill "$emulator_pid" >/dev/null 2>&1 || true' EXIT
+          boot_deadline=$((SECONDS + 360))
+          until [[ "$(timeout 5s adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == 1 ]]; do
+            if ! kill -0 "$emulator_pid" 2>/dev/null || (( SECONDS >= boot_deadline )); then
+              tail -n 60 "$RUNNER_TEMP/android-ui/emulator.log" >&2
+              exit 1
+            fi
+            sleep 2
+          done
           adb shell input keyevent 82
           adb install -r android/app/build/outputs/routervpn/app-debug.apk
           adb logcat -b crash -c
@@ -635,9 +643,22 @@ jobs:
           chmod +x client/linux/build-native-app.sh deploy/package-linux-native.sh
           ./deploy/package-linux-native.sh '${{ matrix.arch }}'
           (cd dist/linux-native && sha256sum -c "RouterVPN-linux-${{ matrix.arch }}.sha256")
-          mkdir -p "$RUNNER_TEMP/routervpn-linux-layout"
+          export ROUTERVPN_UI_EVIDENCE_DIR="$RUNNER_TEMP/routervpn-linux-layout/evidence"
+          mkdir -p "$ROUTERVPN_UI_EVIDENCE_DIR"
           tar -xzf "dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.tar.gz" -C "$RUNNER_TEMP/routervpn-linux-layout"
           xvfb-run -a "$RUNNER_TEMP/routervpn-linux-layout/RouterVPN-linux-${{ matrix.arch }}/router-vpn-app" --layout-self-test
+      - name: Save native Linux layout images
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: RouterVPN-Linux-layout-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/routervpn-linux-layout/evidence/*.png
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Exercise installed protected SMART transitions
+        run: |
+          sudo apt-get install -y --no-install-recommends kbd libpam0g-dev wireguard-tools dnsmasq-base openssl tcpdump
+          python3 deploy/verify-linux-smart.py --archive "dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.tar.gz"
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-Linux-${{ matrix.arch }}-release-candidate

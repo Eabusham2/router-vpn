@@ -66,7 +66,7 @@ func (s *linuxStandardService) bootBootstrapProfile(ctx context.Context, q linux
 	}
 	p, ok := s.app.profileByIDLocked(q.ProfileID)
 	s.app.mu.Unlock()
-	if !ok || desktopOwnedNodeProfileToken(p) != q.ProfileRevision || p.Endpoint != q.Hostname || !mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(q.Mode, p.StartLayer) || desktopOwnedNodeProtectionPolicy(p) == "off" {
+	if !ok || desktopOwnedNodeProfileToken(p) != q.ProfileRevision || p.Endpoint != q.Hostname || !mobilemultihop.DesktopLinuxRetainedNodeGraphSupported(q.Mode, p.StartLayer, desktopOwnedNodeProtectionPolicy(p)) || desktopOwnedNodeProtectionPolicy(p) == "off" {
 		return zero, errors.New("bootstrap changed its captured protected Node profile")
 	}
 	network, e := physicalNetworkIdentityContext(ctx)

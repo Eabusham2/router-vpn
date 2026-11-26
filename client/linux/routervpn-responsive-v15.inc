@@ -175,6 +175,24 @@ static gboolean linux_control_reachable_v15(GtkWidget *widget, GtkWidget *page,
     return FALSE;
 }
 
+static gboolean linux_save_layout_v15(GtkWidget *window, const char *directory, const char *scenario,
+                                      int width, int height, const char *view) {
+    gtk_test_widget_wait_for_draw(window);
+    GdkWindow *surface = gtk_widget_get_window(window);
+    GdkPixbuf *image = gdk_pixbuf_get_from_window(surface, 0, 0, gdk_window_get_width(surface), gdk_window_get_height(surface));
+    char *name = g_strdup_printf("linux-%dx%d-%s-%s.png", width, height, scenario, view);
+    g_strdelimit(name, " ", '-');
+    char *path = g_build_filename(directory, name, NULL);
+    GError *error = NULL;
+    gboolean saved = image != NULL && gdk_pixbuf_save(image, path, "png", &error, NULL);
+    if (!saved) g_printerr("Could not save %s: %s\n", path, error != NULL ? error->message : "no window pixels");
+    g_clear_error(&error);
+    g_clear_object(&image);
+    g_free(path);
+    g_free(name);
+    return saved;
+}
+
 static int linux_responsive_check_sizes_v15(App *app, const char *scenario) {
     LinuxUnifiedV8 *base = g_object_get_data(G_OBJECT(app->window), "linux-unified-v8");
     GtkWidget *scroll = g_object_get_data(G_OBJECT(app->window), "linux-responsive-v15");
@@ -195,6 +213,16 @@ static int linux_responsive_check_sizes_v15(App *app, const char *scenario) {
         }
         GtkWidget *viewport = gtk_bin_get_child(GTK_BIN(scroll));
         GtkWidget *page = gtk_bin_get_child(GTK_BIN(viewport));
+        const char *evidence = g_getenv("ROUTERVPN_UI_EVIDENCE_DIR");
+        if (evidence != NULL && *evidence != '\0') {
+            GtkAdjustment *vertical = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scroll));
+            gtk_adjustment_set_value(vertical, gtk_adjustment_get_lower(vertical));
+            if (!linux_save_layout_v15(app->window, evidence, scenario, sizes[n][0], sizes[n][1], "map")) return 10;
+            int x = 0, y = 0;
+            if (!gtk_widget_translate_coordinates(base->connect, page, 0, 0, &x, &y)) return 10;
+            gtk_adjustment_set_value(vertical, y);
+            if (!linux_save_layout_v15(app->window, evidence, scenario, sizes[n][0], sizes[n][1], "controls")) return 10;
+        }
         int minimum_width = 0, minimum_height = 0;
         gtk_widget_get_preferred_width(app->window, &minimum_width, NULL);
         gtk_widget_get_preferred_height(app->window, &minimum_height, NULL);
@@ -230,8 +258,8 @@ static int linux_responsive_check_sizes_v15(App *app, const char *scenario) {
 /* Real-widget acceptance check for the built app under Xvfb. It opens no
  * connections and changes no profiles. Long labels change only existing model
  * display text; their IDs, selection, callbacks and stored preferences survive. */
-static int linux_responsive_self_test_v15(App *app) {
-    int result = linux_responsive_check_sizes_v15(app, "normal");
+static int linux_responsive_check_labels_v15(App *app, const char *scenario, const char *long_scenario) {
+    int result = linux_responsive_check_sizes_v15(app, scenario);
     if (result != 0) return result;
     LinuxUnifiedV8 *base = g_object_get_data(G_OBJECT(app->window), "linux-unified-v8");
     GtkTreeModel *model = gtk_combo_box_get_model(GTK_COMBO_BOX(base->mode));
@@ -246,7 +274,7 @@ static int linux_responsive_self_test_v15(App *app) {
     base->syncing = TRUE;
     gtk_list_store_set(GTK_LIST_STORE(model), &iter, 0, long_label, -1);
     base->syncing = was_syncing;
-    result = linux_responsive_check_sizes_v15(app, "long mode label");
+    result = linux_responsive_check_sizes_v15(app, long_scenario);
     base->syncing = TRUE;
     gtk_list_store_set(GTK_LIST_STORE(model), &iter, 0, original, -1);
     base->syncing = was_syncing;
@@ -259,5 +287,50 @@ static int linux_responsive_self_test_v15(App *app) {
     g_free(long_label);
     g_free(original);
     g_free(selected);
+    return result;
+}
+
+static int linux_responsive_self_test_v15(App *app) {
+    int result = linux_responsive_check_labels_v15(app, "normal", "long mode label");
+    if (result != 0) return result;
+    LinuxUnifiedV8 *base = g_object_get_data(G_OBJECT(app->window), "linux-unified-v8");
+    GtkWidget *label = gtk_bin_get_child(GTK_BIN(base->connect));
+    if (!GTK_IS_LABEL(label)) return 11;
+    int original_height = 0;
+    pango_layout_get_pixel_size(gtk_label_get_layout(GTK_LABEL(label)), NULL, &original_height);
+    GtkSettings *settings = gtk_widget_get_settings(app->window);
+    char *original = NULL;
+    gboolean animations;
+    g_object_get(settings, "gtk-font-name", &original, "gtk-enable-animations", &animations, NULL);
+    if (original == NULL) return 11;
+    PangoFontDescription *font = pango_font_description_from_string(original);
+    int size = pango_font_description_get_size(font);
+    if (size <= 0 || size > G_MAXINT / 2) {
+        g_printerr("Cannot double the configured GTK font %s\n", original);
+        pango_font_description_free(font);
+        g_free(original);
+        return 11;
+    }
+    if (pango_font_description_get_size_is_absolute(font))
+        pango_font_description_set_absolute_size(font, (double)size * 2);
+    else
+        pango_font_description_set_size(font, size * 2);
+    char *enlarged = pango_font_description_to_string(font);
+    g_print("Checking GTK layout with configured font %s doubled to %s\n", original, enlarged);
+    // Measure the fully applied font at the first window size as well as later sizes.
+    g_object_set(settings, "gtk-enable-animations", FALSE, "gtk-font-name", enlarged, NULL);
+    result = linux_responsive_check_labels_v15(app, "double font", "double font long mode label");
+    int enlarged_height = 0;
+    pango_layout_get_pixel_size(gtk_label_get_layout(GTK_LABEL(label)), NULL, &enlarged_height);
+    if (result == 0 && enlarged_height <= original_height) {
+        g_printerr("Connect label did not grow after changing the configured GTK font\n");
+        result = 11;
+    }
+    g_object_set(settings, "gtk-font-name", original, NULL);
+    gtk_test_widget_wait_for_draw(app->window);
+    g_object_set(settings, "gtk-enable-animations", animations, NULL);
+    g_free(enlarged);
+    pango_font_description_free(font);
+    g_free(original);
     return result;
 }

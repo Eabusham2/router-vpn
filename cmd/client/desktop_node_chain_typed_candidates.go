@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"math"
 	"os"
 	"time"
 
@@ -274,7 +273,7 @@ func exchangeDesktopNodeChainTypedCandidateObserved(parent context.Context, cata
 			if err := current(ctx); err != nil {
 				return empty, err
 			}
-			if err := validateDesktopNodeChainTypedCandidateStatus(catalog.typedPlan, id, result.Status, time.Now()); err != nil {
+			if err := validateDesktopNodeChainCandidateStatus(catalog.typedPlan, id, result.Status, time.Now()); err != nil {
 				return empty, err
 			}
 			return result.Status, nil
@@ -285,51 +284,6 @@ func exchangeDesktopNodeChainTypedCandidateObserved(parent context.Context, cata
 		case <-ticker.C:
 		}
 	}
-}
-
-func validateDesktopNodeChainTypedCandidateStatus(plan *desktopTypedCandidateDescriptor, id string, status hopmeasure.CandidateStatus, now time.Time) error {
-	bad := errors.New("candidate result did not retain its exact fifty-sample original prefix and source")
-	if plan == nil {
-		return bad
-	}
-	var metadata struct {
-		PrefixPosition int    `json:"prefix_position"`
-		PrefixID       string `json:"prefix_id"`
-		Targets        []struct {
-			ID     string `json:"id"`
-			Source string `json:"source_sha256"`
-		} `json:"targets"`
-	}
-	if json.Unmarshal([]byte(plan.Metadata()), &metadata) != nil {
-		return bad
-	}
-	source := ""
-	for _, target := range metadata.Targets {
-		if target.ID == id {
-			source = target.Source
-		}
-	}
-	if source == "" || status.Schema != 1 || status.Measurement != "routed-tcp-connect" || status.PrefixPosition != metadata.PrefixPosition ||
-		status.PrefixID != metadata.PrefixID || status.CaptureSHA256 != plan.CaptureSHA256() || status.CandidateID != id || status.CandidateSourceSHA256 != source ||
-		status.Stage != "complete" || status.Failure != "" || !status.Complete || !status.Drained || len(status.Results) != 1 ||
-		status.MeasuredAt <= 0 || status.MeasuredAt > now.UnixMilli() || status.ExpiresAt != status.MeasuredAt+hopmeasure.CandidateReceiptLifetime.Milliseconds() || status.ExpiresAt <= now.UnixMilli() {
-		return bad
-	}
-	r := status.Results[0]
-	if r.ID != id || r.Role != "candidate" || r.Kind != "tcp-connect" || !r.Ready || r.Failure != "" || r.Idle != nil || r.Response != nil || r.Download != nil || r.Upload != nil || r.Benchmark == nil {
-		return bad
-	}
-	b := r.Benchmark
-	if b.Schema != 1 || b.Measurement != "routed-tcp-connect" || b.Endpoint != "" || b.Attempts != hopmeasure.LatencyBenchmarkSamples || b.Failed != 0 || b.Distribution == nil {
-		return bad
-	}
-	d := b.Distribution
-	finite := func(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) && v > 0 }
-	if d.Samples != hopmeasure.LatencyBenchmarkSamples || !finite(d.Min) || !finite(d.Median) || !finite(d.Average) || !finite(d.P90) || !finite(d.Max) || !finite(b.TrimmedMean) ||
-		math.IsNaN(d.Jitter) || math.IsInf(d.Jitter, 0) || d.Jitter < 0 || d.Min > d.Median || d.Median > d.P90 || d.P90 > d.Max || d.Average < d.Min || d.Average > d.Max || b.TrimmedMean < d.Min || b.TrimmedMean > d.Max {
-		return bad
-	}
-	return nil
 }
 
 func publishDesktopNodeChainTypedCandidatePulse(ctx context.Context, launch *desktopNodeLaunch, value desktopNodeChainTypedCandidatePulse, previous os.FileInfo) (os.FileInfo, error) {

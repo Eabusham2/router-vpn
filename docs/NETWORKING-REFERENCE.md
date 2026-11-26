@@ -57,7 +57,7 @@ connection. Invalid fixed values are rejected by the profile/runtime contract.
 This document describes the shipping source contract. Exact-commit native
 builds, kernel execution, physical networking and private-server acceptance
 remain separate evidence. See [REQUIREMENTS-RECONCILED.md](CURRENT-REQUIREMENTS.md#section-requirements-reconciled)
-and [LIVE-RELEASE-EVIDENCE.md](LIVE-RELEASE-EVIDENCE.md).
+and [the production release contract](PRODUCTION-RELEASE.md#section-current-certification).
 
 ## Requirement evidence for this change
 
