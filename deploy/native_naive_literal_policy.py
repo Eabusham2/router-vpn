@@ -269,12 +269,11 @@ STREAM_PATCHES = (
 '''),
 )
 TEMPLATES = {'cronet_literal.go.tmpl': 'routervpn_naive_literal.go', 'cronet_stream_owner.go.tmpl': 'routervpn_naive_stream_owner.go', 'cronet_client_lifecycle.go.tmpl': 'routervpn_naive_client_lifecycle.go'}
-CLIENT_TEST_FIXTURES = {'cronet_engine_bindings.go.tmpl': 'internal/cronet/routervpn_lifecycle_fixture.go'}
 MAX_BYTES = 32*1024*1024
 
 
 def inputs():
-    return [Path(__file__).resolve(), *(ROOT / 'mobile/naive' / name for name in TEMPLATES), *(ROOT / 'mobile/naive/testdata' / name for name in CLIENT_TEST_FIXTURES)]
+    return [Path(__file__).resolve(), *(ROOT / 'mobile/naive' / name for name in TEMPLATES)]
 
 
 def transform(relative, raw, *, reverse=False):

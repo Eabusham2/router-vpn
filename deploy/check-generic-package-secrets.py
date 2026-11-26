@@ -9,7 +9,7 @@ REPO=Path(__file__).resolve().parents[1]
 FORBIDDEN_HOME_IDENTITIES=("192.168.50.","99.88.243.10")
 PUBLIC_SOURCE_PATHS=(
  "client/RouterVPN-Windows-Product-v2.ps1",
- "client/linux/routervpn-gtk-product-v3.c",
+ "client/linux/routervpn-gtk-product.c",
  "client/macos/RouterVPNMacProduct.swift",
  "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
  "ios/RouterVPN/App/RouterVPNModel.swift",

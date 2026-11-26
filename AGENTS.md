@@ -46,3 +46,7 @@ Documentation should use adaptable public examples and link to canonical guides.
 ## CI and release scope
 
 Maintain exactly two workflows: `.github/workflows/ci.yml` for routine checks and `.github/workflows/build-all.yml` for manual release. Release requires successful CI for the same commit. Do not recreate per-feature workflows, test-of-test scripts or source-score systems. Aim for roughly 20 small, generalized behavioral tests in routine CI. Extend an existing small test instead of introducing another file for a single scenario. Native builds must not rerun the full development regression inventory. Keep only necessary dependency, security and real artifact smoke checks. Keep meaningful behavioral, security, platform and artifact verification; do not duplicate routine CI in release.
+
+## Source consolidation
+
+RouterVPN alone follows the owner’s strict main-only branch policy. Use Git history as the reference for original behavior, not a reason to retain multiple active copies of an implementation. Preserve useful original behavior and the latest requested features in one canonical source; remove proven unused copies and test-only scaffolding. Preserve platform-specific behavior, fail-closed boundaries and explicitly requested features. Do not treat filename version suffixes as evidence that a separate feature module is obsolete. Avoid broad rewrites solely to reduce the number of files.
