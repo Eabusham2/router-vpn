@@ -20,8 +20,9 @@ import Foundation
     private var backgroundRefresh = false
 
     static func supported(_ model: RouterVPNModel) -> Bool {
-        model.connected && !model.tunnelTransitioning && model.activeEngine == "external-libbox" &&
-            model.unifiedSelectedProfile?.normalizedNodeKind == "external"
+        model.connected && !model.tunnelTransitioning && !model.iosCandidateTesting &&
+            (model.activeSessionIdentity?.selectedMeasurementSource?.externalFinal == true ||
+             (model.activeEngine == "external-libbox" && model.unifiedSelectedProfile?.normalizedNodeKind == "external"))
     }
 
     func showPerformance(_ visible: Bool) {
@@ -70,7 +71,8 @@ import Foundation
         guard let stored = IOSNodeBundleStore.shared.bundleData(containing: capture.nodeID, current: model.persistedNodeBundle) else {
             throw CancellationError()
         }
-        let requested = try IOSExternalNodeStatistics.requestedExecution(node: capture.nodeID, bundle: capture.identity.bundleData)
+        let ordered = capture.identity.selectedMeasurementSource.flatMap { $0.externalFinal ? $0 : nil }
+        let requested = try ordered?.requested ?? IOSExternalNodeStatistics.requestedExecution(node: capture.nodeID, bundle: capture.identity.bundleData)
         running = true; progress = "Measuring three HTTPS responses through the proved external path…"
         defer { running = false; transaction = nil; worker = nil }
         let task = Task { @MainActor [self] in
@@ -91,8 +93,17 @@ import Foundation
                     let id = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
                     let data = try await IOSMTUControl.send(binding.connection, operation: "hop-measure-info", request: id, session: "")
                     let initial = try IOSHopMeasurementBinding.decode(data, request: id, mtuSession: binding.session)
-                    guard initial.node_id == captured.nodeID else { throw CancellationError() }
-                    let path = try IOSExternalNodeStatistics.PathReceipt(binding: initial, requested: requested, network: network)
+                    let path: IOSExternalNodeStatistics.PathReceipt?
+                    if let ordered {
+                        guard let execution = initial.ordered_execution, execution.source_sha256 == ordered.source,
+                              execution.config_sha256 == ordered.config, execution.requested == requested,
+                              execution.nodes == ordered.ids.count, ["local", "server"].contains(execution.selected),
+                              requested == "auto" || requested == execution.selected else { throw CancellationError() }
+                        path = nil
+                    } else {
+                        guard initial.node_id == captured.nodeID else { throw CancellationError() }
+                        path = try IOSExternalNodeStatistics.PathReceipt(binding: initial, requested: requested, network: network)
+                    }
                     let owned = try IOSHopMeasurementTransaction(id: id, session: initial.session_id,
                         startOperation: "hop-measure-response-start", send: { operation in
                             try await IOSMTUControl.send(binding.connection, operation: operation, request: id, session: initial.session_id)
@@ -113,13 +124,21 @@ import Foundation
                     try model.iosSpeedLabOwnership.require(owner)
                     guard generation == round, IOSMTUControl.current(binding, model: model),
                           Self.storedCurrent(node: captured.nodeID, source: stored, model: model),
-                          final.session_id == initial.session_id, final.node_id == captured.nodeID,
-                          try IOSExternalNodeStatistics.PathReceipt(binding: final, requested: requested, network: network) == path,
+                          final.session_id == initial.session_id,
                           let status = completed, status.complete, status.drained, status.stage == "complete", status.failure == nil,
-                          status.results.count == 1, let result = status.results.first,
-                          result.node_id == captured.nodeID, result.role == "exit", result.kind == "public-path", result.ready,
+                          let result = status.results.last,
+                          result.role == "exit", result.kind == "public-path", result.ready,
                           result.failure == nil, result.idle == nil, result.download == nil, result.upload == nil, result.benchmark == nil,
                           let response = result.response, response.valid else { throw CancellationError() }
+                    if let ordered {
+                        guard final.ordered_execution == initial.ordered_execution,
+                              status.results.count == 2, status.results.first?.node_id == ordered.ids.first,
+                              status.results.first?.role == "entry", status.results.first?.kind == "private-node",
+                              status.results.first?.ready == true, result.node_id == ordered.ids.last else { throw CancellationError() }
+                    } else {
+                        guard status.results.count == 1, result.node_id == captured.nodeID, final.node_id == captured.nodeID,
+                              try IOSExternalNodeStatistics.PathReceipt(binding: final, requested: requested, network: network) == path else { throw CancellationError() }
+                    }
                     return response.distribution.median_ms
                 }
             }

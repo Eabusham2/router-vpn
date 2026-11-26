@@ -319,7 +319,7 @@ struct IOSMultihopView: View {
 
     private var totalResponse: String {
         guard model.connected, !model.iosCandidateTesting else { return "Connect to measure" }
-        let external = model.activeSessionIdentity?.engine == "external-libbox"
+        let external = IOSExternalLiveTelemetry.supported(model)
         let value = external ? externalLive.currentMilliseconds(model: model) : telemetry.currentMilliseconds(model: model)
         return value.map { String(format: "%.1f ms • %@", $0, external ? "public HTTPS" : "final node HTTP") } ?? "Awaiting a current response"
     }

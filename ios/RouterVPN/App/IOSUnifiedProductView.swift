@@ -407,8 +407,8 @@ struct IOSUnifiedProductView: View {
     }
 
     private var selectedProfile: RouterProfile? { model.unifiedSelectedProfile }
-    private var livePathMilliseconds: Double? { selectedProfile?.normalizedNodeKind == "external" ? externalLive.currentMilliseconds(model: model) : telemetry.currentMilliseconds(model: model) }
-    private var livePathLabel: String { selectedProfile?.normalizedNodeKind == "external" ? "HTTPS" : "HTTP" }
+    private var livePathMilliseconds: Double? { IOSExternalLiveTelemetry.supported(model) ? externalLive.currentMilliseconds(model: model) : telemetry.currentMilliseconds(model: model) }
+    private var livePathLabel: String { IOSExternalLiveTelemetry.supported(model) ? "HTTPS" : "HTTP" }
     private var linkedRouters: [RouterProfile] { model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" } }
     private var routerProfiles: [RouterProfile] {
         linkedRouters.filter { !IOSViaEntryTCP.endpointHost($0.endpoint).isEmpty }
@@ -513,9 +513,7 @@ struct IOSUnifiedProductView: View {
                         IOSForwardingMasterButton().environmentObject(model)
                     }
 
-                    unifiedRow(icon: "plus.circle.fill", title: "Add / manage nodes", value: "Router / Custom") { showingNodes = true }
                     unifiedRow(icon: "point.3.connected.trianglepath.dotted", title: "Multihop", value: iosMultihopSummary) { showingMultihop = true }
-                    unifiedRow(icon: "person.crop.rectangle.stack", title: "Profiles & bridges", value: "Router / Custom / Tor") { showingNodes = true }
                     unifiedRow(icon: "slider.horizontal.3", title: "Settings", value: settingsSummary) { showingSettings = true }
                     unifiedRow(icon: "wand.and.stars", title: "Mode", value: selectedModeTitle, disabled: model.profileMutationBlocked || (selectedProfile?.multihopEnabled == true && selectedProfile?.multihopNodes != nil)) { showingModes = true }
 
@@ -537,6 +535,9 @@ struct IOSUnifiedProductView: View {
                         }
                     }
                     .padding(11).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+
+                    unifiedRow(icon: "plus.circle.fill", title: "Add / manage nodes", value: "Router / Custom") { showingNodes = true }
+                    unifiedRow(icon: "person.crop.rectangle.stack", title: "Profiles & bridges", value: "Router / Custom / Tor") { showingNodes = true }
 
                     if expanded {
                         IOSHomeSummaryView().environmentObject(model)
@@ -563,7 +564,7 @@ struct IOSUnifiedProductView: View {
         if let ordered = model.iosVisibleOrderedNodePath {
             let route = ordered.map(\.name).joined(separator: " → ")
             guard model.connected, !model.iosCandidateTesting, let ms = livePathMilliseconds else { return route }
-            return route + String(format: " • total %.1f ms (final node HTTP)", ms)
+            return route + String(format: " • total %.1f ms (%@)", ms, livePathLabel == "HTTPS" ? "public HTTPS" : "final node HTTP")
         }
         if selectedProfile?.multihopEnabled == true && selectedProfile?.multihopNodes != nil { return "Waiting for the complete ordered source" }
         if let p = selectedProfile, p.multihopEnabled == true, let entry = p.multihopEntryID, let exit = p.multihopExitID {
@@ -879,7 +880,7 @@ private struct IOSUnifiedPerformanceView: View {
         NavigationStack {
             Form {
                 Section("Current path") {
-                    if model.unifiedSelectedProfile?.normalizedNodeKind == "external" {
+                    if model.unifiedSelectedProfile?.normalizedNodeKind == "external" || IOSExternalLiveTelemetry.supported(model) {
                         LabeledContent("External path HTTPS response", value: externalLive.currentMilliseconds(model: model).map { String(format: "%.1f ms", $0) } ?? "No current measurement")
                         Button("Measure live external HTTPS response") { runExternalLive() }
                             .disabled(!IOSExternalLiveTelemetry.supported(model) || busy || externalLive.running || telemetry.measuring || externalBenchmark.running || externalComparison.running || model.iosSpeedLabOwnership.active || IOSMTUMeasurementGate.held)
@@ -889,7 +890,7 @@ private struct IOSUnifiedPerformanceView: View {
                         Button("Measure private node response") { runLive() }.disabled(!model.connected || busy || telemetry.measuring || externalBenchmark.running || externalComparison.running)
                     }
                     Button(telemetry.isSpeedTesting ? "Testing real VPN path speed…" : "Run real current VPN path speed") { runSpeed() }
-                        .disabled(!model.connected || model.unifiedSelectedProfile?.normalizedNodeKind != "router-vpn" || busy || telemetry.measuring || externalBenchmark.running || externalComparison.running)
+                        .disabled(!model.connected || model.unifiedSelectedProfile?.normalizedNodeKind != "router-vpn" || IOSExternalLiveTelemetry.supported(model) || busy || telemetry.measuring || externalBenchmark.running || externalComparison.running)
                     if let speed = telemetry.lastSpeedResult {
                         Text(speed.detail).font(.caption.monospaced()).textSelection(.enabled)
                     }

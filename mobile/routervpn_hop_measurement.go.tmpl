@@ -74,6 +74,15 @@ func (m *RouterHopMeasurement) StartLatency(request, exitID string) error {
 func (m *RouterHopMeasurement) StartResponse(request, exitID string) error {
 	return m.service.StartResponse(request, exitID)
 }
+
+// Only the selected ordered engine can start this fixed, three-response probe.
+func (m *RouterHopMeasurement) StartOrderedResponse(request string) error {
+	service, ok := m.service.(interface{ startOrderedResponse(string) error })
+	if !ok {
+		return errors.New("no captured ordered execution")
+	}
+	return service.startOrderedResponse(request)
+}
 func (m *RouterHopMeasurement) Cancel(request string)      { m.service.Cancel(request) }
 func (m *RouterHopMeasurement) Drain(request string) error { return m.service.Drain(request) }
 func (m *RouterHopMeasurement) StatusJSON() string         { return m.service.StatusJSON() }

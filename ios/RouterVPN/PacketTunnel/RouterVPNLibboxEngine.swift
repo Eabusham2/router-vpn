@@ -2210,6 +2210,10 @@ final class RouterVPNLibboxEngine {
             return Self.retiredMeasurements.start(probe, request: request, session: session, requiresLiveOwner: ordered,
                 maximumBytes: max(16384, Int(nodeChainExecution?.capture.plan.extendedOriginalStatusLimit() ?? nodeChain?.extendedLocalStatusLimit() ?? 0)))
         }
+        if operation == "hop-measure-response-start", nodeChainExecution?.capture.isExternalFinal == true {
+            guard !starting, hopMeasurementExitID == nil, !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
+            return Self.retiredMeasurements.start(probe, request: request, session: session, liveResponse: true, requiresLiveOwner: true)
+        }
         if operation == "hop-measure-latency-start" || operation == "hop-measure-response-start" {
             guard let exitID = hopMeasurementExitID,
                   !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
@@ -2333,7 +2337,10 @@ final class RouterVPNLibboxEngine {
                     if liveResponse { try probe.startResponse(request, exitID: exitID) }
                     else { try probe.startLatency(request, exitID: exitID) }
                 }
-                else if liveResponse { return nil }
+                else if liveResponse {
+                    guard requiresLiveOwner else { return nil }
+                    try probe.startOrderedResponse(request)
+                }
                 else { try probe.start(request, bytes: 8388608) }
             } catch { return nil }
             owners[id] = probe

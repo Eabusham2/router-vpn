@@ -47,6 +47,10 @@ final class AndroidNativeHopMeasurement {
         run(null,exitID,nativeSession,homeSession,pathGeneration,true,callback);
     }
 
+    void runOrderedResponse(Callback callback){
+        run(null,null,"","",-1,true,callback);
+    }
+
     private void run(Object borrowedLease,String exitID,String nativeSession,String homeSession,long pathGeneration,boolean responseOnly,Callback callback){
         final Job job;
         synchronized(this){

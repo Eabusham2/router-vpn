@@ -144,12 +144,12 @@ public final class ProductActivity extends Activity {
         multihopTotal=text("",12,true);multihopTotal.setOnClickListener(v->showLiveRoute());sheet.addView(multihopTotal);
 
         LinearLayout settingsRow=controlRow("Settings");Button settings=smallButton("Open settings");settings.setOnClickListener(v->showSettings());settingsRow.addView(settings);Button connectionProfiles=smallButton("Profiles");connectionProfiles.setContentDescription("Add, load, update or delete a whole non-secret connection profile");connectionProfiles.setOnClickListener(v->showConnectionProfiles());settingsRow.addView(connectionProfiles);performanceButton=smallButton("Performance");performanceButton.setOnClickListener(v->showPerformance());settingsRow.addView(performanceButton);Button mtu=smallButton("MTU");mtu.setOnClickListener(v->showMtuHelp());settingsRow.addView(mtu);sheet.addView(settingsRow,margins(0,dp(7),0,0));autoRequirementsHint=text("AUTO requirements: Off",11,false);autoRequirementsHint.setTextColor(Color.rgb(145,160,184));autoRequirementsHint.setPadding(dp(72),0,0,0);sheet.addView(autoRequirementsHint);
-        LinearLayout speedRow=controlRow("Speed");Button speedLabButton=smallButton("Speed Lab");speedLabButton.setContentDescription("Run the dedicated current-path or temporary-config Speed Lab with idle and loaded latency, download/upload Mbps, and proved multihop hop metrics.");speedLabButton.setOnClickListener(v->new AndroidSpeedLabDialog(this,nodeStore,connection,new AndroidSpeedLabController(this,connection)).show());speedRow.addView(speedLabButton,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));sheet.addView(speedRow,margins(0,dp(7),0,0));
         LinearLayout modeRow=controlRow("Mode");modeSpinner=new Spinner(this);modeSpinner.setPopupBackgroundDrawable(round(Color.rgb(29,43,68),12));modeRow.addView(modeSpinner,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));Button modeDetails=smallButton("Presets");modeDetails.setOnClickListener(v->showCustomPresetManager());modeRow.addView(modeDetails);sheet.addView(modeRow,margins(0,dp(7),0,0));modeHint=text("SMART AUTO is the default.",11,false);modeHint.setTextColor(Color.rgb(145,160,184));sheet.addView(modeHint);
         LinearLayout dnsRow=controlRow("DNS");dnsSpinner=new Spinner(this);String[]dns={"Home AdGuard","Fastest measured","Custom","DoT","DoH","DoH3","Rescue"};dnsSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,dns));dnsRow.addView(dnsSpinner,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));Button dnsDetails=smallButton("Details");dnsDetails.setOnClickListener(v->{if(!openSelectedExternal(false))AndroidProductParity.showDNS(this,nodeStore,null,this::refreshDnsSelection);});dnsRow.addView(dnsDetails);sheet.addView(dnsRow,margins(0,dp(7),0,0));dnsHint=text("DNS changes the next tunnel resolver path; Connected still requires runtime DNS/path proof.",11,false);dnsHint.setTextColor(Color.rgb(145,160,184));sheet.addView(dnsHint);dnsSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
             public void onNothingSelected(android.widget.AdapterView<?> parent){}
             public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){selectHomeDns(position);}
         });
+        LinearLayout speedRow=controlRow("Speed");Button speedLabButton=smallButton("Speed Lab");speedLabButton.setContentDescription("Run the dedicated current-path or temporary-config Speed Lab with idle and loaded latency, download/upload Mbps, and proved multihop hop metrics.");speedLabButton.setOnClickListener(v->new AndroidSpeedLabDialog(this,nodeStore,connection,new AndroidSpeedLabController(this,connection)).show());speedRow.addView(speedLabButton,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));sheet.addView(speedRow,margins(0,dp(7),0,0));
         LinearLayout footer=row();Button nodes=smallButton("Nodes");nodes.setContentDescription("Add / manage nodes");nodes.setOnClickListener(v->showNodes());footer.addView(nodes);Button profiles=smallButton("Router nodes");profiles.setContentDescription("Manage linked Router VPN node records");profiles.setOnClickListener(v->showProfileManager());footer.addView(profiles);Button pair=smallButton("Add Router");pair.setOnClickListener(v->showAddRouter());footer.addView(pair);Button custom=smallButton("Add custom");custom.setOnClickListener(v->openStandardExits());footer.addView(custom);Button help=smallButton("Help");help.setOnClickListener(v->showHelp());footer.addView(help);sheet.addView(footer,margins(0,dp(8),0,0));return root;
     }
 
@@ -277,7 +277,7 @@ public final class ProductActivity extends Activity {
         telemetryBusy=true;long ticket=telemetryGeneration;
         telemetry.currentPath(2,(path,error)->runOnUiThread(()->{
             telemetryBusy=false;if(!resumed||ticket!=telemetryGeneration||isFinishing()||isDestroyed())return;
-            try{if(error!=null)throw new IllegalStateException(safe(error));if(path==null)throw new IllegalStateException("No current RTT result.");path.requireCurrent();currentPathReceipt=path;currentPathMs=path.medianMs;liveLatency.setText(String.format(Locale.US,"%.1f ms",path.medianMs));}
+            try{if(error!=null)throw new IllegalStateException(safe(error));if(path==null)throw new IllegalStateException("No current RTT result.");path.requireCurrent();currentPathReceipt=path;currentPathMs=path.medianMs;liveLatency.setText(String.format(Locale.US,"%.1f ms%s",path.medianMs,path.publicExitId.isEmpty()?"":" HTTPS"));}
             catch(Exception stale){clearCurrentTelemetry();}
             refreshMultihopSummary();refreshLiveRoute();
         }));
@@ -308,7 +308,7 @@ public final class ProductActivity extends Activity {
         }
         telemetry.currentPath(5,(r,e)->runOnUiThread(()->{
             if(isFinishing()||isDestroyed())return;
-            try{if(e!=null)throw new IllegalStateException(safe(e));r.requireCurrent();dialog("Live tunnel RTT",String.format(Locale.US,"Median %.1f ms • %d ok / %d failed\n%s",r.medianMs,r.samples,r.failed,r.proof));}
+            try{if(e!=null)throw new IllegalStateException(safe(e));r.requireCurrent();dialog(r.publicExitId.isEmpty()?"Live tunnel RTT":"Live HTTPS path response",String.format(Locale.US,"Median %.1f ms • %d ok / %d failed\n%s",r.medianMs,r.samples,r.failed,r.proof));}
             catch(Exception stale){dialog("Live tunnel RTT",safe(stale));}
         }));
     }
@@ -338,7 +338,7 @@ public final class ProductActivity extends Activity {
                     total=String.format(Locale.US,"Total path response • %.1f ms HTTPS",currentExternalReceipt.medianMs);
                 } else if(!external&&currentPathReceipt!=null) {
                     currentPathReceipt.requireCurrent();
-                    total=String.format(Locale.US,"Total path response • %.1f ms HTTP to final node",currentPathReceipt.medianMs);
+                    total=String.format(Locale.US,"Total path response • %.1f ms %s",currentPathReceipt.medianMs,currentPathReceipt.publicExitId.isEmpty()?"HTTP to final node":"public HTTPS");
                 }
             } catch(Exception stale) { /* The next current-session poll may provide a new receipt. */ }
         }

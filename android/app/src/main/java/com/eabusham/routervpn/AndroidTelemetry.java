@@ -30,8 +30,15 @@ final class AndroidTelemetry {
     static final class PathResult {
         final double medianMs; final int samples,failed; final String proof; AndroidTelemetryCapture capture;
         final long measuredAt=android.os.SystemClock.elapsedRealtime();
+        private LayeredVpnService.HopMeasurementOwner orderedOwner;
+        String publicExitId="";
         PathResult(double median,int samples,int failed,String proof){this.medianMs=median;this.samples=samples;this.failed=failed;this.proof=proof;}
-        void requireCurrent()throws Exception{if(capture==null||android.os.SystemClock.elapsedRealtime()-measuredAt>15000)throw new IllegalStateException("The live path response expired. Measure again.");capture.requireCurrent();}
+        void requireCurrent()throws Exception{
+            if(android.os.SystemClock.elapsedRealtime()-measuredAt>15000)throw new IllegalStateException("The live path response expired. Measure again.");
+            if(orderedOwner!=null){if(!publicExitId.equals(orderedOwner.orderedResponseExitID()))throw new IllegalStateException("The measured final node changed.");}
+            else if(capture!=null)capture.requireCurrent();
+            else throw new IllegalStateException("No captured live path response.");
+        }
     }
     static final class SpeedResult {
         final double downloadMbps,uploadMbps,downloadMs,uploadMs,serverReceiveMs; final int bytes; AndroidTelemetryCapture capture;
@@ -46,6 +53,7 @@ final class AndroidTelemetry {
     private static volatile AndroidTelemetryIO processPathIO;
     private final Context context; private final AndroidNodeStore store;
     private volatile AndroidTelemetryIO pathIO; private volatile SpeedWork speedWork;
+    private final AndroidNativeHopMeasurement orderedResponse=new AndroidNativeHopMeasurement();
     private final List<AndroidTelemetryIO> nodeWork=new ArrayList<>();
     private volatile boolean closed;
     private FastestWork fastestWork;
@@ -80,7 +88,7 @@ final class AndroidTelemetry {
         context.getSharedPreferences(PREFS,Context.MODE_PRIVATE).edit().putString(result.id,value.toString()).apply();
     }
     AndroidNodeStatistics.Record savedStatistics(AndroidNodeStore.Node node){return AndroidNodeStatistics.load(node);}
-    void cancelCurrent(){AndroidTelemetryIO owned=pathIO;if(owned!=null)owned.cancel();SpeedWork speed=speedWork;if(speed!=null)speed.cancel();}
+    void cancelCurrent(){orderedResponse.cancel();AndroidTelemetryIO owned=pathIO;if(owned!=null)owned.cancel();SpeedWork speed=speedWork;if(speed!=null)speed.cancel();}
     void close(){closed=true;cancelCurrent();cancelFastest();synchronized(nodeWork){for(AndroidTelemetryIO owned:nodeWork)owned.cancel();}}
 
     void measureNode(AndroidNodeStore.Node node,int samples,Callback<Result> callback){
@@ -157,6 +165,33 @@ final class AndroidTelemetry {
 
     void currentPath(int samples,Callback<PathResult> callback){
         if(closed||AndroidMTUMeasurementGate.held()||!PATH_RUNNING.compareAndSet(false,true)){callback.finished(null,new IllegalStateException("Current RTT yields while another measurement is active."));return;}
+        if(LayeredVpnService.hasOrderedExternalFinal()){
+            final PathResult[] result={null};
+            orderedResponse.runOrderedResponse(new AndroidNativeHopMeasurement.Callback(){
+                public void progress(String status){}
+                public void commit(LayeredVpnService.HopMeasurementOwner owner,String raw)throws Exception{
+                    String exit=owner.orderedResponseExitID();
+                    org.json.JSONArray rows=new JSONObject(raw).getJSONArray("results");
+                    if(rows.length()!=2)throw new IllegalStateException("Incomplete ordered response.");
+                    JSONObject row=rows.getJSONObject(1),response=row.getJSONObject("response"),stats=response.getJSONObject("distribution");
+                    double median=stats.getDouble("median_ms");
+                    if(!exit.equals(row.getString("node_id"))||!"exit".equals(row.getString("role"))||!"public-path".equals(row.getString("kind"))
+                            ||!row.getBoolean("ready")||response.getInt("schema")!=1||response.getInt("attempts")!=3||stats.getInt("samples")!=3
+                            ||!AndroidExternalNodeStatistics.MEASUREMENT.equals(response.getString("measurement"))
+                            ||!AndroidExternalNodeStatistics.ENDPOINT.equals(response.getString("endpoint"))
+                            ||!Double.isFinite(median)||median<=0||median>10000)
+                        throw new IllegalStateException("No complete current HTTPS response on the original ordered final.");
+                    PathResult measured=new PathResult(median,3,0,"Public HTTPS response through the original complete ordered route.");
+                    measured.orderedOwner=owner;measured.publicExitId=exit;measured.requireCurrent();result[0]=measured;
+                }
+                public void finished(String status,Throwable error){
+                    PATH_RUNNING.set(false);
+                    if(error==null)try{if(closed||result[0]==null)throw new IllegalStateException("No current ordered response.");result[0].requireCurrent();}catch(Exception stale){error=stale;}
+                    callback.finished(error==null?result[0]:null,error);
+                }
+            });
+            return;
+        }
         new Thread(()->{
             AndroidTelemetryIO io=null;PathResult result=null;Throwable failure=null;
             try{

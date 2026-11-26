@@ -219,6 +219,7 @@ private final class IOSNativeTelemetryReply: @unchecked Sendable {
     func refreshLivePath(model: RouterVPNModel) async {
         invalidateResults(model: model)
         guard !performanceVisible, model.connected, !model.tunnelTransitioning, model.unifiedSelectedProfile?.normalizedNodeKind == "router-vpn",
+              model.activeSessionIdentity?.selectedMeasurementSource?.externalFinal != true,
               !measuring, !model.iosSpeedLabOwnership.active, !IOSMTUMeasurementGate.held else { return }
         backgroundRefresh = true
         defer { backgroundRefresh = false }

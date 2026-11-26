@@ -18,7 +18,7 @@ struct IOSHopMeasurementBinding: Decodable {
     let mtu_session_id: String
     let node_id: String?
     let execution: IOSHopExecutionReceipt?
-    struct OrderedExecution: Decodable {
+    struct OrderedExecution: Decodable, Equatable {
         let source_sha256: String, config_sha256: String, requested: String, selected: String
         let nodes: Int
     }

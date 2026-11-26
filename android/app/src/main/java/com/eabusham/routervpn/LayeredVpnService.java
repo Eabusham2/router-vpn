@@ -687,14 +687,32 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 requireCurrent();
             }
         }
+        String orderedResponseExitID(){
+            synchronized(service.lock){
+                requireCurrent();
+                if(chain==null||chain.execution==null||!chain.capture.externalFinal||chain.candidatePrefix!=null||
+                        !nodeChainReady(chain)||!AndroidHomeStateStore.ownsNodeChain(service,chain.home))
+                    throw new IllegalStateException("No captured ordered external final.");
+                AndroidNodeStore.ChainSource last=chain.source.members.get(chain.source.members.size()-1);
+                if(!last.imported)throw new IllegalStateException("The original final node is not external.");
+                return last.profileId;
+            }
+        }
         void startResponse()throws Exception{
-            synchronized(service.lock){requireCurrent();if(exitID.isEmpty())throw new IllegalStateException("Live HTTPS responses require the captured external path.");if(service.mtuSession!=null&&service.mtuSession.running())throw new IllegalStateException("MTU Retest has not drained.");probe.startResponse(request,exitID);started=true;requireCurrent();}
+            synchronized(service.lock){
+                requireResponseIdle();
+                if(exitID.isEmpty())probe.startOrderedResponse(request);else probe.startResponse(request,exitID);
+                started=true;requireCurrent();
+            }
         }
         void requireResponseIdle(){
-            synchronized(service.lock){requireCurrent();if(exitID.isEmpty()||service.mtuSession!=null&&service.mtuSession.running())throw new IllegalStateException("Live HTTPS responses wait for the captured MTU operation.");}
+            synchronized(service.lock){
+                requireCurrent();if(exitID.isEmpty())orderedResponseExitID();
+                if(service.mtuSession!=null&&service.mtuSession.running())throw new IllegalStateException("Live HTTPS responses wait for the captured MTU operation.");
+            }
         }
         void resumeResponseMTU(){
-            synchronized(service.lock){requireCurrent();if(exitID.isEmpty())throw new IllegalStateException("No captured external response owner.");if(mtu!=null)mtu.resumeAfterResponse();}
+            synchronized(service.lock){requireCurrent();if(exitID.isEmpty())orderedResponseExitID();if(mtu!=null)mtu.resumeAfterResponse();}
         }
         boolean started(){return started;}
         int maximumRows(){
@@ -765,6 +783,11 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         String requestID(){return request;}
         String configIdentity()throws Exception{return AndroidTorProfile.digest(config.getBytes(java.nio.charset.StandardCharsets.UTF_8));}
         String networkIdentity()throws Exception{return AndroidTorProfile.digest(network.getBytes(java.nio.charset.StandardCharsets.UTF_8));}
+    }
+    static boolean hasOrderedExternalFinal(){
+        LayeredVpnService service=currentService.get();
+        AndroidNodeChainSession chain=service==null?null:service.nodeChainSession;
+        return chain!=null&&chain.execution!=null&&chain.capture.externalFinal&&chain.candidatePrefix==null;
     }
     static HopMeasurementOwner captureHopMeasurement(String request)throws Exception{
         LayeredVpnService service=currentService.get();if(service==null||request==null||!request.matches("[0-9a-f]{32}"))throw new IllegalStateException("No captured path measurement session.");

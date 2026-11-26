@@ -35,6 +35,7 @@ type routerNodeChainExecutionThroughput struct {
 	capture     string
 	service     *mobilemultihop.NodeChainExecutionMeasurement
 	invalidated bool
+	response    bool
 }
 
 func RouterNodeChainExecutionNewHopMeasurement(m *RouterNodeChainExecution, server *CommandServer) (*RouterHopMeasurement, error) {
@@ -183,6 +184,23 @@ func (s *routerNodeChainExecutionMeasurement) StartResponse(request, exit string
 		return nil, s.service.StartResponse(request, exit)
 	})
 }
+func (s *routerNodeChainExecutionMeasurement) startOrderedResponse(request string) error {
+	return s.begin(func(ctx context.Context) (*routerNodeChainExecutionThroughput, error) {
+		shared, ok := s.service.(*mobilemultihop.NodeChainExecutionMeasurement)
+		if !ok || shared == nil {
+			return nil, errRouterNodeChainExecution
+		}
+		capture, err := shared.SelectedCaptureContext(ctx)
+		if err != nil || capture == "" {
+			return nil, errors.Join(err, errRouterNodeChainExecution)
+		}
+		// The worker has its own bounded request lifetime, like Start above.
+		if err := shared.StartOrderedResponseContext(context.Background(), request, 3); err != nil {
+			return nil, err
+		}
+		return &routerNodeChainExecutionThroughput{request: request, capture: capture, service: shared, response: true}, nil
+	})
+}
 func (s *routerNodeChainExecutionMeasurement) Cancel(request string) { s.service.Cancel(request) }
 func (s *routerNodeChainExecutionMeasurement) Drain(request string) error {
 	return s.service.Drain(request)
@@ -207,7 +225,13 @@ func (s *routerNodeChainExecutionMeasurement) StatusJSON() string {
 	status.Results = []hopmeasure.Result{}
 	if status.Complete && status.Drained && status.Stage == "complete" && status.Failure == "" {
 		if !receipt.invalidated {
-			verified, err := receipt.service.CompletedThroughputContext(ctx, receipt.request, receipt.capture, 8<<20)
+			var verified hopmeasure.Status
+			var err error
+			if receipt.response {
+				verified, err = receipt.service.CompletedOrderedResponseContext(ctx, receipt.request, receipt.capture, 3)
+			} else {
+				verified, err = receipt.service.CompletedThroughputContext(ctx, receipt.request, receipt.capture, 8<<20)
+			}
 			if err == nil && s.current(ctx) == nil {
 				status = verified
 			} else {
@@ -215,7 +239,7 @@ func (s *routerNodeChainExecutionMeasurement) StatusJSON() string {
 			}
 		}
 		if receipt.invalidated {
-			status.Stage, status.Failure = "invalidated", "The selected path or its complete transfer proof changed."
+			status.Stage, status.Failure = "invalidated", "The selected path or its complete measurement proof changed."
 		}
 	}
 	raw, _ := json.Marshal(status)
