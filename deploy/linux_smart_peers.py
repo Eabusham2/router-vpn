@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import signal
@@ -145,7 +146,7 @@ class Peers:
              '--cache-size=0', '--bind-interfaces', '--listen-address='+PRIVATE, '--log-queries',
              '--local=/#/', '--host-record=example.com,93.184.216.34', '--address=/#/'+OUTER])
         self.wait_listening('dns', 53, False)
-        self.capture('http', ['-A', '-s', '2048', '-i', 'any', f'src host {PRIVATE} and tcp src port 8787'])
+        self.capture('http', ['-A', '-s', '2048', '-i', 'any', f'host {PRIVATE} and tcp port 8787'])
 
     def capture(self, name, options):
         self.spawn(name, ['tcpdump', '-nn', '-l', *options])
@@ -324,18 +325,47 @@ class Peers:
             return value
         body = json.dumps({'node_id': self.profile['node_proof_id'], 'ok': True, 'proof': 'router-vpn-private-agent-v1'},
                           separators=(',', ':')).encode()
-        result = {'http': records('http').count(body),
+        http_records = records('http')
+        # These are captured packet observations, not handler receipts or
+        # distinct TCP exchanges. Retransmissions are deliberately counted.
+        packet_fields = ('packets', 'syn', 'syn_ack', 'ack', 'rst', 'fin', 'data_packets', 'payload_bytes')
+        http_packets = {direction: dict.fromkeys(packet_fields, 0) for direction in ('to_private', 'from_private')}
+        for line in http_records.splitlines():
+            match = re.search(rb'\bIP ([0-9.]+)\.([0-9]+) > ([0-9.]+)\.([0-9]+): Flags \[([^\]]*)\].*length ([0-9]+)(?:$|:)', line)
+            if match is None:
+                continue
+            source, source_port, target, target_port, flags, length = match.groups()
+            if source == PRIVATE.encode() and source_port == b'8787':
+                direction = 'from_private'
+            elif target == PRIVATE.encode() and target_port == b'8787':
+                direction = 'to_private'
+            else:
+                continue
+            counts = http_packets[direction]
+            counts['packets'] += 1
+            counts['syn'] += int(b'S' in flags and b'.' not in flags)
+            counts['syn_ack'] += int(b'S' in flags and b'.' in flags)
+            counts['ack'] += int(b'.' in flags)
+            counts['rst'] += int(b'R' in flags)
+            counts['fin'] += int(b'F' in flags)
+            counts['data_packets'] += int(int(length) > 0)
+            counts['payload_bytes'] += int(length)
+        result = {'http': http_records.count(body),
+                  'http_get_health_headers': http_records.count(b'GET /health HTTP/1.1'),
+                  'http_packets': http_packets,
                   'dns': records('dns').count(b' query['), 'pq_key_applied': False,
                   'source_uot': records(self.source).count(b'inbound UoT'),
                   'candidate_uot': records(self.candidate).count(b'inbound UoT'),
                   'candidate_hy2': records('hysteria2').count(f'[qualification] inbound connection to {PRIVATE}:8787'.encode()),
                   'candidate_hy2_dns': records('hysteria2').count(f'[qualification] inbound packet connection to {PRIVATE}:53'.encode()),
-                  'wg_handshake': 0, 'candidate_handshake': 0, 'source_wg_received': 0, 'candidate_wg_received': 0}
+                  'wg_handshake': 0, 'candidate_handshake': 0, 'source_wg_received': 0, 'candidate_wg_received': 0,
+                  'source_wg_sent': 0, 'candidate_wg_sent': 0}
         for mode, field, device in [('wg-pq', 'wg_handshake', 'wgpq'), ('wg', 'candidate_handshake', 'wgplain')]:
             if mode == self.source or mode == self.candidate and self.enabled:
                 result[field] = int(observed_output(self.ns+['wg', 'show', device, 'latest-handshakes']).split()[1])
                 role = 'source' if mode == self.source else 'candidate'
-                result[role+'_wg_received'] = int(observed_output(self.ns+['wg', 'show', device, 'transfer']).split()[1])
+                transfer = observed_output(self.ns+['wg', 'show', device, 'transfer']).split()
+                result[role+'_wg_received'], result[role+'_wg_sent'] = int(transfer[1]), int(transfer[2])
         for prefix, mode in [('source', self.source), ('candidate', self.candidate), ('pq', 'rosenpass')]:
             result[prefix+'_layer_packets'] = records('decrypted').count(f'.{PORTS[mode]}:'.encode())
         key = self.work/'negotiated.psk'

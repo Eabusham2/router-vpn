@@ -312,13 +312,12 @@ jobs:
             $root=(Get-ChildItem -LiteralPath $extract -Directory|Select-Object -First 1).FullName
             $name=if($family -eq 'Windows'){'RouterVPN.exe'}else{'RouterVPNPortable.exe'}
             $dataRoot=if($family -eq 'Windows'){$root}else{Join-Path $root 'Data'}
-            # The installed-family package requires the same private-root setup as its installer.
-            if($family -eq 'Windows'){
-              $aclHelper=Join-Path $root 'client/Protect-RouterVPN-Windows-PrivateRoot.ps1'
-              $aclItem=Get-Item -LiteralPath $aclHelper -Force
-              if($aclItem.PSIsContainer-or($aclItem.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0){throw 'Packaged Windows private-root helper is not a regular file'}
-              & $aclHelper -Root $root -TraceSetup | Out-Host
-            }
+            # Reproduce installer ACLs and keep Portable defaults inside the same private desktop boundary.
+            $packageRoot=if($family -eq 'Windows'){$root}else{Join-Path $root 'App/RouterVPN'}
+            $aclHelper=Join-Path $packageRoot 'client/Protect-RouterVPN-Windows-PrivateRoot.ps1'
+            $aclItem=Get-Item -LiteralPath $aclHelper -Force
+            if($aclItem.PSIsContainer-or($aclItem.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0){throw 'Packaged Windows private-root helper is not a regular file'}
+            & $aclHelper -Root $root -TraceSetup | Out-Host
             $evidence=Join-Path $env:RUNNER_TEMP "routervpn-ui/$family"
             [void][IO.Directory]::CreateDirectory($evidence)
             $stdout=Join-Path $evidence 'launcher.stdout.log'
@@ -1025,7 +1024,7 @@ jobs:
           python3 - <<'PY'
           import hashlib, ipaddress, json, os, re, secrets, shutil, subprocess, tempfile, time
           from pathlib import Path
-          
+
           sha = os.environ["GITHUB_SHA"]
           tree = os.environ["SOURCE_TREE_SHA"]
           ref = "ghcr.io/eabusham2/router-vpn-agent:" + sha
@@ -1039,7 +1038,7 @@ jobs:
           node = secrets.token_hex(32)
           image = None
           names = {scope + "-" + role for role in ("agent", "peer", "nonpeer")}
-          
+
           def run(*args, timeout=20):
               remaining = deadline - time.monotonic()
               if remaining <= 0:
@@ -1050,15 +1049,15 @@ jobs:
                   detail = (done.stderr + done.stdout).replace(token, "[redacted]")[-2000:]
                   raise RuntimeError("docker " + args[0] + " failed: " + detail)
               return (done.stdout + (done.stderr if args[0] == "logs" else "")).strip()
-          
+
           def inspect(kind, identity):
               rows = json.loads(run(kind, "inspect", identity))
               assert len(rows) == 1
               return rows[0]
-          
+
           def labels(row):
               return row.get("Labels") or row.get("Config", {}).get("Labels") or {}
-          
+
           def cleanup():
               global deadline
               deadline = time.monotonic() + 60
@@ -1102,7 +1101,7 @@ jobs:
               if errors:
                   raise ExceptionGroup("agent image cleanup failed", errors)
               return retired
-          
+
           try:
               assert re.fullmatch(r"[0-9a-f]{40}", sha) and re.fullmatch(r"[0-9a-f]{40}", tree)
               original = inspect("image", ref)

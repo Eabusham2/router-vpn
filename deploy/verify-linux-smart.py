@@ -594,7 +594,7 @@ def controller(work, user, password):
 
 
 @contextmanager
-def canary(peer):
+def canary(peer, policy):
     # Each socket stays in its original namespace after the calling thread returns.
     with open("/proc/self/ns/net") as client_ns, open("/run/netns/" + peer) as peer_ns:
         os.setns(peer_ns.fileno(), os.CLONE_NEWNET)
@@ -605,6 +605,9 @@ def canary(peer):
             os.setns(client_ns.fileno(), os.CLONE_NEWNET)
     stop = threading.Event()
     armed = threading.Event()
+    started = time.monotonic()
+    protected_count = 0
+    first_protected_ms = last_protected_ms = retirement_ms = None
     with receiver, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
         sender.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"smartphy\0")
         sender.bind((CLIENT_PHYSICAL, 0))
@@ -619,6 +622,7 @@ def canary(peer):
                 stop.wait(.002)
         control, leaked = threading.Event(), threading.Event()
         def receive():
+            nonlocal protected_count, first_protected_ms, last_protected_ms
             receiver.settimeout(.1)
             while True:
                 try:
@@ -628,21 +632,75 @@ def canary(peer):
                         return
                     continue
                 if payload == nonce + b"protected":
+                    now = round((time.monotonic()-started)*1000)
+                    protected_count += 1
+                    if first_protected_ms is None:
+                        first_protected_ms = now
+                    last_protected_ms = now
                     leaked.set()
                 if payload == nonce + b"control":
                     control.set()
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             workers = [pool.submit(receive), pool.submit(send)]
+            def retire():
+                nonlocal retirement_ms
+                if retirement_ms is None:
+                    retirement_ms = round((time.monotonic()-started)*1000)
+                stop.set()
+                failure = None
+                for future in workers:
+                    try:
+                        future.result(timeout=5)
+                    except BaseException as error:
+                        if failure is None:
+                            failure = error
+                        else:
+                            failure.add_note("Another physical canary worker failed: " + type(error).__name__)
+                if failure is not None:
+                    raise failure
+            failure = None
             try:
                 if not control.wait(5):
                     raise RuntimeError("The physical leak canary failed its positive control")
-                yield armed, control
+                yield armed, control, retire
+            except BaseException as error:
+                failure = error
+                raise
             finally:
-                stop.set()
-                for future in workers:
-                    future.result(timeout=5)
+                try:
+                    retire()
+                except BaseException as error:
+                    if failure is None:
+                        raise
+                    failure.add_note("Physical canary retirement also failed: " + type(error).__name__)
                 if leaked.is_set():
-                    raise RuntimeError("Protected SMART leaked a canary to the physical peer")
+                    if failure is None:
+                        raise RuntimeError("Protected SMART leaked a canary to the physical peer")
+                    # Preserve the failed request as the primary error. In a
+                    # failed On-connect case, its accepted Off can precede the
+                    # API error; these packet times alone cannot locate that Off.
+                    failure.add_note("Protected-tagged canary packets during the failed case: " + json.dumps({
+                        "policy": policy, "packets": protected_count,
+                        "first_received_ms": first_protected_ms, "last_received_ms": last_protected_ms,
+                        "retirement_started_ms": retirement_ms,
+                        "receiver_joined": workers[0].done(), "sender_joined": workers[1].done(),
+                        "on_connect_release_interval_unproved": policy == "on-connect"}))
+
+
+@contextmanager
+def retire_failed_canary(policy, retire):
+    try:
+        yield
+    except BaseException as error:
+        if policy == "on-connect":
+            # The failed body, including its request and monitor, has joined.
+            # Join/drain the original sender before controller/PAM cleanup can
+            # release On-connect protection. Keep all recorded packets intact.
+            try:
+                retire()
+            except BaseException as cleanup:
+                error.add_note("Physical canary retirement before controller cleanup failed: " + type(cleanup).__name__)
+        raise
 
 
 def captured_processes(parent):
@@ -724,7 +782,8 @@ def qualify(work, user, password, peer_ns, source, candidate, policy, layer, suc
             directory.mkdir(mode=0o700)
             for name, body in files.items():
                 private_write(directory / name, body)
-        with canary(peer_ns) as (armed, control), controller(work, user, password) as (owner, headers):
+        with canary(peer_ns, policy) as (armed, control, retire_canary), \
+                controller(work, user, password) as (owner, headers), retire_failed_canary(policy, retire_canary):
             with (work / "nft.events").open("wb") as log:
                 monitor = subprocess.Popen(["stdbuf", "-oL", "nft", "-nn", "monitor"], stdout=log)
                 result = None
