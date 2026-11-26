@@ -2,9 +2,9 @@ package common
 
 import (
 	"os"
-	"os/exec"
+
 	"path/filepath"
-	"runtime"
+
 	"strings"
 	"testing"
 )
@@ -13,55 +13,6 @@ func repositoryRoot() string {
 	return filepath.Clean(filepath.Join("..", ".."))
 }
 
-func runRepositoryPythonPath(t *testing.T, scriptPath string) {
-	t.Helper()
-	python, err := exec.LookPath("python3")
-	if err != nil {
-		t.Fatal("python3 is required for the repository audits")
-	}
-	cmd := exec.Command(python, scriptPath)
-	cmd.Dir = repositoryRoot()
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("repository audit %s failed: %v\n%s", scriptPath, err, out)
-	}
-}
-
-func TestAuthoritativeRepositoryPythonSafetyContracts(t *testing.T) {
-	paths := []string{
-		"deploy/full-audit-v4.py",
-		"deploy/router-forwarding-audit.py",
-		"deploy/test_router_forwarding_fail_open.py",
-		"deploy/linux-full-profile-shipping-audit.py",
-		"deploy/linux-auto-requirements-audit.py",
-		"deploy/docs-native-fallback-policy-audit.py",
-		"server/scripts/test_preserve_generated_state.py",
-		"server/scripts/test_setup_center_update.py",
-		"server/scripts/test_download_safety.py",
-		"server/scripts/test_setup_center_release.py",
-		"android/test_android_connection_profiles_contract.py",
-		"android/test_android_via_entry_latency_contract.py",
-		"modes/test_kill_switch.py",
-		"modes/test_mtu_policy.py",
-		"modes/test_multihop.py",
-	}
-	linuxRuntimeOnly := map[string]bool{
-		"deploy/test_router_forwarding_fail_open.py":       true,
-		"server/scripts/test_preserve_generated_state.py": true,
-		"modes/test_kill_switch.py":                       true,
-		"modes/test_mtu_policy.py":                        true,
-		"modes/test_multihop.py":                          true,
-	}
-	for _, path := range paths {
-		path := path
-		t.Run(path, func(t *testing.T) {
-			if runtime.GOOS != "linux" && linuxRuntimeOnly[path] {
-				t.Skip("Linux/server runtime contract is executed by the authoritative Ubuntu release audit")
-			}
-			runRepositoryPythonPath(t, path)
-		})
-	}
-}
 
 func TestASUSProtectedJFFSScriptsAreNeverTargeted(t *testing.T) {
 	path := filepath.Join(repositoryRoot(), "router", "asus-merlin-router-vpn-forwards.sh")

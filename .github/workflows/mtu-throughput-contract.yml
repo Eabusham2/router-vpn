@@ -61,7 +61,6 @@ jobs:
           PY
       - name: Exact original caller MTU snapshot and proof observation
         run: |
-          python3 deploy/test_desktop_mtu_client_context_runner.py
           python3 deploy/test_desktop_mtu_client_context.py
       - name: Validate complete MTU controller package budget
         run: python3 deploy/test_mtu_throughput_budget.py

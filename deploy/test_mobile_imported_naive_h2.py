@@ -161,7 +161,7 @@ def source_receipt():
         ROOT/'deploy/test_mobile_imported_naive_h2_runner.py',
         ROOT/'deploy/test_ios_tor_profile.py', ROOT/'android/test_android_imported_router.py',
         ROOT/'cmd/client/multihop_native_imported_naive_h2_home_test.go',
-        ROOT/'deploy/test_imported_naive_h2_workflow.py', ROOT/'.github/workflows/imported-naive-h2-native.yml'}
+        ROOT/'.github/workflows/imported-naive-h2-native.yml'}
     for directory, suffix in (('android/app/src/main/java/com/eabusham/routervpn', '*.java'),
                               ('ios/RouterVPN/App', '*.swift'), ('ios/RouterVPN/PacketTunnel', '*.swift')):
         paths.update((ROOT/directory).glob(suffix))

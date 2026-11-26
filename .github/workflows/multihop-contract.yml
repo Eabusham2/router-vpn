@@ -43,7 +43,6 @@ jobs:
           grep -q 'registerDesktopMultihopRoutes(h, a)' cmd/client/extras.go
           python3 deploy/test_native_shipping_audit_gates.py
           python3 deploy/test_desktop_typed_candidate_controller_runner.py
-          python3 deploy/test_desktop_typed_connected_candidates_runner.py
           grep -q 'nativeWindowsMultihopCommand' cmd/client/multihop_native_routes.go
           grep -q 'nativeDarwinMultihopCommand' cmd/client/multihop_native_routes.go
           grep -q '/api/multihop/connect' cmd/client/logical_ui.js

@@ -567,7 +567,6 @@ ALLOWLISTS = {
         "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
         "android/test_android_node_candidate_prefix_host.py",
         "android/test_android_runtime_contract.py",
-        "deploy/test_android_multihop_workflow.py",
     }),
     "socks-native-mtu": frozenset({
         "mobile/chain/openvpn_box.go.tmpl",

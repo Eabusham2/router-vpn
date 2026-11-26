@@ -33,8 +33,7 @@ SOURCE_FILES=(
  'cmd/client/ordered_candidate_prefix_unsupported_test.go','cmd/client/multihop_native_routes.go',
 
  '.github/workflows/darwin-node-prefix-host-tun.yml',
- 'deploy/native-artifact-workflow-parity-audit.py','deploy/test_native_artifact_aggregate.py',
- 'deploy/reusable-workflow-concurrency-audit.py','.github/workflows/release-candidate.yml',
+ 'deploy/native-artifact-workflow-parity-audit.py','deploy/reusable-workflow-concurrency-audit.py','.github/workflows/release-candidate.yml',
 )
 
 def case_inventory(source=None):

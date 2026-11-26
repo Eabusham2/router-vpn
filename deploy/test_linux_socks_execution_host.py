@@ -24,7 +24,7 @@ PEER_TEMPLATE = 'mobile/desktop/node_chain_socks_execution_peer_test.go.tmpl'
 PEER_TARGET = 'protocol/routervpnamnezia/routervpn_socks_execution_peer_test.go'
 PEER_HELPERS = {'mobile/desktop/node_chain_socks_execution_peer_linux_test.go.tmpl':'protocol/routervpnamnezia/routervpn_socks_execution_peer_linux_test.go'}
 SOURCES = ('deploy/test_linux_socks_execution_host.py','deploy/test_linux_socks_execution_host_runner.py',
- 'deploy/test_linux_socks_execution_workflow.py','.github/workflows/linux-socks-execution-host.yml',
+ '.github/workflows/linux-socks-execution-host.yml',
  'cmd/client/desktop_socks_execution_linux_tun_native_test.go','cmd/client/desktop_node_host_linux_tun_native_test.go',
  'deploy/test_desktop_linux_guardian.py','deploy/prepare-desktop-external.py',PEER_TEMPLATE,*PEER_HELPERS,
  'cmd/client/desktop_node_chain_socks_execution_product_test.go','cmd/client/desktop_node_chain_socks_execution_profile_test.go')

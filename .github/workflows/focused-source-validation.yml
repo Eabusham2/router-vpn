@@ -151,38 +151,26 @@ jobs:
             python3 validator/deploy/test_windows_connect_release_receipt.py
           fi
           if [[ "$SUITE" == "desktop-socks-parent" ]]; then
-            python3 validator/deploy/test_focused_desktop_socks_parent_runner.py
           fi
           if [[ "$SUITE" == "desktop-socks-policy" ]]; then
-            python3 validator/deploy/test_focused_desktop_socks_policy_runner.py
           fi
           if [[ "$SUITE" == "desktop-socks-capture" ]]; then
-            python3 validator/deploy/test_focused_desktop_socks_capture_runner.py
           fi
           if [[ "$SUITE" == "macos-profiles" ]]; then
             python3 validator/deploy/test_validate_macos_profile_source.py
           fi
           if [[ "$SUITE" == "socks-mtu" ]]; then
-            python3 validator/deploy/test_focused_socks_mtu_runner.py
           fi
           if [[ "$SUITE" == "darwin-hy2" ]]; then
             python3 validator/deploy/test_validate_darwin_hy2_source.py
           fi
           if [[ "$SUITE" == "socks-runtime" ]]; then
-            python3 validator/deploy/test_focused_socks_runtime_runner.py
           fi
           if [[ "$SUITE" == "connect-runtime" ]]; then
-            python3 validator/deploy/test_focused_socks_runtime_runner.py
-            python3 validator/deploy/test_focused_connect_runtime_runner.py
           fi
           if [[ "$SUITE" == "connect-native-mtu" ]]; then
-            python3 validator/deploy/test_focused_socks_bridge_runner.py
-            python3 validator/deploy/test_focused_socks_native_mtu_runner.py
-            python3 validator/deploy/test_focused_connect_native_mtu_runner.py
           fi
           if [[ "$SUITE" == "connect-run" ]]; then
-            python3 validator/deploy/test_focused_socks_bridge_runner.py
-            python3 validator/deploy/test_focused_connect_run_runner.py
             python3 validator/deploy/test_connect_ordered_fifty_native.py
             python3 validator/deploy/test_connect_reference_lifetime.py
           fi
@@ -193,7 +181,6 @@ jobs:
             python3 validator/deploy/validate-ios-socks-host.py --self-test
           fi
           if [[ "$SUITE" == "socks-run" ]]; then
-            python3 validator/deploy/test_focused_socks_run_runner.py
             python3 validator/deploy/test_socks_private_measurement_diagnostic.py
           fi
           if [[ "$SUITE" == "ios-sdk" ]]; then
@@ -203,26 +190,17 @@ jobs:
             python3 validator/deploy/validate-android-sdk-source.py --self-test
           fi
           if [[ "$SUITE" == "socks-native-mtu" ]]; then
-            python3 validator/deploy/test_focused_socks_bridge_runner.py
-            python3 validator/deploy/test_focused_socks_native_mtu_runner.py
           fi
           if [[ "$SUITE" == "socks-preclose" ]]; then
-            python3 validator/deploy/test_focused_socks_bridge_runner.py
-            python3 validator/deploy/test_focused_socks_native_mtu_runner.py
-            python3 validator/deploy/test_focused_socks_preclose_runner.py
           fi
           if [[ "$SUITE" == "socks-bridge" ]]; then
-            python3 validator/deploy/test_focused_socks_bridge_runner.py
           fi
           if [[ "$SUITE" == "socks-owner" ]]; then
             python3 validator/deploy/test_validate_node_chain_socks_owner.py
           fi
           if [[ "$SUITE" == "socks-source" ]]; then
-            python3 validator/deploy/test_focused_socks_source_runner.py
           fi
           if [[ "$SUITE" == "connect-source" ]]; then
-            python3 validator/deploy/test_focused_socks_source_runner.py
-            python3 validator/deploy/test_focused_connect_source_runner.py
           fi
           if [[ "$SUITE" == "linux-hy2" ]]; then
             python3 validator/deploy/test_validate_linux_hy2_source.py

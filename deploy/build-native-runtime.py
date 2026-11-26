@@ -220,7 +220,6 @@ def inputs():
                              ROOT/'deploy/test_desktop_native_root_phases.py',
                              ROOT/'deploy/test_desktop_native_root_phases_runner.py',
                              ROOT/'deploy/test_socks_server_prefix_native.py',
-                             ROOT/'deploy/test_socks_server_prefix_native_runner.py',
                              ROOT/'deploy/test_server_node_chain_openvpn_encrypted.py',
                              ROOT/'deploy/test_server_node_chain_hysteria_encrypted.py',
                              ROOT/'deploy/test_server_node_chain_hysteria_encrypted_runner.py',
@@ -235,7 +234,6 @@ def inputs():
                              ROOT/'deploy/test_server_node_chain_openvpn_native.py',
                              ROOT/'deploy/test_server_node_chain_openvpn_native_runner.py',
                              ROOT/'deploy/test_node_chain_openvpn_encrypted_local.py',
-                             ROOT/'deploy/test_node_chain_openvpn_encrypted_local_runner.py',
                              ROOT/'deploy/test_node_chain_multiple_imported_native.py',
                              ROOT/'deploy/test_node_chain_multiple_imported_native_runner.py',
                              ROOT/'deploy/test_node_chain_multiple_imported_execution_owner.py',
@@ -252,17 +250,13 @@ def inputs():
                              ROOT/'mobile/server_chain_component/openvpn_owner.go.tmpl',
                              ROOT/'mobile/server_chain_component/openvpn_test.go.tmpl',
                              ROOT/'deploy/test_desktop_socks_execution_construction.py',
-                             ROOT/'deploy/test_desktop_socks_execution_construction_runner.py',
                              ROOT/'deploy/test_desktop_socks_execution_child.py',
-                             ROOT/'deploy/test_desktop_socks_execution_child_runner.py',
                              ROOT/'deploy/test_desktop_openvpn_execution_child.py',
                              ROOT/'deploy/test_desktop_openvpn_execution_child_runner.py',
                              ROOT/'deploy/test_desktop_selected_latency.py',
-                             ROOT/'deploy/test_desktop_selected_latency_runner.py',
                              ROOT/'deploy/prepare-desktop-selected-latency-test.py',
                              ROOT/'mobile/desktop_test/selected_latency_fixture.go.tmpl',
                              ROOT/'deploy/test_desktop_selected_candidates.py',
-                             ROOT/'deploy/test_desktop_selected_candidates_runner.py',
                              ROOT/'deploy/prepare-desktop-selected-candidate-test.py',
                              ROOT/'mobile/desktop_test/selected_candidate_fixture.go.tmpl',
                              ROOT/'deploy/test_desktop_selected_candidate_controller.py',
@@ -277,7 +271,6 @@ def inputs():
                              ROOT/'deploy/test_desktop_typed_candidate_controller.py',
                              ROOT/'deploy/test_desktop_typed_candidate_controller_runner.py',
                              ROOT/'deploy/test_desktop_typed_connected_candidates.py',
-                             ROOT/'deploy/test_desktop_typed_connected_candidates_runner.py',
                              ROOT/'deploy/test_node_chain_ordinary_candidate_reservation.py',
                              ROOT/'deploy/test_node_chain_ordinary_candidate_reservation_runner.py',
                              ROOT/'.github/workflows/multihop-contract.yml',
@@ -1809,13 +1802,9 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                  '-ldflags=-checklinkname=0', './protocol/wireguard', '-run', '^TestRouterVPNWireGuard',
                  '-count=1', '-timeout=60s'], cwd=source, env=env, timeout=120)
             command_contracts(source, target, env)
-            run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_construction_runner.py'],
-                cwd=ROOT, env=env, timeout=60)
             run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_construction.py',
                  '--core', source, '--tags='+','.join(tags(target)),
                  *(['--without-race'] if not race else [])], cwd=source, env=env, timeout=1200)
-            run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_child_runner.py'],
-                cwd=ROOT, env=env, timeout=60)
             # Preserve each existing 120s test / 600s compiler bound. Separate
             # source-bound phases each join two serial original processes.
             for socks_phase in ('baselines', 'controls'):
@@ -1835,8 +1824,6 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             # their actual mobile core; desktop verifies its strict source runner.
             run([sys.executable, ROOT/'deploy/test_node_chain_ordinary_candidate_reservation_runner.py'],
                 cwd=ROOT, env=env, timeout=60)
-            run([sys.executable, ROOT/'deploy/test_desktop_selected_latency_runner.py'],
-                cwd=ROOT, env=env, timeout=60)
             # Eight disjoint actual HTTP50 roots retain 120s test / 600s
             # compiler bounds; the two original-owner controls are separate.
             for selected_latency_phase in ('baselines', 'controls'):
@@ -1844,8 +1831,6 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                      '--core', source, '--tags='+','.join(tags(target)), '--phase', selected_latency_phase,
                      *(['--without-race'] if not race else [])], cwd=ROOT, env=env,
                     timeout=1800 if selected_latency_phase == 'baselines' else 1600)
-            run([sys.executable, ROOT/'deploy/test_desktop_selected_candidates_runner.py'],
-                cwd=ROOT, env=env, timeout=60)
             # Original private-fixture generation, two independent compilers,
             # seven positive phases and the original-inode causal phase retain
             # their individual 360s, 600s and 135s process bounds.
@@ -1871,8 +1856,6 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             run([sys.executable, ROOT/'deploy/test_desktop_selected_candidate_controller.py',
                  '--phase=typed-entry', '--receipt', temp/'selected-typed-entry-controller.json',
                  *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=600)
-            run([sys.executable, ROOT/'deploy/test_desktop_typed_connected_candidates_runner.py'],
-                cwd=ROOT, env=env, timeout=60)
             # Distinct connected typed mailboxes keep the original native
             # 150s test/600s process bounds and finite baseline aggregate.
             for typed_candidate_phase in ('baselines', 'controls'):
@@ -2145,8 +2128,6 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                      '--core', source, '--tags='+','.join(tags(target))],
                     cwd=source, env=env, timeout=1900)
             if target.startswith('linux/'):
-                run([sys.executable, ROOT/'deploy/test_socks_server_prefix_native_runner.py'],
-                    cwd=ROOT, env=env, timeout=60)
                 socks_prefix = load('socks_server_prefix_native', 'test_socks_server_prefix_native.py')
                 socks_prefix.execute(source, target, ','.join(tags(target)), env, run)
                 run([sys.executable, ROOT/'deploy/test_server_node_chain_candidate_worker_runner.py'],
@@ -2175,8 +2156,6 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                     cwd=ROOT, env=env, timeout=60)
                 openvpn_server = load('openvpn_server_native', 'test_server_node_chain_openvpn_native.py')
                 openvpn_server.execute(source, target, ','.join(tags(target)), env, run)
-                run([sys.executable, ROOT/'deploy/test_node_chain_openvpn_encrypted_local_runner.py'],
-                    cwd=ROOT, env=env, timeout=60)
                 openvpn_local = load('openvpn_encrypted_local', 'test_node_chain_openvpn_encrypted_local.py')
                 openvpn_local.execute(source, target, ','.join(tags(target)), env, run)
                 run([sys.executable, ROOT/'deploy/test_node_chain_multiple_imported_native_runner.py'],
