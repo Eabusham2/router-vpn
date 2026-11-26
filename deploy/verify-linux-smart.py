@@ -729,6 +729,9 @@ def qualify(work, user, password, peer_ns, source, candidate, policy, layer, suc
                 monitor = subprocess.Popen(["stdbuf", "-oL", "nft", "-nn", "monitor"], stdout=log)
                 result = None
                 observed_stages = {}
+                trace_started = time.monotonic()
+                first_ready_ms = first_proof_ms = None
+                first_proof = None
                 try:
                     # A harmless table marker establishes monitor subscription before SMART.
                     marker = "qualification_monitor"
@@ -743,7 +746,7 @@ def qualify(work, user, password, peer_ns, source, candidate, policy, layer, suc
                     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                         future = pool.submit(api, "/api/strategy/smart-auto", method="POST", headers=headers, timeout=420)
                         sessions = {}
-                        first, first_proof = None, None
+                        first = None
                         rejected = 0
                         while True:
                             for pid, directory in captured_processes(owner):
@@ -754,19 +757,32 @@ def qualify(work, user, password, peer_ns, source, candidate, policy, layer, suc
                                     continue
                                 key = data["session"]
                                 try:
-                                    observed_stages[data["pid"]] = native_stage(data, directory)
+                                    stage = native_stage(data, directory)
+                                    previous = observed_stages.get(data["pid"], {})
+                                    elapsed_ms = round((time.monotonic()-trace_started)*1000)
+                                    stage["first_seen_ms"] = previous.get("first_seen_ms", elapsed_ms)
+                                    stage["last_seen_ms"] = elapsed_ms
+                                    if "first_ready_ms" in previous:
+                                        stage["first_ready_ms"] = previous["first_ready_ms"]
+                                        stage["first_ready_numbers"] = previous.get("first_ready_numbers", {})
+                                    elif stage["ready"]:
+                                        stage["first_ready_ms"] = elapsed_ms
+                                        stage["first_ready_numbers"] = stage.get("ready_numbers", {})
+                                    observed_stages[data["pid"]] = stage
                                 except Exception:
                                     pass  # Diagnostics cannot replace the original qualification failure.
                                 if key not in sessions or "ready" not in sessions[key]:
                                     sessions[key] = data
                                 if data["mode"] == source and first is None and "ready" in data:
                                     first = data
+                                    first_ready_ms = round((time.monotonic()-trace_started)*1000)
                                     armed.set()
                             if first is not None and first_proof is None:
                                 observation = peers.observation()
                                 if observation["http"] and observation["dns"] and (
                                         observation["pq_key_applied"] if source == "wg-pq" else observation["source_uot"]):
                                     first_proof = observation
+                                    first_proof_ms = round((time.monotonic()-trace_started)*1000)
                                     rejected = physical_rejections(peer_ns)
                                     if succeed:
                                         peers.enable_candidate()
@@ -821,6 +837,18 @@ def qualify(work, user, password, peer_ns, source, candidate, policy, layer, suc
                     check_guard_history(work / "nft.events", first["session"], final["session"])
                 except Exception as error:
                     try:
+                        timing = {"elapsed_ms": round((time.monotonic()-trace_started)*1000),
+                                  "source_first_ready_ms": first_ready_ms,
+                                  "source_first_peer_proof_ms": first_proof_ms,
+                                  "source_first_peer_counters": first_proof,
+                                  "candidate_enabled": peers.enabled,
+                                  "peer_processes": [{"name": name, "pid": process.pid, "exit_code": process.poll()}
+                                      for name, process in list(peers.processes.items())[:16]]}
+                        try:
+                            timing["peer_observation"] = peers.observation(diagnostic=True)
+                        except Exception as diagnostic_failure:
+                            timing["peer_observation_error_type"] = type(diagnostic_failure).__name__
+                        error.add_note("SMART failure timing and peer counters: " + json.dumps(timing, ensure_ascii=True))
                         error.add_note("Observed native startup stages: " + json.dumps(
                             list(observed_stages.values())[:32], ensure_ascii=True))
                         if result is not None:

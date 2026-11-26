@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import secrets
 import signal
+import stat
 import subprocess
 import time
 
@@ -285,13 +286,42 @@ class Peers:
             self.start_mode(self.candidate)
             self.enabled = True
 
-    def observation(self):
+    def observation(self, *, diagnostic=False):
+        # The failure-only readback shares these exact existing peer counters.
+        # It cannot extend a probe, restart a peer or replace the original error.
+        deadline = time.monotonic()+3 if diagnostic else None
+        log_samples = {}
+        def observed_output(args):
+            if deadline is None:
+                return output(args)
+            remaining = deadline-time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('Diagnostic peer readback deadline')
+            value = subprocess.run(args, check=True, stdout=subprocess.PIPE,
+                                   stderr=subprocess.DEVNULL, timeout=remaining).stdout
+            if len(value) > 4096:
+                raise ValueError('Diagnostic peer readback exceeded its bound')
+            return value
         for name, process in self.processes.items():
             if process.poll() is not None:
                 raise RuntimeError(f'{name} peer stopped before the qualification ended')
         def records(name):
             path = self.work/(name+'.log')
-            return path.read_bytes() if path.exists() else b''
+            if not diagnostic:
+                return path.read_bytes() if path.exists() else b''
+            try:
+                descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            except FileNotFoundError:
+                log_samples[name] = {'present': False}
+                return b''
+            with os.fdopen(descriptor, 'rb') as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    raise ValueError('Diagnostic peer log changed its file type')
+                value = stream.read(256 << 10)
+            log_samples[name] = {'file_bytes': info.st_size, 'sample_bytes': len(value),
+                                 'truncated': info.st_size > len(value)}
+            return value
         body = json.dumps({'node_id': self.profile['node_proof_id'], 'ok': True, 'proof': 'router-vpn-private-agent-v1'},
                           separators=(',', ':')).encode()
         result = {'http': records('http').count(body),
@@ -303,14 +333,14 @@ class Peers:
                   'wg_handshake': 0, 'candidate_handshake': 0, 'source_wg_received': 0, 'candidate_wg_received': 0}
         for mode, field, device in [('wg-pq', 'wg_handshake', 'wgpq'), ('wg', 'candidate_handshake', 'wgplain')]:
             if mode == self.source or mode == self.candidate and self.enabled:
-                result[field] = int(output(self.ns+['wg', 'show', device, 'latest-handshakes']).split()[1])
+                result[field] = int(observed_output(self.ns+['wg', 'show', device, 'latest-handshakes']).split()[1])
                 role = 'source' if mode == self.source else 'candidate'
-                result[role+'_wg_received'] = int(output(self.ns+['wg', 'show', device, 'transfer']).split()[1])
+                result[role+'_wg_received'] = int(observed_output(self.ns+['wg', 'show', device, 'transfer']).split()[1])
         for prefix, mode in [('source', self.source), ('candidate', self.candidate), ('pq', 'rosenpass')]:
             result[prefix+'_layer_packets'] = records('decrypted').count(f'.{PORTS[mode]}:'.encode())
         key = self.work/'negotiated.psk'
         if self.source == 'wg-pq' and key.exists():
-            installed = output(self.ns+['wg', 'show', 'wgpq', 'preshared-keys']).split()[1]
+            installed = observed_output(self.ns+['wg', 'show', 'wgpq', 'preshared-keys']).split()[1]
             result['pq_key_applied'] = installed == key.read_bytes().strip() and installed != (self.work/'initial.psk').read_bytes().strip()
             if result['pq_key_applied']:
                 digest = hashlib.sha256(installed).digest()
@@ -318,6 +348,8 @@ class Peers:
                     self.last_pq_key_digest = digest
                     self.pq_generation += 1
         result['pq_generation'] = self.pq_generation
+        if diagnostic:
+            result['log_samples'] = log_samples
         return result
 
 
