@@ -181,7 +181,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
                 else if(!responseMode.isEmpty() && prefix<source.members.size()-2)
                     supported=Libbox.routerNodeChainPacketSuccessorCandidateInputSupported(input,responseMode)
                             &&Libbox.routerNodeChainPacketSuccessorCandidateFitsSource(originalPlan,prefix,input);
-                else if(!responseMode.isEmpty())supported=Libbox.routerNodeChainResponseCandidateInputSupported(input,responseMode);
+                else if(!responseMode.isEmpty())supported=Libbox.routerNodeChainConnectedFinalCandidateFitsSource(originalPlan,prefix,input);
                 else if(publicResponse||"routed-candidate-response".equals(measurement))
                     supported=Libbox.routerNodeChainCandidateInputSupportedForMeasurement(input,measurement);
                 else supported=Libbox.routerNodeChainCandidateInputSupported(input);

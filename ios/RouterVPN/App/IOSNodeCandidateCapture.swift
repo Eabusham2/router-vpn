@@ -39,7 +39,7 @@ import Libbox
         guard !selectedResponse || (!pairedFinalResponse && !preparedResponse) else { throw issue() }
         let candidateMode = proofs[prefixPosition].candidate_mode ?? "shadowsocks"
         let packetResponse = proofs[prefixPosition].packetSuccessorResponse(in: proofs)
-        let packetPlan = packetResponse || preparedResponse && pairedFinalResponse ?
+        let packetPlan = pairedFinalResponse ?
             try responseSourcePlan(originalLaunch, proofs: proofs, position: prefixPosition, mode: candidateMode, prepared: preparedResponse) : nil
         defer { if let packetPlan { try? packetPlan.close() } }
         let completeSource = publicResponse || selectedResponse || pairedFinalResponse
@@ -88,7 +88,7 @@ import Libbox
                         guard let packetPlan, LibboxRouterNodeChainPacketSuccessorCandidateInputSupported(input, candidateMode),
                               LibboxRouterNodeChainPacketSuccessorCandidateFitsSource(packetPlan, Int32(prefixPosition), input) else { throw issue() }
                     } else if pairedFinalResponse {
-                        guard LibboxRouterNodeChainResponseCandidateInputSupported(input, candidateMode) else { throw issue() }
+                        guard let packetPlan, LibboxRouterNodeChainConnectedFinalCandidateFitsSource(packetPlan, Int32(prefixPosition), input) else { throw issue() }
                     } else {
                         guard LibboxRouterNodeChainCandidateInputSupported(input) else { throw issue() }
                     }
@@ -174,6 +174,7 @@ import Libbox
             let retained = IOSNodeCandidateOriginalCapture.ordinary(original)
             let expected = prepared ? retained.preparedCandidatePrefixes : retained.connectedCandidatePrefixes
             let nativeMode = prepared ? LibboxRouterNodeChainPreparedCandidateResponseMode(plan, Int32(position)) :
+                position == original.members.count - 2 ? LibboxRouterNodeChainConnectedFinalCandidateResponseMode(plan, Int32(position)) :
                 LibboxRouterNodeChainConnectedPacketSuccessorCandidateMode(plan, Int32(position))
             guard original.sourceSHA256 == launch["source_sha256"] as? String,
                   original.configSHA256 == launch["config_sha256"] as? String,

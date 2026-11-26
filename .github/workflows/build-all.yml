@@ -171,6 +171,20 @@ jobs:
       - name: Install native macOS build libraries
         if: runner.os == 'macOS'
         run: brew install cmake ninja pkg-config openssl@3 autoconf automake libtool
+      - name: Verify native macOS owned-socket PF lifecycle
+        if: runner.os == 'macOS'
+        timeout-minutes: 18
+        env:
+          ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE: '1'
+        run: python3 deploy/darwin-pf-abi.py --native-smoke --receipt "$RUNNER_TEMP/routervpn-native-pf.json"
+      - name: Save native macOS PF component evidence
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-native-PF-${{ matrix.slug }}-${{ github.sha }}
+          path: ${{ runner.temp }}/routervpn-native-pf.json
+          if-no-files-found: warn
+          retention-days: 7
       - name: Prepare exact Rust and native C toolchains
         shell: bash
         run: python3 deploy/setup-desktop-native-toolchain.py '${{ matrix.target }}' "$RUNNER_TEMP/native-toolchain"
