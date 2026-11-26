@@ -9,6 +9,7 @@ connection time. A package may consume only a bundle with this exact receipt.
 from collections import Counter, deque
 from pathlib import Path
 import argparse
+import ast
 import base64
 import hashlib
 import http.client
@@ -18,7 +19,6 @@ import json
 import os
 import platform
 import re
-import select
 import shlex
 import shutil
 import socket
@@ -52,6 +52,7 @@ DNSSEC = load('desktop_native_dnssec', 'desktop-dnssec-bundle.py')
 BUILD_OWNER = load('desktop_windows_build_owner', 'windows_build_owner.py')
 DARWIN_RACE = load('desktop_darwin_race_compiler', 'darwin_race_toolchain.py')
 GO_SOCKETS = load('desktop_windows_go_sockets', 'prepare-go-windows-sockets.py')
+XRAY_SERVER = load('desktop_native_xray_server', 'prepare-xray-runtime.py')
 PIN, VERSION, TOOLCHAIN = POLICY.CORE, '1.14.1', 'go1.26.3'
 TARGETS = tuple(PQ.TARGETS)
 TAGS = ('with_wireguard', 'with_gvisor', 'with_quic', 'with_utls', 'with_openvpn',
@@ -133,9 +134,10 @@ def inputs():
              ROOT/'deploy/build-desktop-tor.py', ROOT/'deploy/build-mobile-tor.py',
              ROOT/'deploy/prepare-desktop-rosenpass.py', ROOT/'deploy/prepare-mobile-buffers.py',
              ROOT/'deploy/mobile_udp_socket_policy.py', ROOT/'deploy/seal-native-runtime.py',
+             ROOT/'server/scripts/generate-xray-pq.sh', ROOT/'server/scripts/generate-advanced-profiles.sh',
              ROOT/'deploy/prepare-go-windows-sockets.py', ROOT/'deploy/windows_build_owner.py',
              ROOT/'deploy/install-desktop-windows-toolchain.py', ROOT/'deploy/darwin_race_toolchain.py',
-             *POLICY.inputs(), *TOR.inputs(), *DNSSEC.inputs(), *PERFORMANCE.inputs(),
+             *POLICY.inputs(), *XRAY_SERVER.sources(), *TOR.inputs(), *DNSSEC.inputs(), *PERFORMANCE.inputs(),
              *OPENVPN.inputs(), *EXTERNAL.inputs(), ROOT/'go.mod',
              *sorted((ROOT/'cmd').rglob('*.go')), *sorted((ROOT/'internal').rglob('*.go')),
              *sorted((ROOT/'mobile').rglob('*.tmpl')), ROOT/'cmd/client/ui.html',
@@ -407,189 +409,6 @@ def reuse(directory, target, policy=None, env=None):
     return receipt
 
 
-STOCK_DNS_TEST = 'TestLegacyStandardDNSPinnedCore'
-STOCK_DNS_CASES = tuple(STOCK_DNS_TEST+'/'+case for case in (
-    'udp-uncached', 'udp-cached-negative-control', 'tcp-uncached', 'tcp-cached-negative-control'))
-
-
-
-
-
-STANDARD_CONFIG_TEST = 'TestLinuxStandardServiceStartupStockGraphs'
-STANDARD_CONFIG_PROTOCOLS = ('wireguard', 'socks5', 'http-connect', 'https-connect', 'shadowsocks', 'hysteria2')
-STANDARD_CONFIG_POLICIES = ('default', 'fixed', 'ipv6-off')
-
-
-
-
-
-
-IMPORTED_DESKTOP_GRAPH_TEST = 'TestDesktopImportedNativeCaptureExactGraphAndPhysicalSockets'
-IMPORTED_DESKTOP_LAYER_TEST = 'TestDesktopImportedExplicitLocalPreservesSavedExecutionAndLayers'
-IMPORTED_DESKTOP_LIFECYCLE_TEST = 'TestDesktopImportedDailyConnectRestoreAndOwnedTeardown'
-IMPORTED_DESKTOP_DNS_ROOTS = ('TestDesktopImportedDNSReceiptAdmission',
-    'TestDesktopImportedDNSCancellationWaitsForNativeJoin',
-    'TestDesktopImportedDNSCannotUseSuccessfulOSLookup',
-    'TestDesktopImportedDNSAtomicPublicationAndFreshHeartbeat',
-    'TestDesktopImportedDNSOperationDuration')
-IMPORTED_DESKTOP_DNS_CASES = ('success', 'dns-failed', 'reader', 'source', 'owner', 'old-receipt')
-IMPORTED_DESKTOP_DNS_DURATION_CASES = tuple(operation+'/'+fault for operation in ('dns','observe') for fault in
-    ('positive','zero','failed-zero','cancelled-zero','negative','nan','infinite','oversized','reader','foreign-operation'))
-IMPORTED_NATIVE_DNS_ROOTS = ('TestRouterVPNImportedDNSMailbox',
-    'TestRouterVPNImportedDNSCancellationJoins', 'TestRouterVPNImportedDNSNativeRouterIsUncached',
-    'TestRouterVPNImportedDNSOperationDuration')
-IMPORTED_NATIVE_DNS_DURATION_CASES = ('observe','dns','dns-error','cancelled-dns','cancelled-observe')
-IMPORTED_NATIVE_DNS_CASES = ('success', 'dns-failed', 'session', 'config', 'path', 'reader',
-    'deadline', 'replay', 'source-replaced', 'owner-replaced')
-IMPORTED_NATIVE_DNS_PACKAGE = 'github.com/sagernet/sing-box/cmd/sing-box'
-IMPORTED_DESKTOP_LAYERS = ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
-IMPORTED_DESKTOP_PAIRS = tuple((entry, final) for entry in ('shadowsocks','hysteria2')
-    for final in ('shadowsocks','reality-vision','hysteria2','wg','awg2-fast','awg2-strong')) + tuple(
-    (entry, final) for entry in ('socks5','http-connect','https-connect') for final in ('shadowsocks','reality-vision'))
-IMPORTED_DESKTOP_FILES = {entry+'--'+final+'.json' for entry,final in IMPORTED_DESKTOP_PAIRS
-                          if (entry,final) != ('socks5','shadowsocks')} | {
-    'layers-'+entry+'--'+final+'.json' for entry in IMPORTED_DESKTOP_LAYERS for final in IMPORTED_DESKTOP_LAYERS}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-IMPORTED_PACKET_PROTOCOLS = ('wireguard', 'amneziawg')
-IMPORTED_PACKET_FINALS = ('shadowsocks', 'hysteria2', 'wg', 'awg2-fast', 'awg2-strong', 'reality-vision')
-IMPORTED_PACKET_GRAPH_TEST = 'TestDesktopImportedPacketGraphs'
-IMPORTED_PACKET_SOURCE_TEST = 'TestDesktopImportedPacketSourceOwnership'
-IMPORTED_PACKET_LIMIT_TEST = 'TestDesktopImportedPacketLimits'
-IMPORTED_PACKET_DNS_TEST = 'TestDesktopImportedPacketSelectedDNS'
-IMPORTED_PACKET_PROFILE_TEST = 'TestDesktopImportedPacketProfiles'
-IMPORTED_PACKET_PROOF_TEST = 'TestDesktopImportedPacketProof'
-IMPORTED_PACKET_LIFECYCLE_TEST = 'TestDesktopImportedPacketDailyConnectRestoreAndOwnedTeardown'
-IMPORTED_PACKET_SOURCE_CASES = ('private-key', 'peer-key', 'psk', 'address', 'allowed-ips', 'endpoint', 'keepalive',
-    'packet-mtu', 'parameters', 'public-exit', 'final-token', 'final-dns', 'entry-layer', 'final-layer')
-IMPORTED_PACKET_LIMIT_CASES = ('cancel', 'undersized-entry', 'fixed-overflow', 'missing-layer', 'server', 'auto', 'wrong-entry-mode', 'openvpn')
-IMPORTED_PACKET_FILES = {protocol+'--'+mode+'--'+entry+'--'+final+'.json'
-    for protocol in IMPORTED_PACKET_PROTOCOLS for mode in IMPORTED_PACKET_FINALS
-    for entry in IMPORTED_DESKTOP_LAYERS for final in IMPORTED_DESKTOP_LAYERS}
-
-
-
-
-
-
-
-IMPORTED_OPENVPN_NETWORKS = ('tcp', 'udp')
-IMPORTED_OPENVPN_FILES = {network+'--'+mode+'--'+entry+'--'+final+'.json'
-    for network in IMPORTED_OPENVPN_NETWORKS for mode in IMPORTED_PACKET_FINALS
-    for entry in IMPORTED_DESKTOP_LAYERS for final in IMPORTED_DESKTOP_LAYERS}
-IMPORTED_OPENVPN_CASES = {
-    'Graphs': tuple(network+'/'+mode+'/'+entry+'/'+final
-        for network in IMPORTED_OPENVPN_NETWORKS for mode in IMPORTED_PACKET_FINALS
-        for entry in IMPORTED_DESKTOP_LAYERS for final in IMPORTED_DESKTOP_LAYERS),
-    'Profiles': (),
-    'PublicProof': ('wrong-public','cancel','replacement','success'),
-    'SelectedDNS': tuple(network+'/'+mode for network in IMPORTED_OPENVPN_NETWORKS for mode in ('home','dot','doh')),
-    'SourceOwnership': tuple(network+'/'+case for network in IMPORTED_OPENVPN_NETWORKS
-        for case in ('username','password','certificate','remote','port','packet-mtu','public-exit','entry-layer','final-layer','final-token','final-dns')),
-    'Limits': tuple(network+'/'+case for network in IMPORTED_OPENVPN_NETWORKS
-        for case in ('cancel','script','multiple-remotes','hostname','undersized-entry','fixed-overflow','missing-layer','server','auto','paired-mode','third-control')),
-    'ReceiptAdmission': ('success','failed','remote','port','network','capacity','missing-state','operation','reader','source','owner','old-connection','future-connection'),
-    'OriginalConnectionCannotRelatch': ('generation','connected-at','capacity'),
-    'CancellationJoinsNativeObservation': (),
-    'ContextOwnedLocks': ('observation','mailbox','workspace'),
-    'DNSOperationCannotBorrowObservation': (),
-}
-IMPORTED_OPENVPN_NATIVE_CASES = {
-    'Constructor': ('original','digest','duplicate-entry','system','multiple-remotes','nonliteral','capacity','expired','replacement-before-ready'),
-    'OriginalTuple': ('generation','remote','port','network','connected-at','capacity','too-small','pending','reader','reader-pointer','interface','index','tun-mtu','path','source','active','failure'),
-    'CallerContext': ('owner-held','native-held','late-success'),
-    'Mailbox': ('observe','dns','dns-failed','reconnect-during-dns','unknown-operation','foreign-observer','missing-observer'),
-    'CancellationJoins': (),
-    'NativeConnected': ('tcp','udp'),
-}
-
-
-
-
-
-
-
-
-
-
-IMPORTED_PQ_GRAPH_TEST = 'TestDesktopImportedPQRealityCapturedGraphs'
-IMPORTED_PQ_ENTRIES = ('socks5', 'shadowsocks', 'hysteria2', 'http-connect', 'https-connect',
-                       'wireguard', 'amneziawg', 'openvpn-tcp', 'openvpn-udp')
-IMPORTED_PQ_FILES = {entry+'--reality-pq-vision--'+first+'--'+last+'.json'
-    for entry in IMPORTED_PQ_ENTRIES
-    for first in IMPORTED_DESKTOP_LAYERS for last in IMPORTED_DESKTOP_LAYERS}
-
-
-
-
-
-
-IMPORTED_XHTTP_GRAPH_TEST = 'TestDesktopImportedXHTTPCapturedGraphs'
-IMPORTED_XHTTP_ENTRIES = ('socks5', 'shadowsocks', 'hysteria2', 'http-connect', 'https-connect',
-                       'wireguard', 'amneziawg', 'openvpn-tcp', 'openvpn-udp')
-IMPORTED_XHTTP_FILES = {entry+'--reality-xhttp--'+first+'--'+last+'.json'
-    for entry in IMPORTED_XHTTP_ENTRIES
-    for first in IMPORTED_DESKTOP_LAYERS for last in IMPORTED_DESKTOP_LAYERS}
-
-
-
-
-
-
-IMPORTED_NAIVE_H2_GRAPH_TEST = 'TestDesktopImportedNaiveH2CapturedGraphs'
-IMPORTED_NAIVE_H2_ENTRIES = ('socks5', 'shadowsocks', 'hysteria2', 'http-connect', 'https-connect',
-                       'wireguard', 'amneziawg', 'openvpn-tcp', 'openvpn-udp')
-IMPORTED_NAIVE_H2_FILES = {entry+'--naive-h2--'+first+'--'+last+'.json'
-    for entry in IMPORTED_NAIVE_H2_ENTRIES
-    for first in IMPORTED_DESKTOP_LAYERS for last in IMPORTED_DESKTOP_LAYERS}
-
-
-
-
-
-IMPORTED_NAIVE_H3_GRAPH_TEST = 'TestDesktopImportedNaiveH3CapturedGraphs'
-IMPORTED_NAIVE_H3_ENTRIES = ('socks5', 'shadowsocks', 'hysteria2',
-                       'wireguard', 'amneziawg', 'openvpn-tcp', 'openvpn-udp')
-IMPORTED_NAIVE_H3_FILES = {entry+'--naive-h3--'+first+'--'+last+'.json'
-    for entry in IMPORTED_NAIVE_H3_ENTRIES
-    for first in IMPORTED_DESKTOP_LAYERS for last in IMPORTED_DESKTOP_LAYERS}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def checkout(path, repository, revision):
     run(['git', 'init', path])
     # Keep pinned upstream blobs identical on Windows too. The application's
@@ -660,46 +479,385 @@ def prepare_native_sources(source, xray, env):
     POLICY.AMNEZIA.verify(source)
 
 
-def relay_awg_smoke_datagrams(transports, host, finished, counts, server_ready, startup_datagrams):
-    # Both AWG userspace endpoints dial out. Each role gets its own relay
-    # socket so a native BindUpdate can change its ephemeral source port.
-    peers = [None, None]
-    server_packets = 0
-    while not finished.is_set():
-        readable, _, _ = select.select(transports, [], [], 0.2)
-        for transport in readable:
-            try:
-                payload, source = transport.recvfrom(65535)
-            except (ConnectionResetError, ConnectionRefusedError):
-                continue
-            if source[0] != host:
-                continue
-            role = transports.index(transport)
-            counts[role]['received'] += 1
-            # Sizes of this fixture's padded initiation and response. Count
-            # matching datagrams without assuming their contents or peer state.
-            if len(payload) in (164, 124):
-                counts[role]['received_'+str(len(payload))+'B'] += 1
-            if peers[role] is not None and peers[role] != source:
-                counts[role]['port_changes'] += 1
-            if role == 0 and not server_ready.is_set():
-                if peers[role] != source:
-                    server_packets = 0
-                server_packets += 1
-                if server_packets == startup_datagrams:
-                    server_ready.set()
-            peers[role] = source
-            other = 1 - role
-            if peers[other] is not None:
-                transports[other].sendto(payload, peers[other])
-                counts[other]['sent_to_role'] += 1
-            else:
-                # Ordinary UDP cannot replay an old initiation to a peer
-                # that has not yet opened its physical socket.
-                counts[role]['before_peer_ready'] += 1
+def build_awg_smoke_peer(destination, env, source=None):
+    """Compile a disposable passive peer; never add a listener to the client."""
+    if run(['go', 'env', 'GOVERSION'], env=env) != TOOLCHAIN:
+        raise ValueError('Passive AWG smoke requires the exact pinned Go compiler')
+    destination = Path(destination)
+    if destination.exists() or destination.is_symlink():
+        raise ValueError('Unowned passive AWG smoke executable')
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source is None:
+        # A reused bundle has no remaining prepared build tree. Reconstruct
+        # the same pinned source/module graph, without rebuilding its engine
+        # or any native library, rather than silently omitting this protocol.
+        source, xray = destination.parent/'core', destination.parent/'xray'
+        checkout(source, 'https://github.com/SagerNet/sing-box.git', PIN)
+        checkout(xray, 'https://github.com/XTLS/Xray-core.git', POLICY.XRAY.XRAY_PIN)
+        pristine(source, PIN)
+        pristine(xray, POLICY.XRAY.XRAY_PIN)
+        prepare_native_sources(source, xray, env)
+    else:
+        source = Path(source)
+        if source.is_symlink() or run(['git', '-C', source, 'rev-parse', 'HEAD']) != PIN:
+            raise ValueError('Passive AWG smoke requires the original prepared core')
+    POLICY.AMNEZIA.TIMERS.verify(source, env=env)
+    # Reuse the exact production raw-IP adapter, with no copied implementation
+    # or dependency on the application's Box/controller import closure.
+    adapter = (ROOT/'mobile/amnezia/tun.go.tmpl').read_bytes()
+    package = b'package routervpnamnezia\n'
+    if not adapter.startswith(package):
+        raise ValueError('Native AWG adapter package boundary changed')
+    with tempfile.TemporaryDirectory(prefix='routervpn-awg-smoke-', dir=source/'cmd') as generated:
+        generated = Path(generated)
+        (generated/'tun.go').write_bytes(b'package main\n'+adapter[len(package):])
+        (generated/'main.go').write_text(AWG_SMOKE_PEER, encoding='utf-8')
+        run(['go', 'build', '-mod=readonly', '-trimpath', '-buildvcs=false',
+             '-tags=with_wireguard,with_gvisor', '-ldflags=-s -w -buildid= -checklinkname=0',
+             '-o', destination, './cmd/'+generated.name], cwd=source, env=env)
+    if not destination.is_file() or destination.is_symlink():
+        raise ValueError('Passive AWG smoke executable was not produced')
+    return destination
 
 
-def smoke_protocols(binary, env):
+def build_xray_smoke_peer(destination, env):
+    """Build the separately executed peer with the shipping server corrections."""
+    if run(['go', 'env', 'GOVERSION'], env=env) != TOOLCHAIN:
+        raise ValueError('Independent Xray smoke requires the exact pinned Go compiler')
+    destination = Path(destination)
+    if destination.exists() or destination.is_symlink():
+        raise ValueError('Unowned independent Xray smoke executable')
+    source = destination.parent/'xray-reference'
+    checkout(source, 'https://github.com/XTLS/Xray-core.git', POLICY.XRAY.XRAY_PIN)
+    pristine(source, POLICY.XRAY.XRAY_PIN)
+    # The shipped server applies these same pinned transport corrections,
+    # including FinalMask half-close required by REALITY. Keep both generated
+    # masks; a pristine upstream server panics before authentication here.
+    # No embedded-client patch or linked native library enters this peer.
+    policy = XRAY_SERVER.prepare(source)
+    flags = '-s -w -buildid= -checklinkname=0 -X github.com/xtls/xray-core/core.build=routervpn-'+POLICY.XRAY.XRAY_PIN+'.'+policy
+    run(['go', 'build', '-mod=readonly', '-trimpath', '-buildvcs=false',
+         '-ldflags='+flags, '-o', destination, './main'],
+        cwd=source, env={**env, 'CGO_ENABLED': '0'})
+    if not destination.is_file() or destination.is_symlink():
+        raise ValueError('Independent Xray smoke executable was not produced')
+    return destination
+
+
+def xray_smoke_pq_keys(peer, env):
+    output = run([peer, 'vlessenc'], env=env, timeout=10)
+    marker = 'Authentication: ML-KEM-768'
+    if output.count(marker) != 1:
+        raise ValueError('Pinned Xray did not produce its ML-KEM authentication pair')
+    keys = {}
+    for line in output.split(marker, 1)[1].splitlines():
+        if line.startswith(('"decryption":', '"encryption":')):
+            keys.update(json.loads('{'+line+'}'))
+    if set(keys) != {'decryption', 'encryption'} or not all(
+            value.startswith('mlkem768x25519plus.') for value in keys.values()):
+        raise ValueError('Pinned Xray generated no exact hybrid-PQ configuration')
+    return keys
+
+
+def pq_smoke_configurations(peer, env, protocol, host, target_port, upstream, proxy, cover):
+    """Use the shipping generators' exact PQ/FinalMask settings and real keys."""
+    pair = dict(line.split(': ', 1) for line in
+                run([peer, 'x25519'], env=env, timeout=10).splitlines() if ': ' in line)
+    private, password = pair.get('PrivateKey'), pair.get('Password (PublicKey)', pair.get('Password', pair.get('PublicKey')))
+    if not private or not password:
+        raise ValueError('Pinned Xray generated no REALITY authentication pair')
+    keys = xray_smoke_pq_keys(peer, env)
+    identity = run([peer, 'uuid'], env=env, timeout=10)
+    if str(uuid.UUID(identity)) != identity:
+        raise ValueError('Pinned Xray generated an invalid identity')
+    short = os.urandom(8).hex()
+
+    def generator(name):
+        path = ROOT/'server/scripts'/name
+        bodies = re.findall(r"<<'PY'\n(.*?)\nPY(?:\n|$)", path.read_text(encoding='utf-8'), re.S)
+        if len(bodies) != 1:
+            raise ValueError('Native smoke lost the original generator boundary')
+        return path, ast.parse(bodies[0], filename=str(path))
+
+    path, tree = generator('generate-xray-pq.sh')
+    definitions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                   and node.name in ('reality', 'inbound', 'client_xray')]
+    if {node.name for node in definitions} != {'reality', 'inbound', 'client_xray'} or len(definitions) != 3:
+        raise ValueError('Native smoke lost the original PQ generator functions')
+    scope = dict(target='localhost', tport=cover, rpriv=private, rpass=password, endpoint=host)
+    exec(compile(ast.Module(body=definitions, type_ignores=[]), str(path), 'exec'), scope)
+    inbound = scope['inbound']('pq-reality-in', upstream, identity, keys['decryption'], short, 'smoke')
+    client = scope['client_xray'](identity, upstream, keys['encryption'], short, proxy, 'xtls-rprx-vision')
+    server = {'inbounds': [inbound], 'outbounds': [{'protocol': 'freedom', 'tag': 'direct'}]}
+    if protocol == 'reality-xhttp':
+        path, tree = generator('generate-advanced-profiles.sh')
+        assignments = [node for node in tree.body if isinstance(node, ast.Assign) and
+                       any(isinstance(target, ast.Name) and target.id in ('finalmask', 'outer_xray') for target in node.targets)]
+        additions = [node for node in tree.body if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                     and isinstance(node.value.func, ast.Attribute) and node.value.func.attr == 'append'
+                     and any(isinstance(value, ast.Constant) and value.value == 'max-xhttp-in' for value in ast.walk(node))]
+        if len(assignments) != 2 or len(additions) != 1:
+            raise ValueError('Native smoke lost the original XHTTP generator settings')
+        scope.update(server=server, uuid=identity, server_dec=keys['decryption'], client_enc=keys['encryption'],
+                     xp=upstream, tp=cover, rpub=password, shortid=short, path='/'+os.urandom(16).hex())
+        selected = sorted([*assignments, *additions], key=lambda node: node.lineno)
+        exec(compile(ast.Module(body=selected, type_ignores=[]), str(path), 'exec'), scope)
+        inbound = server['inbounds'][-1]
+        server['inbounds'] = [inbound]
+        client = scope['outer_xray']
+        client['inbounds'][0]['port'] = proxy
+    # The SNI remains localhost. Only the fixture's literal bind/cover target
+    # changes; the cover can never return the destination's unpredictable body.
+    inbound['listen'] = host
+    inbound['streamSettings']['realitySettings']['target'] = '127.0.0.1:'+str(cover)
+    # The reference peer keeps the pinned private-target policy. Only this
+    # fixture's exact TCP destination is admitted; every other target is denied.
+    server['outbounds'][0]['settings'] = {'finalRules': [
+        {'action': 'allow', 'network': 'tcp', 'ip': [host+'/32'], 'port': str(target_port)},
+        {'action': 'block'}]}
+    server['log'] = {'loglevel': 'error'}
+    return server, client
+
+
+AWG_SMOKE_PEER = r'''package main
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	awg "github.com/amnezia-vpn/amneziawg-go/v3/device"
+	awgconn "github.com/amnezia-vpn/amneziawg-go/v3/conn"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/logger"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// The default UDP bind batches packets on Linux. The shipping protected
+// bind and its raw stack reader each use one packet; preserve that reader
+// contract while permitting the genuine passive peer to use batched UDP.
+type passiveTun struct { *nativeTun }
+func (t *passiveTun) Read(buffers [][]byte, sizes []int, offset int) (int, error) {
+	if len(buffers) == 0 || len(sizes) == 0 { return 0, errors.New("invalid passive TUN read") }
+	return t.nativeTun.Read(buffers[:1], sizes[:1], offset)
+}
+
+type peerConfig struct {
+	PrivateKey string `json:"private_key"`
+	ClientKey string `json:"client_key"`
+	ListenPort int `json:"listen_port"`
+	Target string `json:"target"`
+	Parameters map[string]string `json:"parameters"`
+}
+
+type targetHandler struct {
+	ctx context.Context
+	target netip.AddrPort
+	mu sync.Mutex
+	closed bool
+	flows map[net.Conn]struct{}
+	workers sync.WaitGroup
+}
+
+func (h *targetHandler) JudgeFlow(network uint8, _, target netip.AddrPort, _ []byte) tun.FlowVerdict {
+	if network == 6 && target == h.target { return tun.FlowVerdict{Action: tun.ActionAccept} }
+	return tun.FlowVerdict{Action: tun.ActionDrop}
+}
+func (*targetHandler) NewDNSPacket([]byte, M.Socksaddr, M.Socksaddr, N.PacketWriter) {}
+func (*targetHandler) NewPacketConnectionEx(_ context.Context, c N.PacketConn, _, _ M.Socksaddr, closed N.CloseHandlerFunc) {
+	_ = c.Close()
+	if closed != nil { closed(net.ErrClosed) }
+}
+func (h *targetHandler) NewConnectionEx(_ context.Context, c net.Conn, _, target M.Socksaddr, closed N.CloseHandlerFunc) {
+	defer c.Close()
+	if closed != nil { defer closed(nil) }
+	h.mu.Lock()
+	if h.closed || target.String() != h.target.String() { h.mu.Unlock(); return }
+	h.workers.Add(1)
+	h.flows[c] = struct{}{}
+	h.mu.Unlock()
+	defer h.workers.Done()
+	var upstream net.Conn
+	defer func() {
+		h.mu.Lock()
+		delete(h.flows, c)
+		if upstream != nil { delete(h.flows, upstream) }
+		h.mu.Unlock()
+	}()
+	var err error
+	upstream, err = (&net.Dialer{Timeout: 3*time.Second}).DialContext(h.ctx, "tcp", h.target.String())
+	if upstream != nil { defer upstream.Close() }
+	if err != nil || upstream == nil { return }
+	h.mu.Lock()
+	if h.closed { h.mu.Unlock(); return }
+	h.flows[upstream] = struct{}{}
+	h.mu.Unlock()
+	done := make(chan struct{})
+	go func() { _, _ = io.Copy(upstream, c); _ = upstream.Close(); close(done) }()
+	_, _ = io.Copy(c, upstream)
+	_ = c.Close()
+	_ = upstream.Close()
+	<-done
+}
+func (h *targetHandler) close() {
+	h.mu.Lock()
+	h.closed = true
+	flows := make([]net.Conn, 0, len(h.flows))
+	for c := range h.flows { flows = append(flows, c) }
+	h.mu.Unlock()
+	for _, c := range flows { _ = c.Close() }
+	h.workers.Wait()
+}
+
+func peer() error {
+	if len(os.Args) != 2 { return errors.New("missing private smoke configuration") }
+	raw, err := os.ReadFile(os.Args[1])
+	if err != nil || len(raw) > 4096 { return errors.New("invalid private smoke configuration") }
+	var config peerConfig
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&config) != nil || decoder.Decode(new(any)) != io.EOF ||
+		config.ListenPort < 1 || config.ListenPort > 65535 || len(config.Parameters) != 11 {
+		return errors.New("invalid private smoke configuration")
+	}
+	private, err := base64.StdEncoding.DecodeString(config.PrivateKey)
+	if err != nil || len(private) != 32 { return errors.New("invalid smoke key") }
+	public, err := base64.StdEncoding.DecodeString(config.ClientKey)
+	if err != nil || len(public) != 32 { return errors.New("invalid smoke key") }
+	target, err := netip.ParseAddrPort(config.Target)
+	if err != nil || !target.Addr().Is4() || (!target.Addr().IsGlobalUnicast() && !target.Addr().IsLinkLocalUnicast()) || target.Port() == 0 {
+		return errors.New("invalid smoke target")
+	}
+	var parameters strings.Builder
+	for _, key := range []string{"jc","jmin","jmax","s1","s2","s3","s4","h1","h2","h3","h4"} {
+		value := config.Parameters[key]
+		n, err := strconv.ParseUint(value, 10, 32)
+		if err != nil || strconv.FormatUint(n, 10) != value { return errors.New("invalid smoke padding") }
+		fmt.Fprintf(&parameters, "%s=%s\n", key, value)
+	}
+	padding, err := strconv.Atoi(config.Parameters["s4"])
+	if err != nil || padding > 1280 { return errors.New("invalid smoke padding") }
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	handler := &targetHandler{ctx: ctx, target: target, flows: make(map[net.Conn]struct{})}
+	stack, err := wg.NewDevice(wg.DeviceOptions{Context: ctx, Logger: logger.NOP(), System: false,
+		Handler: handler, UDPTimeout: 30*time.Second, ICMPTimeout: 30*time.Second,
+		Name: "routervpn-passive-awg-smoke", MTU: 1280,
+		Address: []netip.Prefix{netip.MustParsePrefix("198.18.0.1/32")},
+		AllowedAddress: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}})
+	if err != nil { return errors.New("passive smoke stack failed") }
+	wrapped := wrapTun(stack)
+	device := awg.NewDevice(&passiveTun{wrapped}, awgconn.NewDefaultBind(), &awg.Logger{Verbosef: func(string,...any){}, Errorf: func(string,...any){}})
+	defer func() { cancel(); handler.close(); device.Close() }()
+	// A genuine passive peer has no endpoint and no periodic initiation.
+	ipc := fmt.Sprintf("private_key=%x\nlisten_port=%d\n%sreplace_peers=true\npublic_key=%x\nallowed_ip=198.18.0.2/32\n",
+		private, config.ListenPort, parameters.String(), public)
+	if device.IpcSet(ipc) != nil || wrapped.configuredPadding(padding) != nil || stack.Start() != nil || device.Up() != nil {
+		return errors.New("passive smoke peer failed")
+	}
+	fmt.Println("Passive AWG smoke peer ready")
+	eof := make(chan struct{})
+	go func() { _, _ = io.Copy(io.Discard, os.Stdin); close(eof) }()
+	select {
+	case <-eof:
+		return nil
+	case <-ctx.Done():
+		// A Windows pipe read need not be interruptible by closing this handle.
+		// The failed helper exits after native cleanup; the parent joins it.
+		return errors.New("passive smoke peer lifetime expired")
+	}
+}
+
+
+func cover() (result error) {
+	if len(os.Args) != 5 { return errors.New("invalid smoke cover arguments") }
+	address, err := netip.ParseAddrPort(os.Args[2])
+	if err != nil || !address.Addr().IsLoopback() || address.Port() == 0 { return errors.New("invalid smoke cover bind") }
+	certificate, err := tls.LoadX509KeyPair(os.Args[3], os.Args[4])
+	if err != nil { return errors.New("invalid smoke cover certificate") }
+	pem, err := os.ReadFile(os.Args[3])
+	roots := x509.NewCertPool()
+	if err != nil || !roots.AppendCertsFromPEM(pem) { return errors.New("invalid smoke cover trust") }
+	listener, err := net.Listen("tcp", address.String())
+	if err != nil { return errors.New("smoke cover could not listen") }
+	const body = "routervpn-smoke-cover"
+	server := &http.Server{
+		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}},
+		ReadHeaderTimeout: 3*time.Second, ReadTimeout: 3*time.Second, WriteTimeout: 3*time.Second, IdleTimeout: 3*time.Second,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			_, _ = io.WriteString(w, body)
+		}),
+	}
+	done := make(chan struct{})
+	var serving error
+	go func() { serving = server.ServeTLS(listener, "", ""); close(done) }()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		result = errors.Join(result, server.Shutdown(ctx))
+		_ = server.Close()
+		_ = listener.Close()
+		<-done
+		if !errors.Is(serving, http.ErrServerClosed) { result = errors.Join(result, serving) }
+	}()
+	// REALITY XHTTP always selects HTTP/2. Exercise the actual cover with h2
+	// before readiness, instead of advertising h2 on an HTTP/1-only server.
+	transport := &http.Transport{ForceAttemptHTTP2: true,
+		TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS13}}
+	defer transport.CloseIdleConnections()
+	response, err := (&http.Client{Transport: transport, Timeout: 3*time.Second}).Get("https://"+address.String()+"/")
+	if err != nil { return errors.New("smoke cover HTTP2 handshake failed") }
+	received, readErr := io.ReadAll(io.LimitReader(response.Body, 128))
+	closeErr := response.Body.Close()
+	if readErr != nil || closeErr != nil || response.ProtoMajor != 2 || response.StatusCode != 200 || string(received) != body {
+		return errors.New("smoke cover did not serve its exact HTTP2 body")
+	}
+	transport.CloseIdleConnections()
+	input := make(chan struct{})
+	go func() { _, _ = io.Copy(io.Discard, os.Stdin); close(input) }()
+	fmt.Println("Native HTTP2 smoke cover ready")
+	deadline := time.NewTimer(90*time.Second)
+	defer deadline.Stop()
+	select {
+	case <-input:
+		return nil
+	case <-deadline.C:
+		return errors.New("smoke cover ownership deadline expired")
+	case <-done:
+		return errors.New("smoke cover stopped before retirement")
+	}
+}
+
+func main() {
+	var err error
+	if len(os.Args) > 1 && os.Args[1] == "cover" { err = cover() } else { err = peer() }
+	if err != nil {
+		// Never emit peer-supplied IPC errors or credentials.
+		fmt.Fprintln(os.Stderr, "Native smoke helper failed:", err)
+		os.Exit(1)
+	}
+}
+'''
+
+
+
+def smoke_protocols(binary, env, *, source=None):
     """Exercise the built host engine locally, without host routes or TUN.
 
     One actual HTTPS exchange traverses each selected proxy. Stopping its
@@ -720,6 +878,9 @@ def smoke_protocols(binary, env):
         key.chmod(0o600)
         token = os.urandom(32)
         target_events = deque(maxlen=32)
+        awg_peer = build_awg_smoke_peer(work/'peer'/('passive-awg.exe' if os.name == 'nt' else 'passive-awg'), env, source)
+        xray_peer = build_xray_smoke_peer(work/'peer'/('reference-xray.exe' if os.name == 'nt' else 'reference-xray'), env)
+        print('Independent Xray smoke peer: '+POLICY.XRAY.XRAY_PIN+' server-policy '+XRAY_SERVER.digest()+' SHA256 '+hashlib.sha256(xray_peer.read_bytes()).hexdigest(), flush=True)
 
         class Target(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
@@ -749,6 +910,7 @@ def smoke_protocols(binary, env):
                 try:
                     secured = server_tls.wrap_socket(stream, server_side=True)
                 except OSError:
+                    target_events.append((time.monotonic(), 'tls_failed'))
                     return
                 with secured:
                     target_events.append((time.monotonic(), 'tls_complete'))
@@ -762,11 +924,19 @@ def smoke_protocols(binary, env):
             target_host = route.getsockname()[0]
         server_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         server_tls.load_cert_chain(certificate, key)
-        target = TargetServer((target_host, 0), Target)
-        worker = threading.Thread(target=target.serve_forever, daemon=True)
-        worker.start()
+        def start_target(listen_port=0):
+            server = TargetServer((target_host, listen_port), Target)
+            thread = threading.Thread(target=lambda: server.serve_forever(poll_interval=0.05), daemon=True)
+            thread.start()
+            return server, thread, server.server_address[1]
+
+        def close_target(server, thread):
+            server.shutdown(); server.server_close(); thread.join(timeout=5)
+            if thread.is_alive():
+                raise RuntimeError('Native protocol target did not stop')
+
+        target, worker, target_port = start_target()
         client_tls = ssl.create_default_context(cafile=str(certificate))
-        target_port = target.server_address[1]
 
         def exact(stream, count):
             value = b''
@@ -810,20 +980,27 @@ def smoke_protocols(binary, env):
                 reservation.bind(('127.0.0.1', 0))
                 return reservation.getsockname()[1]
 
-        def stop(process):
+        def stop(process, *, clean=False):
+            if process.stdin is not None:
+                process.stdin.close()
             if process.poll() is None:
-                process.terminate()
+                if process.stdin is None:
+                    process.terminate()
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=5)
+            if clean and process.returncode != 0:
+                raise RuntimeError('Native smoke helper did not retire cleanly')
 
         try:
-            for protocol in ('socks', 'http', 'https', 'shadowsocks', 'hysteria2', 'naive-h2', 'naive-h3', 'wireguard', 'openvpn-tcp', 'openvpn-udp', 'amneziawg', 'reality-vision'):
+            for protocol in ('socks', 'http', 'https', 'shadowsocks', 'hysteria2', 'naive-h2', 'naive-h3', 'wireguard', 'openvpn-tcp', 'openvpn-udp', 'amneziawg', 'reality-vision', 'reality-pq-vision', 'reality-xhttp'):
                 upstream_port, proxy_port = port(socket.SOCK_DGRAM if protocol in ('hysteria2', 'naive-h3', 'wireguard', 'openvpn-udp', 'amneziawg') else socket.SOCK_STREAM), port()
                 while upstream_port == proxy_port:
                     proxy_port = port()
+                pq_case = protocol in ('reality-pq-vision', 'reality-xhttp')
+                cover_port = port() if pq_case else None
                 kind = 'http' if protocol == 'https' else 'naive' if protocol in ('naive-h2', 'naive-h3') else protocol
                 inbound = {'type': kind, 'listen': '127.0.0.1', 'listen_port': upstream_port}
                 outbound = {'type': kind, 'tag': 'selected', 'server': '127.0.0.1', 'server_port': upstream_port}
@@ -864,7 +1041,7 @@ def smoke_protocols(binary, env):
                                     'mtu': 1280, 'address': ['198.18.0.'+str(index+1)+'/32'],
                                     'private_key': pairs[index]['PrivateKey'], 'peers': [peer]}
                         if protocol == 'amneziawg':
-                            peer.update(address=target_host, persistent_keepalive_interval=1)
+                            peer.update(address=target_host, port=upstream_port, persistent_keepalive_interval=1)
                             endpoint['amnezia'] = {'jc': '2', 'jmin': '32', 'jmax': '64', 's1': '16', 's2': '32',
                                                    's3': '16', 's4': '16', 'h1': '101', 'h2': '102', 'h3': '103', 'h4': '104'}
                         elif index == 0:
@@ -873,6 +1050,10 @@ def smoke_protocols(binary, env):
                             peer.update(address='127.0.0.1', port=upstream_port)
                         configuration.pop('inbounds' if index == 0 else 'outbounds')
                         configuration['endpoints'] = [endpoint]
+                    if protocol == 'amneziawg':
+                        configurations = ({'private_key': pairs[0]['PrivateKey'], 'client_key': pairs[1]['PublicKey'],
+                            'listen_port': upstream_port, 'target': target_host+':'+str(target_port),
+                            'parameters': configurations[1]['endpoints'][0]['amnezia']}, configurations[1])
                 elif protocol.startswith('openvpn-'):
                     shared = {'system': False, 'mtu': 1280, 'network': protocol[8:], 'data_ciphers': ['AES-256-GCM']}
                     configurations[0]['endpoints'] = [{**shared, 'type': 'openvpn-server', 'tag': 'server',
@@ -901,91 +1082,154 @@ def smoke_protocols(binary, env):
                                     'publicKey': pair['PublicKey'], 'shortId': short_id}}}]}
                     configurations[1]['outbounds'] = [{'type': 'routervpn-xray', 'tag': 'selected',
                                                       'mode': protocol, 'config_json': json.dumps(xray)}]
-                processes, logs, relay_sockets = [], [], []
-                relay_done, relay_worker = threading.Event(), None
+                elif pq_case:
+                    server, xray = pq_smoke_configurations(xray_peer, env, protocol, target_host, target_port, upstream_port, proxy_port, cover_port)
+                    configurations = (server, configurations[1])
+                    configurations[1]['outbounds'] = [{'type': 'routervpn-xray', 'tag': 'selected',
+                                                      'mode': protocol, 'config_json': json.dumps(xray)}]
+                processes, logs, log_paths = [], [], []
+                cover_process, completed = None, False
                 started = time.monotonic()
                 phase, client_stage = 'startup', 'not_started'
-                failures, relay_counts = Counter(), [Counter(), Counter()]
-                try:
-                    if protocol == 'amneziawg':
-                        for configuration in configurations:
-                            relay = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                            relay_sockets.append(relay)
-                            relay.bind((target_host, 0))
-                            configuration['endpoints'][0]['peers'][0]['port'] = relay.getsockname()[1]
-                        server_ready = threading.Event()
-                        # Jc junk datagrams precede the server's first initiation.
-                        startup_datagrams = int(configurations[0]['endpoints'][0]['amnezia']['jc']) + 1
-                        relay_worker = threading.Thread(target=relay_awg_smoke_datagrams,
-                                                        args=(relay_sockets, target_host, relay_done, relay_counts,
-                                                              server_ready, startup_datagrams), daemon=True)
-                        relay_worker.start()
-                    for role, configuration in zip(('server', 'client'), configurations):
-                        if role == 'client' and relay_worker is not None:
-                            if not server_ready.wait(max(0, started + 15 - time.monotonic())):
-                                raise RuntimeError('Native AmneziaWG server did not establish its UDP peer before startup expired')
-                        config_path, log_path = work/(protocol+'-'+role+'.json'), work/(protocol+'-'+role+'.log')
-                        configuration['log'] = {'level': 'error', 'timestamp': False}
-                        config_path.write_text(json.dumps(configuration), encoding='utf-8')
-                        config_path.chmod(0o600)
-                        log = log_path.open('wb'); logs.append(log)
-                        processes.append(subprocess.Popen([str(binary), 'run', '-c', str(config_path)], env=env, stdout=log, stderr=log))
-                    phase = 'positive'
-                    deadline = (started if relay_worker is not None else time.monotonic()) + 15
+                failures = Counter()
+
+                def ready(process, path, marker, deadline):
+                    while marker not in path.read_bytes().splitlines():
+                        if process.poll() is not None or time.monotonic() >= deadline:
+                            raise RuntimeError('Native '+protocol+' helper did not become ready')
+                        time.sleep(0.01)
+
+                def launch(role, configuration):
+                    config_path, log_path = work/(protocol+'-'+role+'.json'), work/(protocol+'-'+role+'.log')
+                    passive = protocol == 'amneziawg' and role == 'server'
+                    reference = pq_case and role == 'server'
+                    if not passive:
+                        configuration['log'] = {'loglevel': 'error'} if reference else {'level': 'error', 'timestamp': False}
+                    config_path.write_text(json.dumps(configuration), encoding='utf-8')
+                    config_path.chmod(0o600)
+                    log = log_path.open('wb'); logs.append(log); log_paths.append(log_path)
+                    command = [str(awg_peer), str(config_path)] if passive else [str(xray_peer if reference else binary), 'run', '-c', str(config_path)]
+                    process = subprocess.Popen(command, env=env, stdin=subprocess.PIPE if passive else None, stdout=log, stderr=log)
+                    processes.append(process)
+                    if passive:
+                        # Readiness is charged to the same startup budget.
+                        ready(process, log_path, b'Passive AWG smoke peer ready', deadline)
+                    return process
+
+                def await_payload(deadline):
                     while True:
-                        if any(process.poll() is not None for process in processes):
+                        if any(process.poll() is not None for process in processes) or cover_process is not None and cover_process.poll() is not None:
                             raise RuntimeError('Native '+protocol+' process exited before its traffic check')
                         try:
                             exchange(proxy_port)
-                            break
+                            return
                         except (OSError, http.client.HTTPException):
                             failures[client_stage] += 1
                             if time.monotonic() >= deadline:
                                 raise
                             time.sleep(0.05)
-                    phase = 'stopped_upstream'
-                    stop(processes[0])
+
+                def refused(reason):
                     try:
                         exchange(proxy_port)
                     except (OSError, http.client.HTTPException):
-                        pass
-                    else:
-                        raise RuntimeError('Native '+protocol+' used a path after its selected upstream stopped')
+                        return
+                    raise RuntimeError('Native '+protocol+' accepted traffic '+reason)
+
+                try:
+                    deadline = time.monotonic()+15
+                    if pq_case:
+                        path = work/(protocol+'-cover.log')
+                        log = path.open('wb'); logs.append(log); log_paths.append(path)
+                        cover_process = subprocess.Popen([str(awg_peer), 'cover', '127.0.0.1:'+str(cover_port), str(certificate), str(key)],
+                                                         env=env, stdin=subprocess.PIPE, stdout=log, stderr=log)
+                        ready(cover_process, path, b'Native HTTP2 smoke cover ready', deadline)
+                    for role, configuration in zip(('server', 'client'), configurations):
+                        launch(role, configuration)
+                    phase = 'positive'
+                    await_payload(deadline)
+                    if pq_case:
+                        # Each invalid credential reaches a live native SOCKS
+                        # listener. Independent ML-KEM credentials keep the UUID
+                        # and REALITY trust valid, ruling out a silent PQ bypass.
+                        for credential in ('uuid', 'mlkem'):
+                            phase = 'wrong_'+credential
+                            stop(processes[-1]); processes.pop()
+                            wrong = json.loads(json.dumps(configurations[1]))
+                            config = json.loads(wrong['outbounds'][0]['config_json'])
+                            user = config['outbounds'][0]['settings']['vnext'][0]['users'][0]
+                            if credential == 'uuid':
+                                user['id'] = str(uuid.uuid4())
+                            else:
+                                encryption = xray_smoke_pq_keys(xray_peer, env)['encryption']
+                                if encryption == user['encryption']:
+                                    raise ValueError('Independent ML-KEM key generation repeated its credential')
+                                user['encryption'] = encryption
+                            wrong['outbounds'][0]['config_json'] = json.dumps(config)
+                            invalid = launch('client-invalid-'+credential, wrong)
+                            deadline = time.monotonic()+15
+                            while True:
+                                if invalid.poll() is not None:
+                                    raise RuntimeError('Invalid-credential native client did not start')
+                                try:
+                                    with socket.create_connection(('127.0.0.1', proxy_port), timeout=3) as stream:
+                                        stream.sendall(bytes((5, 1, 0)))
+                                        if exact(stream, 2) != bytes((5, 0)):
+                                            raise ValueError('Invalid-credential client has no native SOCKS ingress')
+                                    break
+                                except OSError:
+                                    if time.monotonic() >= deadline:
+                                        raise
+                                    time.sleep(0.05)
+                            refused('with the wrong generated '+credential+' credential')
+                            if any(process.poll() is not None for process in processes):
+                                raise RuntimeError('Native PQ peer exited instead of refusing its wrong credential')
+                        stop(processes[-1]); processes.pop()
+                        phase = 'restored_credential'
+                        launch('client-restored', configurations[1])
+                        await_payload(time.monotonic()+15)
+                        phase = 'stopped_destination'
+                        close_target(target, worker); target = None
+                        refused('after its actual HTTPS destination stopped')
+                        if any(process.poll() is not None for process in processes):
+                            raise RuntimeError('Native PQ peer exited when the destination stopped')
+                        phase = 'restored_destination'
+                        target, worker, target_port = start_target(target_port)
+                        await_payload(time.monotonic()+15)
+                    phase = 'stopped_upstream'
+                    stop(processes[0], clean=protocol == 'amneziawg')
+                    refused('after its selected upstream stopped')
                     if processes[1].poll() is not None:
                         raise RuntimeError('Native client exited during upstream failure')
                     phase = 'direct_control'
                     exchange()
-                    print('Native protocol traffic: '+protocol+' HTTPS payload passed; stopped upstream refused; direct control alive', flush=True)
+                    detail = '; wrong UUID and independent ML-KEM credential refused; stopped destination refused' if pq_case else ''
+                    print('Native protocol traffic: '+protocol+' HTTPS payload passed; stopped upstream refused; direct control alive'+detail, flush=True)
+                    completed = True
                 except Exception:
                     diagnostic = {'protocol': protocol, 'phase': phase, 'client_stage': client_stage,
                                   'elapsed_ms': round((time.monotonic()-started)*1000),
                                   'positive_failures_by_stage': failures,
                                   'recent_target_events_ms': [(round((when-started)*1000), event)
-                                                              for when, event in target_events.copy() if when >= started]}
-                    if relay_worker is not None:
-                        diagnostic['relay'] = {role: counts.copy() for role, counts in zip(('server', 'client'), relay_counts)}
+                                                              for when, event in target_events.copy() if when >= started],
+                                  'peer_kind': 'passive-awg' if protocol == 'amneziawg' else 'pinned-xray' if pq_case else 'project-native'}
                     print('Native protocol traffic diagnostic: '+json.dumps(diagnostic, sort_keys=True), file=sys.stderr)
-                    for role in ('server', 'client'):
-                        path = work/(protocol+'-'+role+'.log')
+                    for path in log_paths:
                         if path.exists():
                             sys.stderr.write(path.read_bytes()[-8192:].decode('utf-8', errors='replace'))
                     raise
                 finally:
-                    for process in reversed(processes):
-                        stop(process)
-                    for log in logs:
-                        log.close()
-                    relay_done.set()
-                    if relay_worker is not None:
-                        relay_worker.join(timeout=2)
-                    for relay in relay_sockets:
-                        relay.close()
-                    if relay_worker is not None and relay_worker.is_alive():
-                        raise RuntimeError('Native AWG relay did not stop')
+                    try:
+                        for process in reversed(processes):
+                            stop(process)
+                        if cover_process is not None:
+                            stop(cover_process, clean=completed)
+                    finally:
+                        for log in logs:
+                            log.close()
         finally:
-            target.shutdown(); target.server_close(); worker.join(timeout=5)
-            if worker.is_alive():
-                raise RuntimeError('Native protocol target did not stop')
+            if target is not None:
+                close_target(target, worker)
 
 
 def build(target, destination, *, source=None, xray=None, pq=None, cache=None, tor_compiled=None, dnssec_compiled=None):
@@ -1084,7 +1328,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             help_output = run([binary, 'routervpn-external', '--help'], env=env, timeout=20)
             if '--runtime-dir' not in help_output or '--session' not in help_output:
                 raise ValueError('Actual native engine omitted its captured external owner command')
-            smoke_protocols(binary, env)
+            smoke_protocols(binary, env, source=source)
         if destination.exists():
             destination.rmdir()
         os.replace(stage, destination)
