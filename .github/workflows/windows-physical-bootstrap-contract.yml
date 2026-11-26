@@ -1,35 +1,6 @@
 name: Windows physical bootstrap composition
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'go.mod'
-      - 'go.sum'
-      - 'internal/**'
-      - 'mobile/desktop/**'
-      - 'mobile/externalpolicy/**'
-      - 'mobile/strategy/**'
-      - 'mobile/toroutbound/**'
-      - 'mobile/torpt/**'
-      - 'deploy/prepare-*.py'
-      - 'deploy/mobile_*policy.py'
-      - 'deploy/build-native-runtime.py'
-      - '.github/actions/go-windows-sockets/**'
-      - 'deploy/prepare-go-windows-sockets.py'
-      - 'deploy/test_go_windows_sockets.py'
-      - 'deploy/test_windows_physical_bootstrap*.py'
-      - 'deploy/test_windows_physical_tunnel*.py'
-      - 'deploy/test_windows_external_physical.py'
-      - 'deploy/test_windows_external_provider_join.py'
-      - 'deploy/test_desktop_node_physical.py'
-      - 'deploy/test_desktop_node_phases.py'
-      - 'deploy/test_windows_protection_transfer.py'
-      - 'deploy/test_windows_protection_observation.py'
-      - 'deploy/test_windows_node_physical*.py'
-      - 'deploy/fixtures/windows-node-physical/**'
-      - 'deploy/fixtures/windows-physical-bootstrap/**'
-      - '.github/workflows/windows-physical-bootstrap-contract.yml'
   pull_request:
     paths:
       - 'go.mod'

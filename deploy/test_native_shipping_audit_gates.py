@@ -1733,13 +1733,13 @@ class NativeShippingAuditTests(unittest.TestCase):
         self.replace(path, call, 'proofErr := errors.New("' + call + '")')
         self.assert_multihop_chain(False)
 
-    def test_shared_source_guard_retriggers_both_backend_consumers(self):
-        for workflow in ("recovered-native-ui-gate.yml", "recovered-map-first-ui-gate.yml"):
-            text = (ROOT / ".github/workflows" / workflow).read_text()
-            for event in ("push", "pull_request"):
-                section = re.search(r"^  " + event + r":\n(.*?)(?=^  [a-z_]+:|^permissions:)", text, re.M | re.S)
-                self.assertIsNotNone(section, (workflow, event))
-                self.assertIn('"deploy/native_multihop_audit.py"', section.group(1))
+    def test_shared_source_guard_retriggers_combined_map_first_gate(self):
+        workflow = "recovered-map-first-ui-gate.yml"
+        text = (ROOT / ".github/workflows" / workflow).read_text()
+        for event in ("push", "pull_request"):
+            section = re.search(r"^  " + event + r":\n(.*?)(?=^  [a-z_]+:|^permissions:)", text, re.M | re.S)
+            self.assertIsNotNone(section, (workflow, event))
+            self.assertIn('"deploy/native_multihop_audit.py"', section.group(1))
 
     def test_current_shipping_chain_passes_both_scorers(self):
         self.assertTrue(self.scope["windows_owned_package"]())

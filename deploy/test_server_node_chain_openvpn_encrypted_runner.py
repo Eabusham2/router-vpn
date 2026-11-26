@@ -44,8 +44,10 @@ def required_workflow(value):
     if any(value.count(x+'\n')!=1 for x in required):raise ValueError('Required OpenVPN native workflow changed')
     if not value.index("go-version: '1.26.3'")<value.index(runner)<value.index(command)<value.index('      - uses: actions/upload-artifact@v4'):raise ValueError('OpenVPN required execution order changed')
     if re.search(r'^\s*(?:if:|continue-on-error:|allow_failure:)',value,re.M) or any(v in value for v in ('--compile-only','|| true','|| :','set +e')):raise ValueError('OpenVPN native workflow bypass')
+    if not all(event in value for event in ('  workflow_call:\n','  workflow_dispatch:\n','  pull_request:\n')) or re.search(r'^  push:', value, re.M):
+        raise ValueError('Use the release caller for main pushes; keep PR and manual checks')
     for path in ('mobile/server_chain/**','mobile/server_chain_acceptance/**','mobile/desktop/**','internal/mobilemultihop/**','internal/multihoprelay/**','internal/nativeopenvpn/**','deploy/**'):
-        if value.count("      - '"+path+"'\n")!=2:raise ValueError('OpenVPN source trigger missing')
+        if value.count("      - '"+path+"'\n")!=1:raise ValueError('OpenVPN source trigger missing')
 
 def required_reusable_job(value):
     key='  openvpn-direct:\n    name: Require actual zero-prefix OpenVPN Server suffix\n    uses: ./.github/workflows/server-openvpn-direct-encrypted.yml\n'

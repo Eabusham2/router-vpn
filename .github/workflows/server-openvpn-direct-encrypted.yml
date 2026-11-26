@@ -3,19 +3,6 @@ name: OpenVPN direct Server encrypted suffix acceptance
 on:
   workflow_dispatch:
   workflow_call:
-  push:
-    branches: [main]
-    paths:
-      - 'mobile/server_chain/**'
-      - 'mobile/server_chain_acceptance/**'
-      - 'mobile/desktop/**'
-      - 'internal/mobilemultihop/**'
-      - 'internal/multihoprelay/**'
-      - 'internal/nativeopenvpn/**'
-      - 'deploy/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/server-openvpn-direct-encrypted.yml'
   pull_request:
     paths:
       - 'mobile/server_chain/**'

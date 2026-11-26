@@ -3,18 +3,6 @@ name: Hysteria2 Server encrypted suffix acceptance
 on:
   workflow_dispatch:
   workflow_call:
-  push:
-    branches: [main]
-    paths:
-      - 'mobile/server_chain/**'
-      - 'mobile/server_chain_acceptance/**'
-      - 'mobile/desktop/**'
-      - 'internal/mobilemultihop/**'
-      - 'internal/multihoprelay/**'
-      - 'deploy/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/server-hysteria-encrypted.yml'
   pull_request:
     paths:
       - 'mobile/server_chain/**'

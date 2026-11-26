@@ -2,30 +2,6 @@ name: macOS physical socket ownership
 
 on:
   workflow_call:
-  push:
-    branches: [main]
-    paths:
-      - 'go.mod'
-      - 'go.sum'
-      - 'internal/mobiletor/**'
-      - '!internal/mobiletor/desktop_socket_windows*.go'
-      - '!internal/mobiletor/desktop_socket_native_windows*.go'
-      - 'internal/common/**'
-      - 'modes/darwin_kill_switch.py'
-      - 'modes/darwin_pf_baseline.py'
-      - 'modes/kill-switch-platform.py'
-      - 'modes/test_darwin_owned_pf.py'
-      - 'modes/test_darwin_pf_baseline.py'
-      - 'deploy/test_desktop_darwin_guardian.py'
-      - 'deploy/test_darwin_pf_journal.py'
-      - 'deploy/test_desktop_darwin_guardian_runner.py'
-      - 'deploy/test_darwin_off_close_admission.py'
-      - 'deploy/test_desktop_darwin_observation.py'
-      - 'deploy/test_desktop_socket_uid.py'
-      - 'deploy/darwin_race_toolchain.py'
-      - 'deploy/test_darwin_race_toolchain.py'
-      - 'deploy/prepare-desktop-external.py'
-      - '.github/workflows/macos-physical-socket-contract.yml'
   pull_request:
     paths:
       - 'go.mod'
