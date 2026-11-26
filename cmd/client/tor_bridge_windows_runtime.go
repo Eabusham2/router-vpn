@@ -28,10 +28,6 @@ func safePinnedRuntimeExecutable(path, label string) (string, error) {
 	return path, nil
 }
 
-func findUniquePinnedRuntimeExecutable(root, name, label string) (string, error) {
-	return findUniquePinnedRuntimeExecutableContext(context.Background(), root, name, label)
-}
-
 func findUniquePinnedRuntimeExecutableContext(ctx context.Context, root, name, label string) (string, error) {
 	if ctx == nil {
 		return "", errors.New("Tor runtime discovery has no original caller")
@@ -94,10 +90,6 @@ func findUniquePinnedRuntimeExecutableContext(ctx context.Context, root, name, l
 	}
 	path, err := safePinnedRuntimeExecutable(matches[0], label)
 	return path, errors.Join(err, ctx.Err())
-}
-
-func windowsTorRuntimeExecutable(root, name string) (string, error) {
-	return windowsTorRuntimeExecutableContext(context.Background(), root, name)
 }
 
 func windowsTorRuntimeExecutableContext(ctx context.Context, root, name string) (string, error) {

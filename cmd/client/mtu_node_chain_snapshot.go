@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"time"
 
 	"router-vpn/internal/mobilemultihop"
 )
@@ -25,12 +24,6 @@ type mtuNodeChainSnapshot struct {
 	Source        string
 	Config        string
 	Session       string
-}
-
-func captureMTUNodeChainSnapshot(owner *nativeMultihopRuntime) (*mtuNodeChainSnapshot, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	return captureMTUNodeChainSnapshotContext(ctx, owner)
 }
 
 // Extended packet routes retain both the original sealed inputs and the

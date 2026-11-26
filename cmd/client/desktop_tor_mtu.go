@@ -83,30 +83,6 @@ func desktopTorProofReadbackObservedLocked(owner *desktopTorRuntime, proof deskt
 	return readback.InterfaceName == proof.InterfaceName && readback.InterfaceIndex == proof.InterfaceIndex && readback.EffectiveMTU == proof.EffectiveMTU && desktopTorMTUReadbackAllowedLocked(owner, readback, false)
 }
 
-func authorizeDesktopTorMTURequest(launch *desktopNodeLaunch, request desktopMTURequest) error {
-	bad := errors.New("Tor MTU request differs from its captured native operation")
-	if launch == nil || launch.tor == nil || launch.external != nil || request.Generation == 0 || !desktopMTURequestPattern.MatchString(request.Request) {
-		return bad
-	}
-	owner := launch.tor
-	owner.mu.Lock()
-	defer owner.mu.Unlock()
-	expected := owner.expected
-	if !expected.AllowMTUOptimization() || request.Schema != 1 || request.Session != expected.SessionID || request.SourceSHA256 != expected.SourceSHA256 || request.ConfigSHA256 != expected.ConfigSHA256 || owner.adopted == nil || owner.mtu == nil {
-		return bad
-	}
-	previous := owner.mtuAuthority
-	if request.Generation < previous.generation || request.Generation > previous.generation+1 || request.Generation == previous.generation && request.Request != previous.request {
-		return bad
-	}
-	if request.Generation != previous.generation && owner.mtuReadback != nil {
-		captured := *owner.mtuReadback
-		owner.mtuPriorReadback = &captured
-	}
-	owner.mtuAuthority = desktopTorMTUAuthority{generation: request.Generation, request: request.Request}
-	return nil
-}
-
 func validateDesktopTorMTURecord(launch *desktopNodeLaunch, record desktopMTURecord) error {
 	bad := errors.New("native MTU readback belongs to another Tor operation or interface")
 	if launch == nil {

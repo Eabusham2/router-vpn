@@ -11,24 +11,6 @@ import (
 	"router-vpn/internal/mobilemultihop"
 )
 
-// Capture the Windows ordinary proxy's physical owner before preflight or any
-// old-session mutation. The original graph still owns DNS/exit proof; the
-// derived graph owns the actual native sockets and measurement mailboxes.
-// Other graph families retain their existing launch contract until their
-// complete lower path has a native owner of its own.
-// Automatic connection selection remains on that existing contract until the
-// captured legacy-to-native protection handoff is implemented and verified.
-func prepareDesktopExternalPhysical(launch *desktopNodeLaunch, targetOS string) error {
-	if targetOS != "windows" {
-		targetOS = "" // Retained Linux capture is selected by its original host.
-	}
-	return prepareDesktopExternalPhysicalCaptured(launch, targetOS)
-}
-
-func prepareDesktopExternalPhysicalCaptured(launch *desktopNodeLaunch, targetOS string) error {
-	return prepareDesktopExternalPhysicalContext(context.Background(), launch, targetOS)
-}
-
 func prepareDesktopExternalPhysicalContext(ctx context.Context, launch *desktopNodeLaunch, targetOS string) error {
 	if launch == nil || launch.external == nil || launch.tor != nil || launch.command != nil || launch.directory != "" {
 		return errors.New("ordinary physical preparation requires its unstaged external owner")

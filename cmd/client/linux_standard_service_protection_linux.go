@@ -282,10 +282,6 @@ type linuxStandardServiceProtectionCapture struct {
 	launchCleared bool
 }
 
-func (a *app) captureLinuxStandardServiceProtection(ctx context.Context) *linuxStandardServiceProtectionCapture {
-	return a.captureLinuxStandardServiceProtectionForParent(ctx, nil)
-}
-
 func (a *app) captureLinuxStandardServiceProtectionForParent(ctx context.Context, parent *desktopPlatformProtectionCapture) *linuxStandardServiceProtectionCapture {
 	if a == nil {
 		return nil

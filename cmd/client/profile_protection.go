@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"router-vpn/internal/common"
 )
 
 type profileProtectionSettings struct {
@@ -20,11 +19,6 @@ type profileProtectionSettings struct {
 	EffectivePolicy     string `json:"effective_policy,omitempty"`
 	ProtectionProfileID string `json:"protection_profile_id,omitempty"`
 	Message             string `json:"message,omitempty"`
-}
-
-func writeProfileProtectionSettings(w http.ResponseWriter, p common.RouterProfile) {
-	writeProfileProtectionValue(w, http.StatusOK, profileProtectionSettings{
-		ProfileID: p.ID, ProfileToken: profileStartupSettingsToken(p), KillSwitchPolicy: desktopOwnedNodeProtectionPolicy(p)})
 }
 
 func writeProfileProtectionValue(w http.ResponseWriter, status int, value profileProtectionSettings) {

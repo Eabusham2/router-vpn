@@ -10,7 +10,6 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -325,10 +324,6 @@ func (a *app) proveNativeMultihop(sel multihopSelection, command *exec.Cmd) erro
 	return nil
 }
 
-func (a *app) nativeMultihopProofOwnerCurrent(sel multihopSelection, command *exec.Cmd) bool {
-	return a.nativeMultihopProofOwnerCurrentContext(context.Background(), sel, command)
-}
-
 func (a *app) nativeMultihopProofOwnerCurrentContext(ctx context.Context, sel multihopSelection, command *exec.Cmd) bool {
 	if ctx == nil || ctx.Err() != nil || sel.Native == nil || mobilemtu.LockContext(ctx, &a.mu) != nil {
 		return false
@@ -487,35 +482,4 @@ func nativeMultihopEnvironment(root string, sel multihopSelection) []string {
 		}
 	}
 	return env
-}
-
-func stageNativeMultihopCapture(root string, sel multihopSelection) (string, string, error) {
-	root, err := canonicalBundleRoot(root)
-	if err != nil || sel.Native == nil || root != sel.Native.root {
-		return "", "", errors.New("native multihop requires its captured private source")
-	}
-	if err := sel.Native.validate(sel); err != nil {
-		return "", "", err
-	}
-	config, ok := sel.Native.configs[sel.ExitMode]
-	if !ok {
-		if err := sel.Native.failures[sel.ExitMode]; err != nil {
-			return "", "", err
-		}
-		return "", "", errors.New("selected exit mode was unavailable in the captured round")
-	}
-	var graph map[string]any
-	if json.Unmarshal([]byte(config), &graph) != nil {
-		return "", "", errors.New("captured native graph is invalid")
-	}
-	alias, _ := graph["inbounds"].([]any)[0].(map[string]any)["interface_name"].(string)
-	dir, err := newPrivateRuntimeDir(root, "native-multihop")
-	if err != nil {
-		return "", "", err
-	}
-	if err := writePrivateRuntimeFile(filepath.Join(dir, "sing-box.json"), []byte(config)); err != nil {
-		_ = os.RemoveAll(dir)
-		return "", "", err
-	}
-	return dir, alias, nil
 }

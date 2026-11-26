@@ -27,10 +27,6 @@ type torBridgePrelaunch struct {
 
 var errTorPrelaunchRejected = errors.New("captured Tor prelaunch operation was rejected")
 
-func captureTorBridgePrelaunch(a *app, profileID, directory string, captured ...*desktopNodeLaunch) (*torBridgePrelaunch, error) {
-	return captureTorBridgePrelaunchContext(context.Background(), a, profileID, directory, captured...)
-}
-
 func captureTorBridgePrelaunchContext(ctx context.Context, a *app, profileID, directory string, captured ...*desktopNodeLaunch) (*torBridgePrelaunch, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return nil, errors.New("Tor prelaunch capture has no live original caller")

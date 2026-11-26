@@ -13,14 +13,6 @@ import (
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
-// The native child recompiles all of the exact captured private constructor
-// inputs. A staged graph, tuple list or metadata document alone never supplies
-// NodeProfile authority. The public argument only constrains its expected
-// desktop identity and cannot install a socket factory by itself.
-func routerVPNNodeCommandPhysical(files *routerVPNExternalFiles, session, config, source string) (*mobilemultihop.DesktopNodePolicy, error) {
-	return routerVPNNodeCommandPhysicalWithMTU(files, session, config, source, 0)
-}
-
 // The launcher and worker independently derive the same policy from the
 // original source. Only a matching constrained hash/metadata can select a
 // device-wide startup projection. Old captures use the unchanged default.

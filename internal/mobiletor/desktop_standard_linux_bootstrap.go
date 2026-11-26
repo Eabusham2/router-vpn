@@ -151,42 +151,6 @@ func desktopLinuxBootstrapExpressions(route desktopLinuxBootstrapRoute, local, r
 	}
 	return []any{match(meta("skuid"), float64(0)), match(meta("mark"), float64(mark)), match(meta("oifname"), route.Interface.Name), match(payload(family, "saddr"), local.Addr().String()), match(payload(family, "daddr"), remote.Addr().String()), match(meta("l4proto"), network), match(payload(network, "sport"), float64(local.Port())), match(payload(network, "dport"), float64(remote.Port())), map[string]any{"accept": nil}}
 }
-func desktopLinuxBootstrapEcho(raw []byte, request map[string]any) (uint64, error) {
-	if len(raw) == 0 || len(raw) > 64<<10 {
-		return 0, errors.New("bootstrap echo exceeded its bound")
-	}
-	d := json.NewDecoder(bytes.NewReader(raw))
-	value, e := profileValue(d, 0)
-	got, ok := value.(map[string]any)
-	if e != nil || !ok {
-		return 0, errors.Join(e, errors.New("bootstrap echo is ambiguous"))
-	}
-	if _, e = d.Token(); e != io.EOF {
-		return 0, errors.New("bootstrap echo contains trailing data")
-	}
-	var canonical any
-	encoded, _ := json.Marshal(request)
-	_ = json.Unmarshal(encoded, &canonical)
-	rows, ok := got["nftables"].([]any)
-	if !ok || len(got) != 1 || len(rows) != 1 {
-		return 0, errors.New("bootstrap creation omitted its original rule echo")
-	}
-	row, ok := rows[0].(map[string]any)
-	if !ok {
-		return 0, errors.New("invalid bootstrap rule echo")
-	}
-	op, _ := row["add"].(map[string]any)
-	rule, _ := op["rule"].(map[string]any)
-	handle := desktopLinuxNumber(rule["handle"])
-	if handle == 0 || handle > 1<<53-1 {
-		return 0, errors.New("bootstrap rule lacks its original handle")
-	}
-	delete(rule, "handle")
-	if !reflect.DeepEqual(got, canonical) {
-		return 0, errors.New("bootstrap rule echo changed its exact socket scope")
-	}
-	return handle, nil
-}
 func (t *desktopLinuxStandardBootstrap) currentSocket(ctx context.Context) error {
 	if e := ctx.Err(); e != nil {
 		return e

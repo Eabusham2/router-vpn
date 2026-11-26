@@ -5,16 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"router-vpn/internal/common"
 )
@@ -31,10 +27,6 @@ type standardExitConnectRequest struct {
 	StandardExitID string `json:"standard_exit_id"`
 	Base           string `json:"base"`
 	Direct         bool   `json:"direct"`
-}
-
-func registerStandardExitRuntimeRoutes(h *http.ServeMux, a *app) {
-	h.HandleFunc("/api/standard-exit/connect", a.standardExitConnect)
 }
 
 func selectedStandardExitDNS(control common.RouterProfile, direct bool) (map[string]any, error) {
@@ -244,36 +236,6 @@ func standardExitConfig(_ common.RouterProfile, dnsServer map[string]any, endpoi
 	}
 }
 
-func prepareNativeStandardExit(root string, control, entry common.RouterProfile, exit standardExit) (string, string, error) {
-	entryDir, err := nativeGeneratedDir(root, entry.ID, "wg")
-	if err != nil {
-		return "", "", err
-	}
-	wg, err := parseNativeWG(filepath.Join(entryDir, "wg.conf"))
-	if err != nil {
-		return "", "", err
-	}
-	cfg, err := buildNativeStandardExitConfig(control, wg, exit)
-	if err != nil {
-		return "", "", err
-	}
-	cfg, err = compileDesktopStandardExitPolicy(cfg, control, &entry, exit)
-	if err != nil {
-		return "", "", err
-	}
-	return writeStandardExitRuntime(root, cfg)
-}
-func prepareDirectStandardExit(root string, control common.RouterProfile, exit standardExit) (string, string, error) {
-	cfg, err := buildDirectStandardExitConfig(control, exit)
-	if err != nil {
-		return "", "", err
-	}
-	cfg, err = compileDesktopStandardExitPolicy(cfg, control, nil, exit)
-	if err != nil {
-		return "", "", err
-	}
-	return writeStandardExitRuntime(root, cfg)
-}
 func writeStandardExitRuntime(root string, cfg map[string]any) (string, string, error) {
 	runtimeDir, err := newPrivateRuntimeDir(root, "native-standard-exit")
 	if err != nil {
@@ -387,210 +349,4 @@ func nativeStandardExitCommandOwnedContext(operation context.Context, a *app, co
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd, nil
-}
-
-func proveStandardExit(expected string) error {
-	expectedIP := net.ParseIP(strings.TrimSpace(expected))
-	if expectedIP == nil {
-		return errors.New("expected public exit IP is invalid")
-	}
-	proxyURL, err := url.Parse(multihopProofProxy)
-	if err != nil {
-		return err
-	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = http.ProxyURL(proxyURL)
-	transport.ForceAttemptHTTP2 = false
-	client := &http.Client{Transport: transport, Timeout: 2 * time.Second}
-	providers := []string{"https://api64.ipify.org", "https://api.ipify.org"}
-	deadline := time.Now().Add(10 * time.Second)
-	var last error
-	for time.Now().Before(deadline) {
-		for _, endpoint := range providers {
-			resp, reqErr := client.Get(endpoint)
-			if reqErr != nil {
-				last = reqErr
-				continue
-			}
-			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 256))
-			_ = resp.Body.Close()
-			if readErr != nil {
-				last = readErr
-				continue
-			}
-			if resp.StatusCode/100 != 2 {
-				last = fmt.Errorf("exit address proof returned HTTP %d", resp.StatusCode)
-				continue
-			}
-			observed := net.ParseIP(strings.TrimSpace(string(body)))
-			if observed == nil {
-				last = errors.New("exit address proof returned a non-IP value")
-				continue
-			}
-			if observed.Equal(expectedIP) {
-				return nil
-			}
-			last = fmt.Errorf("custom exit reached public address %s, expected %s", observed.String(), expectedIP.String())
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
-	if last == nil {
-		last = errors.New("custom exit public-address proof timed out")
-	}
-	return last
-}
-
-func (a *app) standardExitConnect(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "POST only", http.StatusMethodNotAllowed)
-		return
-	}
-	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
-		http.Error(w, "custom standard exit runtime is unavailable on this platform instead of faking a connection", http.StatusNotImplemented)
-		return
-	}
-	var q standardExitConnectRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&q); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
-		return
-	}
-	if !q.Direct && normalizeBase(q.Base) != "" && normalizeBase(q.Base) != "auto" && normalizeBase(q.Base) != "wg" {
-		http.Error(w, "custom standard exits currently require a standard WireGuard entry", http.StatusBadRequest)
-		return
-	}
-	a.mu.Lock()
-	control, ok := a.profileByIDLocked(a.profiles.SelectedID)
-	profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...)
-	a.mu.Unlock()
-	if !ok {
-		http.Error(w, "select a Router VPN control profile first; direct external nodes reuse its DNS/LAN/kill-switch policy but do not route through that Router VPN node", http.StatusBadRequest)
-		return
-	}
-	exit, err := standardExitByID(strings.TrimSpace(q.StandardExitID))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	entry := common.RouterProfile{}
-	if !q.Direct {
-		entryID := strings.TrimSpace(q.EntryID)
-		if entryID == "" {
-			entryID = strings.TrimSpace(control.MultihopEntryID)
-		}
-		entry, ok = profileByID(profiles, entryID)
-		if !ok {
-			http.Error(w, "choose a linked Router VPN entry node", http.StatusBadRequest)
-			return
-		}
-		if strings.TrimSpace(entry.Endpoint) == "" {
-			http.Error(w, "entry node needs a public endpoint", http.StatusBadRequest)
-			return
-		}
-	}
-	sessionBase := "wg"
-	if q.Direct {
-		sessionBase = "external"
-	}
-	sessionTrackerFor(a).declareRequest("standard-exit", sessionBase)
-	if err = a.stopMode(); err != nil {
-		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	cmd, err := nativeStandardExitCommand(a, control, entry, exit, q.Direct)
-	if err != nil {
-		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err = cmd.Start(); err != nil {
-		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	stateID := "standard:" + exit.ID
-	a.mu.Lock()
-	a.cmd = cmd
-	a.state.Mode = "standard-exit"
-	a.state.LogicalMode = "standard-exit"
-	a.state.RuntimeMode = "standard-" + exit.Protocol
-	a.state.Base = sessionBase
-	a.state.RouterID = stateID
-	a.state.Connected = false
-	a.state.Phase = "standard-exit:proving-public-exit"
-	a.state.LastError = ""
-	a.mu.Unlock()
-	if err = proveStandardExit(exit.ExpectedPublicIP); err != nil {
-		msg, cleanupFailed := a.standardExitStopFailure(cmd, "standard exit proof failed: "+err.Error())
-		a.mu.Lock()
-		a.state.Mode = "standard-exit"
-		a.state.LogicalMode = "standard-exit"
-		a.state.RuntimeMode = "standard-" + exit.Protocol
-		a.state.Base = sessionBase
-		a.state.RouterID = stateID
-		a.state.Phase = "failed"
-		a.state.LastError = msg
-		a.state.Connected = false
-		a.mu.Unlock()
-		sessionTrackerFor(a).markRequestFailure(msg)
-		status := http.StatusBadGateway
-		if cleanupFailed {
-			status = http.StatusInternalServerError
-		}
-		http.Error(w, msg, status)
-		return
-	}
-	if err = a.checkConnectionOperation(); err != nil {
-		message, cleanupFailed := a.standardExitStopFailure(cmd, err.Error())
-		sessionTrackerFor(a).markRequestFailure(message)
-		status := http.StatusConflict
-		if cleanupFailed {
-			status = http.StatusInternalServerError
-		}
-		http.Error(w, message, status)
-		return
-	}
-	a.mu.Lock()
-	if a.cmd != cmd {
-		a.mu.Unlock()
-		http.Error(w, "standard exit runtime changed during proof", http.StatusConflict)
-		return
-	}
-	previousStore := cloneRouterProfileStore(a.profiles)
-	a.state.Connected = true
-	a.state.Phase = "connected"
-	a.state.LastError = ""
-	if !q.Direct {
-		usedAt := time.Now().UTC().Format(time.RFC3339)
-		for i := range a.profiles.Profiles {
-			if a.profiles.Profiles[i].ID == entry.ID {
-				a.profiles.Profiles[i].UseCount++
-				a.profiles.Profiles[i].LastUsedAt = usedAt
-			}
-		}
-	}
-	persistErr := a.persistProfilesLocked()
-	if persistErr != nil {
-		a.rollbackProfilesLocked(previousStore)
-	}
-	a.mu.Unlock()
-	if persistErr != nil {
-		message, cleanupFailed := a.standardExitStopFailure(cmd, "standard-exit usage persistence failed: "+persistErr.Error())
-		if !cleanupFailed {
-			message += "; runtime was torn down"
-		}
-		sessionTrackerFor(a).markRequestFailure(message)
-		http.Error(w, message, http.StatusInternalServerError)
-		return
-	}
-	route := "client TUN -> entry WireGuard -> custom standard exit -> Internet"
-	entryID := entry.ID
-	entryName := entry.Name
-	if q.Direct {
-		route = "client TUN -> direct external standard node -> Internet"
-		entryID = ""
-		entryName = ""
-	}
-	w.Header().Set("content-type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": "standard-exit", "direct": q.Direct, "entry_id": entryID, "entry_name": entryName, "standard_exit_id": exit.ID, "standard_exit_name": exit.Name, "protocol": exit.Protocol, "expected_public_ip": exit.ExpectedPublicIP, "exit_path_proof": "expected-public-ip-passed", "route": route})
 }

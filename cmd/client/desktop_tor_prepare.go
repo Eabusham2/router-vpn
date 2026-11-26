@@ -46,10 +46,6 @@ type desktopTorConnectRuntime struct {
 	operation        context.Context
 }
 
-func captureDesktopTorExecutable(path string) (string, error) {
-	return captureDesktopTorExecutableContext(context.Background(), path)
-}
-
 func captureDesktopTorExecutableContext(ctx context.Context, path string) (string, error) {
 	if ctx == nil {
 		return "", errors.New("Tor executable capture has no original caller")
@@ -103,14 +99,6 @@ func (reader desktopTorCaptureReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) (torBridgeRuntime, error) {
-	return prepareTorBridgeRuntimeWithPredecessor(root, policy, profile, nil)
-}
-
-func prepareTorBridgeRuntimeWithPredecessor(root string, policy, profile common.RouterProfile, predecessor *desktopTorPredecessorCapture) (torBridgeRuntime, error) {
-	return prepareTorBridgeRuntimeWithPredecessorContext(context.Background(), root, policy, profile, predecessor)
-}
-
 func prepareTorBridgeRuntimeWithPredecessorContext(ctx context.Context, root string, policy, profile common.RouterProfile, predecessor *desktopTorPredecessorCapture) (torBridgeRuntime, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return torBridgeRuntime{}, errors.New("Tor runtime verification has no live original caller")
@@ -128,17 +116,6 @@ func prepareTorBridgeRuntimeWithPredecessorContext(ctx context.Context, root str
 		return torBridgeRuntime{}, err
 	}
 	return stageDesktopTorInputsWithPredecessorContext(ctx, root, policy, profile, tor, native, predecessor)
-}
-
-// Separate binary verification from immutable staging so isolated tests can
-// exercise exact input ownership without installing a TUN or private server.
-// Shipping preparation above always verifies the complete packaged engine.
-func stageDesktopTorInputs(root string, policy, profile common.RouterProfile, tor, native string) (result torBridgeRuntime, failure error) {
-	return stageDesktopTorInputsWithPredecessor(root, policy, profile, tor, native, nil)
-}
-
-func stageDesktopTorInputsWithPredecessor(root string, policy, profile common.RouterProfile, tor, native string, predecessor *desktopTorPredecessorCapture) (result torBridgeRuntime, failure error) {
-	return stageDesktopTorInputsWithPredecessorContext(context.Background(), root, policy, profile, tor, native, predecessor)
 }
 
 func stageDesktopTorInputsWithPredecessorContext(ctx context.Context, root string, policy, profile common.RouterProfile, tor, native string, predecessor *desktopTorPredecessorCapture) (result torBridgeRuntime, failure error) {
@@ -344,12 +321,6 @@ func desktopTorRuntimePolicyJSON(policy common.RouterProfile) ([]byte, error) {
 	return json.Marshal(fields)
 }
 
-// Capture the inode before writing, including a partial failed write. Cleanup
-// may retire only the exact bytes this writer supplied to that owned inode.
-func writeDesktopTorInput(launch *desktopNodeLaunch, name string, raw []byte) (failure error) {
-	return writeDesktopTorInputContext(context.Background(), launch, name, raw)
-}
-
 func writeDesktopTorInputContext(ctx context.Context, launch *desktopNodeLaunch, name string, raw []byte) (failure error) {
 	if launch == nil || launch.tor == nil || !desktopRuntimeFilename(name) || len(raw) == 0 || int64(len(raw)) > desktopTorInputLimit(name) {
 		return errors.New("invalid captured Tor input")
@@ -404,14 +375,6 @@ func desktopTorEnvironment(base []string, root, profile, endpoint string, inputs
 		clean = append(clean, entry)
 	}
 	return append(clean, "HOMEVPN_TOR_SESSION="+session, "HOMEVPN_TOR_SOURCE_SHA256="+inputs.SourceSHA256, "HOMEVPN_TOR_PROFILE_SHA256="+inputs.ProfileSHA256, "HOMEVPN_TOR_CAPTURE_SHA256="+inputs.CaptureSHA256, "HOMEVPN_TOR_TORRC_SHA256="+inputs.TorrcSHA256, "HOMEVPN_TOR_DEFAULTS_SHA256="+inputs.DefaultsSHA256, "HOMEVPN_TOR_CONFIG_SHA256="+inputs.ConfigSHA256, "HOMEVPN_TOR_BINARY_SHA256="+torHash)
-}
-
-func prepareTorBridgeCommand(a *app, policy, profile common.RouterProfile) (command *exec.Cmd, staged *torBridgePrelaunch, failure error) {
-	return prepareTorBridgeCommandWithRuntime(a, policy, profile, nil, desktopTorConnectRuntime{})
-}
-
-func desktopTorCapturedPhysicalEgress(launch *desktopNodeLaunch) ([]mobilemultihop.PhysicalEgress, error) {
-	return desktopTorCapturedPhysicalEgressContext(context.Background(), launch)
 }
 
 func desktopTorCapturedPhysicalEgressContext(ctx context.Context, launch *desktopNodeLaunch) ([]mobilemultihop.PhysicalEgress, error) {
@@ -469,10 +432,6 @@ func desktopTorTransportPlan(profile common.RouterProfile) (mobiletor.Plan, erro
 		return mobiletor.Plan{}, errors.New("Tor transport lost its exact bridge selection")
 	}
 	return mobiletor.NewPlan(*profile.External.TorBridge)
-}
-
-func desktopTorLaunchEnvironment(base []string, root string, prepared torBridgeRuntime) ([]string, error) {
-	return desktopTorLaunchEnvironmentContext(context.Background(), base, root, prepared)
 }
 
 func desktopTorLaunchEnvironmentContext(ctx context.Context, base []string, root string, prepared torBridgeRuntime) ([]string, error) {
@@ -535,18 +494,6 @@ func desktopTorLaunchEnvironmentContext(ctx context.Context, base []string, root
 		return nil, err
 	}
 	return append(environment, "HOMEVPN_EXTERNAL_SESSION="+owner.expected.SessionID, "HOMEVPN_NATIVE_ENDPOINTS_JSON="+string(hostJSON), "HOMEVPN_NATIVE_EGRESS_JSON="+string(egressJSON)), nil
-}
-
-func prepareTorBridgeCommandWithRuntime(a *app, policy, profile common.RouterProfile, predecessor *desktopTorPredecessorCapture, driver desktopTorConnectRuntime) (command *exec.Cmd, staged *torBridgePrelaunch, failure error) {
-	if a == nil {
-		return nil, nil, errors.New("Tor preparation has no original application")
-	}
-	ctx, finish, err := desktopTorChoiceCaller(a.connectionOperationContextOrBackground(), driver.requestContext)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer finish()
-	return prepareTorBridgeCommandWithRuntimeContext(ctx, a, policy, profile, predecessor, driver)
 }
 
 func prepareTorBridgeCommandWithRuntimeContext(ctx context.Context, a *app, policy, profile common.RouterProfile, predecessor *desktopTorPredecessorCapture, driver desktopTorConnectRuntime) (command *exec.Cmd, staged *torBridgePrelaunch, failure error) {

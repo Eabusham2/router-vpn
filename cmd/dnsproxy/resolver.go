@@ -105,10 +105,6 @@ func resolveContext(ctx context.Context, query []byte, u upstream) ([]byte, erro
 	return nil, err
 }
 
-func resolveOne(query []byte, u upstream) ([]byte, error) {
-	return resolveOneContext(context.Background(), query, u)
-}
-
 func resolveOneContext(parent context.Context, query []byte, u upstream) ([]byte, error) {
 	if err := common.ValidateDNSForwardQuery(query); err != nil {
 		return nil, err

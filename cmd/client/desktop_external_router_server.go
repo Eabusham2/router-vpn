@@ -33,11 +33,6 @@ func desktopWindowsExternalRouterServerGraph(profile, entry common.RouterProfile
 	return err == nil && mode == "wg"
 }
 
-func desktopWindowsExternalRouterServerOwner(owner *desktopExternalRuntime) bool {
-	return owner != nil && !owner.direct && owner.selection == "server" && owner.predecessor != "" &&
-		desktopWindowsExternalRouterServerGraph(owner.profile, owner.entry, owner.selection)
-}
-
 // The lease remains inside the original child execution controller. Its final
 // result can only be adopted under this exact paired identity and selection.
 // Local and Server keep the same original paired entry and independent final.

@@ -177,12 +177,6 @@ func desktopDarwinIdentityLock() (*os.File, error) {
 	return file, nil
 }
 
-func desktopDarwinAccountRecord(account string, uid uint32) (map[string]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	return desktopDarwinAccountRecordContext(ctx, account, uid)
-}
-
 func desktopDarwinAccountRecordContext(ctx context.Context, account string, uid uint32) (map[string]string, error) {
 	if ctx == nil {
 		return nil, errors.New("Darwin physical account requires its captured readback")
@@ -318,14 +312,6 @@ func desktopDarwinAllocateAccount(c DesktopSocketCapture) (string, uint32, error
 		return account, uid, nil
 	}
 	return "", 0, errors.New("Darwin guardian could not allocate an unused isolated identity")
-}
-
-func desktopDarwinRetireAccount(account string, uid uint32) error {
-	// Standalone recovery keeps the former two-plus-two-second upper bound.
-	// Guardian finish supplies its stricter original cleanup deadline below.
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	return desktopDarwinRetireAccountContext(ctx, account, uid)
 }
 
 func desktopDarwinRetireAccountContext(ctx context.Context, account string, uid uint32) error {

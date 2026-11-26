@@ -70,14 +70,6 @@ func compileDesktopTorPredecessor(ctx context.Context, entry common.RouterProfil
 	return &desktopTorPredecessorCapture{entry: entry, profileToken: desktopTorSourceIdentityToken(entry), assetsSHA256: assets, mode: mode, endpoint: endpoint, native: native}, nil
 }
 
-func captureDesktopTorPredecessor(a *app, profile common.RouterProfile, lookup applexray.Lookup) (*desktopTorPredecessorCapture, error) {
-	ctx := context.Background()
-	if a != nil {
-		ctx = a.connectionOperationContextOrBackground()
-	}
-	return captureDesktopTorPredecessorContext(ctx, a, profile, lookup)
-}
-
 func captureDesktopTorPredecessorContext(ctx context.Context, a *app, profile common.RouterProfile, lookup applexray.Lookup) (*desktopTorPredecessorCapture, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return nil, errors.New("Tor predecessor has no live original caller")

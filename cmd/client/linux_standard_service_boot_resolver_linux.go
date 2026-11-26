@@ -27,13 +27,6 @@ func captureLinuxBootResolver(ctx context.Context, hostname string) (*linuxBootR
 	}
 	return &linuxBootResolver{policy: policy}, nil
 }
-func captureLinuxBootResolverAt(ctx context.Context, hostname string, paths [3]string) (*linuxBootResolver, error) {
-	policy, e := systembootstrap.CaptureFiles(ctx, hostname, paths)
-	if e != nil {
-		return nil, e
-	}
-	return &linuxBootResolver{policy: policy}, nil
-}
 func (r *linuxBootResolver) current(ctx context.Context) error {
 	if r == nil || r.policy == nil {
 		return errors.New("bootstrap resolver capture is incomplete")

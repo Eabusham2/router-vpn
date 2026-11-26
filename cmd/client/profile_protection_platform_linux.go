@@ -40,10 +40,6 @@ type desktopPlatformProtectionCapture struct {
 	originalRevision, resultRevision, pendingToken       string
 }
 
-func (a *app) captureDesktopParentProfileProtection() *desktopPlatformProtectionCapture {
-	return a.captureDesktopParentProfileProtectionContext(context.Background())
-}
-
 func (a *app) captureDesktopParentProfileProtectionContext(caller context.Context) *desktopPlatformProtectionCapture {
 	if caller == nil {
 		return &desktopPlatformProtectionCapture{failure: errors.New("Linux protection observation requires its original caller")}

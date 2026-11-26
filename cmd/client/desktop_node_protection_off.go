@@ -180,11 +180,6 @@ func (s *desktopNodeProtectionSlot) offCurrentLocked(capture *desktopNodeProtect
 		s.target != nil && *s.target == capture.target
 }
 
-func (s *desktopNodeProtectionSlot) offReadyToSave(capture *desktopNodeProtectionOff) bool {
-	ready, _ := s.offReadyToSaveContext(context.Background(), capture)
-	return ready
-}
-
 func (s *desktopNodeProtectionSlot) offReadyToSaveContext(ctx context.Context, capture *desktopNodeProtectionOff) (bool, error) {
 	if ctx == nil {
 		return false, errors.New("protection Off save readiness lost its original caller")

@@ -65,10 +65,6 @@ func privateBenchmarkMbps(bytesCount int64, milliseconds float64) (float64, erro
 	return mbps, nil
 }
 
-func measureRoutedProfileSpeed(p common.RouterProfile, bytesCount int64) (routedSpeedResult, error) {
-	return measureRoutedProfileSpeedContext(context.Background(), p, bytesCount)
-}
-
 func measureRoutedProfileSpeedContext(ctx context.Context, p common.RouterProfile, bytesCount int64) (routedSpeedResult, error) {
 	return measureRoutedProfileSpeedWithClock(ctx, p, bytesCount, startClientMeasurementInterval)
 }

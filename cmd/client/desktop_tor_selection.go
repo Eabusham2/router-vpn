@@ -38,14 +38,6 @@ func desktopTorExecution(value string) string {
 	}
 }
 
-func captureDesktopTorSelection(a *app, profile common.RouterProfile, q externalProfileConnectRequest, lookup applexray.Lookup) (*desktopTorSelection, error) {
-	ctx := context.Background()
-	if a != nil {
-		ctx = a.connectionOperationContextOrBackground()
-	}
-	return captureDesktopTorSelectionContext(ctx, a, profile, q, lookup)
-}
-
 func captureDesktopTorSelectionContext(ctx context.Context, a *app, profile common.RouterProfile, q externalProfileConnectRequest, lookup applexray.Lookup) (*desktopTorSelection, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return nil, errors.New("Tor selection has no live original caller")

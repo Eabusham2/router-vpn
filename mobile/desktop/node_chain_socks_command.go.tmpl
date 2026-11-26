@@ -8,16 +8,8 @@ import (
 	"runtime"
 	"syscall"
 
-	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/spf13/cobra"
 )
-
-func routerVPNNodeChainSOCKSTransfer(record *mobiletor.DesktopProtectionTransferRecord) (string, error) {
-	if record == nil {
-		return "", routerVPNExternalFailure
-	}
-	return mobiletor.DesktopProtectionTransferRecordSHA256(*record)
-}
 
 func init() { mainCommand.AddCommand(routerVPNNewNodeChainSOCKSCommand()) }
 
@@ -106,4 +98,3 @@ func routerVPNRunNodeChainSOCKSWithParents(parent context.Context, directory, se
 	defer func() { failure = errors.Join(failure, journal.close()) }()
 	return routerVPNRunNodeMTUSOCKSFamiliesCaptured(parent, directory, session, config, "", "", "", "", "", "", source, transfer, mtu, journal)
 }
-

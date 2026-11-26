@@ -428,10 +428,6 @@ func speedLabUploadRoundWithClock(ctx context.Context, client *http.Client, byte
 	return sent, elapsed, clockErr
 }
 
-func speedLabParallelRound(ctx context.Context, direction string, client *http.Client, bytesCount int64, streams int, pattern []byte) (int64, time.Duration, error) {
-	return speedLabParallelRoundWithClock(ctx, direction, client, bytesCount, streams, pattern, startSpeedLabTransferInterval)
-}
-
 func speedLabParallelRoundWithClock(ctx context.Context, direction string, client *http.Client, bytesCount int64, streams int, pattern []byte, startClock speedLabTransferClock) (int64, time.Duration, error) {
 	if streams < 1 {
 		streams = 1

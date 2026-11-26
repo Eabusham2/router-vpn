@@ -98,11 +98,6 @@ func newDesktopLinuxNodeJournal(ctx context.Context, parent *desktopLinuxNodePar
 	return j, nil
 }
 
-// Creation never derives native absence from private storage. The matching
-// nft reader checks before creation and after the durable initial checkpoint.
-func createDesktopLinuxNodeJournal(ctx context.Context, parent *desktopLinuxNodeParentCapture) (*desktopLinuxNodeJournal, error) {
-	return createDesktopLinuxNodeJournalTransfer(ctx, parent, nil)
-}
 func createDesktopLinuxNodeJournalTransfer(ctx context.Context, parent *desktopLinuxNodeParentCapture, transfer *linuxStandardServiceNodeTransfer) (_ *desktopLinuxNodeJournal, failure error) {
 	j, err := newDesktopLinuxNodeJournal(ctx, parent)
 	if err != nil {

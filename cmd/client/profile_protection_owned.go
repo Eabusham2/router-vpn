@@ -86,13 +86,6 @@ func protectionSettingsWithCapture(profile common.RouterProfile, capture profile
 	return result
 }
 
-func (a *app) desktopProtectionOffPending() bool {
-	a.mu.Lock()
-	slot := a.nodeProtection
-	a.mu.Unlock()
-	return slot != nil && slot.pendingOff() != nil
-}
-
 func (a *app) guardDesktopProtectionOffPending(caller ...context.Context) error {
 	if len(caller) > 1 || len(caller) == 1 && caller[0] == nil {
 		return errors.New("recorded protection recovery has no single captured caller")
@@ -150,10 +143,6 @@ func (a *app) guardDesktopProtectionPreference(policy string) error {
 		return errors.New("use the Kill switch control to finish turning retained protection off before saving Off here")
 	}
 	return a.guardPlatformProtectionPreference(policy)
-}
-
-func (a *app) capturedProtectionOffCurrent(slot *desktopNodeProtectionSlot, capture *desktopNodeProtectionOff, cleanup bool) bool {
-	return a.capturedProtectionOffCurrentContext(context.Background(), slot, capture, cleanup)
 }
 
 func (a *app) capturedProtectionOffCurrentContext(ctx context.Context, slot *desktopNodeProtectionSlot, capture *desktopNodeProtectionOff, cleanup bool) bool {
@@ -305,14 +294,6 @@ func (a *app) persistProtectionOffProfilesLocked(ctx context.Context) error {
 	}
 	_, err = atomicWritePrivateChecked(a.cfg.ProfilesFile, append(raw, '\n'), ctx.Err)
 	return err
-}
-
-// Startup may find the original accepted profile, or its exact Off result
-// already durably published before the old controller crashed. Read the actual
-// private store before doing either native removal or another save. Preserve
-// the selected node and every unrelated profile/credential reference.
-func (a *app) captureRecoveredOffProfile(slot *desktopNodeProtectionSlot, capture *desktopNodeProtectionOff) error {
-	return a.captureRecoveredOffProfileContext(context.Background(), slot, capture)
 }
 
 func (a *app) captureRecoveredOffProfileContext(ctx context.Context, slot *desktopNodeProtectionSlot, capture *desktopNodeProtectionOff) error {

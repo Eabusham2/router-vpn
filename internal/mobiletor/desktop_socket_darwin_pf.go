@@ -50,15 +50,6 @@ func desktopDarwinPFLoadPointer(ctx context.Context, c DesktopSocketCapture) err
 	return desktopDarwinPFLoad(ctx, desktopDarwinPFSlot(c), desktopDarwinPFPointer(c))
 }
 
-func desktopDarwinPFReadPointer(ctx context.Context, c DesktopSocketCapture) (string, error) {
-	actual, err := desktopDarwinPFRead(ctx, desktopDarwinPFSlot(c))
-	expected := strings.TrimSpace(desktopDarwinPFPointer(c))
-	if err != nil || actual != expected {
-		return actual, errors.Join(err, errors.New("Darwin PF slot changed its network owner or complete generation path"))
-	}
-	return actual, nil
-}
-
 type desktopDarwinPFPermit struct {
 	Grant   DesktopSocketGrant
 	Expires time.Time
@@ -146,10 +137,6 @@ func desktopDarwinPFReadAnchors(ctx context.Context, anchor string) ([]byte, err
 		return desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-s", "Anchors")
 	}
 	return desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", anchor, "-s", "Anchors")
-}
-
-func desktopDarwinPFRejectLegacyLayout(ctx context.Context) error {
-	return desktopDarwinPFRejectLegacyInventory(ctx, desktopDarwinPFReadAnchors)
 }
 
 func desktopDarwinPFRejectLegacyInventory(ctx context.Context, inventory func(context.Context, string) ([]byte, error)) error {

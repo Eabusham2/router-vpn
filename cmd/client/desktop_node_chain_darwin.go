@@ -602,41 +602,6 @@ func validateDesktopMacOSNodeChainInterface(record desktopNodeMTURecord, link *n
 	return nil
 }
 
-// A fresh child proof may name a new utun only after the native reader
-// advanced. Observe both the new interface and absence of the old exact one;
-// a decoded generation counter alone is never a retirement receipt.
-func validateDesktopMacOSNodeChainReaderRetirement(previous *mobilemultihop.DesktopNodeChainReadyRecord,
-	live desktopNodeMTURecord, inventory []net.Interface) error {
-	if previous == nil {
-		return errors.New("macOS ordered replacement lacks its original reader")
-	}
-	return validateDesktopMacOSReaderRetirement(previous.InterfaceName, int(previous.InterfaceIndex), previous.Reader, live, inventory)
-}
-
-func validateDesktopMacOSReaderRetirement(name string, index int, reader uint64,
-	live desktopNodeMTURecord, inventory []net.Interface) error {
-	if name == "" || index < 1 || reader == 0 || name == live.Interface || live.Reader <= reader {
-		return errors.New("macOS ordered replacement lacks an advanced original reader")
-	}
-	found := false
-	for i := range inventory {
-		link := &inventory[i]
-		if link.Index == index && link.Name == name {
-			return errors.New("macOS ordered replacement retained its original utun reader")
-		}
-		if link.Index == live.Index {
-			if err := validateDesktopMacOSNodeChainInterface(live, link); err != nil {
-				return err
-			}
-			found = true
-		}
-	}
-	if !found {
-		return errors.New("macOS ordered replacement lost its actual new utun reader")
-	}
-	return nil
-}
-
 func (h *desktopMacOSNodeChainHost) readReadyLocked(ctx context.Context, fresh bool) error {
 	if err := h.currentLocked(ctx, true); err != nil {
 		return err

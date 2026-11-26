@@ -65,22 +65,6 @@ func buildExternalEntryStandardExitConfig(control common.RouterProfile, entry, e
 	return standardExitConfig(control, dnsServer, endpoints, outbounds), nil
 }
 
-func prepareExternalEntryStandardExit(root string, control, entryProfile common.RouterProfile, exit standardExit) (string, string, error) {
-	entry, err := standardExitFromExternalProfile(entryProfile)
-	if err != nil {
-		return "", "", err
-	}
-	cfg, err := buildExternalEntryStandardExitConfig(control, entry, exit)
-	if err != nil {
-		return "", "", err
-	}
-	cfg, err = compileDesktopStandardExitPolicy(cfg, control, &entryProfile, exit)
-	if err != nil {
-		return "", "", err
-	}
-	return writeStandardExitRuntime(root, cfg)
-}
-
 func nativeExternalEntryStandardExitCommand(a *app, control, entry common.RouterProfile, exit standardExit) (*exec.Cmd, error) {
 	return nativeExternalEntryStandardExitCommandWithBootstrap(a, control, entry, exit, standardExitSystemBootstrap())
 }

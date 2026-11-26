@@ -194,11 +194,6 @@ func readDesktopNodeChainReadyContext(ctx context.Context, launch *desktopNodeLa
 	return record, nil
 }
 
-func validateDesktopNodeChainReady(record mobilemultihop.DesktopNodeChainReadyRecord, live desktopNodeMTURecord,
-	started, now time.Time, captured *mobilemultihop.DesktopNodeChainReadyRecord, fresh bool) error {
-	return validateDesktopNodeChainReadyForTarget("", record, live, started, now, captured, fresh)
-}
-
 func desktopNodeChainDarwinInterfaceName(name string) bool {
 	if !strings.HasPrefix(name, "utun") || len(name) == len("utun") {
 		return false

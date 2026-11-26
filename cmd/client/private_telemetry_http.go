@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -25,21 +24,6 @@ func newRouteBoundHTTPClient(timeout time.Duration) *http.Client {
 			return errors.New("route-bound telemetry redirect refused")
 		},
 	}
-}
-
-func newPrivateTelemetryHTTPClient(timeout time.Duration) *http.Client {
-	return newRouteBoundHTTPClient(timeout)
-}
-
-func privateBenchmarkRequestContext(ctx context.Context, method, target, token string, body io.Reader) (*http.Request, error) {
-	if ctx == nil {
-		return nil, errors.New("private benchmark requires a request context")
-	}
-	req, err := privateBenchmarkRequest(method, target, token, body)
-	if err != nil {
-		return nil, err
-	}
-	return req.WithContext(ctx), nil
 }
 
 func privateDNSBenchmarkRequestContext(ctx context.Context, routerAPI, token string) (*http.Request, error) {

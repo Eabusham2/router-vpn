@@ -50,10 +50,6 @@ func retainedNativeMultihopSelected() bool {
 	return runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux" && desktopNodeNativeSelected("wg")
 }
 
-func compileRetainedNativeMultihopLaunch(sel multihopSelection, descriptor *desktopExecutionDescriptor) (*desktopNodeLaunch, error) {
-	return compileRetainedNativeMultihopLaunchContext(context.Background(), sel, descriptor)
-}
-
 func compileRetainedNativeMultihopLaunchContext(ctx context.Context, sel multihopSelection, descriptor *desktopExecutionDescriptor) (*desktopNodeLaunch, error) {
 	if sel.Native == nil || sel.Native.validate(sel) != nil {
 		return nil, errors.New("native multihop launch lost its immutable entry/exit source")
@@ -323,12 +319,6 @@ func stageOwnedNativeMultihopCommandContext(ctx context.Context, a *app, sel mul
 		return nil
 	}
 	return registerNativeMultihopDNSRuntime(a, sel, launch.command)
-}
-
-// A temporary prepared launch publishes DNS only after its captured operation
-// wins the final owner check. Private input staging itself grants no live route.
-func stageOwnedNativeMultihopInputs(a *app, sel multihopSelection, launch *desktopNodeLaunch) error {
-	return stageOwnedNativeMultihopInputsContext(a.connectionOperationContextOrBackground(), a, sel, launch)
 }
 
 func stageOwnedNativeMultihopInputsContext(ctx context.Context, a *app, sel multihopSelection, launch *desktopNodeLaunch) error {

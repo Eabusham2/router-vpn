@@ -72,17 +72,6 @@ func (saved *speedLabTorRestore) execution() string {
 	return desktopTorExecution(saved.selection.policy.MultihopExecution)
 }
 
-func speedLabTorPolicy(profile common.RouterProfile) (common.RouterProfile, error) {
-	if profile.NodeKind != "external" || profile.External == nil || !desktopTorProtocol(profile.External.Protocol) {
-		return common.RouterProfile{}, errors.New("previous Tor connection has no captured external node")
-	}
-	policy, err := externalRuntimePolicy(profile)
-	if err != nil {
-		return common.RouterProfile{}, err
-	}
-	return externalDNSPolicyForPath(policy, common.RouterProfile{}, true)
-}
-
 func captureSpeedLabTorRestore(profile common.RouterProfile, identity speedLabPathIdentity) (*speedLabTorRestore, error) {
 	launch := identity.Tor
 	if launch == nil || launch.tor == nil || launch.external != nil || launch.profileID != profile.ID || identity.Execution == "" || identity.Execution != desktopTorExecution(launch.tor.expected.Execution) || identity.TorSession != launch.tor.expected.SessionID || liveMeasurementProfileToken(profile) != identity.ProfileToken {
@@ -141,10 +130,6 @@ func captureSpeedLabTorRestore(profile common.RouterProfile, identity speedLabPa
 		return nil, err
 	}
 	return &speedLabTorRestore{device: purpose, profileToken: identity.ProfileToken, policyToken: desktopTorSourceIdentityToken(selection.policy), network: identity.Network, mtu: mtu, automaticMTU: automatic, selection: selection}, nil
-}
-
-func (a *app) speedLabTorRestoreProfile(plan speedLabRestorePlan) (common.RouterProfile, error) {
-	return a.speedLabTorRestoreProfileContext(context.Background(), plan)
 }
 
 func (a *app) speedLabTorRestoreProfileContext(ctx context.Context, plan speedLabRestorePlan) (common.RouterProfile, error) {
@@ -243,14 +228,6 @@ type speedLabExternalRestore struct {
 	execution   string
 	root        string
 	network     string
-}
-
-func (a *app) beginSpeedLabTemporaryOperation() (context.Context, speedLabTemporarySnapshot, func(), error) {
-	return a.beginSpeedLabTemporaryOperationExpected(nil)
-}
-
-func (a *app) beginSpeedLabTemporaryOperationExpected(request *speedLabRequest) (context.Context, speedLabTemporarySnapshot, func(), error) {
-	return a.beginSpeedLabTemporaryOperationExpectedContext(context.Background(), request)
 }
 
 func (a *app) beginSpeedLabTemporaryOperationExpectedContext(ctx context.Context, request *speedLabRequest) (context.Context, speedLabTemporarySnapshot, func(), error) {
@@ -386,10 +363,6 @@ func clearSpeedLabRestorePlan(plan speedLabRestorePlan) {
 	if plan.external != nil {
 		clear(plan.external.source)
 	}
-}
-
-func compileSpeedLabExternalRestore(saved *speedLabExternalRestore, exit standardExit) (*desktopNodeLaunch, error) {
-	return compileSpeedLabExternalRestoreContext(context.Background(), saved, exit)
 }
 
 func compileSpeedLabExternalRestoreContext(operation context.Context, saved *speedLabExternalRestore, exit standardExit) (*desktopNodeLaunch, error) {
@@ -550,10 +523,6 @@ func (a *app) speedLabSuspendPreviousWith(snapshot speedLabTemporarySnapshot, sy
 	// Choosing a system-direct test explicitly permits its temporary unprotected
 	// Internet path. Other temporary VPN transitions retain fail-closed policy.
 	return stop(!systemDirect)
-}
-
-func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (speedLabRestorePlan, error) {
-	return a.speedLabCaptureRestorePlanContext(context.Background(), snapshot)
 }
 
 func (a *app) speedLabCaptureRestorePlanContext(ctx context.Context, snapshot speedLabTemporarySnapshot) (speedLabRestorePlan, error) {
@@ -923,16 +892,8 @@ func (a *app) speedLabRestoreFailed(owner *speedLabTemporaryOwner, message strin
 	return err
 }
 
-func (a *app) speedLabRestartPlan(plan speedLabRestorePlan) error {
-	return a.speedLabRestartPlanWithTorRuntime(plan, desktopTorConnectRuntime{})
-}
-
 func (a *app) speedLabRestartPlanContext(ctx context.Context, plan speedLabRestorePlan) error {
 	return a.speedLabRestartPlanWithTorRuntimeContext(ctx, plan, desktopTorConnectRuntime{})
-}
-
-func (a *app) speedLabRestartPlanWithTorRuntime(plan speedLabRestorePlan, torDriver desktopTorConnectRuntime) error {
-	return a.speedLabRestartPlanWithTorRuntimeContext(a.connectionOperationContextOrBackground(), plan, torDriver)
 }
 
 func (a *app) speedLabRestartPlanWithTorRuntimeContext(ctx context.Context, plan speedLabRestorePlan, torDriver desktopTorConnectRuntime) error {

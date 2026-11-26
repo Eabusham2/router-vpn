@@ -5,20 +5,6 @@ import (
 	"errors"
 )
 
-// Caller holds app.mu and has already observed the original native process,
-// physical network and private workspace with this caller. A completed HTTP
-// connection operation is not the retained child's lifetime. Observation still
-// requires the exact published owner and proof; it cannot admit or publish one.
-func (e *desktopNodeChainExecutionLaunch) retainedCurrentLocked(ctx context.Context, a *app, owner *nativeMultihopRuntime, graph activeMultihopGraph) error {
-	if err := e.retainedSourceCurrentLocked(ctx, a, owner, graph); err != nil {
-		return err
-	}
-	if err := owner.execution.currentLocked(owner.launch, graph); err != nil {
-		return err
-	}
-	return ctx.Err()
-}
-
 // This is only the app-locked source/registry half of observation. The caller
 // must also check the exact selected proof under its original receipt mutex.
 func (e *desktopNodeChainExecutionLaunch) retainedSourceCurrentLocked(ctx context.Context, a *app, owner *nativeMultihopRuntime, graph activeMultihopGraph) error {

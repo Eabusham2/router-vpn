@@ -21,20 +21,6 @@ type desktopExecutionDescriptor struct {
 	Lease     multihoprelay.Lease `json:"lease"`
 }
 
-// Only a copy of the already-validated, session-owned native configuration is
-// changed. The original generated node profiles and selected DNS policy survive.
-func patchDesktopExecutionConfig(path string, d desktopExecutionDescriptor, sel multihopSelection) error {
-	raw, err := readPrivateRegular(path, 4<<20)
-	if err != nil {
-		return err
-	}
-	compiled, err := compileDesktopExecutionConfig(raw, d, sel)
-	if err != nil {
-		return err
-	}
-	return writePrivateRuntimeFile(path, compiled)
-}
-
 func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel multihopSelection) ([]byte, error) {
 	if d.Execution != "server" {
 		return nil, errors.New("invalid server execution descriptor")
@@ -249,10 +235,6 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 		return nil, err
 	}
 	return append(body, '\n'), nil
-}
-
-func desktopExecutionCommand(a *app, sel multihopSelection, d *desktopExecutionDescriptor) (*exec.Cmd, string, *desktopNodeLaunch, error) {
-	return desktopExecutionCommandContext(a.connectionOperationContextOrBackground(), a, sel, d)
 }
 
 func desktopExecutionCommandContext(ctx context.Context, a *app, sel multihopSelection, d *desktopExecutionDescriptor) (*exec.Cmd, string, *desktopNodeLaunch, error) {

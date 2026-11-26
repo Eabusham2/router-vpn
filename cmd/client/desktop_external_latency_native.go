@@ -106,10 +106,6 @@ func readDesktopLatencyDrainRecord(launch *desktopNodeLaunch) (desktopLatencyNat
 	return decodeDesktopLatencyRecord(launch, raw)
 }
 
-func writeDesktopLatencyRequest(launch *desktopNodeLaunch, name string, request desktopLatencyNativeRequest) error {
-	return writeDesktopLatencyRequestContext(context.Background(), launch, name, request)
-}
-
 func writeDesktopLatencyRequestContext(ctx context.Context, launch *desktopNodeLaunch, name string, request desktopLatencyNativeRequest) error {
 	if name != "latency-request.json" && name != "latency-cancel.json" {
 		return errors.New("invalid native Latency command")

@@ -332,10 +332,6 @@ func (o *desktopLatencyOperation) invalidateContext(ctx context.Context) error {
 	return nil
 }
 
-func invalidateDesktopLatencyResults(a *app) {
-	_ = invalidateDesktopLatencyResultsContext(context.Background(), a)
-}
-
 func invalidateDesktopLatencyResultsContext(ctx context.Context, a *app) error {
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
 		return err

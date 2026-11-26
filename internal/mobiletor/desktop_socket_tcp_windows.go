@@ -90,12 +90,6 @@ type desktopWindowsSocket struct {
 	connectObservation desktopWindowsConnectObservation
 }
 
-func (c *desktopWindowsSocket) observeConnect() (desktopWindowsConnectObservation, bool, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.connectObservation, c.closing, c.closed
-}
-
 type desktopWindowsRaw struct{ socket *desktopWindowsSocket }
 
 func desktopSocketCreateTCP(family int) (syscall.Handle, error) {

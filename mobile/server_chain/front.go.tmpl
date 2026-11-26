@@ -52,10 +52,6 @@ type routerVPNServerChainFront struct {
 	stopInterrupt     func() bool
 }
 
-func newRouterVPNServerChainFront(parent context.Context, capture multihoprelay.NodeChainCapture, routes []mobilemultihop.NodeChainServerFrontRoute, current func() bool, resolve func(context.Context, mobilemultihop.NodeChainServerFrontRoute, string, M.Socksaddr) (M.Socksaddr, error), dial func(context.Context, string, string, M.Socksaddr) (net.Conn, error), packet func(context.Context, string, M.Socksaddr) (net.PacketConn, error)) (*routerVPNServerChainFront, error) {
-	return newRouterVPNServerChainFrontWithListener(parent, capture, routes, current, resolve, dial, packet, (&net.ListenConfig{}).Listen)
-}
-
 func newRouterVPNServerChainFrontWithListener(parent context.Context, capture multihoprelay.NodeChainCapture, routes []mobilemultihop.NodeChainServerFrontRoute, current func() bool, resolve func(context.Context, mobilemultihop.NodeChainServerFrontRoute, string, M.Socksaddr) (M.Socksaddr, error), dial func(context.Context, string, string, M.Socksaddr) (net.Conn, error), packet func(context.Context, string, M.Socksaddr) (net.PacketConn, error), listen func(context.Context, string, string) (net.Listener, error)) (*routerVPNServerChainFront, error) {
 	if parent == nil || parent.Err() != nil || capture.Validate() != nil || listen == nil || current == nil || resolve == nil || dial == nil || packet == nil || len(routes) != len(capture.Source.Members) {
 		return nil, errServerChainFront

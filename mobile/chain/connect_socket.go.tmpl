@@ -48,23 +48,6 @@ func joinContext(ctx context.Context, done <-chan struct{}) error {
 		return ctx.Err()
 	}
 }
-func joinDeadline(deadline time.Time, done <-chan struct{}) error {
-	if completed(done) {
-		return nil
-	}
-	timer := time.NewTimer(time.Until(deadline))
-	defer timer.Stop()
-	select {
-	case <-done:
-		return nil
-	case <-timer.C:
-		if completed(done) {
-			return nil
-		}
-		return context.DeadlineExceeded
-	}
-}
-
 // The original outbound deadline and closed flag are published atomically.
 // Concurrent connection closes consult this same owner before setting any
 // transport deadline; a TLS close_notify cannot install its own five seconds.

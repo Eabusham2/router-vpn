@@ -7,16 +7,6 @@ import (
 	"router-vpn/internal/desktopnetwork"
 )
 
-func prepareDesktopOwnedNodeChainLaunch(ctx context.Context, capture *desktopNodeChainHostCapture,
-	selection multihopSelection) (*desktopNodeLaunch, error) {
-	return prepareDesktopOwnedNodeChainLaunchForPurpose(ctx, capture, selection, nil)
-}
-
-func prepareDesktopOwnedNodeChainLaunchForPurpose(ctx context.Context, capture *desktopNodeChainHostCapture,
-	selection multihopSelection, purpose *orderedCandidatePreparation) (*desktopNodeLaunch, error) {
-	return prepareDesktopOwnedNodeChainLaunchForPurposeAndExecution(ctx, capture, selection, purpose, nil)
-}
-
 func prepareDesktopOwnedNodeChainLaunchForPurposeAndExecution(ctx context.Context, capture *desktopNodeChainHostCapture,
 	selection multihopSelection, purpose *orderedCandidatePreparation, execution *desktopNodeChainExecutionRequest) (*desktopNodeLaunch, error) {
 	if capture == nil || capture.windows == nil || capture.platform != nil || capture.app == nil || capture.sources == nil ||

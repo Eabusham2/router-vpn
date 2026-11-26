@@ -399,14 +399,6 @@ func standardExitRuntimeParts(e standardExit, detour string) (map[string]any, ma
 	return nil, out, nil
 }
 
-func registerStandardExitRoutes(h *http.ServeMux) {
-	// Compatibility/read-only registration only. Mutating standard-exit routes
-	// require an *app so they can participate in the shared session transaction
-	// guard and are registered by registerPlatformStandardExitRoutes.
-	h.HandleFunc("/api/standard-exits/capabilities", standardExitCapabilitiesHandler)
-	h.HandleFunc("/api/standard-exits", standardExitListHandler)
-}
-
 func (a *app) guardedStandardExitSave(w http.ResponseWriter, r *http.Request) {
 	release, err := a.beginMutationOperation(r)
 	if err != nil {
@@ -425,15 +417,6 @@ func (a *app) guardedStandardExitDelete(w http.ResponseWriter, r *http.Request) 
 	}
 	defer release()
 	standardExitDeleteHandler(w, r)
-}
-
-func standardExitCapabilitiesHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "GET only", http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("content-type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"schema_version": standardExitStoreVersion, "capabilities": standardExitCapabilities()})
 }
 
 func standardExitListHandler(w http.ResponseWriter, r *http.Request) {

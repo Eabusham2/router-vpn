@@ -567,20 +567,6 @@ func captureLinuxStandardServiceMTUReadback(ctx context.Context, launch *linuxSt
 	}
 	return state, profile, activation.ctx, nil
 }
-func linuxStandardServiceMTUActivationContext(ctx context.Context, launch *linuxStandardServiceLaunch) (context.Context, error) {
-	if launch == nil {
-		return nil, errors.New("standard MTU lifetime has no original launch")
-	}
-	if err := mobilemtu.LockContext(ctx, &launch.mu); err != nil {
-		return nil, err
-	}
-	defer launch.mu.Unlock()
-	_, _, activation, err := captureLinuxStandardServiceMTUReadbackLocked(ctx, launch)
-	if err != nil {
-		return nil, err
-	}
-	return activation.ctx, nil
-}
 func captureLinuxStandardServiceMTUReadbackLocked(ctx context.Context, launch *linuxStandardServiceLaunch) (mobilemtu.State, common.RouterProfile, *linuxStandardServiceMonitor, error) {
 	bad := errors.New("standard MTU readback lost its original proved activation")
 	var profile common.RouterProfile

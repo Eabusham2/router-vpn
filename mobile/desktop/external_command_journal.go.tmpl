@@ -22,15 +22,6 @@ type routerVPNExternalJournal interface {
 	close() error
 }
 
-// Every Windows physical or journal option enters the authenticated form,
-// including a former physical-source-only invocation. The all-empty legacy
-// form separately proves Off from the independently compiled original policy;
-// imported ready/ack records never provide an alternate protected admission.
-func routerVPNRunExternalCommand(parent context.Context, directory, session, source, config, transfer string,
-	linux routerVPNNodeLinuxParentOptions, journal routerVPNExternalJournalOptions) error {
-	return routerVPNRunExternalOwnedCommand(parent, directory, session, source, config, transfer, linux, journal, "")
-}
-
 func routerVPNRunExternalOwnedCommand(parent context.Context, directory, session, source, config, transfer string,
 	linux routerVPNNodeLinuxParentOptions, journal routerVPNExternalJournalOptions, darwin string) error {
 	if darwin != "" {

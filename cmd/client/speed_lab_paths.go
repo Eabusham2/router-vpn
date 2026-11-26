@@ -1234,21 +1234,6 @@ func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *spe
 	return path, nil
 }
 
-func (a *app) startSpeedLabTorPath(q speedLabRequest, profile common.RouterProfile) (speedLabPath, error) {
-	var prepared *speedLabTorPreparation
-	if q.preparedExternal != nil {
-		prepared = q.preparedExternal.tor
-	}
-	if prepared == nil {
-		var err error
-		prepared, err = a.prepareSpeedLabTorPathWithRuntime(q, profile, nil, desktopTorConnectRuntime{})
-		if err != nil {
-			return speedLabPath{}, err
-		}
-	}
-	return a.startPreparedSpeedLabTorPath(q, profile, prepared)
-}
-
 func (a *app) startSpeedLabTemporaryPath(q speedLabRequest) (speedLabPath, error) {
 	topology := strings.ToLower(strings.TrimSpace(q.Topology))
 	switch topology {

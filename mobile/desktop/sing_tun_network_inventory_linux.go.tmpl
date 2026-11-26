@@ -46,10 +46,6 @@ func routervpnLinuxAttributes(raw []byte) (map[uint16][]byte, error) {
 	return result, nil
 }
 
-func (t *NativeTun) routervpnLinuxInterface() (*net.Interface, error) {
-	return t.routervpnLinuxInterfaceContext(t.routervpnNetworkContext())
-}
-
 func (t *NativeTun) routervpnLinuxInterfaceContext(ctx context.Context) (*net.Interface, error) {
 	if ctx == nil {
 		return nil, errors.New("native link inventory lost its original caller")

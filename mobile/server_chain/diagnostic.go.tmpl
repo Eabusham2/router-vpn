@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"strings"
 )
 
 // Failure output is a fixed vocabulary. Never format the underlying native
@@ -47,38 +46,4 @@ func routerVPNWriteServerChainDiagnostic(output io.Writer, operation string, fai
 	if output != nil && failure != nil {
 		_, _ = io.WriteString(output, routerVPNServerChainDiagnostic(operation, failure)+"\n")
 	}
-}
-
-// The acceptance fixture reports only canonical records from the stderr
-// stream. Library logs, private error text and unknown fields cannot be copied
-// into a public failure merely because they share that stream.
-func routerVPNSafeServerChainDiagnostics(raw string) []string {
-	var records []string
-	for _, line := range strings.Split(raw, "\n") {
-		const prefix = "ROUTERVPN_SERVER_FAILURE "
-		if !strings.HasPrefix(line, prefix) {
-			continue
-		}
-		var value struct {
-			Operation string `json:"operation"`
-			Stage     string `json:"stage"`
-			Deadline  bool   `json:"deadline"`
-			Cancelled bool   `json:"cancelled"`
-		}
-		if json.Unmarshal([]byte(strings.TrimPrefix(line, prefix)), &value) != nil {
-			continue
-		}
-		var cause error
-		if value.Deadline {
-			cause = context.DeadlineExceeded
-		}
-		if value.Cancelled {
-			cause = errors.Join(cause, context.Canceled)
-		}
-		records = append(records, routerVPNServerChainDiagnostic(value.Operation, routerVPNServerChainAtStage(value.Stage, cause)))
-		if len(records) > 8 {
-			records = records[len(records)-8:]
-		}
-	}
-	return records
 }

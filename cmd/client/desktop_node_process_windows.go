@@ -142,13 +142,6 @@ func startDesktopProtectedProcessWithJournal(ctx context.Context, arguments, env
 	return result, nil
 }
 
-// This is the actual same-token creation/observation composition. Package
-// authority is established by startDesktopOwnedNodeProcess before it enters.
-func startDesktopCapturedNodeChild(ctx context.Context, owner *desktopNodeProcessOwner, image *windowscontroller.Image,
-	arguments, environment []string, directory string) error {
-	return startDesktopCapturedNodeChildWithJournal(ctx, owner, image, arguments, environment, directory, nil)
-}
-
 func startDesktopCapturedNodeChildWithJournal(ctx context.Context, owner *desktopNodeProcessOwner, image *windowscontroller.Image,
 	arguments, environment []string, directory string, journal *desktopNodeWindowsJournalProcess) error {
 	if ctx == nil || owner == nil || owner.controller == nil || image == nil || owner.child != nil || owner.waiter != nil {

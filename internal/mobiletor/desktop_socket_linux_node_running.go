@@ -200,10 +200,6 @@ func desktopLinuxRunningSOCKS(entries []desktopLinuxRunningTuple, selection Desk
 	return nil
 }
 
-func desktopLinuxRunningRows(n *desktopLinuxNFT, rows []map[string]any, selection DesktopLinuxNodeRunningSelection) error {
-	return desktopLinuxRunningRowsWithLAN(n, rows, selection, false)
-}
-
 func desktopLinuxRunningRowsWithLAN(n *desktopLinuxNFT, rows []map[string]any, selection DesktopLinuxNodeRunningSelection, homeLAN bool) error {
 	if n == nil || selection.validate() != nil {
 		return errors.New("Linux running inventory lacks its original native selection")

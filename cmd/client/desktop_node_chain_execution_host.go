@@ -17,10 +17,6 @@ type desktopNodeChainExecutionRequest struct {
 	startupLast  string
 }
 
-func prepareDesktopNodeChainExecutionHost(ctx context.Context, a *app, selection multihopSelection, requested string) (*desktopNodeLaunch, string, error) {
-	return prepareDesktopNodeChainExecutionHostWithLast(ctx, a, selection, requested, "")
-}
-
 func prepareDesktopNodeChainExecutionHostWithLast(ctx context.Context, a *app, selection multihopSelection, requested, saved string) (*desktopNodeLaunch, string, error) {
 	if requested != "server" && requested != "auto" {
 		return nil, "", errors.New("ordered execution requires captured Server or Compare setting")

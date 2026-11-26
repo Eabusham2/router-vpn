@@ -115,15 +115,6 @@ func (r *RouterExternalProofRequest) Run() (string, error) {
 	}
 	return r.request.RunObserved(r.currentContext)
 }
-func (r *RouterExternalProofRequest) runContext(ctx context.Context) (string, error) {
-	if r == nil || r.request == nil || r.currentContext == nil {
-		if r != nil {
-			r.Cancel()
-		}
-		return "", errors.New("external native request retired")
-	}
-	return r.request.RunContext(ctx, r.currentContext)
-}
 func (r *RouterExternalProofRequest) Cancel() {
 	if r != nil && r.request != nil {
 		r.request.Cancel()

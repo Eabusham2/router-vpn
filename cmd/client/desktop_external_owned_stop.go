@@ -353,12 +353,6 @@ type desktopWindowsExternalStopCapture struct {
 	operation context.Context
 }
 
-func (a *app) captureDesktopRetainedStop() (desktopRetainedStopCapture, error) {
-	ctx, cancel := desktopNodeChainRetirementContext()
-	defer cancel()
-	return a.captureDesktopRetainedStopContext(ctx)
-}
-
 func (a *app) captureDesktopRetainedStopContext(ctx context.Context) (desktopRetainedStopCapture, error) {
 	if err := a.retirePendingDesktopOrderedExecutionPreparation(ctx); err != nil {
 		return nil, err

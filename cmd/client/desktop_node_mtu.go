@@ -253,10 +253,6 @@ func (owner *desktopNodeMTUOwner) RestoreContext(ctx context.Context) (mtuKernel
 	return owner.restoreLockedContext(ctx)
 }
 
-func (owner *desktopNodeMTUOwner) restoreLocked() (mtuKernelState, error) {
-	return owner.restoreLockedContext(context.Background())
-}
-
 func (owner *desktopNodeMTUOwner) restoreLockedContext(ctx context.Context) (mtuKernelState, error) {
 	if owner.committed {
 		if !owner.record.Restored {
@@ -417,10 +413,6 @@ func (owner *desktopNodeMTUOwner) verifyReaderChangeContext(ctx context.Context,
 		return err
 	}
 	return ctx.Err()
-}
-
-func (owner *desktopNodeMTUOwner) acceptExpiredRestoration(record desktopNodeMTURecord) (bool, error) {
-	return owner.acceptExpiredRestorationContext(context.Background(), record)
 }
 
 func (owner *desktopNodeMTUOwner) acceptExpiredRestorationContext(ctx context.Context, record desktopNodeMTURecord) (bool, error) {

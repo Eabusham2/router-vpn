@@ -255,22 +255,6 @@ func validateDesktopWindowsExternalSource(profile common.RouterProfile, launch *
 	defer owner.mu.Unlock()
 	return validateDesktopWindowsExternalSourceLocked(profile, launch)
 }
-func validateDesktopWindowsExternalSourceContext(ctx context.Context, profile common.RouterProfile, launch *desktopNodeLaunch) error {
-	if ctx == nil {
-		return errors.New("native external source observation omitted caller")
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if !desktopWindowsExternalEligible(launch) || profile.ID != launch.policyProfileID {
-		return errors.New("native external source lost its exact saved node")
-	}
-	if err := mobilemtu.LockContext(ctx, &launch.external.mu); err != nil {
-		return err
-	}
-	defer launch.external.mu.Unlock()
-	return errors.Join(validateDesktopWindowsExternalSourceLocked(profile, launch), ctx.Err())
-}
 func validateDesktopWindowsExternalSourceLocked(profile common.RouterProfile, launch *desktopNodeLaunch) error {
 	if !desktopWindowsExternalEligible(launch) || profile.ID != launch.policyProfileID {
 		return errors.New("native external source lost its exact saved node")

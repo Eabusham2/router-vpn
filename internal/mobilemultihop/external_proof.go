@@ -185,12 +185,6 @@ func (r *ExternalProofRequest) verifyCurrentPath(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func (r *ExternalProofRequest) localOpenVPNHealthy() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
-	defer cancel()
-	return r.currentContext(ctx) == nil && r.localOpenVPNHealthyContext(ctx) == nil
-}
-
 func (r *ExternalProofRequest) captureLocalOpenVPNRemote(ctx context.Context) error {
 	if err := r.captureOpenVPNEntry(ctx); err != nil {
 		return err

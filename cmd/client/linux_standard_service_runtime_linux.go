@@ -528,13 +528,6 @@ func (s *linuxStandardService) connection(connection *net.UnixConn) {
 	s.connectionWithRoles(connection, []string{filepath.Join(s.root, "router-vpn-client"), linuxOwnedControllerArgument}, []string{filepath.Join(s.root, "router-vpn-client"), linuxStandardServiceUpgradeArgument})
 }
 
-// Production supplies the fixed installed controller role. Native fixtures
-// supply their exact test executable arguments while retaining the same actual
-// Unix peer, image, namespace and original pidfd authentication.
-func (s *linuxStandardService) connectionWithArguments(connection *net.UnixConn, arguments []string) {
-	s.connectionWithRoles(connection, arguments, nil)
-}
-
 func (s *linuxStandardService) connectionWithRoles(connection *net.UnixConn, arguments, upgradeArguments []string) {
 	defer s.workers.Done()
 	defer connection.Close()

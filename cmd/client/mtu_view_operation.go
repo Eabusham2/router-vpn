@@ -79,20 +79,6 @@ func readMTUViewRequest(w http.ResponseWriter, r *http.Request) (mtuViewRequest,
 	return request, nil
 }
 
-func currentMTUViewIdentity(a *app) (mtuViewIdentity, error) {
-	if launch := desktopExternalMTULaunch(a); launch != nil {
-		if err := a.desktopMeasurementCurrentProof(launch); err != nil && !errors.Is(err, errDesktopTorMTUTransitionPending) {
-			return mtuViewIdentity{}, err
-		}
-		return desktopMeasurementViewIdentity(launch)
-	}
-	snapshot, err := captureMTURetestSnapshot(a)
-	if err != nil {
-		return mtuViewIdentity{}, err
-	}
-	return mtuViewIdentity{Session: snapshot.SessionID, Profile: snapshot.Profile.ID}, nil
-}
-
 func mtuViewSlotFor(a *app) *mtuViewSlot {
 	slot, _ := mtuViewSlots.LoadOrStore(a, &mtuViewSlot{})
 	return slot.(*mtuViewSlot)

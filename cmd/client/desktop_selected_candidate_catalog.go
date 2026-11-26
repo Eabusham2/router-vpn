@@ -125,10 +125,6 @@ func desktopSelectedCandidateFamily(e *desktopNodeChainExecutionLaunch) bool {
 	return c.policy != nil && (e.physical != nil || e.openvpnPhysical != nil || e.multiplePhysical != nil)
 }
 
-func desktopSelectedCandidatePosition(launch *desktopNodeLaunch, position int) bool {
-	return desktopCandidatePositionForIntent(launch, position, false)
-}
-
 func desktopCandidatePositionForIntent(launch *desktopNodeLaunch, position int, serverResponse bool) bool {
 	e := desktopNodeChainLaunchExecution(launch)
 	if e == nil {
@@ -145,10 +141,6 @@ func desktopCandidatePositionForIntent(launch *desktopNodeLaunch, position int, 
 		return e.ready == nil || e.ready.Progress.Execution == "local" && local || e.ready.Progress.Execution == "server" && server
 	}
 	return mobilemultihop.NodeChainPrefixMode(launch.chain.selection.Nodes[position].Mode) && (e.socksPhysical == nil && e.connectPhysical == nil || position == 0)
-}
-
-func captureDesktopSelectedCandidateDescriptor(launch *desktopNodeLaunch, position int, inventory string) (*desktopSelectedCandidateDescriptor, error) {
-	return captureDesktopSelectedCandidateDescriptorForPurpose(launch, position, inventory, nil)
 }
 
 func captureDesktopSelectedCandidateDescriptorForPurpose(launch *desktopNodeLaunch, position int, inventory string, purpose *orderedCandidatePreparation) (*desktopSelectedCandidateDescriptor, error) {

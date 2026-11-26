@@ -137,27 +137,6 @@ func (f *routerVPNDesktopMTUFiles) tick() error {
 	return f.files.publish("mtu-status.json", record)
 }
 
-func routerVPNOpenDesktopMTU(files *routerVPNExternalFiles, owner routerVPNExternalOwner, session, source, config string) (*routerVPNDesktopMTUFiles, error) {
-	provider, ok := owner.(routerVPNExternalMTUProvider)
-	if !ok {
-		return nil, nil
-	} // Fixture owners do not pretend to own an OS TUN.
-	return routerVPNOpenDesktopMTUProvider(files, provider, session, source, config)
-}
-
-func routerVPNOpenDesktopMTUProvider(files *routerVPNExternalFiles, provider routerVPNExternalMTUProvider, session, source, config string) (*routerVPNDesktopMTUFiles, error) {
-	if files == nil || provider == nil {
-		return nil, routerVPNExternalFailure
-	}
-	mtu, err := provider.DesktopMTU()
-	if err != nil {
-		_ = files.publish("mtu-status.json", routerVPNDesktopMTURecord{Schema: 1, Session: session, SourceSHA256: source, ConfigSHA256: config, Status: mobilemtu.Status{Phase: "unavailable", Complete: true, Source: "unavailable-native-interface", Failure: "The captured native interface could not be granted MTU measurement ownership", Candidates: []mobilemtu.Candidate{}}})
-		return nil, err
-	}
-	result := &routerVPNDesktopMTUFiles{files: files, owner: mtu, session: session, source: source, config: config, inputs: map[string]routerVPNDesktopMTUInput{}}
-	return result, result.tick()
-}
-
 // DeadlineNS is the controller's absolute deadline, including time already
 // spent preparing and delivering the mailbox input. It is never renewed here.
 func routerVPNDesktopMTUInputContext(parent context.Context, deadlineNS int64) (context.Context, context.CancelFunc, error) {

@@ -343,10 +343,6 @@ func (a *app) profileLatencyWithClock(w http.ResponseWriter, r *http.Request, ne
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-func pickTCPProbePort(endpoint string) (int, error) {
-	return pickTCPProbePortContext(context.Background(), endpoint)
-}
-
 func pickTCPProbePortContext(ctx context.Context, endpoint string) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -401,14 +397,6 @@ func percentile(sorted []float64, p float64) float64 {
 
 func round3(v float64) float64 { return math.Round(v*1000) / 1000 }
 
-func captureAsyncMeasurementSession(a *app) (connectionSession, error) {
-	s := sessionTrackerFor(a).snapshot(0)
-	if strings.TrimSpace(s.ID) == "" || !s.Connected || strings.TrimSpace(s.Phase) != "connected" || s.PathProof != "passed" {
-		return connectionSession{}, errors.New("current Router VPN session has not proved a stable connected path")
-	}
-	return s, nil
-}
-
 func captureAsyncMeasurementSessionContext(ctx context.Context, a *app) (connectionSession, error) {
 	_, session, err := measurementSessionContext(ctx, a, nil)
 	if err != nil {
@@ -429,10 +417,6 @@ func asyncMeasurementProfileToken(p common.RouterProfile) string {
 	return liveMeasurementProfileToken(p)
 }
 
-func (a *app) activeAsyncMeasurementProfile() (common.RouterProfile, state, error) {
-	return a.activeAsyncMeasurementProfileContext(context.Background())
-}
-
 func (a *app) activeAsyncMeasurementProfileContext(ctx context.Context) (common.RouterProfile, state, error) {
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
 		return common.RouterProfile{}, state{}, err
@@ -451,10 +435,6 @@ func (a *app) activeAsyncMeasurementProfileContext(ctx context.Context) (common.
 		return common.RouterProfile{}, st, errors.New("active VPN node disappeared before live proof")
 	}
 	return cloneRouterProfile(p), st, ctx.Err()
-}
-
-func validateAsyncMeasurementProfile(a *app, p common.RouterProfile, st state, session connectionSession, token string) error {
-	return validateAsyncMeasurementProfileContext(context.Background(), a, p, st, session, token)
 }
 
 func validateAsyncMeasurementProfileContext(ctx context.Context, a *app, p common.RouterProfile, st state, session connectionSession, token string) error {

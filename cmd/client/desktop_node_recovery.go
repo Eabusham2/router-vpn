@@ -155,10 +155,6 @@ func (a *app) ensureDesktopNodeRecoveryMode(ctx context.Context, slot *desktopNo
 	return slot.initializeRecoveryWithJournal(ctx, selected, profiles, guard, requireJournal)
 }
 
-func (s *desktopNodeProtectionSlot) initializeRecovery(ctx context.Context, selectedID, profiles string, current func() bool) (failure error) {
-	return s.initializeRecoveryWithJournal(ctx, selectedID, profiles, current, false)
-}
-
 func (s *desktopNodeProtectionSlot) initializeRecoveryWithJournal(ctx context.Context, selectedID, profiles string, current func() bool, requireJournal bool) (failure error) {
 	if s == nil || ctx == nil || ctx.Err() != nil || current == nil || !current() {
 		return errors.New("native startup recovery lost its captured operation")
@@ -352,28 +348,6 @@ func (s *desktopNodeProtectionSlot) hydrateRecoveryLocked(selectedID string, res
 		pending.token = s.viewLocked().token(pending.profileRevision)
 	}
 	return nil
-}
-
-func (s *desktopNodeProtectionSlot) recoveryPending() bool {
-	pending, _ := s.recoveryPendingContext(context.Background())
-	return pending
-}
-
-func (s *desktopNodeProtectionSlot) recoveryPendingContext(ctx context.Context) (bool, error) {
-	if ctx == nil {
-		return false, errors.New("startup recovery status lost its original caller")
-	}
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-	if s == nil {
-		return false, nil
-	}
-	if err := desktopnetwork.LockContext(ctx, &s.mu); err != nil {
-		return false, err
-	}
-	defer s.mu.Unlock()
-	return s.backend.bootstrap != nil && (s.recovery == nil || !s.recovery.ready), nil
 }
 
 // initializeDesktopNodeRecoveryWith runs before the listener can schedule any

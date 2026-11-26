@@ -173,14 +173,6 @@ func deterministicExternalDNSRuntime(a *app, profileID, runtimeID string) (activ
 	return activeDNSRuntimeIdentity{ProfileID: profileID, RuntimeID: runtimeID, Config: configPath}, true, nil
 }
 
-func activeDNSRuntimeConfigFor(a *app, profileID, runtimeID string) (string, bool, error) {
-	snapshot, owned, err := activeDNSRuntimeSnapshotFor(a, profileID, runtimeID)
-	if err != nil || !owned {
-		return "", owned, err
-	}
-	return snapshot.source.path, true, nil
-}
-
 func captureActiveDNSRuntimeSource(a *app, profileID, runtimeID string) (*activeDNSRuntimeSource, bool, error) {
 	if a == nil {
 		return nil, false, nil

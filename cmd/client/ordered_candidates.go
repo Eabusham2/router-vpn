@@ -60,9 +60,6 @@ func candidateViewMetric(prefixes []orderedCandidatePrefix, position int) string
 	return hopmeasure.CandidateTCPMeasurement
 }
 
-func desktopCandidatePrefixMetric(launch *desktopNodeLaunch, position int) string {
-	return desktopCandidateMetricForIntent(launch, position, false)
-}
 func desktopCandidateMetricForIntent(launch *desktopNodeLaunch, position int, serverResponse bool) string {
 	if launch == nil || launch.chain == nil || position < 0 || position >= len(launch.chain.selection.Nodes) || !desktopCandidatePositionForIntent(launch, position, serverResponse) {
 		return ""

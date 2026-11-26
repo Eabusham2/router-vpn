@@ -88,16 +88,6 @@ func desktopTorRequestedExecution(profile common.RouterProfile, q externalProfil
 	return externalExecutionChoice(profile, q.Execution, direct)
 }
 
-func newDesktopTorComparisonDriver(a *app, profile common.RouterProfile, request externalProfileConnectRequest, startup *startupPolicyCapture, runtime desktopTorConnectRuntime) (*desktopTorComparisonDriver, error) {
-	caller, err := captureDesktopTorCaller(a, runtime.operation, runtime.requestContext)
-	if err != nil {
-		return nil, err
-	}
-	defer caller.finish()
-	runtime.operation = caller.operation
-	return newDesktopTorComparisonDriverContext(caller.work, a, profile, request, startup, runtime)
-}
-
 func newDesktopTorComparisonDriverContext(ctx context.Context, a *app, profile common.RouterProfile, request externalProfileConnectRequest, startup *startupPolicyCapture, runtime desktopTorConnectRuntime) (*desktopTorComparisonDriver, error) {
 	if ctx == nil || ctx.Err() != nil || a == nil || runtime.operation == nil {
 		return nil, errors.New("Tor comparison requires a captured application owner")

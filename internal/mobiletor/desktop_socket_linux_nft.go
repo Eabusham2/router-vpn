@@ -172,10 +172,6 @@ func desktopLinuxNFTRows(raw []byte) ([]map[string]any, error) {
 	return value.NFTables, nil
 }
 
-func desktopLinuxNFTRead(ctx context.Context) ([]map[string]any, error) {
-	return desktopLinuxNFTReadTable(ctx, desktopLinuxNFTTable)
-}
-
 func desktopLinuxNFTReadTable(ctx context.Context, tableName string) ([]map[string]any, error) {
 	if tableName != desktopLinuxNFTTable && !desktopLinuxOwnedTableName(tableName) {
 		return nil, errors.New("Linux physical readback rejected an unowned table name")

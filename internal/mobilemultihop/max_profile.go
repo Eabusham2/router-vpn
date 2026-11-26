@@ -37,10 +37,6 @@ type maxPolicy struct {
 	StartLayer string `json:"start_layer,omitempty"`
 }
 
-func capturedMAXPolicy(raw string) (maxPolicy, string, error) {
-	return capturedMAXPolicyForSelection(raw, false)
-}
-
 func capturedMAXPolicyForSelection(raw string, allowHostname bool) (maxPolicy, string, error) {
 	var policy maxPolicy
 	bad := errors.New("MAX requires the exact selected Router VPN node and private service")

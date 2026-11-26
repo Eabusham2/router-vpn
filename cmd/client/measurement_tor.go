@@ -17,22 +17,6 @@ type desktopTorMeasurementBinding struct {
 	profileToken                     string
 }
 
-func captureDesktopTorMeasurementBinding(a *app, st state) (*desktopTorMeasurementBinding, error) {
-	if st.Mode != "external-node" || !desktopTorRuntimeID(st.RuntimeMode) {
-		return nil, nil
-	}
-	if a == nil {
-		return nil, errors.New("Tor measurement has no application owner")
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	bound, err := capturedDesktopTorMeasurementLocked(a, st)
-	if err != nil {
-		return nil, err
-	}
-	return bound, bound.currentLocked(a)
-}
-
 func captureDesktopTorMeasurementBindingContext(ctx context.Context, a *app, st state) (*desktopTorMeasurementBinding, error) {
 	if ctx == nil {
 		return nil, errors.New("Tor measurement has no original caller")

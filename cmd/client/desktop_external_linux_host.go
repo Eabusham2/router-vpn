@@ -378,10 +378,6 @@ func prepareDesktopLinuxExternalHost(operation context.Context, a *app, launch *
 	return h, h.current(ctx)
 }
 
-func newDesktopLinuxExternalTransaction(h *desktopLinuxNodeHost, journal *desktopLinuxNodeJournal,
-	predecessor *desktopLinuxNodeTransaction) (*desktopLinuxNodeTransaction, error) {
-	return newDesktopLinuxExternalTransactionWithStartup(nil, h, journal, predecessor)
-}
 func newDesktopLinuxExternalTransactionContext(ctx context.Context, h *desktopLinuxNodeHost, journal *desktopLinuxNodeJournal, predecessor *desktopLinuxNodeTransaction) (*desktopLinuxNodeTransaction, error) {
 	if ctx == nil {
 		return nil, errors.New("external startup transaction has no caller")

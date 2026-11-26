@@ -96,9 +96,6 @@ func (op *routerVPNDesktopExecutionMeasurementOperation) closeFacade(ctx context
 	return nil
 }
 
-func routerVPNExecutionMeasurementDecode(raw []byte) (routerVPNExecutionMeasurementRequest, error) {
-	return (*routerVPNDesktopExecutionMeasurement)(nil).decodeMeasurement(raw)
-}
 func (m *routerVPNDesktopExecutionMeasurement) decodeMeasurement(raw []byte) (routerVPNExecutionMeasurementRequest, error) {
 	var request routerVPNExecutionMeasurementRequest
 	var fields map[string]json.RawMessage

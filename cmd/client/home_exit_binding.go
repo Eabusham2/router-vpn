@@ -71,12 +71,6 @@ func validateHomeExitBindingLocked(a *app, session *connectionSession, proof *ho
 	return validateMeasurementProfilesLocked(a, proof.Profiles)
 }
 
-func (a *app) validateHomeExitBinding(proof *homeExitProof) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	return a.validateHomeExitBindingContext(ctx, proof)
-}
-
 func (a *app) validateHomeExitBindingContext(ctx context.Context, proof *homeExitProof) error {
 	if proof == nil {
 		return errors.New("Home public-exit proof has no original capture")

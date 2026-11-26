@@ -23,10 +23,6 @@ type speedLabHopMeasurement struct {
 	SpeedError   string                   `json:"speed_error,omitempty"`
 }
 
-func measureSpeedLabMultihopHops(a *app, identity speedLabPathIdentity) ([]speedLabHopMeasurement, error) {
-	return measureSpeedLabMultihopHopsContext(context.Background(), a, identity)
-}
-
 func measureSpeedLabMultihopHopsContext(ctx context.Context, a *app, identity speedLabPathIdentity) ([]speedLabHopMeasurement, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

@@ -200,14 +200,6 @@ func readPortablePackageFile(path string, limit int64) ([]byte, error) {
 	return body, nil
 }
 
-func portableRegularExists(path string) bool {
-	if err := validatePortableExistingAncestors(path); err != nil {
-		return false
-	}
-	info, err := os.Lstat(path)
-	return err == nil && info.Mode()&os.ModeSymlink == 0 && info.Mode().IsRegular()
-}
-
 type portableTargetSnapshot struct {
 	info   os.FileInfo
 	digest [sha256.Size]byte

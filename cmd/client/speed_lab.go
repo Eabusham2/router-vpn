@@ -204,10 +204,6 @@ func (a *app) speedLabSystemDirect(r *http.Request, q speedLabRequest, duration 
 	return path, measurement, err
 }
 
-func (a *app) speedLabCurrent(r *http.Request, duration speedLabDuration, minDuration, maxDuration time.Duration) (speedLabPath, speedLabMeasurement, []speedLabHopMeasurement, error) {
-	return a.speedLabCurrentExpected(r, speedLabRequest{}, duration, minDuration, maxDuration)
-}
-
 func (a *app) speedLabCurrentExpected(r *http.Request, q speedLabRequest, duration speedLabDuration, minDuration, maxDuration time.Duration) (speedLabPath, speedLabMeasurement, []speedLabHopMeasurement, error) {
 	if err := desktopnetwork.LockContext(r.Context(), &a.mu); err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, nil, err

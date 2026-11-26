@@ -384,10 +384,6 @@ func (t *sessionTracker) observe(s observedConnection) {
 	}
 }
 
-func (t *sessionTracker) proveDNSAsync(sessionID string, s observedConnection, runtimeID string) {
-	t.proveDNSAsyncWithProbe(sessionID, s, runtimeID, proveSelectedDNSContext)
-}
-
 func (t *sessionTracker) eventLocked(kind, phase, message string, connected bool, runtimeID, base string) {
 	t.seq++
 	e := connectionEvent{Seq: t.seq, At: time.Now().UTC(), Type: kind, Phase: phase, Message: message, Connected: connected, Runtime: runtimeID, Base: base}
@@ -397,16 +393,6 @@ func (t *sessionTracker) eventLocked(kind, phase, message string, connected bool
 	}
 	t.session.LastEventSeq = t.seq
 	t.session.UpdatedAt = e.At
-}
-
-func (t *sessionTracker) markStopReason(reason string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	homeExitProofs.Delete(t.a)
-	if t.session != nil {
-		t.session.StopReason = reason
-		t.eventLocked("stop-request", t.session.Phase, reason, t.session.Connected, t.session.ActualMode, t.session.ActualBase)
-	}
 }
 
 func (t *sessionTracker) markRequestFailure(message string) {

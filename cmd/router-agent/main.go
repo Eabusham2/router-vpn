@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"router-vpn/internal/mtuprobe"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -477,32 +476,6 @@ func (s *server) clearPeerForwarding(ip net.IP) error {
 		return nil
 	}
 	return nftScript(script)
-}
-
-func allowedRanges(reserved []int) []string {
-	seen := map[int]bool{}
-	for _, p := range reserved {
-		if p >= 1 && p <= 65535 {
-			seen[p] = true
-		}
-	}
-	vals := make([]int, 0, len(seen))
-	for p := range seen {
-		vals = append(vals, p)
-	}
-	sort.Ints(vals)
-	start := 1
-	out := []string{}
-	for _, p := range vals {
-		if p > start {
-			out = append(out, portRange(start, p-1))
-		}
-		start = p + 1
-	}
-	if start <= 65535 {
-		out = append(out, portRange(start, 65535))
-	}
-	return out
 }
 
 func portRange(a, b int) string {

@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -193,7 +192,6 @@ func validateLinuxOwnedConfiguration(config common.ClientConfig) error {
 	return nil
 }
 
-func linuxOwnedInfo(info fs.FileInfo) bool  { return ownedDesktopInfo(info) }
 func linuxOwnedAncestors(path string) error { return ownedDesktopAncestors(path) }
 func linuxOwnedInstall(root string) error   { return ownedDesktopInstall(root) }
 func linuxOwnedLock(path string, exclusive bool) (*os.File, error) {

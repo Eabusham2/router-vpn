@@ -153,10 +153,6 @@ func hostPortEqual(hint string, selected dnsSelection) bool {
 	return strings.EqualFold(strings.TrimSpace(hint), fmt.Sprintf("%s:%d", selected.Host, selected.Port))
 }
 
-func verifyKernelDNSRuntime(root, profileID, mode string, selected dnsSelection) error {
-	return verifyKernelDNSRuntimeContext(context.Background(), root, profileID, mode, selected)
-}
-
 func verifyKernelDNSRuntimeContext(ctx context.Context, root, profileID, mode string, selected dnsSelection) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
@@ -209,10 +205,6 @@ func verifyDNSHintSelection(hint map[string]string, selected dnsSelection) error
 		}
 	}
 	return nil
-}
-
-func probeLocalDNSProxy() error {
-	return probeLocalDNSProxyContext(context.Background(), "127.0.0.1:53")
 }
 
 func probeLocalDNSProxyContext(ctx context.Context, endpoint string) error {

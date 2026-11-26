@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"net/netip"
 
@@ -44,35 +43,6 @@ func desktopExternalEgressEndpoints(endpoint string, tuples []nativeopenvpn.Laye
 		return nil, errors.New("external physical primary is not part of its compiled socket capture")
 	}
 	return hosts, nil
-}
-
-// Only validated native layer compilation can supply restricted physical
-// tuples. An exit behind a predecessor never opens its own provider ports on
-// the device's physical network; the captured predecessor is the owner.
-func desktopExternalPhysicalEgress(profile, entry common.RouterProfile, direct bool) ([]nativeopenvpn.LayerEgress, error) {
-	physical := profile
-	if !direct {
-		physical = entry
-	}
-	if physical.External == nil || physical.External.OpenVPNStartLayers == nil {
-		return nil, nil
-	}
-	if physical.External.Protocol != "openvpn" || physical.External.OpenVPN == nil {
-		return nil, errors.New("mapped layer physical owner has no captured OpenVPN profile")
-	}
-	profileJSON, err := json.Marshal(physical.External.OpenVPN)
-	if err != nil {
-		return nil, err
-	}
-	probesJSON, err := json.Marshal(physical.External.OpenVPNResponseProbes)
-	if err != nil {
-		return nil, err
-	}
-	layersJSON, err := json.Marshal(physical.External.OpenVPNStartLayers)
-	if err != nil {
-		return nil, err
-	}
-	return nativeopenvpn.StartLayerEgress(string(profileJSON), string(probesJSON), string(layersJSON), physical.StartLayer)
 }
 
 // Only the physically dialed node contributes firewall exceptions. A final

@@ -72,10 +72,6 @@ func readDesktopWindowsProtectionRequest(ctx context.Context, fixtureScope []byt
 	}
 }
 
-func desktopWindowsProtectionRead(ctx context.Context, scope []byte) (snapshot DesktopWindowsProtectionSnapshot, result error) {
-	return desktopWindowsProtectionReadRequest(ctx, scope, nil)
-}
-
 func desktopWindowsProtectionReadRequest(ctx context.Context, scope []byte, prepared *desktopWindowsPreparedCapture) (snapshot DesktopWindowsProtectionSnapshot, result error) {
 	engine, err := desktopWFPOpen(false)
 	if engine != nil {

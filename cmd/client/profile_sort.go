@@ -89,13 +89,3 @@ func sortPublicProfileStore(store common.RouterProfileStore, order string) commo
 	})
 	return out
 }
-
-func lowestLatencyProfileID(store common.RouterProfileStore) string {
-	sorted := sortPublicProfileStore(store, "latency")
-	for _, p := range sorted.Profiles {
-		if savedNodeLatencyEligible(p) {
-			return p.ID
-		}
-	}
-	return ""
-}

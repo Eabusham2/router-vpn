@@ -104,10 +104,6 @@ func (a *app) startRouterNodeAutomaticMTU() {
 	a.startRouterNodeAutomaticMTUWithContextRun(a.runRouterNodeAutomaticMTUContext)
 }
 
-func (a *app) runRouterNodeAutomaticMTU(snapshot mtuRetestSnapshot) mtuAutomaticResult {
-	return a.runRouterNodeAutomaticMTUContext(context.Background(), snapshot)
-}
-
 func (a *app) runRouterNodeAutomaticMTUContext(parent context.Context, snapshot mtuRetestSnapshot) mtuAutomaticResult {
 	encoded, _ := json.Marshal(mtuViewRequest{Session: snapshot.SessionID, Profile: snapshot.Profile.ID})
 	attempt := &mtuAutomaticAttempt{}
@@ -141,13 +137,6 @@ func (owner *routerNodeAutomaticMTU) resumeAfterHold(command *exec.Cmd) {
 		owner.resume = true
 	}
 	owner.mu.Unlock()
-}
-
-func (a *app) startRouterNodeAutomaticMTUWithRun(run func(mtuRetestSnapshot) mtuAutomaticResult) {
-	if run == nil {
-		return
-	}
-	a.startRouterNodeAutomaticMTUWithContextRun(func(_ context.Context, snapshot mtuRetestSnapshot) mtuAutomaticResult { return run(snapshot) })
 }
 
 func (a *app) startRouterNodeAutomaticMTUWithContextRun(run func(context.Context, mtuRetestSnapshot) mtuAutomaticResult) {

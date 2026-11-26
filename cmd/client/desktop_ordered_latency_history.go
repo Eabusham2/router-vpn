@@ -31,13 +31,6 @@ func desktopOrderedReceiptKey(r hopmeasure.OrderedLatencyReceipt) string {
 	return fmt.Sprintf("%s:%s:%d:%s:%s:%s", r.SourceSHA256, r.ConfigSHA256, r.Position, r.NodeID, r.Result.Kind, r.Result.Benchmark.Measurement)
 }
 
-// A historical receipt never grants current readiness or direct-node ranking.
-// Fixed labels/metrics also prevent an endpoint, credential or arbitrary child
-// string from being laundered into the private history or native UI.
-func validateDesktopOrderedReceipt(r hopmeasure.OrderedLatencyReceipt, now time.Time) error {
-	return validateDesktopOrderedReceiptBound(r, now, 8)
-}
-
 func validateDesktopOrderedReceiptBound(r hopmeasure.OrderedLatencyReceipt, now time.Time, limit int) error {
 	bad := errors.New("ordered history requires an exact complete fifty-response receipt")
 	count := desktopOrderedReceiptCount(r)

@@ -248,27 +248,6 @@ func (a *app) logicalStatuses() []logicalModeStatus {
 	return out
 }
 
-func (a *app) persistBasePreference(base string) error {
-	base = normalizeBase(base)
-	if base == "auto" {
-		return nil
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for i := range a.profiles.Profiles {
-		if a.profiles.Profiles[i].ID == a.profiles.SelectedID {
-			previous := a.profiles.Profiles[i].BaseTunnel
-			a.profiles.Profiles[i].BaseTunnel = base
-			if err := a.persistProfilesLocked(); err != nil {
-				a.profiles.Profiles[i].BaseTunnel = previous
-				return err
-			}
-			return nil
-		}
-	}
-	return errors.New("no selected router profile")
-}
-
 func allRuntimeCandidate(runtimeID string) (runtimeCandidate, error) {
 	switch strings.TrimSpace(runtimeID) {
 	case "max-tls-wg", "max-quic-wg":

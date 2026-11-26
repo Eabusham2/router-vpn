@@ -5,20 +5,6 @@ import (
 	"errors"
 )
 
-// Project each nested packet edge against the already-derived prefix budget.
-// Fixed settings never clamp and historical effective_mtu never becomes
-// current-path evidence. A prefix too small for the next WG handshake fails.
-func applyNodeChainMTU(nodes []*NodeProfile, closures []*externalPredecessor) error {
-	members := make([]nodeChainGraphMember, len(nodes))
-	for i, node := range nodes {
-		members[i] = nodeChainGraphMember{profile: node.profile, source: node.source, mode: node.mode}
-	}
-	return applyNodeChainMemberMTU(members, closures)
-}
-func applyNodeChainMemberMTU(nodes []nodeChainGraphMember, closures []*externalPredecessor) error {
-	return applyNodeChainMemberMTUWithServerScope(nodes, closures, nil)
-}
-
 func applyNodeChainMemberMTUWithServerScope(nodes []nodeChainGraphMember, closures []*externalPredecessor, server *nodeChainMultipleImportedServerScope) error {
 	if server != nil && server.validateCompilation(nodes, closures) != nil {
 		return nodeChainServerError

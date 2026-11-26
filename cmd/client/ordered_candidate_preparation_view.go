@@ -27,11 +27,6 @@ type orderedCandidatePreparedView struct {
 	responseOwners []string
 }
 
-func captureOrderedCandidatePreparedView(ctx context.Context, a *app, position int,
-	observe func(context.Context) (string, error)) (*orderedCandidatePreparedView, error) {
-	return captureOrderedCandidatePreparedViewScope(ctx, a, position, orderedCandidateSavedCompleteScope, observe)
-}
-
 func (view *orderedCandidatePreparedView) scopeValue() string {
 	if view == nil {
 		return ""

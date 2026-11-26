@@ -186,19 +186,6 @@ type routerVPNNodeMTU struct {
 	networkReceiptDiagnosticReader uint64
 }
 
-func newRouterVPNNodeMTU(engine routerVPNNodeMTUEngine, session, config, path string, guard func() bool) (*routerVPNNodeMTU, error) {
-	// Compatibility entry point has no caller to propagate. Its explicitly
-	// supplied guard is adapted here; bounded production uses the method below.
-	return newRouterVPNNodeMTUContext(context.Background(), engine, session, config, path, func(ctx context.Context) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if guard == nil || !guard() {
-			return routerVPNExternalFailure
-		}
-		return nil
-	})
-}
 func newRouterVPNNodeMTUContext(ctx context.Context, engine routerVPNNodeMTUEngine, session, config, path string, guard func(context.Context) error) (*routerVPNNodeMTU, error) {
 	if ctx == nil || engine == nil || !routerVPNExternalSession.MatchString(session) || len(config) != 64 || len(path) != 64 || guard == nil {
 		return nil, routerVPNExternalFailure
@@ -607,18 +594,6 @@ func routerVPNNewNodeCommandWithRun(run routerVPNNodeCommandRun) *cobra.Command 
 	command.Flags().StringVar(&linuxParent.CaptureSHA256, "linux-parent-capture", "", "captured Linux command identity")
 	command.Flags().StringVar(&darwin, "darwin-control", "", "original inherited Darwin controller")
 	return command
-}
-
-func routerVPNRunNodeMTU(parent context.Context, directory, session, config string) (failure error) {
-	return routerVPNRunNodeMTUWithPhysical(parent, directory, session, config, "", "")
-}
-
-func routerVPNRunNodeMTUWithPhysical(parent context.Context, directory, session, config, physicalSource, physicalTransfer string) (failure error) {
-	return routerVPNRunNodeMTUWithPhysicalMTU(parent, directory, session, config, physicalSource, physicalTransfer, 0)
-}
-
-func routerVPNRunNodeMTUWithPhysicalMTU(parent context.Context, directory, session, config, physicalSource, physicalTransfer string, physicalMTU int) (failure error) {
-	return routerVPNRunNodeMTUCaptured(parent, directory, session, config, physicalSource, physicalTransfer, physicalMTU, nil)
 }
 
 func routerVPNRunNodeMTUCaptured(parent context.Context, directory, session, config, physicalSource, physicalTransfer string, physicalMTU int, journal routerVPNNodeJournal) error {

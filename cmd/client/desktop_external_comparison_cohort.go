@@ -188,10 +188,6 @@ func desktopComparisonSameFile(before, after os.FileInfo) bool {
 		before.Size() == after.Size() && before.ModTime().Equal(after.ModTime())
 }
 
-func captureDesktopExternalComparisonCohort(a *app, expected string) (*desktopExternalComparisonCohort, error) {
-	return captureDesktopExternalComparisonCohortContext(context.Background(), a, expected)
-}
-
 func captureDesktopExternalComparisonCohortContext(ctx context.Context, a *app, expected string) (*desktopExternalComparisonCohort, error) {
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
 		return nil, err

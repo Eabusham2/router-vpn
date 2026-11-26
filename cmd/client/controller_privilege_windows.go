@@ -18,7 +18,6 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/controllertransport"
@@ -478,20 +477,6 @@ func (c *windowsOwnedController) applyEnvironment(pin string) error {
 		}
 	}
 	return os.Chdir(c.dataRoot)
-}
-
-func windowsOwnedSystemDirectory() (string, error) {
-	proc := syscall.NewLazyDLL("kernel32.dll").NewProc("GetSystemDirectoryW")
-	buffer := make([]uint16, 32768)
-	length, _, err := proc.Call(uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)))
-	if length == 0 || length >= uintptr(len(buffer)) {
-		return "", fmt.Errorf("read native Windows system directory: %w", err)
-	}
-	value := syscall.UTF16ToString(buffer[:length])
-	if !filepath.IsAbs(value) {
-		return "", errors.New("Windows returned no absolute system directory")
-	}
-	return value, nil
 }
 
 func (c *windowsOwnedController) Captured() bool { return c != nil && c.authenticated.Load() }

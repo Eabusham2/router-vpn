@@ -641,14 +641,6 @@ func (c *controller) successfulWorkflowRun(file, sha string) (workflowRun, error
 	return run, nil
 }
 
-func (c *controller) workflowSuccess(file, sha string) (bool, error) {
-	_, err := c.successfulWorkflowRun(file, sha)
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 func compareProvesStrictUpgrade(current, target string, comparison githubCompare) bool {
 	current = strings.ToLower(strings.TrimSpace(current))
 	target = strings.ToLower(strings.TrimSpace(target))

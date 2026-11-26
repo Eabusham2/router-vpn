@@ -8,16 +8,8 @@ import (
 	"runtime"
 	"syscall"
 
-	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/spf13/cobra"
 )
-
-func routerVPNNodeChainCONNECTTransfer(record *mobiletor.DesktopProtectionTransferRecord) (string, error) {
-	if record == nil {
-		return "", routerVPNExternalFailure
-	}
-	return mobiletor.DesktopProtectionTransferRecordSHA256(*record)
-}
 
 func init() { mainCommand.AddCommand(routerVPNNewNodeChainCONNECTCommand()) }
 

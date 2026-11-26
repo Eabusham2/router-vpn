@@ -12,7 +12,6 @@ import (
 	"reflect"
 	"router-vpn/internal/mobilemtu"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 
@@ -177,10 +176,6 @@ func externalExecutionChoice(profile common.RouterProfile, requested string, dir
 		return "local", nil
 	}
 	return string(execution), nil
-}
-
-func compileDesktopExternalGraph(graph map[string]any, profile, entry common.RouterProfile, exit standardExit, direct bool, restored string) (*desktopNodeLaunch, error) {
-	return compileDesktopExternalGraphWithPredecessor(graph, profile, entry, exit, direct, restored, "")
 }
 
 func compileDesktopExternalGraphWithPredecessor(graph map[string]any, profile, entry common.RouterProfile, exit standardExit, direct bool, restored, predecessor string) (*desktopNodeLaunch, error) {
@@ -550,9 +545,6 @@ func readDesktopExternalStoppedContext(ctx context.Context, launch *desktopNodeL
 	return true, nil
 }
 
-func (a *app) readDesktopExternalProgress(launch *desktopNodeLaunch) error {
-	return a.readDesktopExternalProgressContext(context.Background(), launch)
-}
 func (a *app) readDesktopExternalProgressContext(ctx context.Context, launch *desktopNodeLaunch) error {
 	raw, err := readDesktopRuntimeFileContext(ctx, launch, "progress.json", 64<<10)
 	if errors.Is(err, os.ErrNotExist) {
@@ -782,11 +774,6 @@ func prepareDesktopExternalStop(a *app, command *exec.Cmd) error {
 
 func desktopExternalProfilesUnchanged(current, captured common.RouterProfile) bool {
 	return reflect.DeepEqual(current, captured)
-}
-
-func desktopExternalLiteralEndpoint(profile common.RouterProfile) bool {
-	address, err := netip.ParseAddr(strings.Trim(profile.Endpoint, "[]"))
-	return err == nil && address.Zone() == "" && !address.Is4In6()
 }
 
 func (a *app) monitorDesktopExternalRuntime(launch *desktopNodeLaunch) {

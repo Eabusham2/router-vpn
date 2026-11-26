@@ -69,19 +69,12 @@ func (a *app) validateSpeedLabExpectedProfilesLocked(q speedLabRequest, current 
 	return nil
 }
 
-func (a *app) validateSpeedLabExpectedProfiles(q speedLabRequest, current *speedLabPath) error {
-	return a.validateSpeedLabExpectedProfilesContext(context.Background(), q, current)
-}
 func (a *app) validateSpeedLabExpectedProfilesContext(ctx context.Context, q speedLabRequest, current *speedLabPath) error {
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
 		return err
 	}
 	defer a.mu.Unlock()
 	return a.validateSpeedLabExpectedProfilesLocked(q, current)
-}
-
-func (a *app) captureExpectedSpeedLabIdentity(q speedLabRequest) (speedLabPathIdentity, speedLabPath, error) {
-	return a.captureExpectedSpeedLabIdentityContext(context.Background(), q)
 }
 
 func (a *app) captureExpectedSpeedLabIdentityContext(ctx context.Context, q speedLabRequest) (speedLabPathIdentity, speedLabPath, error) {

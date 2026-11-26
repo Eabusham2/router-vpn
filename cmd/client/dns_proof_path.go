@@ -8,10 +8,6 @@ import (
 
 type selectedDNSProbe func(context.Context, *app, observedConnection, string) dnsProofState
 
-func (t *sessionTracker) dnsProofPathContext(sessionID string, s observedConnection, runtimeID string) (context.Context, func(), error) {
-	return t.dnsProofPathContextWithCaller(t.observationContext(), sessionID, s, runtimeID)
-}
-
 func (t *sessionTracker) dnsProofPathContextWithCaller(parent context.Context, sessionID string, s observedConnection, runtimeID string) (context.Context, func(), error) {
 	// A detached tracker must not create another process observer while proving
 	// a path. Production registers its tracker before starting the loop.
@@ -56,12 +52,6 @@ func (t *sessionTracker) discardDNSProof(sessionID string) {
 	t.dnsProofBinding = nil
 	t.session.DNSProof = dnsProofState{Status: "not-proven", Reason: "active VPN session, graph, credentials or DNS policy changed while DNS proof was running; stale result discarded"}
 	t.eventLocked("dns-proof-stale", t.session.Phase, t.session.DNSProof.Reason, t.session.Connected, t.session.ActualMode, t.session.ActualBase)
-}
-
-func (t *sessionTracker) proveDNSAsyncWithProbe(sessionID string, s observedConnection, runtimeID string, probe selectedDNSProbe) {
-	ctx, cancel := context.WithTimeout(t.observationContext(), sessionDNSProofBudget)
-	defer cancel()
-	t.proveDNSAsyncWithProbeContext(ctx, sessionID, s, runtimeID, probe)
 }
 
 func (t *sessionTracker) proveDNSAsyncWithProbeContext(parent context.Context, sessionID string, s observedConnection, runtimeID string, probe selectedDNSProbe) {

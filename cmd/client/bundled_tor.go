@@ -357,10 +357,6 @@ func bundledTorExecutableIdentity(raw []byte, target string) (bundledTorIdentity
 	return identity, nil
 }
 
-func verifyBundledTorPayload(directory, target string) (string, error) {
-	return verifyBundledTorPayloadContext(context.Background(), directory, target)
-}
-
 func verifyBundledTorPayloadContext(ctx context.Context, directory, target string) (string, error) {
 	if ctx == nil {
 		return "", errors.New("Tor payload verification has no original caller")

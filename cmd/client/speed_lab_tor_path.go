@@ -287,10 +287,6 @@ func (a *app) startPreparedSpeedLabTorPath(q speedLabRequest, profile common.Rou
 	return path, nil
 }
 
-func (a *app) startSpeedLabTorRestoreWithRuntime(plan speedLabRestorePlan, driver desktopTorConnectRuntime) error {
-	return a.startSpeedLabTorRestoreWithRuntimeContext(a.connectionOperationContextOrBackground(), plan, driver)
-}
-
 func (a *app) startSpeedLabTorRestoreWithRuntimeContext(ctx context.Context, plan speedLabRestorePlan, driver desktopTorConnectRuntime) error {
 	if ctx == nil {
 		return errors.New("Tor restoration has no original cleanup operation")

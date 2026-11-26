@@ -106,10 +106,6 @@ func clampLiveSamples(value, fallback int) int {
 	return value
 }
 
-func liveProbePort(endpoint string) (int, error) {
-	return liveProbePortContext(context.Background(), endpoint)
-}
-
 func liveProbePortContext(ctx context.Context, endpoint string) (int, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -132,10 +128,6 @@ func liveProbePortContext(ctx context.Context, endpoint string) (int, error) {
 		last = errors.New("no live probe port")
 	}
 	return 0, last
-}
-
-func quickProfileLatency(p common.RouterProfile, samples int) (liveLatencyResult, error) {
-	return quickProfileLatencyContext(context.Background(), p, samples)
 }
 
 func quickProfileLatencyContext(ctx context.Context, p common.RouterProfile, samples int) (liveLatencyResult, error) {
@@ -568,10 +560,6 @@ func validateActiveTelemetryPath(a *app, p common.RouterProfile, st state, sessi
 		return errors.New("active VPN profile or policy changed while live path telemetry was running; stale result was discarded")
 	}
 	return nil
-}
-
-func privatePathLatency(p common.RouterProfile, st state, samples int) (connectionLatencyResult, error) {
-	return privatePathLatencyContext(context.Background(), p, st, samples)
 }
 
 func privatePathLatencyContext(ctx context.Context, p common.RouterProfile, st state, samples int) (connectionLatencyResult, error) {

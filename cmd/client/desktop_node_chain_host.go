@@ -134,10 +134,6 @@ func (capture *desktopNodeChainHostCapture) current(ctx context.Context) error {
 	return capture.sources.currentLocked(capture.app)
 }
 
-func prepareDesktopNodeChainHost(ctx context.Context, a *app, selection multihopSelection) (*desktopNodeLaunch, string, error) {
-	return prepareDesktopNodeChainHostForPurpose(ctx, a, selection, nil)
-}
-
 func prepareDesktopNodeChainHostForPurpose(ctx context.Context, a *app, selection multihopSelection, purpose *orderedCandidatePreparation) (*desktopNodeLaunch, string, error) {
 	if purpose != nil && (purpose.app != a || purpose.selection.Native != selection.Native) {
 		return nil, "", errors.New("ordered preparation purpose belongs to another original source")

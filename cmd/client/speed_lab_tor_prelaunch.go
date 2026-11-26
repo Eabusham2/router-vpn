@@ -8,18 +8,6 @@ import (
 	"router-vpn/internal/desktopnetwork"
 )
 
-// Preparation can perform filesystem work while Disconnect cancels its
-// transaction. Check the originally captured context and runtime, not whatever
-// operation/profile happens to be current when exec.Start is reached.
-func (a *app) speedLabTorPrelaunchCheck(profile common.RouterProfile) func() error {
-	operation := a.connectionOperationContextOrBackground()
-	check, err := a.speedLabTorPrelaunchCheckContext(operation, operation, profile)
-	if err != nil {
-		return func() error { return err }
-	}
-	return check
-}
-
 func (a *app) speedLabTorPrelaunchCheckContext(ctx, operation context.Context, profile common.RouterProfile) (func() error, error) {
 	if ctx == nil || operation == nil {
 		return nil, errors.New("Tor Speed Lab admission has no original caller")

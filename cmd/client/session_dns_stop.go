@@ -56,12 +56,6 @@ func (t *sessionTracker) captureDNSStopLocked(ctx context.Context, expected *ses
 	return receipt, receipt.currentLocked()
 }
 
-// The caller owns operationMu, but no tracker/app/native/MTU lock. Registering
-// the ordinary tracker first also fences a concurrent first status request.
-func (a *app) drainSessionDNSForStop(ctx context.Context) (*sessionDNSStopReceipt, error) {
-	return a.drainCapturedSessionDNSForStop(ctx, nil)
-}
-
 func (a *app) drainCapturedSessionDNSForStop(ctx context.Context, expected *sessionDNSStopReceipt) (*sessionDNSStopReceipt, error) {
 	if a == nil || ctx == nil {
 		return nil, errors.New("selected-DNS Stop requires its original cleanup caller")

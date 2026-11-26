@@ -110,10 +110,3 @@ func (e linuxStandardImageUpgradeEnvelope) validate() error {
 	}
 	return nil
 }
-func linuxStandardImageUpgradePhase(value string) bool {
-	switch value {
-	case "reserved", "successor-prepared", "frozen", "code-verified", "source-removed", "successor-published", "successor-ready", "settled", "aborting", "aborted":
-		return true
-	}
-	return false
-}

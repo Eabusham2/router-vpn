@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -260,15 +259,4 @@ func openVPNStandardExitCommand(a *app, control, entry common.RouterProfile, exi
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd, nil
-}
-
-// Compatibility registration delegates to the one authoritative platform
-// transaction. The former dispatcher acquired operationMu and then delegated to
-// another handler that acquired it again, making non-OpenVPN requests deadlock.
-func registerStandardExitDispatchRoutes(h *http.ServeMux, a *app) {
-	h.HandleFunc("/api/standard-exit/connect", a.standardExitConnectDispatch)
-}
-
-func (a *app) standardExitConnectDispatch(w http.ResponseWriter, r *http.Request) {
-	a.platformStandardExitConnect(w, r)
 }

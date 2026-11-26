@@ -43,10 +43,6 @@ type desktopMacOSProcess struct {
 	executionMultiplePhysical *mobilemultihop.DesktopNodeChainMultipleImportedExecutionPhysicalPolicy
 }
 
-func startDesktopMacOSProcess(ctx context.Context, parent *desktopMacOSSessionCapture, scope macosprocess.Scope) (*desktopMacOSProcess, error) {
-	return startDesktopMacOSProcessWithVerifier(ctx, parent, scope, verifyBundledNativeContext)
-}
-
 // Only complete package metadata/version verification has a fixture seam;
 // fixed paths, native image identity, descriptors and child creation do not.
 func startDesktopMacOSProcessWithVerifier(ctx context.Context, parent *desktopMacOSSessionCapture, scope macosprocess.Scope, verify func(context.Context, string) (string, error)) (*desktopMacOSProcess, error) {

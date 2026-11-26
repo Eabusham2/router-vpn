@@ -52,11 +52,6 @@ type desktopLinuxNodeProcess struct {
 	closeErr                                  error
 }
 
-func startDesktopLinuxNodeProcess(ctx context.Context, parent *desktopLinuxNodeParentCapture, arguments, environment []string,
-	directory, captureSHA256 string) (*desktopLinuxNodeProcess, error) {
-	return startDesktopLinuxNodeProcessWithVerifier(ctx, parent, arguments, environment, directory, captureSHA256, verifyBundledNativeContext)
-}
-
 // The private verifier seam models only package build-metadata verification in
 // the native process fixture. Shipping always retains the full verifier above.
 // Native controller, files, clone, channel and process checks have no override.

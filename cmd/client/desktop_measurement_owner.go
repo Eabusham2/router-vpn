@@ -94,11 +94,6 @@ func desktopMeasurementMTUSession(launch *desktopNodeLaunch) *desktopMTUSession 
 	return *identity.mtu
 }
 
-func desktopMeasurementSessionMatches(launch *desktopNodeLaunch, session string) bool {
-	identity, err := capturedDesktopMeasurementRuntime(launch)
-	return err == nil && identity.session == session
-}
-
 func (a *app) desktopMeasurementCurrentProof(launch *desktopNodeLaunch) error {
 	if _, err := capturedDesktopMeasurementRuntime(launch); err != nil {
 		return err
@@ -161,10 +156,6 @@ func (a *app) waitDesktopMeasurementProof(ctx context.Context, launch *desktopNo
 		case <-tick.C:
 		}
 	}
-}
-
-func desktopMeasurementViewIdentity(launch *desktopNodeLaunch) (mtuViewIdentity, error) {
-	return desktopMeasurementViewIdentityContext(context.Background(), launch)
 }
 
 func desktopMeasurementViewIdentityContext(ctx context.Context, launch *desktopNodeLaunch) (mtuViewIdentity, error) {

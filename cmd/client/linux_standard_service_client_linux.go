@@ -206,12 +206,6 @@ func linuxStandardServiceRPC(ctx context.Context, image, namespace os.FileInfo, 
 	return linuxStandardServiceExchangeGeneration(ctx, channel, image, namespace, originalPeer, request, directory, arguments, beforeWrite, generation)
 }
 
-// Production always supplies its fixed service role. Native tests can exercise
-// this same framed exchange with original inherited channels and exact peer args.
-func linuxStandardServiceExchange(ctx context.Context, channel *net.UnixConn, image, namespace os.FileInfo, originalPeer **linuxStandardServicePeer, request linuxStandardServiceRequest, directory *os.File, arguments []string, beforeWrite func()) (response linuxStandardServiceResponse, failure error) {
-	return linuxStandardServiceExchangeGeneration(ctx, channel, image, namespace, originalPeer, request, directory, arguments, beforeWrite, nil)
-}
-
 func linuxStandardServiceExchangeGeneration(ctx context.Context, channel *net.UnixConn, image, namespace os.FileInfo, originalPeer **linuxStandardServicePeer, request linuxStandardServiceRequest, directory *os.File, arguments []string, beforeWrite func(), generation *linuxStandardServiceGeneration) (response linuxStandardServiceResponse, failure error) {
 	finish, err := linuxStandardServiceDeadline(ctx, channel)
 	if err != nil {

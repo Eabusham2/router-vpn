@@ -41,9 +41,6 @@ func routerVPNDesktopNetworkReceiptContext(ctx context.Context, inbound any, nam
 	}
 	return raw, ctx.Err()
 }
-func routerVPNDesktopNetworkReceipt(inbound any, name string, index, mtu int) (string, error) {
-	return routerVPNDesktopNetworkReceiptContext(context.Background(), inbound, name, index, mtu)
-}
 func (r *RouterVPNExternalProofRequest) DesktopNetworkReceipt() (string, error) {
 	return r.DesktopNetworkReceiptContext(context.Background())
 }

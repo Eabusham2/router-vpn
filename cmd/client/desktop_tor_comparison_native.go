@@ -45,10 +45,6 @@ type desktopTorComparisonAction struct {
 	result *mobiletor.DesktopTorCompareStatus
 }
 
-func newDesktopTorComparisonClient(a *app, launch *desktopNodeLaunch, target string) (*desktopTorComparisonClient, error) {
-	return newDesktopTorComparisonClientContext(context.Background(), a, launch, target)
-}
-
 func newDesktopTorComparisonClientContext(ctx context.Context, a *app, launch *desktopNodeLaunch, target string) (*desktopTorComparisonClient, error) {
 	if a == nil || launch == nil || launch.tor == nil || !mobiletor.DesktopTorCompareTarget(target) {
 		return nil, errors.New("Tor comparison requires a captured native owner and approved target")
@@ -563,12 +559,6 @@ func (c *desktopTorComparisonClient) nativeJoinedContext(ctx context.Context) (b
 	var record desktopExternalStop
 	return err == nil && decodeRelayControlJSON(raw, &record) == nil && record.Schema == 1 && record.Closed &&
 		record.SessionID == c.base.SessionID && record.SourceSHA256 == c.base.SourceSHA256, ctx.Err()
-}
-
-// Cleanup can follow the pinned old directory after a rename. It cannot adopt
-// results, create a new comparison or address the replacement pathname.
-func (c *desktopTorComparisonClient) readCleanup(name string) ([]byte, error) {
-	return c.readCleanupContext(context.Background(), name)
 }
 
 func (c *desktopTorComparisonClient) readCleanupContext(ctx context.Context, name string) ([]byte, error) {

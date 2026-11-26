@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -150,51 +149,6 @@ func parseNativeWG(path string) (nativeWG, error) {
 	return wg, nil
 }
 
-func copyNativeMultihopTree(src, dst string) error {
-	if err := ensurePrivateRuntimeDirectory(dst); err != nil {
-		return err
-	}
-	var total int64
-	return filepath.WalkDir(src, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("multihop profile contains symlink: %s", d.Name())
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-		out := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return ensurePrivateRuntimeDirectory(out)
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("multihop profile contains non-regular file: %s", rel)
-		}
-		if info.Size() > nativeMultihopMaxFile {
-			return fmt.Errorf("multihop profile file too large: %s", rel)
-		}
-		body, err := readPrivateRegular(path, nativeMultihopMaxFile)
-		if err != nil {
-			return fmt.Errorf("read private multihop profile %s: %w", rel, err)
-		}
-		total += int64(len(body))
-		if total > nativeMultihopMaxTotal {
-			return errors.New("multihop private runtime exceeds staging limit")
-		}
-		return writePrivateRuntimeFile(out, body)
-	})
-}
-
 func nativeWGEndpoint(wg nativeWG) map[string]any {
 	peer := map[string]any{"address": wg.Host, "port": wg.Port, "public_key": wg.PublicKey, "allowed_ips": wg.AllowedIPs}
 	if wg.PSK != "" {
@@ -231,10 +185,6 @@ func nativeEntryPrivateOutbound(host string, port int, username, password string
 		out["password"] = password
 	}
 	return out, nil
-}
-
-func prepareNativeMultihop(root string, sel multihopSelection) (string, string, error) {
-	return stageNativeMultihopCapture(root, sel)
 }
 
 func nativeWindowsMultihopCommand(a *app, sel multihopSelection) (*desktopNodeLaunch, error) {

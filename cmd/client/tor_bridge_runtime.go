@@ -52,10 +52,6 @@ func safeExecutable(name string) (string, error) {
 	return path, nil
 }
 
-func desktopTorExecutable(root string) (string, error) {
-	return desktopTorExecutableContext(context.Background(), root)
-}
-
 func desktopTorExecutableContext(ctx context.Context, root string) (string, error) {
 	if ctx == nil {
 		return "", errors.New("Tor executable discovery has no original caller")
@@ -123,10 +119,6 @@ func torBridgeRuntimeCapabilityForExecutionContext(ctx context.Context, root, ex
 	}
 	cap.Supported = true
 	return cap
-}
-
-func desktopTorPolicyRuntimeCapability(policy common.RouterProfile) standardExitCapability {
-	return desktopTorPolicyRuntimeCapabilityContext(context.Background(), policy)
 }
 
 func desktopTorPolicyRuntimeCapabilityContext(ctx context.Context, policy common.RouterProfile) standardExitCapability {

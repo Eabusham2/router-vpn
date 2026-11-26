@@ -50,10 +50,6 @@ func multihopLaneProofURL(p common.RouterProfile) (string, error) {
 	return target, nil
 }
 
-func proveMultihopLaneNode(p common.RouterProfile, proxyRaw string) error {
-	return proveMultihopLaneNodeContext(context.Background(), p, proxyRaw)
-}
-
 func proveMultihopLaneNodeContext(ctx context.Context, p common.RouterProfile, proxyRaw string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -97,10 +93,6 @@ func proveMultihopLaneNodeContext(ctx context.Context, p common.RouterProfile, p
 		return fmt.Errorf("multihop hop lane reached the wrong Router VPN node: %w", err)
 	}
 	return nil
-}
-
-func measureRoutedProfileLatencyViaProxy(p common.RouterProfile, samples int, proxyRaw string) (connectionLatencyResult, error) {
-	return measureRoutedProfileLatencyViaProxyContext(context.Background(), p, samples, proxyRaw)
 }
 
 func measureRoutedProfileLatencyViaProxyContext(ctx context.Context, p common.RouterProfile, samples int, proxyRaw string) (connectionLatencyResult, error) {
@@ -190,10 +182,6 @@ func measureRoutedProfileLatencyViaProxyWithClock(ctx context.Context, p common.
 		MeasuredAt: time.Now().UTC(),
 		Proof:      "exact Router VPN node-identity HTTP RTT through reserved local multihop hop lane " + proxyRaw,
 	}, nil
-}
-
-func measureRoutedProfileSpeedViaProxy(p common.RouterProfile, bytesCount int64, proxyRaw string) (routedSpeedResult, error) {
-	return measureRoutedProfileSpeedViaProxyContext(context.Background(), p, bytesCount, proxyRaw)
 }
 
 func measureRoutedProfileSpeedViaProxyContext(ctx context.Context, p common.RouterProfile, bytesCount int64, proxyRaw string) (routedSpeedResult, error) {

@@ -17,19 +17,6 @@ type speedLabTorComparisonPreparation struct {
 	failures map[routechoice.Execution]error
 }
 
-// Prepare both concrete candidates while the previous VPN and full saved
-// configuration remain intact. A missing native candidate receives no score;
-// if neither can be prepared, no live connection has to be disturbed.
-func (a *app) prepareSpeedLabTorComparison(q speedLabRequest, profile common.RouterProfile, runtime desktopTorConnectRuntime) (_ *speedLabTorPreparation, failure error) {
-	caller, err := captureDesktopTorCaller(a, runtime.operation, runtime.requestContext)
-	if err != nil {
-		return nil, err
-	}
-	defer caller.finish()
-	runtime.operation = caller.operation
-	return a.prepareSpeedLabTorComparisonContext(caller.work, q, profile, runtime)
-}
-
 func (a *app) prepareSpeedLabTorComparisonContext(ctx context.Context, q speedLabRequest, profile common.RouterProfile, runtime desktopTorConnectRuntime) (_ *speedLabTorPreparation, failure error) {
 	if ctx == nil || ctx.Err() != nil || runtime.operation == nil {
 		return nil, errors.New("Tor Speed Lab comparison has no original caller and operation")

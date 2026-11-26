@@ -67,10 +67,6 @@ func desktopOwnedNodeProfileToken(profile common.RouterProfile) string {
 	return liveMeasurementProfileToken(profile)
 }
 
-func newDesktopOwnedNodeLaunch(profile common.RouterProfile, original *mobilemultihop.NodeProfile, mode, root, endpoint, network, session string, restoredMTU int) (*desktopNodeLaunch, error) {
-	return newDesktopOwnedNodeLaunchWithPreference(profile, original, mode, root, endpoint, network, session, restoredMTU, "", 0)
-}
-
 func newDesktopOwnedNodeLaunchWithPreference(profile common.RouterProfile, original *mobilemultihop.NodeProfile, mode, root, endpoint, network, session string, restoredMTU int, revision string, fixed int) (*desktopNodeLaunch, error) {
 	if original == nil || network == "" || root == "" || profile.ID == "" ||
 		!mobilemultihop.DesktopNodePhysicalGraphSupported(mode, profile.StartLayer) {
@@ -464,10 +460,6 @@ func desktopNodeHandoff(raw []byte, launch *desktopNodeLaunch) (desktopNodeHando
 	return record, target, nil
 }
 
-func (a *app) admitDesktopOwnedNode(parent context.Context, launch *desktopNodeLaunch) error {
-	return a.admitDesktopOwnedNodeFor(parent, parent, launch)
-}
-
 func (a *app) admitDesktopOwnedNodeFor(parent, operation context.Context, launch *desktopNodeLaunch) error {
 	if parent == nil || parent.Err() != nil || operation == nil || launch == nil || launch.ownedNode == nil {
 		return errors.New("native Router handoff has no active operation")
@@ -741,10 +733,6 @@ func (a *app) discardDesktopOwnedNodeUnstarted(launch *desktopNodeLaunch) error 
 	clear(launch.metadata)
 	desktopNodeOwners.CompareAndDelete(a, launch)
 	return nil
-}
-
-func (a *app) publishDesktopOwnedNodeStart(launch *desktopNodeLaunch, phase, base string) error {
-	return a.publishDesktopOwnedNodeStartFor(launch, phase, base, a.connectionOperationContextOrBackground())
 }
 
 func (a *app) publishDesktopOwnedNodeStartFor(launch *desktopNodeLaunch, phase, base string, operation context.Context) error {

@@ -279,10 +279,6 @@ func exchangeDesktopImportedNativeWithPublisher(parent context.Context, launch *
 
 var errImportedDNSHeartbeatPending = errors.New("original DNS TUN heartbeat has not refreshed")
 
-func readDesktopImportedDNSHeartbeat(launch *desktopNodeLaunch, expected desktopNodeMTURecord) (desktopNodeMTURecord, error) {
-	return readDesktopImportedDNSHeartbeatContext(context.Background(), launch, expected)
-}
-
 func readDesktopImportedDNSHeartbeatContext(ctx context.Context, launch *desktopNodeLaunch, expected desktopNodeMTURecord) (desktopNodeMTURecord, error) {
 	var record desktopNodeMTURecord
 	raw, err := readDesktopRuntimeFileContext(ctx, launch, "node-mtu-status.json", desktopNodeMTURecordLimit)

@@ -10,13 +10,6 @@ import (
 	"router-vpn/internal/mobilemtu"
 )
 
-// Keep the actual proved graph and its frozen credentials. Recompiling from
-// current saved measurements would create another source identity and could
-// accidentally rerun the user's saved Compare choice instead of restoring it.
-func captureNativeMultihopRestore(a *app, command *exec.Cmd, graph activeMultihopGraph, control, entry, exit common.RouterProfile) (multihopSelection, error) {
-	return captureNativeMultihopRestoreContext(context.Background(), a, command, graph, control, entry, exit)
-}
-
 func captureNativeMultihopRestoreContext(ctx context.Context, a *app, command *exec.Cmd, graph activeMultihopGraph, control, entry, exit common.RouterProfile) (multihopSelection, error) {
 	owner, err := capturedNativeMultihopRuntimeContext(ctx, a, command, graph)
 	if err != nil {
@@ -128,10 +121,6 @@ func captureNativeMultihopRestoreContext(ctx context.Context, a *app, command *e
 // lock; an older caller snapshot alone cannot bless replacement credentials.
 // The existing MTU identity excludes only the persisted EffectiveMTU value;
 // restoration uses the owned live readback, never that saved measurement.
-
-func nativeMultihopLiveProfilesCurrent(a *app, selection multihopSelection) bool {
-	return nativeMultihopLiveProfilesCurrentContext(context.Background(), a, selection)
-}
 
 func nativeMultihopLiveProfilesCurrentContext(ctx context.Context, a *app, selection multihopSelection) bool {
 	if ctx == nil || a == nil || selection.Native == nil {

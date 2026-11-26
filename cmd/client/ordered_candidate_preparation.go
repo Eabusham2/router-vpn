@@ -56,20 +56,6 @@ type orderedCandidatePreparation struct {
 	invalidated       atomic.Bool
 }
 
-// Synchronous callers own the entire batch lifetime, including cleanup. The
-// public 202 route uses the explicit lifetime-aware admission below so ending
-// its response cannot revoke the retained native worker.
-func beginOrderedCandidatePreparation(ctx context.Context, a *app, q orderedCandidatePreparationRequest) (*orderedCandidatePreparation, error) {
-	return beginOrderedCandidatePreparationWithNetwork(ctx, a, q, physicalNetworkIdentityContext)
-}
-
-// Only the physical-inventory boundary is supplied by portable tests. Complete
-// saved graph/source compilation and candidate eligibility use shipping code.
-func beginOrderedCandidatePreparationWithNetwork(ctx context.Context, a *app, q orderedCandidatePreparationRequest,
-	observe func(context.Context) (string, error)) (result *orderedCandidatePreparation, failure error) {
-	return beginOrderedCandidatePreparationWithLifetime(ctx, ctx, a, q, observe)
-}
-
 // A 202 response has a separate bounded, registered worker lifetime. Admission
 // still uses its request deadline; ending that response cannot revoke the
 // original background worker, while explicit Cancel/Stop retains its join.

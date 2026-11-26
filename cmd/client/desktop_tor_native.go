@@ -367,9 +367,6 @@ func (a *app) readDesktopTorProofContext(ctx context.Context, launch *desktopNod
 	return proof, errors.Join(err, ctx.Err())
 }
 
-func (a *app) readDesktopTorProgress(launch *desktopNodeLaunch) error {
-	return a.readDesktopTorProgressContext(context.Background(), launch)
-}
 func (a *app) readDesktopTorProgressContext(ctx context.Context, launch *desktopNodeLaunch) error {
 	if err := a.desktopTorCurrentContext(ctx, launch); err != nil {
 		return err

@@ -29,23 +29,6 @@ type desktopNodeChainExecutionSession struct {
 	restoreNext      *desktopNodeChainExecutionSession
 }
 
-// A partial session is returned with every post-construction error so the
-// caller can join its exact child and retry retained cleanup.
-func openDesktopNodeChainExecutionSession(ctx context.Context, a *app, selection multihopSelection, requested string) (*desktopNodeChainExecutionSession, error) {
-	launch, binary, err := prepareDesktopNodeChainExecutionHost(ctx, a, selection, requested)
-	if launch == nil {
-		return nil, err
-	}
-	session := &desktopNodeChainExecutionSession{app: a, launch: launch, execution: desktopNodeChainLaunchExecution(launch), selection: selection}
-	if err != nil {
-		return session, err
-	}
-	if err := preflightRetainedNativeMultihop(ctx, binary, launch, runDesktopExternalPreflightCommand); err != nil {
-		return session, err
-	}
-	return session, session.startContext(ctx)
-}
-
 func (s *desktopNodeChainExecutionSession) startContext(ctx context.Context) error {
 	if ctx == nil || s == nil || s.app == nil || s.execution == nil || s.execution.bound(s.launch) != nil {
 		return errors.New("execution session lost its original launch")

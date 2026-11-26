@@ -273,10 +273,6 @@ func (c *Controller) verifyExternalTrial(ctx context.Context, tag string) error 
 	return c.requireValid()
 }
 
-func (c *Controller) externalNodeResponse(ctx context.Context, tag string) (time.Duration, error) {
-	return c.externalNodeResponseAt(ctx, tag, nil)
-}
-
 func (c *Controller) externalNodeResponseAt(ctx context.Context, tag string, receipt *nativeopenvpn.RemoteReceipt) (time.Duration, error) {
 	if c.external == nil || c.requireValid() != nil || c.engine.Selected() != tag {
 		return 0, errors.New("external response probe is stale")

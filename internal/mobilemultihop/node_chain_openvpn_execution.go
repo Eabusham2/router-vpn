@@ -106,10 +106,6 @@ type NodeChainOpenVPNExecutionObserver interface {
 	ObserveOpenVPNExecutionContext(context.Context, *NodeChain) error
 }
 
-func (p *NodeChainExecutionPreparation) observeOpenVPNExecutionContext(ctx context.Context, engine any) error {
-	return p.observeOpenVPNExecutionCurrentContext(ctx, engine, true)
-}
-
 // Entry discovery and an independently authenticated Server trial do not use
 // the Local provider connection. They still require the original native owner.
 func (p *NodeChainExecutionPreparation) observeOpenVPNExecutionOwnerContext(ctx context.Context, engine any) error {

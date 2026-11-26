@@ -106,16 +106,8 @@ func decodeDesktopSelectedLatencyCapture(raw string) (desktopSelectedLatencyCapt
 	return capture, nodes, nil
 }
 
-func desktopSelectedLatencyMeaning(position, count int, capturedKind, execution string) (role, kind, label, metric, endpoint string) {
-	return desktopSelectedLatencyMeaningFamily(position, count, capturedKind, execution, false)
-}
-
 func (capture desktopSelectedLatencyCapture) meaning(position int, kind string) (string, string, string, string, string) {
 	return desktopSelectedLatencyMeaningSource(position, len(capture.Nodes), kind, capture.Execution, capture.MultipleImported != nil, capture.privateStreamShape())
-}
-
-func desktopSelectedLatencyMeaningFamily(position, count int, capturedKind, execution string, multiple bool) (role, kind, label, metric, endpoint string) {
-	return desktopSelectedLatencyMeaningSource(position, count, capturedKind, execution, multiple, false)
 }
 
 func desktopSelectedLatencyMeaningSource(position, count int, capturedKind, execution string, multiple, privateStream bool) (role, kind, label, metric, endpoint string) {
