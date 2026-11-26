@@ -5,7 +5,7 @@ final class RouterVPNMacMTUPanel: NSWindowController, NSWindowDelegate {
     let controller: RouterVPNMacMTUController
     private let heading = NSTextField(wrappingLabelWithString: "Reading current MTU status…")
     private let details = NSTextField(wrappingLabelWithString: "")
-    private let owner = NSTextField(wrappingLabelWithString: "")
+    private let ownerLabel = NSTextField(wrappingLabelWithString: "")
     private let candidates = NSTextView()
     private let spinner = NSProgressIndicator()
     private let retestButton = NSButton(title: "Retest MTU", target: nil, action: nil)
@@ -54,10 +54,10 @@ final class RouterVPNMacMTUPanel: NSWindowController, NSWindowDelegate {
         heading.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         details.setAccessibilityIdentifier("mtu-measurement-status")
         details.identifier = NSUserInterfaceItemIdentifier("mtu-measurement-status")
-        owner.font = .monospacedSystemFont(ofSize: 10, weight: .regular); owner.textColor = .secondaryLabelColor
-        owner.setAccessibilityIdentifier("mtu-captured-owner")
-        owner.identifier = NSUserInterfaceItemIdentifier("mtu-captured-owner")
-        stack.addArrangedSubview(details); stack.addArrangedSubview(owner)
+        ownerLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular); ownerLabel.textColor = .secondaryLabelColor
+        ownerLabel.setAccessibilityIdentifier("mtu-captured-owner")
+        ownerLabel.identifier = NSUserInterfaceItemIdentifier("mtu-captured-owner")
+        stack.addArrangedSubview(details); stack.addArrangedSubview(ownerLabel)
         let label = NSTextField(labelWithString: "Reported candidates"); label.font = .systemFont(ofSize: 12, weight: .semibold)
         stack.addArrangedSubview(label)
         candidates.isEditable = false; candidates.isSelectable = true
@@ -87,7 +87,7 @@ final class RouterVPNMacMTUPanel: NSWindowController, NSWindowDelegate {
         let note = NSTextField(wrappingLabelWithString: "Cancel stays pending until the captured test finishes rolling back. Closing an Auto observer leaves Auto running; closing a manual test requests cancellation and waits for it to drain.")
         note.font = .systemFont(ofSize: 11); note.textColor = .secondaryLabelColor
         stack.addArrangedSubview(note)
-        for field in [explanation, details, owner, note] {
+        for field in [explanation, details, ownerLabel, note] {
             field.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -44).isActive = true
         }
     }
@@ -95,7 +95,7 @@ final class RouterVPNMacMTUPanel: NSWindowController, NSWindowDelegate {
     private func apply(_ state: RouterVPNMacMTUViewState) {
         guard !didClose else { return }
         precondition(Thread.isMainThread)
-        heading.stringValue = state.title; details.stringValue = state.detail; owner.stringValue = state.owner
+        heading.stringValue = state.title; details.stringValue = state.detail; ownerLabel.stringValue = state.owner
         candidates.string = state.measurements
         retestButton.isEnabled = state.canRetest; cancelButton.isEnabled = state.canCancel
         refreshButton.isEnabled = !state.busy

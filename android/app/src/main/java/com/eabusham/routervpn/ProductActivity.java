@@ -1374,6 +1374,7 @@ if(isExternalSelected()){boolean on=prefs().getBoolean(MULTI_ON,false);multihopT
     private Spinner homeSpinner(){
         Spinner spinner=new Spinner(new ContextThemeWrapper(this,android.R.style.Theme_Material),Spinner.MODE_DROPDOWN);
         spinner.setPopupBackgroundDrawable(round(Color.rgb(29,43,68),12));
+        spinner.setDropDownWidth(ViewGroup.LayoutParams.MATCH_PARENT);
         return spinner;
     }
     private <T> ArrayAdapter<T> homeChoices(Spinner spinner,List<T> choices){
@@ -1391,10 +1392,22 @@ if(isExternalSelected()){boolean on=prefs().getBoolean(MULTI_ON,false);multihopT
             @Override public View getDropDownView(int position,View recycled,ViewGroup parent){
                 TextView label=readableLabel(super.getDropDownView(position,recycled,parent));
                 ViewGroup.LayoutParams params=label.getLayoutParams();
-                if(params!=null && params.height>0){
+                if(params!=null && params.height>0)
                     label.setMinimumHeight(Math.max(label.getMinimumHeight(),params.height));
-                    params.height=ViewGroup.LayoutParams.WRAP_CONTENT;
+                // Dropdown height is measured before the popup is shown. Give
+                // each multiline row its actual content width at that stage.
+                int width=spinner.getWidth()-spinner.getPaddingLeft()-spinner.getPaddingRight();
+                if(width<=0){
+                    android.graphics.Rect frame=new android.graphics.Rect();
+                    spinner.getWindowVisibleDisplayFrame(frame);
+                    width=frame.width()>0?frame.width():getResources().getDisplayMetrics().widthPixels;
                 }
+                width=Math.max(dp(48),width);
+                if(params==null)params=new ViewGroup.LayoutParams(width,ViewGroup.LayoutParams.WRAP_CONTENT);
+                params.width=width;params.height=ViewGroup.LayoutParams.WRAP_CONTENT;
+                label.setLayoutParams(params);
+                label.setMaxWidth(width);
+                label.setHorizontallyScrolling(false);
                 return label;
             }
         };

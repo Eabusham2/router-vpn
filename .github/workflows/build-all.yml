@@ -229,7 +229,7 @@ jobs:
 
   generic-builds:
     needs: native-runtimes
-    name: Generic desktop and Windows packages
+    name: Windows installed and Portable packages
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -241,14 +241,14 @@ jobs:
       - uses: ./.github/actions/go-windows-sockets
       - uses: actions/download-artifact@v4
         with:
-          pattern: RouterVPN-native-runtime-*-${{ github.sha }}
+          pattern: RouterVPN-native-runtime-windows-*-${{ github.sha }}
           path: ${{ runner.temp }}/native-runtime-artifacts
           merge-multiple: true
-      - name: Build and package generic clients
+      - name: Build and package Windows clients
         run: |
           chmod +x deploy/build-client.sh deploy/package-builds.sh
-          ./deploy/build-client.sh
-          python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
+          ./deploy/build-client.sh --windows
+          python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime windows/amd64 windows/arm64
           ./deploy/package-builds.sh
           (cd dist/packages && sha256sum -c SHA256SUMS)
           bash deploy/scope-windows-release-candidate.sh

@@ -4,10 +4,19 @@ static void linux_globe_project_v10(double lat, double lon, double *x, double *y
     *y = -(lat / 90.0) * .86;
 }
 
+static void linux_globe_scale_v10(double width, double height, double *sx, double *sy) {
+    // Fit the 360-by-180-degree world without stretching it as the window resizes.
+    // Geometry, routes, markers and hit testing all share this centered viewport.
+    *sy = fmax(0.0, fmin((width / 2.0 - 18.0) / 2.0, height / 2.0 - 16.0));
+    *sx = *sy * 2.0;
+}
+
 static void linux_globe_xy_v10(double lat, double lon, double width, double height, double *x, double *y) {
+    double sx, sy;
+    linux_globe_scale_v10(width, height, &sx, &sy);
     linux_globe_project_v10(lat, lon, x, y);
-    *x = width / 2.0 + *x * fmax(40.0, width / 2.0 - 18.0);
-    *y = height / 2.0 + *y * fmax(40.0, height / 2.0 - 16.0);
+    *x = width / 2.0 + *x * sx;
+    *y = height / 2.0 + *y * sy;
 }
 
 static JsonArray *linux_globe_array_v10(JsonNode *node) {
@@ -71,10 +80,12 @@ done:
 }
 
 static void linux_globe_land_draw_v10(cairo_t *cr, const cairo_path_t *land, double width, double height) {
-    if (!land) return;
+    double sx, sy;
+    linux_globe_scale_v10(width, height, &sx, &sy);
+    if (!land || sx <= 0 || sy <= 0) return;
+    sx /= 1024; sy /= 1024;
     cairo_save(cr);
     cairo_translate(cr, width / 2, height / 2);
-    double sx = fmax(40.0, width / 2 - 18) / 1024, sy = fmax(40.0, height / 2 - 16) / 1024;
     cairo_scale(cr, sx, sy);
     cairo_append_path(cr, land);
     cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);

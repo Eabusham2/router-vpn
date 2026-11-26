@@ -137,11 +137,13 @@ struct IOSUserLocationControl: View {
             HStack(spacing: 5) {
                 Image(systemName: controller.state == "shown" ? "location.fill" : "location")
                     .foregroundStyle(controller.state == "shown" ? .green : .primary)
-                Text(controller.detail).lineLimit(1)
+                Text(controller.detail)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .font(.caption.bold())
             .padding(.horizontal, 9).padding(.vertical, 7)
-            .background(.regularMaterial, in: Capsule())
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(controller.requestedByUser ? "Hide or cancel my real device location on the Router VPN map" : "Show my real device location on the Router VPN map")

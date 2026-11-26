@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+build_scope=all
+if [[ $# -eq 1 && $1 == --windows ]]; then
+  build_scope=windows
+elif [[ $# -ne 0 ]]; then
+  printf 'usage: %s [--windows]\n' "$0" >&2
+  exit 2
+fi
+
 rm -rf dist
 mkdir -p dist/client dist/dnsproxy dist/start-layer dist/router-agent dist/app-update
 
@@ -23,6 +31,15 @@ client_targets=(
   dragonfly/amd64
   illumos/amd64
 )
+updater_targets=(windows/amd64 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64)
+router_agent_targets=(linux/amd64 linux/arm64)
+if [[ $build_scope == windows ]]; then
+  # The release's native Linux/macOS jobs build their own complete applications.
+  # Keep the broader controller/helper targets available through the default build.
+  client_targets=(windows/amd64 windows/arm64)
+  updater_targets=("${client_targets[@]}")
+  router_agent_targets=()
+fi
 
 for target in "${client_targets[@]}"; do
   GOOS=${target%/*}
@@ -52,7 +69,7 @@ done
 
 # The self-update helper is intentionally limited to mainstream desktop
 # platforms whose exact-SHA release assets have a real install/staging path.
-for target in windows/amd64 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+for target in "${updater_targets[@]}"; do
   GOOS=${target%/*}
   GOARCH=${target#*/}
   ext=''
@@ -84,7 +101,7 @@ for target in windows/amd64 windows/arm64; do
     -o "dist/client/RouterVPNSetupRuntime-${GOARCH}.exe" ./cmd/portable-runtime-setup
 done
 
-for target in linux/amd64 linux/arm64; do
+for target in "${router_agent_targets[@]}"; do
   GOOS=${target%/*}
   GOARCH=${target#*/}
   echo "building router agent $GOOS/$GOARCH"

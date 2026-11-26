@@ -6,35 +6,10 @@ struct ProductRootView: View {
     @State private var showingExternalNodeBuilder = false
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            IOSUnifiedProductView()
-                .environmentObject(model)
-
-            // The unified product already owns the one opt-in CoreLocation
-            // control in its map header. Keep these small utility shortcuts in a
-            // compact vertical rail so they never replace or modal-block the
-            // map-first Connect/Multihop/Settings/Mode/DNS controls.
-            VStack(spacing: 8) {
-                Button { showingSpeedLab = true } label: {
-                    Image(systemName: "speedometer")
-                        .font(.system(size: 18, weight: .semibold))
-                        .frame(width: 42, height: 42)
-                }
-                .accessibilityLabel("Open Router VPN Speed Lab")
-
-                Button { showingExternalNodeBuilder = true } label: {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 18, weight: .semibold))
-                        .frame(width: 42, height: 42)
-                }
-                .accessibilityLabel("Add external VPN node")
-                .disabled(model.profileMutationBlocked)
-            }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.circle)
-            .padding(.top, 58)
-            .padding(.trailing, 12)
-        }
+        IOSUnifiedProductView(
+            openSpeedLab: { showingSpeedLab = true },
+            addExternalNode: { showingExternalNodeBuilder = true })
+            .environmentObject(model)
         .sheet(isPresented: $showingSpeedLab) {
             IOSSpeedLabView().environmentObject(model)
         }

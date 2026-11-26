@@ -2,6 +2,7 @@
 """Qualify installed SMART's protected Linux owner against private reference peers."""
 import concurrent.futures
 import errno
+import fcntl
 import hashlib
 import hmac
 import http.client
@@ -16,6 +17,7 @@ import select
 import signal
 import struct
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -82,6 +84,34 @@ def api(path, *, method="GET", headers, timeout=20):
         connection.close()
 
 
+def qualification_vt():
+    auto = subprocess.check_output(["busctl", "get-property", "org.freedesktop.login1",
+                                    "/org/freedesktop/login1", "org.freedesktop.login1.Manager",
+                                    "NAutoVTs"], text=True).split()
+    if len(auto) != 2 or auto[0] != "u" or not auto[1].isdigit():
+        raise RuntimeError("Could not read the running logind automatic VT range")
+    # ReserveVT is marked busy by logind. Check only the VTs represented in the
+    # kernel mask; openvt repeats its busy check and is never allowed to force one.
+    with open("/dev/tty1", "rb", opener=lambda path, flags: os.open(path, flags | os.O_NOCTTY)) as tty:
+        active, _, used = struct.unpack("=HHH", fcntl.ioctl(tty, 0x5603, bytes(6)))  # VT_GETSTATE
+    for number in range(15, int(auto[1]), -1):
+        if number != active and not used & (1 << number) and Path(f"/dev/tty{number}").is_char_device():
+            return number
+    raise RuntimeError("No unused kernel-verified VT outside logind's automatic range is available")
+
+
+def qualification_uid():
+    # A removed account may still belong to logind. Keep one exclusive identity
+    # for the entire matrix instead of reusing its lowest recently freed UID.
+    existing = {entry.pw_uid for entry in pwd.getpwall()}
+    logged_in = subprocess.check_output(["loginctl", "list-users", "--no-legend", "--no-pager"], text=True)
+    existing.update(int(row.split()[0]) for row in logged_in.splitlines() if row.split())
+    available = [number for number in range(20000, 60000) if number not in existing]
+    if not available:
+        raise RuntimeError("No unused disposable login UID is available")
+    return secrets.choice(available)
+
+
 @contextmanager
 def controller(work, user, password):
     session = work / "session"
@@ -93,12 +123,54 @@ def controller(work, user, password):
         private_write(session / name, contents)
         os.chown(session / name, uid, -1)
     os.chown(session, uid, -1)
-    launch = subprocess.Popen(["openvt", "-s", "-w", "--", work.parent / "login", user, password,
-                               work.parent / "session.py", session])
+    login_log = work / "login-diagnostics"
+    private_write(login_log, b"")
+    completed = work / "login-complete"
+    vt = qualification_vt()
+    print(f"Opening unused foreground tty{vt} for the disposable PAM login", flush=True)
+    launch = subprocess.Popen(["openvt", "-c", str(vt), "-s", "-w", "--", work.parent / "login", user, password,
+                               work.parent / "session.py", session, login_log, completed])
+
+    def retired_login():
+        # The root-owned parent directory and nofollow read keep this separate
+        # from the user's progress files and openvt's child-status forwarding.
+        try:
+            descriptor = os.open(completed, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(descriptor, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                return (stat.S_ISREG(info.st_mode) and info.st_uid == 0 and
+                        stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1 and
+                        stream.read(64) == b"routervpn-smart-login-retired-v1\n")
+        except OSError:
+            return False
+
+    def diagnostics():
+        try:
+            records = {"openvt_exit": launch.poll()}
+            for label, path, owner in (("login", login_log, 0), ("session_failure", session / "failure", uid),
+                                       ("session_stage", session / "stage", uid)):
+                try:
+                    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                    with os.fdopen(descriptor, "rb") as stream:
+                        info = os.fstat(stream.fileno())
+                        if not stat.S_ISREG(info.st_mode) or info.st_uid != owner:
+                            records[label] = "diagnostic ownership or file type changed"
+                            continue
+                        data = stream.read(4097)
+                    records[label] = data[:4096].decode("utf-8", errors="replace")
+                    if len(data) > 4096:
+                        records[label] += " [truncated]"
+                except FileNotFoundError:
+                    continue
+                except OSError as error:
+                    records[label] = "diagnostic read failed: errno=" + str(error.errno)
+            return json.dumps(records, ensure_ascii=True)
+        except Exception as error:
+            return "Login diagnostics unavailable: " + type(error).__name__
 
     def prove():
         if launch.poll() is not None or (session / "failure").exists():
-            raise RuntimeError("The real foreground VT login or stock PolicyKit auth_admin challenge failed")
+            raise RuntimeError("The real foreground VT login or stock PolicyKit auth_admin challenge failed: " + diagnostics())
         if not (session / "pid").is_file():
             return False
         pid = int((session / "pid").read_text())
@@ -117,13 +189,23 @@ def controller(work, user, password):
             raise RuntimeError("The listener did not prove this exact installed, authenticated controller")
         return pid
 
+    failure = None
     try:
         pid = wait_for(prove, "active VT authorization and the original controller identity", 90)
         yield pid, {"Authorization": "Bearer " + token}
+    except BaseException as error:
+        failure = error
+        error.add_note("Bounded login diagnostics: " + diagnostics())
+        raise
     finally:
-        (session / "close").touch()
-        if launch.wait(timeout=150) != 0:
-            raise RuntimeError("The authenticated session failed or did not retire its original controller")
+        try:
+            (session / "close").touch()
+            if launch.wait(timeout=150) != 0 or not retired_login():
+                raise RuntimeError("The authenticated controller, PAM session or VT did not complete retirement: " + diagnostics())
+        except BaseException as error:
+            if failure is None:
+                raise
+            failure.add_note("Session retirement also failed: " + type(error).__name__ + "; " + diagnostics())
 
 
 @contextmanager
@@ -530,8 +612,11 @@ def root_fixture(archive, references):
         user = "rvsmart" + secrets.token_hex(4)
         password = secure / "password"
         private_write(password, secrets.token_hex(32).encode() + b"\n")
-        run("useradd", "--create-home", "--groups", "sudo", "--shell", "/bin/bash", user)
-        cleanup.callback(remove_login_user, user, pwd.getpwnam(user).pw_uid)
+        uid = qualification_uid()
+        run("useradd", "--uid", str(uid), "--create-home", "--groups", "sudo", "--shell", "/bin/bash", user)
+        if pwd.getpwnam(user).pw_uid != uid:
+            raise RuntimeError("The disposable login UID changed after exclusive allocation")
+        cleanup.callback(remove_login_user, user, uid)
         run("chpasswd", input=user.encode() + b":" + password.read_bytes())
         for source, candidate, policy, layer, outcome in matrix(archive.name):
             label = "-".join((source, candidate, policy, layer, outcome))
