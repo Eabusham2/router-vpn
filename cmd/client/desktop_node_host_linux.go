@@ -245,11 +245,25 @@ func (h *desktopLinuxNodeHost) current(ctx context.Context) error {
 	if h != nil && h.external != nil {
 		return h.currentExternal(ctx)
 	}
+	return h.currentOrdinary(ctx, nil)
+}
+
+func (h *desktopLinuxNodeHost) currentOrdinary(ctx context.Context, read *mobilemultihop.DesktopNodeReadyRead) error {
 	if h == nil || ctx == nil || ctx.Err() != nil || h.operation == nil || h.closing || h.closed ||
 		h.parent == nil || h.policy == nil || h.launch == nil || h.network == "" {
 		return errors.New("Linux Node host no longer owns its captured operation and policy")
 	}
-	_, meta, _, err := h.policy.ReadValidated()
+	var meta mobilemultihop.DesktopNodeMetadata
+	var err error
+	if read == nil {
+		_, meta, _, err = h.policy.ReadValidated()
+	} else {
+		source, sourceErr := h.readyPolicySource()
+		if sourceErr != nil || source != h.policy {
+			return errors.Join(sourceErr, errors.New("Linux Node readiness changed its original policy family"))
+		}
+		meta, err = read.Metadata(h.policy)
+	}
 	if err != nil || physicalNetworkIdentity() != h.network {
 		return errors.Join(err, errors.New("Linux Node host no longer owns its captured operation and policy"))
 	}

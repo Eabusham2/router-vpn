@@ -65,6 +65,28 @@ def wait_for(check, description, timeout=30):
     raise RuntimeError("Timed out waiting for " + description)
 
 
+def attempt_summary(result):
+    # The controller's errors may embed private capture material. Report only
+    # known diagnostic text and never echo the original error or response body.
+    markers = ("could not capture the proved predecessor", "Linux Speed Lab path lost its captured native readiness",
+               "Linux Connect lost its freshly activated retained path", "context deadline exceeded", "context canceled",
+               "Linux Node original control retained an unresolved protocol failure")
+    rows = result.get("attempts", []) if isinstance(result, dict) else []
+    summary = []
+    for row in rows[:32] if isinstance(rows, list) else ():
+        if not isinstance(row, dict):
+            continue
+        mode, action = row.get("mode"), row.get("action")
+        if not all(isinstance(x, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,31}", x) for x in (mode, action)):
+            continue
+        error = row.get("error", "")
+        item = {"mode": mode, "action": action, "success": row.get("success") is True}
+        if not item["success"]:
+            item["error"] = [value for value in markers if isinstance(error, str) and value in error] or ["other"]
+        summary.append(item)
+    return summary
+
+
 def api(path, *, method="GET", headers, timeout=20):
     connection = http.client.HTTPConnection("127.0.0.1", 8788, timeout=timeout)
     try:
@@ -72,12 +94,10 @@ def api(path, *, method="GET", headers, timeout=20):
         response = connection.getresponse()
         body = response.read(1 << 20)
         if not 200 <= response.status < 300:
-            # Strategy errors and generated profiles can contain private inputs.
             attempts = []
             try:
-                attempts = [(a.get("mode"), a.get("action"), a.get("success"))
-                            for a in json.loads(body).get("attempts", [])]
-            except (ValueError, AttributeError):
+                attempts = attempt_summary(json.loads(body))
+            except ValueError:
                 pass
             raise RuntimeError(f"{path} returned HTTP {response.status}, attempts={attempts}")
         return json.loads(body)
@@ -343,6 +363,7 @@ def qualify(work, user, password, peer_ns, source, candidate, policy, layer, suc
         with canary(peer_ns) as (armed, control), controller(work, user, password) as (owner, headers):
             with (work / "nft.events").open("wb") as log:
                 monitor = subprocess.Popen(["stdbuf", "-oL", "nft", "-nn", "monitor"], stdout=log)
+                result = None
                 try:
                     # A harmless table marker establishes monitor subscription before SMART.
                     marker = "qualification_monitor"
@@ -429,6 +450,10 @@ def qualify(work, user, password, peer_ns, source, candidate, policy, layer, suc
                     if monitor.poll() is not None:
                         raise RuntimeError("Kernel nftables monitor stopped early")
                     check_guard_history(work / "nft.events", first["session"], final["session"])
+                except Exception as error:
+                    if result is not None:
+                        error.add_note("Observed SMART attempts: " + json.dumps(attempt_summary(result)))
+                    raise
                 finally:
                     monitor.terminate()
                     monitor.wait(timeout=5)

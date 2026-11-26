@@ -2,9 +2,12 @@ package mobilemultihop
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"math"
+	"reflect"
+	"slices"
 )
 
 const DesktopNodeReadyRecordLimit = 2048
@@ -31,6 +34,85 @@ type DesktopNodeReadyRecord struct {
 	CoverSHA256     string  `json:"cover_sha256,omitempty"`
 }
 
+// DesktopNodeReadyRead binds one synchronous readiness observation to its
+// original ordinary desktop policy. Its caller must still perform every live
+// process, controller, network, TUN and kernel check around the native receipt.
+type DesktopNodeReadyRead struct {
+	ctx         context.Context
+	owner       *DesktopNodePolicy
+	desktop     DesktopNodePolicy
+	node        NodeProfile
+	profileHash string
+	meta        DesktopPhysicalMetadata
+	capture     DesktopPhysicalCapture
+}
+
+func (p *DesktopNodePolicy) WithReadyRead(ctx context.Context, use func(*DesktopNodeReadyRead) error) error {
+	if p == nil || ctx == nil || use == nil {
+		return desktopNodePolicyError
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	_, meta, capture, err := p.PhysicalReadValidated()
+	if err != nil {
+		return err
+	}
+	read := &DesktopNodeReadyRead{ctx: ctx, owner: p, desktop: *p, node: *p.original,
+		profileHash: desktopExternalObjectDigest(p.original.profile), meta: meta, capture: capture}
+	read.desktop.metadata.Roots = slices.Clone(p.metadata.Roots)
+	if read.profileHash == "" {
+		return desktopNodePolicyError
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := use(read); err != nil {
+		return err
+	}
+	return read.current(p)
+}
+
+// The full constructor has already checked these exact values in this callback.
+// All strings (including sealed PQ assets) are immutable. Roots and the small
+// decoded profile are the two mutable containers and are compared by value.
+func (r *DesktopNodeReadyRead) current(p *DesktopNodePolicy) error {
+	if r == nil || r.ctx == nil || p == nil || p != r.owner || p.original == nil || p.original != r.desktop.original {
+		return desktopNodePolicyError
+	}
+	if err := r.ctx.Err(); err != nil {
+		return err
+	}
+	n := p.original
+	if p.config != r.desktop.config || p.inputs != r.desktop.inputs || p.seal != r.desktop.seal ||
+		!reflect.DeepEqual(p.metadata, r.desktop.metadata) || n.config != r.node.config || n.source != r.node.source ||
+		n.metadata != r.node.metadata || n.mode != r.node.mode || n.inputs != r.node.inputs || n.desktopSeal != r.node.desktopSeal ||
+		desktopExternalObjectDigest(n.profile) != r.profileHash {
+		return desktopNodePolicyError
+	}
+	return r.ctx.Err()
+}
+
+func (r *DesktopNodeReadyRead) Metadata(p *DesktopNodePolicy) (DesktopNodeMetadata, error) {
+	if err := r.current(p); err != nil {
+		return DesktopNodeMetadata{}, err
+	}
+	meta := r.desktop.metadata
+	meta.Roots = slices.Clone(meta.Roots)
+	return meta, nil
+}
+
+func (r *DesktopNodeReadyRead) Parse(raw []byte, p *DesktopNodePolicy, transfer string) (DesktopNodeReadyRecord, error) {
+	if err := r.current(p); err != nil {
+		return DesktopNodeReadyRecord{}, err
+	}
+	return parseDesktopNodeReadyRecord(raw, func(record DesktopNodeReadyRecord) error {
+		return record.validateRead(p, transfer, r.desktop.config, r.meta, r.capture)
+	})
+}
+
 func (r DesktopNodeReadyRecord) Validate(policy DesktopPhysicalPolicy, transfer string) error {
 	// A private prefix never opens application/DNS ingress or proves the saved
 	// final. Even exact positive fields cannot upgrade its distinct purpose.
@@ -43,6 +125,13 @@ func (r DesktopNodeReadyRecord) Validate(policy DesktopPhysicalPolicy, transfer 
 	config, meta, capture, err := ReadDesktopPhysicalPolicy(policy)
 	if err != nil {
 		return errors.New("native Router readiness lost its original source")
+	}
+	return r.validateRead(policy, transfer, config, meta, capture)
+}
+
+func (r DesktopNodeReadyRecord) validateRead(policy DesktopPhysicalPolicy, transfer, config string, meta DesktopPhysicalMetadata, capture DesktopPhysicalCapture) error {
+	if !proofID.MatchString(transfer) {
+		return errors.New("native Router readiness lost its captured policy")
 	}
 	// Linux starts its exact captured native cover service before readiness.
 	// The count and digest describe that initial activation; its continuing
@@ -102,12 +191,16 @@ func CanonicalDesktopNodeReadyRecord(record DesktopNodeReadyRecord, policy Deskt
 }
 
 func ParseDesktopNodeReadyRecord(raw []byte, policy DesktopPhysicalPolicy, transfer string) (DesktopNodeReadyRecord, error) {
+	return parseDesktopNodeReadyRecord(raw, func(record DesktopNodeReadyRecord) error { return record.Validate(policy, transfer) })
+}
+
+func parseDesktopNodeReadyRecord(raw []byte, validate func(DesktopNodeReadyRecord) error) (DesktopNodeReadyRecord, error) {
 	var record DesktopNodeReadyRecord
 	if len(raw) == 0 || len(raw) > DesktopNodeReadyRecordLimit || json.Unmarshal(raw, &record) != nil {
 		return DesktopNodeReadyRecord{}, errors.New("native Router readiness is not a bounded private record")
 	}
-	canonical, err := CanonicalDesktopNodeReadyRecord(record, policy, transfer)
-	if err != nil || !bytes.Equal(raw, canonical) {
+	canonical, err := json.Marshal(record)
+	if err != nil || !bytes.Equal(raw, canonical) || validate(record) != nil {
 		return DesktopNodeReadyRecord{}, errors.New("native Router readiness is not canonical and complete")
 	}
 	return record, nil

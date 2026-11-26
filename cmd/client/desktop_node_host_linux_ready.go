@@ -108,7 +108,11 @@ func captureDesktopLinuxRunningPath(roots []mobilemultihop.ExternalDesktopPhysic
 }
 
 func (h *desktopLinuxNodeHost) runningPolicyLocked(ctx context.Context) error {
-	if err := h.runningLocked(ctx); err != nil {
+	return h.runningPolicyWithReadyReadLocked(ctx, nil)
+}
+
+func (h *desktopLinuxNodeHost) runningPolicyWithReadyReadLocked(ctx context.Context, read *mobilemultihop.DesktopNodeReadyRead) error {
+	if err := h.runningWithReadyReadLocked(ctx, read); err != nil {
 		return err
 	}
 	t := h.transaction
@@ -165,9 +169,32 @@ func desktopLinuxNodeTUNCurrentContext(ctx context.Context, live desktopNodeMTUR
 }
 
 func (h *desktopLinuxNodeHost) readReadyLocked(ctx context.Context, fresh bool) (mobilemultihop.DesktopNodeReadyRecord, desktopNodeMTURecord, error) {
+	if h == nil || h.policy == nil {
+		return h.readReadySourceLocked(ctx, fresh, nil)
+	}
+	// Only the exact ordinary Node source supports this scoped read. Other
+	// families keep their own independent validation and readiness domains.
+	source, err := h.readyPolicySource()
+	if err != nil || source != h.policy {
+		return mobilemultihop.DesktopNodeReadyRecord{}, desktopNodeMTURecord{}, errors.Join(err, errors.New("Linux Node readiness changed its original policy family"))
+	}
+	var record mobilemultihop.DesktopNodeReadyRecord
+	var live desktopNodeMTURecord
+	err = h.policy.WithReadyRead(ctx, func(read *mobilemultihop.DesktopNodeReadyRead) error {
+		var observeErr error
+		record, live, observeErr = h.readReadySourceLocked(ctx, fresh, read)
+		return observeErr
+	})
+	if err != nil {
+		return mobilemultihop.DesktopNodeReadyRecord{}, desktopNodeMTURecord{}, err
+	}
+	return record, live, nil
+}
+
+func (h *desktopLinuxNodeHost) readReadySourceLocked(ctx context.Context, fresh bool, read *mobilemultihop.DesktopNodeReadyRead) (mobilemultihop.DesktopNodeReadyRecord, desktopNodeMTURecord, error) {
 	var empty mobilemultihop.DesktopNodeReadyRecord
 	var noLive desktopNodeMTURecord
-	if err := h.runningPolicyLocked(ctx); err != nil {
+	if err := h.runningPolicyWithReadyReadLocked(ctx, read); err != nil {
 		return empty, noLive, err
 	}
 	digest, err := h.selection.ControlSHA256()
@@ -182,7 +209,12 @@ func (h *desktopLinuxNodeHost) readReadyLocked(ctx context.Context, fresh bool) 
 	if err != nil {
 		return empty, noLive, err
 	}
-	record, err := mobilemultihop.ParseDesktopNodeReadyRecord(raw, policy, digest)
+	var record mobilemultihop.DesktopNodeReadyRecord
+	if read != nil {
+		record, err = read.Parse(raw, h.policy, digest)
+	} else {
+		record, err = mobilemultihop.ParseDesktopNodeReadyRecord(raw, policy, digest)
+	}
 	if err != nil {
 		return empty, noLive, err
 	}
@@ -202,14 +234,14 @@ func (h *desktopLinuxNodeHost) readReadyLocked(ctx context.Context, fresh bool) 
 	if err := desktopLinuxNodeTUNCurrent(live); err != nil {
 		return empty, noLive, err
 	}
-	if err := h.runningPolicyLocked(ctx); err != nil {
+	if err := h.runningPolicyWithReadyReadLocked(ctx, read); err != nil {
 		return empty, noLive, err
 	}
 	if h.chain != nil || h.socksChain != nil || h.connectChain != nil {
 		if err := readDesktopNodeChainNativeReadyContext(ctx, h.launch, digest, h.started, fresh, live); err != nil {
 			return empty, noLive, err
 		}
-		if err := h.runningPolicyLocked(ctx); err != nil {
+		if err := h.runningPolicyWithReadyReadLocked(ctx, read); err != nil {
 			return empty, noLive, err
 		}
 	}

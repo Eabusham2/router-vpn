@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"router-vpn/internal/desktopnetwork"
+	"router-vpn/internal/mobilemultihop"
 )
 
 // Start requires the caller to retain operationMu and to have already joined
@@ -190,7 +191,17 @@ func (h *desktopLinuxNodeHost) publishStarting(ctx context.Context) error {
 }
 
 func (h *desktopLinuxNodeHost) runningLocked(ctx context.Context) error {
-	if err := h.current(ctx); err != nil {
+	return h.runningWithReadyReadLocked(ctx, nil)
+}
+
+func (h *desktopLinuxNodeHost) runningWithReadyReadLocked(ctx context.Context, read *mobilemultihop.DesktopNodeReadyRead) error {
+	var err error
+	if read == nil {
+		err = h.current(ctx)
+	} else {
+		err = h.currentOrdinary(ctx, read)
+	}
+	if err != nil {
 		return err
 	}
 	if h.process == nil || h.launch.command != h.process.command || !h.process.Started() || h.transaction == nil || h.started.IsZero() {
