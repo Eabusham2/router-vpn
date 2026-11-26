@@ -102,11 +102,6 @@ extension RouterVPNModel {
         } catch { message = "DNS update failed: \(error.localizedDescription)" }
     }
 
-    private func unifiedRawModeMeetsAutoRequirements(_ rawID: String) -> Bool {
-        guard let profile = unifiedSelectedProfile else { return false }
-        return IOSStrategyCatalog.autoRequirementFailure(rawID: rawID, profile: profile) == nil
-    }
-
     func runUnifiedIOSAuto() async {
         guard unifiedSelectedProfile != nil else { message = "Pair/import a Router VPN node first."; return }
         auto = true

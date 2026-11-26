@@ -12,7 +12,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -232,50 +231,6 @@ final class NativeXrayController {
         if (old != null) for (int i = 0; i < old.length(); i++) rules.put(old.get(i));
         routing.put("rules", rules);
         config.put("routing", routing);
-    }
-
-    private static String selectedPlainDns(JSONObject bundle) throws Exception {
-        JSONObject p = selectedProfile(bundle);
-        if (p == null) return "1.1.1.1";
-        String mode = p.optString("dns_mode", "fastest").trim().toLowerCase(Locale.ROOT);
-        String protocol = p.optString("dns_protocol", "udp").trim().toLowerCase(Locale.ROOT);
-        String host;
-        if ("home".equals(mode)) host = p.optString("adguard_ipv4", p.optString("adguard_ipv6", "")).trim();
-        else if ("fastest".equals(mode)) host = p.optString("fastest_dns_host", "1.1.1.1").trim();
-        else host = p.optString("dns_host", p.optString("fastest_dns_host", "1.1.1.1")).trim();
-        if (!("udp".equals(protocol) || "tcp".equals(protocol) || "fastest".equals(mode) || "home".equals(mode))) {
-            throw new IllegalStateException("Native Xray currently requires an IP-based plain selected DNS; encrypted selected DNS remains available through embedded libbox modes.");
-        }
-        if (!isLiteralIp(host)) throw new IllegalStateException("Native Xray selected DNS must be a literal IP address.");
-        return host;
-    }
-
-    private static int selectedMtu(JSONObject bundle) {
-        JSONObject p = selectedProfile(bundle);
-        int mtu = p == null ? 1380 : p.optInt("mtu", p.optInt("tun_mtu", 1380));
-        if (mtu < 1200 || mtu > 9000) mtu = 1380;
-        return mtu;
-    }
-
-    private static JSONObject selectedProfile(JSONObject bundle) {
-        JSONArray profiles = bundle.optJSONArray("routerProfiles");
-        String wanted = bundle.optString("selectedRouterID", "").trim();
-        if (profiles == null) return null;
-        for (int i = 0; i < profiles.length(); i++) {
-            JSONObject p = profiles.optJSONObject(i);
-            if (p != null && wanted.equals(p.optString("id", ""))) return p;
-        }
-        return profiles.length() > 0 ? profiles.optJSONObject(0) : null;
-    }
-
-    private static boolean isLiteralIp(String value) {
-        if (value == null || value.trim().isEmpty()) return false;
-        String v = value.trim();
-        try {
-            InetAddress parsed = InetAddress.getByName(v);
-            if (v.indexOf(':') >= 0) return parsed.getAddress().length == 16;
-            return v.matches("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}") && parsed.getAddress().length == 4;
-        } catch (Exception invalid) { return false; }
     }
 
     private static boolean isLoopbackHost(String value) {

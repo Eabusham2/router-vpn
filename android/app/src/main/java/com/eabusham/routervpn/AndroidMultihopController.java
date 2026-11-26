@@ -622,9 +622,6 @@ final class AndroidMultihopController {
         return profile;
     }
 
-    private static String readWireGuardText(JSONObject bundle) throws Exception {
-        return readNativeText(bundle,"wg");
-    }
     private static String readNativeText(JSONObject bundle, String mode) throws Exception {
         JSONObject profile=requiredProfile(bundle,mode);
         String encoded=profile.optString("wg".equals(mode) ? "wg.conf" : "awg.conf", "").trim();

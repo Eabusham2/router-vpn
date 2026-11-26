@@ -361,10 +361,19 @@ enum IOSNodeChainPresentation {
         guard (2...8).contains(expected.count) || (9...IOSMultihopNodeSelection.physicalTraversalDepth).contains(expected.count) && expected.count == capturedExtendedCount && expectedPublicPositions != nil, Set(expected).count == expected.count,
               ["local", "server", "auto"].contains(requestedExecution),
               let execution = value["execution"] as? String,
-              (requestedExecution == "auto" ? ["local", "server"].contains(execution) : execution == requestedExecution),
-              let stage = value["stage"] as? String, ["verifying", "selected", "closed"].contains(stage),
-              let rows = value["prefixes"] as? [[String: Any]], rows.count <= expected.count else { return nil }
-        var lines = ["Ordered route • \(execution == "server" ? "Server" : "Local") • \(stage)"]
+              let stage = value["stage"] as? String,
+              ["pending", "verifying", "starting", "probing", "stopping", "measured", "activating", "activation-failed", "selected", "failed", "closed"].contains(stage),
+              requestedExecution == "auto" ? (["local", "server"].contains(execution) || execution == "auto" && boolean(value["ready"]) != true) : execution == requestedExecution else { return nil }
+        let rows: [[String: Any]]
+        if let prefixes = value["prefixes"] as? [[String: Any]] { rows = prefixes }
+        else if value["prefixes"] is NSNull && boolean(value["ready"]) != true { rows = [] }
+        else { return nil }
+        guard rows.count <= expected.count else { return nil }
+        let ready = stage == "selected" && boolean(value["ready"]) == true && boolean(value["complete"]) == true
+            && rows.count == expected.count && boolean(value["dns_proven"]) == true && boolean(value["public_proven"]) == true
+        let lane = execution == "server" ? "Server" : execution == "local" ? "Local" : "Waiting"
+        let title = requestedExecution == "auto" ? "Compare • \(lane)\(ready ? " selected" : "")" : lane
+        var lines = [requestedExecution == "auto" && ready ? "Ordered route • \(title)" : "Ordered route • \(title) • \(stage)"]
         for (position, row) in rows.enumerated() {
             guard let reported = row["position"] as? NSNumber, CFGetTypeID(reported) != CFBooleanGetTypeID(),
                   reported.doubleValue == Double(position), row["profile_id"] as? String == expected[position],
@@ -374,7 +383,7 @@ enum IOSNodeChainPresentation {
             let role = position == 0 ? "Entry" : position == expected.count - 1 ? "Exit" : "Hop \(position)"
             let publicPath = row["kind"] as? String == "public-path"
             if let expectedPublicPositions {
-                guard (expected.count == 3 && expectedPublicPositions == Set([0, 1]) && requestedExecution == "local" || expectedPublicPositions.allSatisfy({ $0 > 0 && $0 < expected.count - 1 })),
+                guard (expected.count == 3 && expectedPublicPositions == Set([0, 1]) && requestedExecution == "local" || expected.count >= 3 && expectedPublicPositions == Set(1..<expected.count) || expectedPublicPositions.allSatisfy({ $0 > 0 && $0 < expected.count - 1 })),
                       publicPath == expectedPublicPositions.contains(position),
                       publicPath || row["kind"] == nil || row["kind"] as? String == "private-node" else { return nil }
             } else {
@@ -385,11 +394,52 @@ enum IOSNodeChainPresentation {
         if rows.count < expected.count { lines.append("Verified \(rows.count) of \(expected.count) nodes") }
         if boolean(value["dns_proven"]) == true { lines.append("Final-path DNS verified") }
         if boolean(value["public_proven"]) == true { lines.append("Final public exit verified") }
-        if boolean(value["ready"]) == true && boolean(value["complete"]) == true && rows.count == expected.count && boolean(value["dns_proven"]) == true && boolean(value["public_proven"]) == true {
+        if ready {
             lines.append("Every captured node and final path verified")
+            if requestedExecution == "auto" {
+                lines.append(contentsOf: comparisonLines(value["comparison"], expected: expected, execution: execution))
+            }
         } else if stage == "selected" { lines.append("The captured path is not currently ready") }
         if stage == "closed" { lines.append("Captured path is closed") }
         return lines.joined(separator: "\n")
+    }
+
+    /// Display the original comparison receipts, never an inferred total or a stale score.
+    private static func comparisonLines(_ value: Any?, expected: [String], execution: String) -> [String] {
+        let unavailable = ["Comparison trial scores unavailable for this captured route"]
+        func lane(_ value: Any?) -> String? {
+            guard let candidate = value as? [String: Any],
+                  candidate["transport"] as? String == "ordered-node-chain",
+                  candidate["entry_id"] as? String == expected.first,
+                  candidate["exit_id"] as? String == expected.last,
+                  let execution = candidate["execution"] as? String,
+                  ["local", "server"].contains(execution) else { return nil }
+            return execution
+        }
+        func positive(_ value: Any?) -> Double? {
+            guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  number.doubleValue.isFinite, number.doubleValue > 0 else { return nil }
+            return number.doubleValue
+        }
+        guard let comparison = value as? [String: Any], lane(comparison["winner"]) == execution,
+              let target = comparison["target"] as? String, !target.isEmpty,
+              let rows = comparison["measurements"] as? [[String: Any]], rows.count == 2 else { return unavailable }
+        var lines: [String] = ["Comparison trial scores"]
+        var seen = Set<String>()
+        for row in rows {
+            guard let candidate = lane(row["candidate"]), seen.insert(candidate).inserted,
+                  let eligible = boolean(row["eligible"]) else { return unavailable }
+            let name = candidate == "server" ? "Server" : "Local"
+            if eligible {
+                guard let last = positive(row["last_node_ms"]), let external = positive(row["external_ms"]),
+                      let score = positive(row["score_ms"]), abs(score - (last / 2 + external / 2)) <= max(0.000001, score * 0.000001) else { return unavailable }
+                lines.append(String(format: "%@: (last node %.1f + external %.1f) / 2 = %.1f ms", name, last, external, score))
+            } else {
+                guard candidate != execution else { return unavailable }
+                lines.append("\(name): rejected — no valid comparison score")
+            }
+        }
+        return lines
     }
 }
 

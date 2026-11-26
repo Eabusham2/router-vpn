@@ -21,14 +21,14 @@ final class AndroidOrderedPathPresentation {
     }
     final List<Member> members;
     final boolean live, testing;
-    final String requestedExecution, selectedExecution;
+    final String requestedExecution, selectedExecution, comparisonDetails;
     private final AndroidNodeCandidatePreparation preparation;
     private final String selection,homeSession;
     private final long homeGeneration;
 
-    private AndroidOrderedPathPresentation(List<Member> members,boolean live,boolean testing,AndroidNodeCandidatePreparation preparation,String selection,AndroidHomeStateStore.Snapshot home,String requested,String selected) {
+    private AndroidOrderedPathPresentation(List<Member> members,boolean live,boolean testing,AndroidNodeCandidatePreparation preparation,String selection,AndroidHomeStateStore.Snapshot home,String requested,String selected,String comparisonDetails) {
         this.members=Collections.unmodifiableList(new ArrayList<>(members));this.live=live;this.testing=testing;this.preparation=preparation;this.selection=selection;
-        homeSession=home.sessionId;homeGeneration=home.pathGeneration;requestedExecution=requested;selectedExecution=selected;
+        homeSession=home.sessionId;homeGeneration=home.pathGeneration;requestedExecution=requested;selectedExecution=selected;this.comparisonDetails=comparisonDetails;
     }
 
     static boolean configured(Context context) {
@@ -72,9 +72,50 @@ final class AndroidOrderedPathPresentation {
             }
             values.add(new Member(sources.get(i),modes.get(i),ms,testing&&preparation.testsSavedPosition(i)));
         }
-        AndroidOrderedPathPresentation out=new AndroidOrderedPathPresentation(values,live,testing,preparation,choice,home,requested,selected);
+        String details=live&&"auto".equals(requested)
+                ?comparisonDetails(progress.optJSONObject("comparison"),sources.get(0).profileId,sources.get(sources.size()-1).profileId,selected):"";
+        AndroidOrderedPathPresentation out=new AndroidOrderedPathPresentation(values,live,testing,preparation,choice,home,requested,selected,details);
         if(!out.current(context))throw new IllegalStateException("The ordered display changed during capture.");
         return out;
+    }
+
+    private static String comparisonLane(JSONObject candidate,String entry,String exit) {
+        if(candidate==null||!"ordered-node-chain".equals(candidate.optString("transport"))
+                ||!entry.equals(candidate.optString("entry_id"))||!exit.equals(candidate.optString("exit_id")))return "";
+        String lane=candidate.optString("execution");
+        return "local".equals(lane)||"server".equals(lane)?lane:"";
+    }
+
+    private static double positiveNumber(JSONObject value,String key) {
+        Object raw=value.opt(key);
+        double number=raw instanceof Number?((Number)raw).doubleValue():Double.NaN;
+        return Double.isFinite(number)&&number>0?number:Double.NaN;
+    }
+
+    private static String comparisonDetails(JSONObject comparison,String entry,String exit,String selected) {
+        String unavailable="Comparison trial scores unavailable for this captured route";
+        if(comparison==null||!selected.equals(comparisonLane(comparison.optJSONObject("winner"),entry,exit))
+                ||!(comparison.opt("target") instanceof String)||comparison.optString("target").isEmpty())return unavailable;
+        JSONArray rows=comparison.optJSONArray("measurements");
+        if(rows==null||rows.length()!=2)return unavailable;
+        java.util.Set<String> seen=new java.util.HashSet<>();
+        StringBuilder details=new StringBuilder("Comparison trial scores");
+        for(int i=0;i<rows.length();i++) {
+            JSONObject row=rows.optJSONObject(i);
+            String lane=row==null?"":comparisonLane(row.optJSONObject("candidate"),entry,exit);
+            if(lane.isEmpty()||!seen.add(lane)||!(row.opt("eligible") instanceof Boolean))return unavailable;
+            String name="server".equals(lane)?"Server":"Local";
+            if(row.optBoolean("eligible")) {
+                double last=positiveNumber(row,"last_node_ms"),external=positiveNumber(row,"external_ms"),score=positiveNumber(row,"score_ms");
+                if(!Double.isFinite(last)||!Double.isFinite(external)||!Double.isFinite(score)
+                        ||Math.abs(score-(last/2+external/2))>Math.max(0.000001,score*0.000001))return unavailable;
+                details.append(String.format(java.util.Locale.US,"\n%s: (last node %.1f + external %.1f) / 2 = %.1f ms",name,last,external,score));
+            } else {
+                if(selected.equals(lane))return unavailable;
+                details.append("\n").append(name).append(": rejected — no valid comparison score");
+            }
+        }
+        return details.toString();
     }
 
     String executionLabel() {

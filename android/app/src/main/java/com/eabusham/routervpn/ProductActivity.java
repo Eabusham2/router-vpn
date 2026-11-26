@@ -317,7 +317,8 @@ public final class ProductActivity extends Activity {
         AlertDialog.Builder builder=new AlertDialog.Builder(this);
         liveRouteDetails=new TextView(builder.getContext());liveRouteDetails.setPadding(dp(24),dp(16),dp(24),dp(8));
         liveRouteDetails.setTextIsSelectable(true);
-        liveRouteDialog=builder.setTitle("Multihop path").setView(liveRouteDetails).setNegativeButton("Close",null).create();
+        ScrollView routeScroll=new ScrollView(builder.getContext());routeScroll.addView(liveRouteDetails);
+        liveRouteDialog=builder.setTitle("Multihop path").setView(routeScroll).setNegativeButton("Close",null).create();
         liveRouteDialog.setOnDismissListener(d->{liveRouteDialog=null;liveRouteDetails=null;});
         refreshLiveRoute();liveRouteDialog.show();refreshTelemetry(true);
     }
@@ -342,9 +343,13 @@ public final class ProductActivity extends Activity {
             } catch(Exception stale) { /* The next current-session poll may provide a new receipt. */ }
         }
         multihopTotal.setVisibility(multihop?View.VISIBLE:View.GONE);multihopTotal.setText(total);
-        if(liveRouteDetails!=null)liveRouteDetails.setText(multihop?multihopHint.getText()+"\n\n"+total:total);
+        if(liveRouteDetails!=null){
+            String details=multihop?multihopHint.getText()+"\n\n"+total:total;
+            AndroidOrderedPathPresentation presentation="node-chain".equals(home.logicalMode)?currentOrderedPresentation():null;
+            if(multihop&&presentation!=null&&presentation.live&&!presentation.comparisonDetails.isEmpty())details+="\n\n"+presentation.comparisonDetails;
+            liveRouteDetails.setText(details);
+        }
     }
-    private void refreshMultihopTelemetry(){refreshMultihopSummary();}
 
     private void showPerformance(){
         String[] actions={"Live current path response","50-sample selected node","Compare all Router nodes (50 TCP)","Real current VPN path speed","Routed multihop speeds","Path throughput / Auto MTU status","Last saved 50-sample statistics","Compare all external exits (50 HTTPS)","Compare and connect fastest external path","Test candidates through a saved or connected prefix","Ordered path: Fifty / Retest per node"};
