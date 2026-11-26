@@ -236,9 +236,8 @@ for name, before, after in dispatch_controls:
     else:
         raise AssertionError(f"ordered profile dispatch contract accepted its deliberate defect: {name}")
 workflow = (ROOT.parent / '.github/workflows/android-multihop-contract.yml').read_text()
-for dependency in ('android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainCapture.java',
-                   'android/test_android_node_chain_capture.py'):
-    assert workflow.count("- '" + dependency + "'") == 2, f"ordered source push/PR trigger missing: {dependency}"
+# The native workflow is called deliberately by release qualification; routine
+# pushes use the repository's single CI workflow. Retain the actual compiler.
 assert workflow.count('          python3 android/test_android_node_chain_capture.py') == 1, "actual ordered compiler/capture gate is required"
 
 # Every original call from the complete Java aggregate belongs to one mandatory
