@@ -334,6 +334,21 @@ jobs:
                   Get-Content -LiteralPath $diagnostic -Tail 60 | ForEach-Object { if($_.Length-gt1024){$_.Substring(0,1024)}else{$_} }
                 }
               }
+              $report=Join-Path $dataRoot 'windows-self-test-error.json'
+              if(Test-Path -LiteralPath $report -PathType Leaf){
+                try{
+                  $item=Get-Item -LiteralPath $report -Force
+                  if($item.PSIsContainer-or($item.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0){throw 'Invalid self-test diagnostic receipt'}
+                  $receiptStream=[IO.File]::Open($report,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+                  try{
+                    if($receiptStream.Length-gt16384){throw 'Oversized self-test diagnostic receipt'}
+                    $reader=[IO.StreamReader]::new($receiptStream,[Text.Encoding]::UTF8)
+                    try{$text=$reader.ReadToEnd()}finally{$reader.Dispose()}
+                  }finally{$receiptStream.Dispose()}
+                  [IO.File]::WriteAllText((Join-Path $evidence 'windows-self-test-error.json'),$text,[Text.UTF8Encoding]::new($false))
+                  Write-Host $text
+                }catch{Write-Warning 'The private self-test diagnostic receipt was unavailable.'}
+              }
               foreach($layout in @('windows-640x480.png','windows-1040x720.png')){
                 $image=Join-Path $dataRoot $layout
                 if(Test-Path -LiteralPath $image -PathType Leaf){Copy-Item -LiteralPath $image -Destination (Join-Path $evidence $layout)}
@@ -355,6 +370,7 @@ jobs:
           path: |
             ${{ runner.temp }}/routervpn-ui/*/*.png
             ${{ runner.temp }}/routervpn-ui/*/*.log
+            ${{ runner.temp }}/routervpn-ui/*/windows-self-test-error.json
           if-no-files-found: warn
           retention-days: 7
 
