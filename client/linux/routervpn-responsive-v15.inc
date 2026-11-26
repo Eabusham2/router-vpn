@@ -67,7 +67,7 @@ static void linux_move_controls_v15(GtkWidget *box, GtkWidget *flow) {
     g_list_free(children);
 }
 
-static void linux_reflow_controls_v15(GtkWidget *box, const char *name) {
+static GtkWidget *linux_action_flow_v15(GtkWidget *box, const char *name) {
     GtkWidget *flow = gtk_flow_box_new();
     gtk_widget_set_name(flow, name);
     gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(flow), GTK_SELECTION_NONE);
@@ -76,6 +76,11 @@ static void linux_reflow_controls_v15(GtkWidget *box, const char *name) {
     gtk_flow_box_set_row_spacing(GTK_FLOW_BOX(flow), 4);
     gtk_flow_box_set_column_spacing(GTK_FLOW_BOX(flow), 4);
     linux_move_controls_v15(box, flow);
+    return flow;
+}
+
+static void linux_reflow_controls_v15(GtkWidget *box, const char *name) {
+    GtkWidget *flow = linux_action_flow_v15(box, name);
     gtk_orientable_set_orientation(GTK_ORIENTABLE(box), GTK_ORIENTATION_VERTICAL);
     gtk_box_pack_start(GTK_BOX(box), flow, FALSE, FALSE, 0);
 }
@@ -119,7 +124,13 @@ static void linux_install_responsive_v15(App *app) {
     if (external == NULL) g_error("Router VPN responsive external-path action missing");
     gtk_orientable_set_orientation(GTK_ORIENTABLE(gtk_widget_get_parent(external)), GTK_ORIENTATION_VERTICAL);
     linux_reflow_controls_v15(gtk_widget_get_parent(base->mode), "router-vpn-mode-actions");
-    linux_reflow_controls_v15(gtk_widget_get_parent(settings), "router-vpn-settings-actions");
+    /* Ask the flow for its height at the width left beside the Settings label.
+     * The original button box made this row reserve one line per action. */
+    GtkWidget *settings_buttons = gtk_widget_get_parent(settings);
+    GtkWidget *settings_row = gtk_widget_get_parent(settings_buttons);
+    GtkWidget *settings_flow = linux_action_flow_v15(settings_buttons, "router-vpn-settings-actions");
+    gtk_container_remove(GTK_CONTAINER(settings_row), settings_buttons);
+    gtk_box_pack_start(GTK_BOX(settings_row), settings_flow, TRUE, TRUE, 0);
     linux_compact_map_controls_v15(main);
     GList *hops = gtk_container_get_children(GTK_CONTAINER(gtk_widget_get_parent(base->multihop)));
     for (GList *item = hops; item != NULL; item = item->next) {

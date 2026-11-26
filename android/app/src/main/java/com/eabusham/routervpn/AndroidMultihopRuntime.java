@@ -510,14 +510,25 @@ final class AndroidMultihopRuntime implements AutoCloseable {
     }
 
     /** Tear down this owner's runtime without changing Home state; the revalidation transaction owns the final state write. */
-    void failClosedForRevalidation() {
+    void failClosedForRevalidation() { failClosedForRevalidation(null); }
+
+    boolean failClosedForRevalidation(AndroidHomeStateStore.Snapshot token) {
+        final long command;
         synchronized (this) {
+            if (token == null) command = 0L; // Emergency Disconnect owns every transport.
+            else {
+                if (!activeHomeSession.equals(token.sessionId))
+                    throw new IllegalStateException("The original multihop owner changed.");
+                command = AndroidHomeStateStore.reserveRevalidationStop(context, token, NativeSingBoxController.STATE_KEY);
+                if (command == 0L) return false;
+            }
             disconnectRequested = true;
             revalidationTeardown = true;
             transitioning = true;
+            connected = false;
             if (workerThread != null) workerThread.interrupt();
         }
-        boolean stopped = stopEmbeddedAndProve() && cleanupPreparedSession();
+        boolean stopped = stopEmbeddedAndProve(command) && cleanupPreparedSession();
         synchronized (this) {
             transitioning = !stopped;
             if (stopped) {
@@ -526,6 +537,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
             }
         }
         if (!stopped) throw new IllegalStateException("Android multihop revalidation teardown did not reach a terminal state.");
+        return true;
     }
 
     @Override public void close() {
@@ -574,10 +586,12 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         }
     }
 
-    private boolean stopEmbeddedAndProve() {
+    private boolean stopEmbeddedAndProve() { return stopEmbeddedAndProve(0L); }
+
+    private boolean stopEmbeddedAndProve(long reserved) {
         boolean interrupted = Thread.interrupted();
         try {
-            singBox.stop();
+            if (reserved == 0L) singBox.stop(); else singBox.stopReserved(reserved);
             long deadline = System.currentTimeMillis() + STOP_TIMEOUT_MS;
             while (System.currentTimeMillis() < deadline) {
                 if (terminal(singBox.getState())) return true;

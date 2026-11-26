@@ -16,7 +16,7 @@ struct IOSExternalComparisonRow: Identifiable, Sendable {
 
 /// A selection revision is separate from the native session that restoration
 /// renews. Only the joined restoration callback may advance the latter.
-@MainActor private struct IOSExternalComparisonSelection: Equatable {
+@MainActor struct IOSExternalComparisonSelection: Equatable {
     let bundle: Data
     let mode: String
     let logicalMode: String

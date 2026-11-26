@@ -29,25 +29,86 @@ import java.util.concurrent.atomic.AtomicReference;
 /** Truthful Android Home state. Cached profile public_ip is never treated as a live exit proof. */
 final class AndroidHomeSummary {
     interface Callback { void done(String message, Throwable error); }
-    private static volatile String provedSignature = "";
-    private static volatile String provedExit = "";
+    private static final class ExitProof {
+        final String signature, address;
+        final AndroidHomeStateStore.Snapshot owner;
+        ExitProof(AndroidHomeStateStore.Snapshot owner, String signature, String address) {
+            this.owner = owner; this.signature = signature; this.address = address;
+        }
+    }
+    private static final AtomicReference<ExitProof> publicExit = new AtomicReference<>();
 
     private static final class RuntimeState {
+        AndroidHomeStateStore.Snapshot owner;
         String sessionId="",phase="off", logical="", runtime="", base="", fallback="", warning="", activeNodeId="", activeEntryId="", activeExitId="";
         String activeExternalId="",activeExternalName="",activeExternalProtocol="",expectedExternalIp="";
         long pathGeneration;
         boolean connected;
     }
 
-    static String format(Activity activity, AndroidNodeStore nodeStore) {
+    private static String currentExit(Activity activity, Network vpn, RuntimeState runtime) {
+        ExitProof proof = publicExit.get();
+        if (proof != null && !proof.signature.equals(signature(vpn, runtime))) {
+            if (proof.owner.sessionId.equals(runtime.sessionId) && proof.owner.pathGeneration == runtime.pathGeneration) return "";
+            proof = null;
+        }
+        boolean external = "external".equals(runtime.logical);
+        if (vpn == null || (proof == null && !external)) return "";
+        String stored = AndroidHomeStateStore.actualExitForCurrentSession(activity, runtime.owner);
+        if (external) return stored;
+        return proof.address.equals(stored) ? stored : "";
+    }
+
+    private static void publishExit(Activity activity, AndroidHomeStateStore.Snapshot owner, String signature, String ip) {
+        RuntimeState current = runtimeState(activity);
+        if (!signature.equals(signature(ownedVpnNetwork(activity), current)))
+            throw new IllegalStateException("The VPN network changed before its public exit could be saved.");
+        synchronized (AndroidHomeStateStore.class) {
+            if (!AndroidHomeStateStore.saveActualExit(activity, owner, ip))
+                throw new IllegalStateException("The VPN session or path changed before its public exit could be saved.");
+            publicExit.set(new ExitProof(owner, signature, ip));
+        }
+    }
+
+    static String status(Activity activity, AndroidNodeStore nodeStore, boolean externalSelected) {
         try {
             RuntimeState runtime = runtimeState(activity);
             Network vpn = ownedVpnNetwork(activity);
-            String signature = signature(vpn, runtime);
+            String provedExit = currentExit(activity, vpn, runtime);
+            if (runtime.logical.startsWith("external-untracked")) return "Unverified custom exit · reconnect";
+            if (!runtime.connected || vpn == null) {
+                if ("failed".equals(runtime.phase)) return "Connection failed · see Details";
+                if ("connecting".equals(runtime.phase)) return "Connecting…";
+                if (runtime.connected || vpn != null || "engine-up-unproven".equals(runtime.phase) || "connected".equals(runtime.phase))
+                    return "VPN path unverified · see Details";
+                if (!runtime.warning.isEmpty()) return "Disconnected · warning in Details";
+                if (!externalSelected && nodeStore.activeId().isEmpty()) return "Choose or add a node to connect";
+                return "Disconnected";
+            }
+            if (runtime.sessionId.isEmpty()) return "Session identity unavailable · reconnect";
+            boolean external = "external".equals(runtime.logical);
+            if (external) {
+                if (runtime.activeExternalId.isEmpty() || (runtime.expectedExternalIp.isEmpty() && !AndroidTorProfile.isTor(runtime.activeExternalProtocol))) return "Custom exit identity unavailable · reconnect";
+            } else {
+                if ("multihop".equals(runtime.logical) && runtime.activeEntryId.isEmpty()) return "Entry identity unavailable · reconnect";
+                proofProfile(nodeStore, runtime);
+            }
+            return "Connected · public exit " + (provedExit.isEmpty() ? "unproven" : "proved")
+                    + (runtime.warning.isEmpty() ? "" : " · warning in Details");
+        } catch (Exception error) {
+            return "Node or session unavailable · see Details";
+        }
+    }
+
+    static String format(Activity activity, AndroidNodeStore nodeStore) {
+        RuntimeState runtime = null;
+        try {
+            runtime = runtimeState(activity);
+            Network vpn = ownedVpnNetwork(activity);
+            String provedExit = currentExit(activity, vpn, runtime);
             boolean osConnected = vpn != null;
             boolean connected = runtime.connected && osConnected;
-            if (!signature.equals(provedSignature)) { provedSignature = ""; provedExit = ""; }
-            if ("external".equals(runtime.logical)) return formatExternal(activity,runtime,connected,osConnected);
+            if ("external".equals(runtime.logical)) return formatExternal(runtime,connected,osConnected,provedExit);
             if (runtime.logical.startsWith("external-untracked")) return "Node/path: Untracked custom external runtime\nActual public VPN exit: Unproven\nConnection: "+(connected?"VPN engine is UP but unified external-session identity is missing":"not connected")+"\nWarnings: Reconnect this custom exit from the Router VPN Custom Exits screen before trusting identity/proof.";
 
             JSONObject profile = proofProfile(nodeStore, runtime);
@@ -89,15 +150,16 @@ final class AndroidHomeSummary {
                     "\nLAN access: " + (profile.optBoolean("home_lan_access", true) ? "On" : "Off") + " • Kill switch: " + killSwitch(profile) +
                     "\nEffective MTU: " + mtuText + " • IPv6: " + profile.optString("ipv6_mode", "default") +
                     "\nWarnings: " + (warnings.isEmpty() ? "None" : String.join(" | ", warnings));
-        } catch (Throwable error) { return "Home state unavailable: " + safe(error); }
+        } catch (Throwable error) {
+            return "Home state unavailable: " + safe(error) + (runtime != null && !runtime.warning.isEmpty()
+                    ? "\nConnection: " + runtime.phase + "\nWarnings: " + runtime.warning : "");
+        }
     }
 
-    private static String formatExternal(Activity activity,RuntimeState runtime,boolean connected,boolean osConnected){
-        String stored=AndroidHomeStateStore.actualExitForCurrentSession(activity);
-        String actual=!provedExit.isEmpty()?provedExit:stored;
+    private static String formatExternal(RuntimeState runtime,boolean connected,boolean osConnected,String actual){
         List<String>warnings=new ArrayList<>();
         if(runtime.connected&&!osConnected)warnings.add("Stored external session says connected but Android has no Router VPN-owned VPN network");
-        if(runtime.expectedExternalIp.isEmpty())warnings.add("Expected custom-exit public IP is missing; reconnect before trusting proof");
+        if(runtime.expectedExternalIp.isEmpty()&&!AndroidTorProfile.isTor(runtime.activeExternalProtocol))warnings.add("Expected custom-exit public IP is missing; reconnect before trusting proof");
         if(connected&&actual.isEmpty())warnings.add("Current external-session public exit is unproven");
         if(!runtime.warning.isEmpty())warnings.add(runtime.warning);
         return "Node/path: Custom external • "+empty(runtime.activeExternalName)+
@@ -110,6 +172,7 @@ final class AndroidHomeSummary {
 
     static void proveActualExit(Activity activity, AndroidNodeStore nodeStore, Callback callback) {
         new Thread(() -> {
+            ExitProof previous = publicExit.get();
             try {
                 RuntimeState runtime=runtimeState(activity);
                 if("external".equals(runtime.logical)){proveExternalExit(activity,runtime,callback);return;}
@@ -119,10 +182,9 @@ final class AndroidHomeSummary {
                 FileProof after = proofInputs(activity, nodeStore);
                 if (!proof.signature.equals(after.signature)) throw new IllegalStateException("Android VPN network/session/runtime or underlying path generation changed while proving public exit; result discarded.");
                 if (!AndroidPathProbe.prove(after.bundle, 8000)) throw new IllegalStateException(after.multihop ? "Active multihop exit-node private path proof failed after public-exit test." : "Active session node private path proof failed after public-exit test.");
-                provedSignature = after.signature; provedExit = ip;
-                AndroidHomeStateStore.saveActualExit(activity, AndroidHomeStateStore.snapshot(activity).sessionId, ip);
+                publishExit(activity, proof.owner, proof.signature, ip);
                 callback.done("Actual public VPN exit proved for this live Router VPN network: " + ip, null);
-            } catch (Throwable error) { provedSignature=""; provedExit=""; callback.done("Actual exit proof failed: " + safe(error), error); }
+            } catch (Throwable error) { publicExit.compareAndSet(previous, null); callback.done("Actual exit proof failed: " + safe(error), error); }
         }, "routervpn-home-exit-proof").start();
     }
 
@@ -133,13 +195,13 @@ final class AndroidHomeSummary {
         String beforeSignature=signature(network,before);String ip=fetchIP(network);
         if(!InetAddress.getByName(ip).equals(InetAddress.getByName(before.expectedExternalIp)))throw new IllegalStateException("Custom exit reached "+ip+", expected "+before.expectedExternalIp+".");
         RuntimeState after=runtimeState(activity);Network afterNetwork=ownedVpnNetwork(activity);if(afterNetwork==null||!beforeSignature.equals(signature(afterNetwork,after)))throw new IllegalStateException("External VPN network/session/path generation changed while proving public exit; result discarded.");
-        provedSignature=beforeSignature;provedExit=ip;AndroidHomeStateStore.saveActualExit(activity,AndroidHomeStateStore.snapshot(activity).sessionId,ip);callback.done("Actual custom public VPN exit re-proved for this live session: "+ip,null);
+        publishExit(activity,before.owner,beforeSignature,ip);callback.done("Actual custom public VPN exit re-proved for this live session: "+ip,null);
     }
 
     static void emergencyDisconnect(Activity activity, Callback callback) {
         AndroidHomeStateStore.warning(activity, "Emergency Disconnect requested; verifying every Router VPN transport stops.");
         AndroidRuntimeRegistry runtime=AndroidRuntimeRegistry.get(activity);
-        provedSignature=""; provedExit="";
+        publicExit.set(null);
         new Thread(() -> {
             try {
                 CountDownLatch rawStops=new CountDownLatch(2);
@@ -177,14 +239,24 @@ final class AndroidHomeSummary {
         }, "routervpn-emergency-verify").start();
     }
 
-    private static final class FileProof { final java.io.File bundle; final Network network; final String signature; final boolean multihop; FileProof(java.io.File bundle,Network network,String signature,boolean multihop){this.bundle=bundle;this.network=network;this.signature=signature;this.multihop=multihop;} }
+    private static final class FileProof {
+        final java.io.File bundle;
+        final Network network;
+        final String signature;
+        final boolean multihop;
+        final AndroidHomeStateStore.Snapshot owner;
+        FileProof(java.io.File bundle, Network network, RuntimeState runtime, boolean multihop) {
+            this.bundle = bundle; this.network = network; this.multihop = multihop;
+            this.signature = signature(network, runtime); this.owner = runtime.owner;
+        }
+    }
     private static FileProof proofInputs(Activity activity,AndroidNodeStore store)throws Exception{
         RuntimeState runtime=runtimeState(activity); if(!runtime.connected)throw new IllegalStateException("Router VPN runtime is not in a proven connected state.");
         boolean multihop="multihop".equals(runtime.logical);String id=multihop?runtime.activeExitId:runtime.activeNodeId;
         if(id==null||id.isEmpty())throw new IllegalStateException(multihop?"Active multihop exit identity is unavailable.":"Active Router VPN session node identity is unavailable; reconnect before proving exit.");
         java.io.File bundle=store.file(id); if(!bundle.isFile())throw new IllegalStateException(multihop?"Active multihop exit bundle is missing.":"Active session node bundle is missing.");
         Network network=ownedVpnNetwork(activity); if(network==null)throw new IllegalStateException("No active Android VPN network owned by Router VPN.");
-        return new FileProof(bundle,network,signature(network,runtime),multihop);
+        return new FileProof(bundle,network,runtime,multihop);
     }
 
     private static Network ownedVpnNetwork(Context context) {
@@ -192,7 +264,7 @@ final class AndroidHomeSummary {
     }
 
     private static RuntimeState runtimeState(Context context){
-        RuntimeState out=new RuntimeState();AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
+        RuntimeState out=new RuntimeState();AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);out.owner=home;
         out.sessionId=home.sessionId;out.activeNodeId=home.activeNodeId;out.activeEntryId=home.activeEntryId;out.activeExitId=home.activeExitId;out.activeExternalId=home.activeExternalId;out.activeExternalName=home.activeExternalName;out.activeExternalProtocol=home.activeExternalProtocol;out.expectedExternalIp=home.expectedExternalIp;out.pathGeneration=home.pathGeneration;
         if(AndroidNodeCandidatePreparation.busy()){out.connected=false;out.phase="Testing";out.logical=home.logicalMode;out.runtime=home.runtimeMode;out.base=home.actualBase;out.fallback=home.fallback;out.warning=home.warning;return out;}
         if(home.connected&&"passed".equals(home.pathProof)){out.connected=true;out.phase=home.phase;out.logical=home.logicalMode;out.runtime=home.runtimeMode;out.base=home.actualBase;out.fallback=home.fallback;out.warning=home.warning;return out;}

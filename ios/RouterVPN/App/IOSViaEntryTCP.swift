@@ -5,6 +5,7 @@ import Foundation
 /// changes without counting this measurement's own temporary VPN interface.
 final class IOSViaEntryNetwork: @unchecked Sendable {
     static let shared = IOSViaEntryNetwork()
+    static let didChange = Notification.Name("RouterVPNPhysicalPathDidChange")
     private let lock = NSLock()
     private let monitor = NWPathMonitor(prohibitedInterfaceTypes: [.other, .loopback])
     private var generation: UInt64 = 0
@@ -20,6 +21,7 @@ final class IOSViaEntryNetwork: @unchecked Sendable {
             self.lock.lock(); self.generation &+= 1
             self.available = path.status == .satisfied && physical != nil; self.physical = physical
             self.lock.unlock()
+            NotificationCenter.default.post(name: Self.didChange, object: nil)
         }
         monitor.start(queue: DispatchQueue(label: "routervpn.via-entry.network"))
     }

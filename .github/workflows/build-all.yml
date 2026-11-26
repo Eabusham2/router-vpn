@@ -420,6 +420,18 @@ jobs:
               (out / (name + ".png")).write_bytes(subprocess.check_output(["adb", "exec-out", "screencap", "-p"]))
               return list(ET.fromstring(data).iter("node"))
 
+          def home_choice(nodes, caption):
+              for row in nodes:
+                  if any(child.get("text") == caption for child in row):
+                      for child in row:
+                          if child.get("class") == "android.widget.Spinner":
+                              return child
+              return None
+
+          def selected_label(spinner):
+              if spinner is not None:
+                  return next((n.get("text") for n in spinner if n.get("text")), None)
+
           for name, rotation in [("portrait", 0), ("landscape", 1)]:
               shell("wm", "user-rotation", "lock", rotation)
               shell("am", "force-stop", package)
@@ -431,6 +443,7 @@ jobs:
               shell("input", "tap", (left + right) // 2, (top + bottom) // 2)
               required = {"Connect", "Kill switch", "Forward", "Multihop", "Open settings", "Profiles",
                           "Performance", "MTU", "Mode", "DNS", "Help"}
+              menus = {"Mode", "DNS"} if name == "portrait" else set()
               for page in range(20):
                   nodes = capture(f"{pages}-{page:02d}")
                   if any(node.get("text") == "Cancel startup" for node in nodes):
@@ -448,16 +461,47 @@ jobs:
                   root = bounds(nodes[0])
                   if (root[2] - root[0] > root[3] - root[1]) != (rotation == 1):
                       raise RuntimeError(f"{name}: Activity has the wrong orientation")
+                  if page == 0:
+                      primary = {"Kill switch", "Connect", "-- ms", "Forward"}
+                      for node in nodes:
+                          x, y, end_x, end_y = bounds(node)
+                          if left <= x < end_x <= right and top < y < end_y < bottom:
+                              primary.discard(node.get("text"))
+                      if primary:
+                          raise RuntimeError(f"{name}: expanded primary row is clipped: {sorted(primary)}")
                   for node in nodes:
                       x, y, end_x, end_y = bounds(node)
                       if left <= x < end_x <= right and top <= y < end_y <= bottom:
                           required.discard(node.get("text"))
-                  if not required:
+                  for caption in sorted(menus):
+                      spinner = home_choice(nodes, caption)
+                      original = selected_label(spinner)
+                      if not original or spinner.get("enabled") != "true":
+                          continue
+                      x, y, end_x, end_y = bounds(spinner)
+                      if not (left <= x < end_x <= right and top < y < end_y < bottom):
+                          continue
+                      shell("input", "tap", (x + end_x) // 2, (y + end_y) // 2)
+                      prefix = f"{pages}-{caption.lower()}"
+                      popup = capture(prefix + "-choices")
+                      choices = {item.get("text") for widget in popup if widget.get("package") == package
+                                 and widget.get("class") == "android.widget.ListView"
+                                 for item in widget.iter("node") if item.get("text")}
+                      if original not in choices or len(choices) < 2:
+                          raise RuntimeError(f"{caption}: the installed spinner did not expose its choices")
+                      shell("input", "keyevent", "KEYCODE_BACK")
+                      nodes = capture(prefix + "-closed")
+                      if not any(n.get("package") == package for n in nodes) or selected_label(home_choice(nodes, caption)) != original:
+                          raise RuntimeError(f"{caption}: Back did not restore the original selection")
+                      menus.remove(caption)
+                  if not required and not menus:
                       break
                   x = (left + right) // 2
                   shell("input", "swipe", x, bottom - 16, x, top + (bottom - top) // 3, 600)
               if required:
                   raise RuntimeError(f"{name}: controls were not reached by scrolling: {sorted(required)}")
+              if menus:
+                  raise RuntimeError(f"{name}: dropdowns were not reached: {sorted(menus)}")
           PYUI
           adb logcat -b crash -d > "$RUNNER_TEMP/android-ui/crash.log"
           ! grep -F 'FATAL EXCEPTION' "$RUNNER_TEMP/android-ui/crash.log"

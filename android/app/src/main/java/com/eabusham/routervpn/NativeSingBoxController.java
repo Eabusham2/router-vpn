@@ -539,9 +539,14 @@ final class NativeSingBoxController {
     }
     void stop() {
         AndroidMAXProfilePreparation.cancelActive();
-        AndroidServiceStopConfirmation.request(STATE_KEY, command -> context.startService(
-                new Intent(context, LayeredVpnService.class).setAction(LayeredVpnService.ACTION_STOP)
-                        .putExtra(AndroidServiceStopConfirmation.EXTRA_COMMAND, command)));
+        AndroidServiceStopConfirmation.request(STATE_KEY, this::dispatchStop);
+    }
+    void stopReserved(long command) {
+        AndroidServiceStopConfirmation.dispatchReserved(STATE_KEY, command, this::dispatchStop);
+    }
+    private void dispatchStop(long command) {
+        context.startService(new Intent(context, LayeredVpnService.class).setAction(LayeredVpnService.ACTION_STOP)
+                .putExtra(AndroidServiceStopConfirmation.EXTRA_COMMAND, command));
     }
     String getState() {
         if (AndroidMAXProfilePreparation.busy()) return "PREPARING";

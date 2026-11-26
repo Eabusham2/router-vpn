@@ -171,8 +171,32 @@ def require_headers(raw):
         declarations.append("FOUNDATION_EXPORT "+matches[0][0]+" "+name+"("+matches[0][1]+");")
     return {"owners":[{"owner":PLAN_DECL.replace("SOCKS",kind),"methods":list(PLAN_METHODS)} for kind in ("SOCKS","CONNECT")],"owner":PLAN_DECL,"methods":list(PLAN_METHODS),"latency_methods":list(LATENCY_METHODS),"factories":declarations,"header_sha256":hashlib.sha256(raw).hexdigest()}
 
+def framework_members(location):
+    # gomobile v0.1.12 creates a version A framework with these public aliases.
+    base = Path()
+    versions = location / "Versions"
+    if versions.exists() or versions.is_symlink():
+        aliases = {"Versions/Current": "A"}
+        for name in ("Libbox", "Headers", "Modules"):
+            aliases[name] = "Versions/Current/" + name
+        for name, target in aliases.items():
+            alias = location / name
+            if not alias.is_symlink() or os.readlink(alias) != target:
+                raise ValueError("Unexpected gomobile framework alias: " + name)
+        base = Path("Versions/A")
+
+    members = []
+    for relative in ("Libbox", "Headers/Libbox.objc.h", "Modules/module.modulemap"):
+        path = contained(location, base / relative)
+        if path.resolve(strict=True) != path:
+            raise ValueError("Original gomobile framework member is redirected: " + relative)
+        members.append(regular(path))
+    return members
+
 def framework_slices(root):
     root=Path(root)
+    if root.is_symlink():raise ValueError("Original XCFramework is redirected")
+    root=root.resolve(strict=True)
     meta=plistlib.loads(regular(root/"Info.plist").read_bytes())
     libraries=meta.get("AvailableLibraries")
     if not isinstance(libraries,list) or not libraries:raise ValueError("Native SDK has no slices")
@@ -187,15 +211,12 @@ def framework_slices(root):
         if not isinstance(arches,list) or not arches or len(arches)!=len(set(arches)) or not set(arches)<={"arm64","x86_64"} or (not variant and set(arches)!={"arm64"}):
             raise ValueError("Native SDK platform architecture changed")
         identities.add(identity);platforms.add(variant)
-        location=contained(root,Path(identity)/(item.get("LibraryPath") or "Libbox.framework"))
-        if not location.is_dir() or location.name!="Libbox.framework" or location.resolve(strict=True)!=location:
+        if Path(identity).parts!=(identity,) or item.get("LibraryPath","Libbox.framework")!="Libbox.framework":
             raise ValueError("Original gomobile framework layout changed")
-        # Pinned gomobile writes Versions/A and public aliases through
-        # Versions/Current. Resolve only inside this exact slice framework;
-        # another slice or an external artifact cannot supply these members.
-        binary=regular(contained(location,"Libbox",resolve=True))
-        header=regular(contained(location,"Headers/Libbox.objc.h",resolve=True))
-        module=regular(contained(location,"Modules/module.modulemap",resolve=True))
+        location=contained(root,Path(identity)/"Libbox.framework")
+        if not location.is_dir() or location.resolve(strict=True)!=location:
+            raise ValueError("Original gomobile framework slice is redirected")
+        binary,header,module=framework_members(location)
         out.append({"identity":identity,"variant":variant,"architectures":sorted(arches),"binary":binary,"header":header,"module":module})
     if platforms!={"","simulator"}:raise ValueError("Original iOS and simulator slices are required")
     return out
@@ -446,8 +467,14 @@ def self_test():
     def framework(root):
         libs=[]
         for identity,variant,arches in (("ios-arm64","",["arm64"]),("ios-arm64_x86_64-simulator","simulator",["arm64","x86_64"])):
-            location=root/identity/"Libbox.framework";(location/"Headers").mkdir(parents=True);(location/"Modules").mkdir()
-            (location/"Libbox").write_bytes(b"original-binary");(location/"Headers/Libbox.objc.h").write_bytes(header());(location/"Modules/module.modulemap").write_text("framework module Libbox {}")
+            location=root/identity/"Libbox.framework"
+            payload=location/"Versions/A" if variant else location
+            (payload/"Headers").mkdir(parents=True);(payload/"Modules").mkdir()
+            (payload/"Libbox").write_bytes(b"original-binary");(payload/"Headers/Libbox.objc.h").write_bytes(header());(payload/"Modules/module.modulemap").write_text("framework module Libbox {}")
+            if variant:
+                (location/"Versions/Current").symlink_to("A")
+                for name in ("Libbox","Headers","Modules"):
+                    (location/name).symlink_to("Versions/Current/"+name)
             entry=dict(LibraryIdentifier=identity,LibraryPath="Libbox.framework",SupportedPlatform="ios",SupportedArchitectures=arches)
             if variant:entry["SupportedPlatformVariant"]=variant
             libs.append(entry)
@@ -525,6 +552,23 @@ def self_test():
                 with self.subTest(member=member),tempfile.TemporaryDirectory() as temporary:
                     root=Path(temporary);framework(root);(root/"ios-arm64/Libbox.framework"/member).unlink()
                     with self.assertRaises(ValueError):framework_slices(root)
+            with tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary);libs=framework(root)
+                device=root/libs[0]["LibraryIdentifier"]/"Libbox.framework"
+                simulator=root/libs[1]["LibraryIdentifier"]/"Libbox.framework"
+                for member, path in (("Libbox", "Libbox"), ("Headers", "Headers/Libbox.objc.h"), ("Modules", "Modules/module.modulemap")):
+                    with self.subTest(member=member):
+                        alias=simulator/member
+                        original=os.readlink(alias);alias.unlink();alias.symlink_to(device/member)
+                        with self.assertRaises(ValueError):framework_slices(root)
+                        alias.unlink();alias.symlink_to(original)
+                        canonical=simulator/"Versions/A"/path
+                        canonical.unlink();canonical.symlink_to(device/path)
+                        with self.assertRaises(ValueError):framework_slices(root)
+                        canonical.unlink();canonical.write_bytes((device/path).read_bytes())
+                current=simulator/"Versions/Current"
+                current.unlink();current.symlink_to(device)
+                with self.assertRaises(ValueError):framework_slices(root)
         def test_snapshot_detects_changed_and_redirected_original_artifact(self):
             with tempfile.TemporaryDirectory() as temporary:
                 root=Path(temporary)/"root";root.mkdir();p=root/"one";p.write_bytes(b"one")

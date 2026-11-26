@@ -28,11 +28,22 @@ final class AndroidServiceStopConfirmation {
     static synchronized void request(String channel, LongConsumer dispatch) {
         requireChannel(channel);
         if (dispatch == null) throw new IllegalArgumentException("Stop dispatch is missing.");
+        dispatch.accept(reserve(channel));
+    }
+
+    static synchronized long reserve(String channel) {
+        requireChannel(channel);
         long command = Math.incrementExact(sequence);
         sequence = command;
         pending.put(channel, command);
-        // Keep the pending command on dispatch failure: we cannot infer whether
-        // Android accepted it before the caller received an exception.
+        return command;
+    }
+
+    /** A captured Home owner reserves before releasing its lock. A newer stop
+     * can supersede the reservation before this service command is dispatched. */
+    static synchronized void dispatchReserved(String channel, long command, LongConsumer dispatch) {
+        if (command <= 0L || !Long.valueOf(command).equals(pending.get(channel)))
+            throw new IllegalStateException("The captured service stop was superseded.");
         dispatch.accept(command);
     }
 

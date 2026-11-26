@@ -6,6 +6,7 @@ same process as WG/AWG, native Xray, Naive, authenticated Start Layers and the
 TCP/UDP composite. No installed system engine is overwritten or downloaded at
 connection time. A package may consume only a bundle with this exact receipt.
 """
+from collections import Counter, deque
 from pathlib import Path
 import argparse
 import base64
@@ -659,11 +660,11 @@ def prepare_native_sources(source, xray, env):
     POLICY.AMNEZIA.verify(source)
 
 
-def relay_awg_smoke_datagrams(transports, host, finished):
+def relay_awg_smoke_datagrams(transports, host, finished, counts, server_ready, startup_datagrams):
     # Both AWG userspace endpoints dial out. Each role gets its own relay
     # socket so a native BindUpdate can change its ephemeral source port.
     peers = [None, None]
-    pending = [[], []]
+    server_packets = 0
     while not finished.is_set():
         readable, _, _ = select.select(transports, [], [], 0.2)
         for transport in readable:
@@ -674,16 +675,28 @@ def relay_awg_smoke_datagrams(transports, host, finished):
             if source[0] != host:
                 continue
             role = transports.index(transport)
+            counts[role]['received'] += 1
+            # Sizes of this fixture's padded initiation and response. Count
+            # matching datagrams without assuming their contents or peer state.
+            if len(payload) in (164, 124):
+                counts[role]['received_'+str(len(payload))+'B'] += 1
+            if peers[role] is not None and peers[role] != source:
+                counts[role]['port_changes'] += 1
+            if role == 0 and not server_ready.is_set():
+                if peers[role] != source:
+                    server_packets = 0
+                server_packets += 1
+                if server_packets == startup_datagrams:
+                    server_ready.set()
             peers[role] = source
-            for packet in pending[role]:
-                transport.sendto(packet, source)
-            pending[role].clear()
             other = 1 - role
             if peers[other] is not None:
                 transports[other].sendto(payload, peers[other])
-            elif len(pending[other]) < 129:
-                # The native sender permits a 129-datagram handshake group.
-                pending[other].append(payload)
+                counts[other]['sent_to_role'] += 1
+            else:
+                # Ordinary UDP cannot replay an old initiation to a peer
+                # that has not yet opened its physical socket.
+                counts[role]['before_peer_ready'] += 1
 
 
 def smoke_protocols(binary, env):
@@ -706,14 +719,17 @@ def smoke_protocols(binary, env):
              '-config', certificate_config], env=env, timeout=20)
         key.chmod(0o600)
         token = os.urandom(32)
+        target_events = deque(maxlen=32)
 
         class Target(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
+                target_events.append((time.monotonic(), 'get'))
                 body = token + self.path.encode('ascii')
                 self.send_response(200)
                 self.send_header('Content-Length', str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                target_events.append((time.monotonic(), 'response_written'))
 
             def log_message(self, *_args):
                 pass
@@ -723,6 +739,7 @@ def smoke_protocols(binary, env):
 
             def get_request(self):
                 stream, address = super().get_request()
+                target_events.append((time.monotonic(), 'accept'))
                 stream.settimeout(3)
                 return stream, address
 
@@ -734,6 +751,7 @@ def smoke_protocols(binary, env):
                 except OSError:
                     return
                 with secured:
+                    target_events.append((time.monotonic(), 'tls_complete'))
                     super().finish_request(secured, address)
 
         # Userspace VPN stacks reject inner loopback packets. Find this host's
@@ -760,23 +778,32 @@ def smoke_protocols(binary, env):
             return value
 
         def exchange(proxy_port=None):
+            nonlocal client_stage
+            client_stage = 'tcp_connect'
             with socket.create_connection(('127.0.0.1' if proxy_port is not None else target_host, proxy_port or target_port), timeout=3) as stream:
                 if proxy_port is not None:
+                    client_stage = 'socks_greeting'
                     stream.sendall(b'\x05\x01\x00')
                     if exact(stream, 2) != b'\x05\x00':
                         raise ConnectionError('Native SOCKS negotiation failed')
+                    client_stage = 'socks_connect'
                     stream.sendall(b'\x05\x01\x00\x01'+socket.inet_aton(target_host)+struct.pack('!H', target_port))
                     reply = exact(stream, 4)
                     if reply[:3] != b'\x05\x00\x00' or reply[3] not in (1, 3, 4):
                         raise ConnectionError('Selected native protocol did not connect')
                     exact(stream, (4 if reply[3] == 1 else 16 if reply[3] == 4 else exact(stream, 1)[0])+2)
+                client_stage = 'tls_handshake'
                 with client_tls.wrap_socket(stream, server_hostname='localhost') as secured:
                     path = '/'+os.urandom(16).hex()
+                    client_stage = 'request_write'
                     secured.sendall(('GET '+path+' HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n').encode('ascii'))
+                    client_stage = 'response_headers'
                     response = http.client.HTTPResponse(secured)
                     response.begin()
+                    client_stage = 'response_validation'
                     if response.status != 200 or response.read(4096) != token+path.encode('ascii'):
                         raise ValueError('Native protocol returned a different target or payload')
+                    client_stage = 'verified'
 
         def port(kind=socket.SOCK_STREAM):
             with socket.socket(socket.AF_INET, kind) as reservation:
@@ -876,6 +903,9 @@ def smoke_protocols(binary, env):
                                                       'mode': protocol, 'config_json': json.dumps(xray)}]
                 processes, logs, relay_sockets = [], [], []
                 relay_done, relay_worker = threading.Event(), None
+                started = time.monotonic()
+                phase, client_stage = 'startup', 'not_started'
+                failures, relay_counts = Counter(), [Counter(), Counter()]
                 try:
                     if protocol == 'amneziawg':
                         for configuration in configurations:
@@ -883,17 +913,25 @@ def smoke_protocols(binary, env):
                             relay_sockets.append(relay)
                             relay.bind((target_host, 0))
                             configuration['endpoints'][0]['peers'][0]['port'] = relay.getsockname()[1]
+                        server_ready = threading.Event()
+                        # Jc junk datagrams precede the server's first initiation.
+                        startup_datagrams = int(configurations[0]['endpoints'][0]['amnezia']['jc']) + 1
                         relay_worker = threading.Thread(target=relay_awg_smoke_datagrams,
-                                                        args=(relay_sockets, target_host, relay_done), daemon=True)
+                                                        args=(relay_sockets, target_host, relay_done, relay_counts,
+                                                              server_ready, startup_datagrams), daemon=True)
                         relay_worker.start()
                     for role, configuration in zip(('server', 'client'), configurations):
+                        if role == 'client' and relay_worker is not None:
+                            if not server_ready.wait(max(0, started + 15 - time.monotonic())):
+                                raise RuntimeError('Native AmneziaWG server did not establish its UDP peer before startup expired')
                         config_path, log_path = work/(protocol+'-'+role+'.json'), work/(protocol+'-'+role+'.log')
                         configuration['log'] = {'level': 'error', 'timestamp': False}
                         config_path.write_text(json.dumps(configuration), encoding='utf-8')
                         config_path.chmod(0o600)
                         log = log_path.open('wb'); logs.append(log)
                         processes.append(subprocess.Popen([str(binary), 'run', '-c', str(config_path)], env=env, stdout=log, stderr=log))
-                    deadline = time.monotonic()+15
+                    phase = 'positive'
+                    deadline = (started if relay_worker is not None else time.monotonic()) + 15
                     while True:
                         if any(process.poll() is not None for process in processes):
                             raise RuntimeError('Native '+protocol+' process exited before its traffic check')
@@ -901,9 +939,11 @@ def smoke_protocols(binary, env):
                             exchange(proxy_port)
                             break
                         except (OSError, http.client.HTTPException):
+                            failures[client_stage] += 1
                             if time.monotonic() >= deadline:
                                 raise
                             time.sleep(0.05)
+                    phase = 'stopped_upstream'
                     stop(processes[0])
                     try:
                         exchange(proxy_port)
@@ -913,9 +953,18 @@ def smoke_protocols(binary, env):
                         raise RuntimeError('Native '+protocol+' used a path after its selected upstream stopped')
                     if processes[1].poll() is not None:
                         raise RuntimeError('Native client exited during upstream failure')
+                    phase = 'direct_control'
                     exchange()
                     print('Native protocol traffic: '+protocol+' HTTPS payload passed; stopped upstream refused; direct control alive', flush=True)
                 except Exception:
+                    diagnostic = {'protocol': protocol, 'phase': phase, 'client_stage': client_stage,
+                                  'elapsed_ms': round((time.monotonic()-started)*1000),
+                                  'positive_failures_by_stage': failures,
+                                  'recent_target_events_ms': [(round((when-started)*1000), event)
+                                                              for when, event in target_events.copy() if when >= started]}
+                    if relay_worker is not None:
+                        diagnostic['relay'] = {role: counts.copy() for role, counts in zip(('server', 'client'), relay_counts)}
+                    print('Native protocol traffic diagnostic: '+json.dumps(diagnostic, sort_keys=True), file=sys.stderr)
                     for role in ('server', 'client'):
                         path = work/(protocol+'-'+role+'.log')
                         if path.exists():

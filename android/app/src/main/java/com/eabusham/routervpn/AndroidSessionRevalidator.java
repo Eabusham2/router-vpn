@@ -12,128 +12,88 @@ final class AndroidSessionRevalidator {
     private final AndroidRuntimeRegistry engines;
     private final AndroidUnderlyingNetworkMonitor monitor;
     private final ExecutorService executor=Executors.newSingleThreadExecutor();
+    // Captured beside Home state so another network change cannot race proof adoption.
+    private long networkRevision;
 
     AndroidSessionRevalidator(Context context,AndroidRuntimeRegistry engines){
         this.context=context.getApplicationContext();this.engines=engines;this.monitor=new AndroidUnderlyingNetworkMonitor(this.context);
     }
 
-    void start(){monitor.start(()->executor.execute(this::revalidate));}
+    void start(){
+        monitor.start(() -> {
+            synchronized (AndroidHomeStateStore.class) {
+                networkRevision++;
+                AndroidHomeStateStore.Snapshot observed = AndroidHomeStateStore.snapshot(context);
+                if (observed.connected && "passed".equals(observed.pathProof))
+                    executor.execute(() -> revalidate(observed));
+            }
+        });
+    }
 
-    private void revalidate(){
-        AndroidHomeStateStore.Snapshot before=AndroidHomeStateStore.snapshot(context);
-        if(!before.connected)return;
-        if("node-chain".equals(before.logicalMode)){
-            // The native owner must retire every dependency on a new network.
-            // A final-node probe cannot restore an ordered graph's proof.
-            engines.nodeChain.networkChanged(before);return;
+    private void revalidate(AndroidHomeStateStore.Snapshot observed){
+        if("node-chain".equals(observed.logicalMode)){
+            // An ordered graph owns every dependency on the original physical network.
+            engines.nodeChain.networkChanged(observed);return;
         }
-        if("wg".equals(before.actualBase)||"awg".equals(before.actualBase)){
-            if(!"multihop".equals(before.logicalMode)&&!"external".equals(before.logicalMode))return; // native WG/AWG controllers own recovery/reproof.
+        if("wg".equals(observed.actualBase)||"awg".equals(observed.actualBase)){
+            if(!"multihop".equals(observed.logicalMode)&&!"external".equals(observed.logicalMode))return;
         }
-        if(before.sessionId==null||before.sessionId.isEmpty())return;
-
         AndroidHomeStateStore.Snapshot token=AndroidHomeStateStore.beginPathRevalidation(
-                context,
+                context, observed,
                 "Underlying network changed; re-proving the frozen Router VPN session before keeping Connected.");
         if(token==null)return;
-        try{
-            try{Thread.sleep(650L);}catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new IllegalStateException("Android network-change revalidation was interrupted; refusing to keep stale Connected proof.",interrupted);}
-            AndroidHomeStateStore.Snapshot current=requireSameRevalidation(token);
-            if("external".equals(current.logicalMode)){
-                String observed;
-                if(AndroidTorProfile.isTor(current.activeExternalProtocol)){
-                    // A different network invalidates the captured native Tor
-                    // owner. Never substitute a fixed-IP check or a new graph.
-                    observed=engines.standardExit.capturedTorExit(current);
-                }else{
-                    if(current.expectedExternalIp==null||current.expectedExternalIp.isEmpty())throw new IllegalStateException("External session has no expected public-exit proof target.");
-                    if(!AndroidExternalPolicy.supports(current.activeExternalProtocol))throw new IllegalStateException("External session has no captured native policy owner.");
-                    observed=engines.standardExit.capturedExternalExit(current);
-                }
-                current=requireSameRevalidation(token);
-                if(!AndroidHomeStateStore.completePathRevalidation(context,token))throw new IllegalStateException("External path proof completed for a stale Android session/generation.");
-                AndroidHomeStateStore.saveActualExit(context,token.sessionId,observed);
-                return;
+        try {
+            Thread.sleep(650L);
+            final AndroidHomeStateStore.Snapshot current;
+            final long revision;
+            synchronized (AndroidHomeStateStore.class) {
+                if (!AndroidHomeStateStore.pendingRevalidation(context, token)) return;
+                current = AndroidHomeStateStore.snapshot(context);
+                revision = networkRevision;
             }
-            String nodeId="multihop".equals(current.logicalMode)?current.activeExitId:current.activeNodeId;
-            if(nodeId==null||nodeId.isEmpty())throw new IllegalStateException("Active session node identity is missing after network change.");
-            File bundle=new AndroidNodeStore(context).file(nodeId);
-            if(!AndroidPathProbe.prove(bundle,10000))throw new IllegalStateException("Frozen node private path proof failed after network change.");
-            requireSameRevalidation(token);
-            if(!AndroidHomeStateStore.completePathRevalidation(context,token))throw new IllegalStateException("Router VPN path proof completed for a stale Android session/generation.");
-        }catch(Throwable error){
-            failClosedOwnedRuntime(before,token,error);
+            String observedExit = prove(current);
+            synchronized (AndroidHomeStateStore.class) {
+                if (revision != networkRevision)
+                    throw new IllegalStateException("The physical network changed during its selected-path proof.");
+                if (!AndroidHomeStateStore.completePathRevalidation(context, token, observedExit))
+                    throw new IllegalStateException("The selected path or observed exit changed before proof adoption.");
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            failClosedOwnedRuntime(token, interrupted);
+        } catch (Throwable error) {
+            failClosedOwnedRuntime(token, error);
         }
     }
 
-    private void failClosedOwnedRuntime(AndroidHomeStateStore.Snapshot before,AndroidHomeStateStore.Snapshot token,Throwable error){
-        // A stale revalidation worker has lost ownership. It must never stop a
-        // newer tunnel/session merely because the old proof finished late.
-        if(!isSameRevalidation(token))return;
-        final String message="Network-change revalidation failed closed: "+safe(error);
-        try{
-            if("multihop".equals(before.logicalMode)){
-                engines.multihop.failClosedForRevalidation();
-                if(isSameRevalidation(token))AndroidHomeStateStore.failed(context,message);
-                return;
-            }
-            if("external".equals(before.logicalMode)){
-                engines.standardExit.failClosedForRevalidation();
-                if(isSameRevalidation(token))AndroidHomeStateStore.failed(context,message);
-                return;
-            }
-            // AUTO/SMART/CUSTOM/logical paths are owned by the orchestrator.
-            // Its disconnect path now retains frozen ownership if child cleanup
-            // fails. The callback may only adopt this failure for the exact
-            // pending token or the exact empty/off state produced by a proved
-            // successful teardown; a newer non-empty session is never touched.
-            engines.orchestrator.disconnect(new AndroidModeOrchestrator.Callback(){
-                @Override public void progress(String ignored){}
-                @Override public void finished(boolean ok,String ignoredMode,String cleanupMessage){
-                    AndroidHomeStateStore.Snapshot now=AndroidHomeStateStore.snapshot(context);
-                    if(!sameRevalidation(token,now)&&!sameCleanedRevalidation(token,now))return;
-                    String suffix=ok?"":"; owner cleanup reported: "+safeMessage(cleanupMessage);
-                    if(ok)AndroidHomeStateStore.failed(context,message+suffix);
-                    else AndroidHomeStateStore.failedPreservingOwnership(context,message+suffix);
-                }
-            });
-        }catch(Throwable cleanupError){
-            // Teardown did not complete. Keep the exact frozen owner/session
-            // identity so Emergency Disconnect or a later retry still knows
-            // which runtime graph must be stopped.
-            if(isSameRevalidation(token))AndroidHomeStateStore.failedPreservingOwnership(context,message+"; owner cleanup failed: "+safe(cleanupError));
+    private String prove(AndroidHomeStateStore.Snapshot current) throws Exception {
+        if ("external".equals(current.logicalMode)) {
+            if (AndroidTorProfile.isTor(current.activeExternalProtocol))
+                return engines.standardExit.capturedTorExit(current);
+            if (current.expectedExternalIp.isEmpty() || !AndroidExternalPolicy.supports(current.activeExternalProtocol))
+                throw new IllegalStateException("External session has no captured native proof target.");
+            return engines.standardExit.capturedExternalExit(current);
         }
+        String nodeId = "multihop".equals(current.logicalMode) ? current.activeExitId : current.activeNodeId;
+        if (nodeId.isEmpty()) throw new IllegalStateException("Active session node identity is missing after network change.");
+        File bundle = new AndroidNodeStore(context).file(nodeId);
+        if (!AndroidPathProbe.prove(bundle, 10000))
+            throw new IllegalStateException("Frozen node private path proof failed after network change.");
+        return null;
     }
 
-    private AndroidHomeStateStore.Snapshot requireSameRevalidation(AndroidHomeStateStore.Snapshot token){
-        AndroidHomeStateStore.Snapshot now=AndroidHomeStateStore.snapshot(context);
-        if(!sameRevalidation(token,now))throw new IllegalStateException("Router VPN session/path generation changed during network-change revalidation.");
-        return now;
-    }
-
-    private boolean isSameRevalidation(AndroidHomeStateStore.Snapshot token){return sameRevalidation(token,AndroidHomeStateStore.snapshot(context));}
-
-    private static boolean sameRevalidation(AndroidHomeStateStore.Snapshot token,AndroidHomeStateStore.Snapshot now){
-        return token!=null&&now!=null
-                &&token.sessionId!=null&&token.sessionId.equals(now.sessionId)
-                &&now.pathGeneration==token.pathGeneration+1L
-                &&"connecting".equals(now.phase)
-                &&!now.connected
-                &&"pending".equals(now.pathProof);
-    }
-
-    private static boolean sameCleanedRevalidation(AndroidHomeStateStore.Snapshot token,AndroidHomeStateStore.Snapshot now){
-        if(token==null||now==null||token.sessionId==null||token.sessionId.isEmpty())return false;
-        String session=now.sessionId==null?"":now.sessionId;
-        String phase=now.phase==null?"":now.phase.trim().toLowerCase(java.util.Locale.ROOT);
-        String proof=now.pathProof==null?"":now.pathProof.trim().toLowerCase(java.util.Locale.ROOT);
-        return session.isEmpty()
-                &&now.pathGeneration==token.pathGeneration+1L
-                &&("off".equals(phase)||"disconnected".equals(phase))
-                &&!now.connected
-                &&("not-run".equals(proof)||proof.isEmpty());
+    private void failClosedOwnedRuntime(AndroidHomeStateStore.Snapshot token, Throwable error) {
+        String message = "Network-change revalidation failed closed: " + safe(error);
+        try {
+            boolean released;
+            if ("multihop".equals(token.logicalMode)) released = engines.multihop.failClosedForRevalidation(token);
+            else if ("external".equals(token.logicalMode)) released = engines.standardExit.failClosedForRevalidation(token);
+            else released = engines.orchestrator.failClosedForRevalidation(token);
+            if (released) AndroidHomeStateStore.failRevalidation(context, token, message, true);
+        } catch (Throwable cleanupError) {
+            AndroidHomeStateStore.failRevalidation(context, token, message + "; owner cleanup failed: " + safe(cleanupError), false);
+        }
     }
 
     private static String safe(Throwable e){String value=e==null?"":e.getMessage();return value==null||value.trim().isEmpty()?"session proof failed":value.replace('\n',' ').replace('\r',' ').trim();}
-    private static String safeMessage(String value){return value==null||value.trim().isEmpty()?"runtime cleanup failed":value.replace('\n',' ').replace('\r',' ').trim();}
 }

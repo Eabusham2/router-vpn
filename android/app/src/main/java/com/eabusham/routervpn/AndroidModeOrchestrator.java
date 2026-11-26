@@ -42,6 +42,7 @@ final class AndroidModeOrchestrator {
     private final NativeXrayController xray;
     private final ExecutorService executor=Executors.newSingleThreadExecutor();
     private volatile boolean running, stopping;
+    private boolean revalidationStopping;
     private volatile Thread selectionWorker;
     private volatile String activeSource;
     private volatile Candidate current;
@@ -92,6 +93,36 @@ final class AndroidModeOrchestrator {
         });
     }
 
+    /** Network revalidation only owns the original selected embedded transport. */
+    boolean failClosedForRevalidation(AndroidHomeStateStore.Snapshot token) throws Exception {
+        final boolean layered = "libbox".equals(token.actualBase);
+        final long command;
+        synchronized (this) {
+            if (stopping || !selectionSessionId.equals(token.sessionId) || current == null
+                    || !token.runtimeMode.equals(current.id) || !layered && !"xray".equals(token.actualBase)
+                    || current.kind != (layered ? Kind.LIBBOX : Kind.XRAY))
+                throw new IllegalStateException("The original selected transport is unavailable for cleanup.");
+            String channel = layered ? NativeSingBoxController.STATE_KEY : NativeXrayController.STATE_KEY;
+            command = AndroidHomeStateStore.reserveRevalidationStop(context, token, channel);
+            if (command == 0L) return false;
+            stopping = true;
+            revalidationStopping = true;
+        }
+        try {
+            if (layered) sing.stopReserved(command); else xray.stopReserved(command);
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
+            while (!terminal(layered ? sing.getState() : xray.getState())) {
+                if (System.nanoTime() >= deadline)
+                    throw new IllegalStateException("The original embedded transport did not prove terminal.");
+                Thread.sleep(150L);
+            }
+            synchronized (this) { current = null; activeSource = null; }
+        } finally {
+            synchronized (this) { revalidationStopping = false; stopping = false; }
+        }
+        return true;
+    }
+
     /** Capture only a currently proved runtime; its exact selected source is
      * retained through temporary tests, without changing saved selection. */
     synchronized String captureSource(File bundle, String session, String raw) throws Exception {
@@ -137,6 +168,7 @@ final class AndroidModeOrchestrator {
 
     /** Serialized after the captured selector's actual worker completion. */
     synchronized void disconnectCaptured(String session,Callback cb){
+        if(revalidationStopping){cb.finished(false,"","The captured Router VPN transition is still draining.");return;}
         AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
         if(session==null||session.isEmpty()||!session.equals(home.sessionId)){
             cb.finished(false,"","The captured Router VPN owner was replaced; its replacement is unchanged.");return;

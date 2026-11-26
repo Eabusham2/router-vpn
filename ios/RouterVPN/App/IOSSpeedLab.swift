@@ -81,11 +81,11 @@ struct IOSSpeedLabMeasurement: Hashable, Sendable {
 // One shared HTTP policy for idle, download-load and upload-load requests.
 // Refuse redirects before URLSession can contact a different endpoint or replay
 // an upload. Response validation alone is too late to enforce that boundary.
-private final class IOSSpeedLabHTTP: NSObject, URLSessionTaskDelegate {
+final class IOSSpeedLabHTTP: NSObject, URLSessionTaskDelegate {
     private static let redirectGuard = IOSSpeedLabHTTP()
     private static let providerHost = "speed.cloudflare.com"
 
-    static func makeSession(timeout: TimeInterval) -> URLSession {
+    static func makeSession(timeout: TimeInterval, userAgent: String = "RouterVPN-SpeedLab/1") -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = timeout
         config.timeoutIntervalForResource = timeout
@@ -94,7 +94,7 @@ private final class IOSSpeedLabHTTP: NSObject, URLSessionTaskDelegate {
         config.urlCredentialStorage = nil
         config.httpShouldSetCookies = false
         config.httpCookieAcceptPolicy = .never
-        config.httpAdditionalHeaders = ["User-Agent": "RouterVPN-SpeedLab/1", "Cache-Control": "no-store", "Accept-Encoding": "identity"]
+        config.httpAdditionalHeaders = ["User-Agent": userAgent, "Cache-Control": "no-store", "Accept-Encoding": "identity"]
         return URLSession(configuration: config, delegate: redirectGuard, delegateQueue: nil)
     }
 

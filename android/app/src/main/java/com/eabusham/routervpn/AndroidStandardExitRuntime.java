@@ -435,11 +435,26 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
     }
 
     /** Tear down this owner's runtime without changing Home state; revalidation owns the failed-state adoption. */
-    void failClosedForRevalidation(){
-        synchronized(this){disconnectRequested=true;revalidationTeardown=true;teardownInProgress=true;if(workerThread!=null)workerThread.interrupt();}
-        boolean stopped=stopEmbeddedAndProve();
+    void failClosedForRevalidation() { failClosedForRevalidation(null); }
+
+    boolean failClosedForRevalidation(AndroidHomeStateStore.Snapshot token){
+        final long command;
+        synchronized(this){
+            if (token == null) command = 0L; // Emergency Disconnect owns every transport.
+            else {
+                String nativeHome = AndroidTorProfile.isTor(token.activeExternalProtocol) ? torHomeSession : externalHomeSession;
+                if (!nativeHome.equals(token.sessionId))
+                    throw new IllegalStateException("The original external owner changed.");
+                command=AndroidHomeStateStore.reserveRevalidationStop(context,token,NativeSingBoxController.STATE_KEY);
+                if(command==0L)return false;
+            }
+            disconnectRequested=true;revalidationTeardown=true;teardownInProgress=true;
+            if(workerThread!=null)workerThread.interrupt();
+        }
+        boolean stopped=stopEmbeddedAndProve(command);
         synchronized(this){teardownInProgress=!stopped;}
         if(!stopped)throw new IllegalStateException("Android custom-exit revalidation teardown did not reach a terminal state.");
+        return true;
     }
 
     @Override public void close(){
@@ -458,13 +473,14 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         executor.shutdown();
     }
 
-    private boolean stopEmbeddedAndProve(){
+    private boolean stopEmbeddedAndProve(){ return stopEmbeddedAndProve(0L); }
+    private boolean stopEmbeddedAndProve(long reserved){
         boolean interrupted=Thread.interrupted();
         final AndroidTorCompareRuntime comparison;
         synchronized(this){comparison=torComparison;}
         if(comparison!=null)comparison.cancel();
         try{
-            singBox.stop();
+            if(reserved==0L)singBox.stop();else singBox.stopReserved(reserved);
             long deadline=System.currentTimeMillis()+STOP_TIMEOUT_MS;
             while(System.currentTimeMillis()<deadline){
                 if(terminal(singBox.getState()))return drainTorComparison(comparison);

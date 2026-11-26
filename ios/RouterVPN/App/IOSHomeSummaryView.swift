@@ -1,11 +1,14 @@
-import Network
+import Foundation
+@preconcurrency import NetworkExtension
 import SwiftUI
 
 struct IOSHomeSummaryView: View {
     @EnvironmentObject var model: RouterVPNModel
-    @State private var actualExitIP = ""
-    @State private var actualExitStatus = "not-connected"
-    @State private var provingExit = false
+    @State private var actualExitIP: String?
+    @State private var exitOwner: IOSExternalComparisonSelection?
+    @State private var exitNetwork: UInt64?
+    @State private var exitNodeRevision: UInt64 = 0
+    @State private var exitRequest: UUID?
     @State private var exitError = ""
     @State private var showingSettings = false
 
@@ -53,9 +56,6 @@ struct IOSHomeSummaryView: View {
 
     private var warnings: [String] {
         var values: [String] = []
-        if model.connected && actualExitStatus != "proved" {
-            values.append("Actual public exit is not proven for this live PacketTunnel session")
-        }
         if let p = profile, (p.dnsMode ?? "").isEmpty == false {
             values.append("DNS RTT shown here is a home-node query measurement; active PacketTunnel DNS still needs runtime/device proof")
         }
@@ -75,8 +75,8 @@ struct IOSHomeSummaryView: View {
 
     private var actualExitText: String {
         if model.iosCandidateTesting { return "Testing temporary path" }
-        if actualExitStatus == "proved" { return actualExitIP }
-        return model.connected ? "Unproven — tap Prove actual exit" : "Not connected"
+        if let actualExitIP, let exitOwner, exitIsCurrent(exitOwner) { return actualExitIP }
+        return model.connected ? "Not checked for this connection" : "Not connected"
     }
 
     private var rawProfileText: String {
@@ -113,15 +113,20 @@ struct IOSHomeSummaryView: View {
         .sheet(isPresented: $showingSettings) {
             IOSProfileSettingsView().environmentObject(model)
         }
-        .onChange(of: model.connected) { connected in
-            if !connected {
-                actualExitIP = ""
-                actualExitStatus = "not-connected"
-                exitError = ""
-            }
+        .task(id: exitRequest) { [request = exitRequest] in
+            if let request { await checkPublicIP(request) }
         }
-        .onChange(of: model.activeRawProfile) { _ in clearExitProofForRuntimeChange() }
-        .onChange(of: model.activeEngine) { _ in clearExitProofForRuntimeChange() }
+        .onChange(of: model.activeSessionIdentity) { identity in
+            if let owner = exitOwner, let identity, identity != owner.identity { clearExitObservation() }
+        }
+        .onChange(of: model.iosConnectGeneration) { _ in clearExitObservation() }
+        .onChange(of: IOSNodeBundleStore.shared.revision) { _ in clearExitObservation() }
+        .onChange(of: model.iosCandidateTesting) { _ in clearExitObservation() }
+        .onReceive(NotificationCenter.default.publisher(for: .NEVPNStatusDidChange)) { _ in clearExitObservation() }
+        .onReceive(NotificationCenter.default.publisher(for: IOSViaEntryNetwork.didChange).receive(on: DispatchQueue.main)) { _ in
+            if let exitNetwork, exitNetwork != IOSViaEntryNetwork.shared.current { clearExitObservation() }
+        }
+        .onDisappear { clearExitObservation() }
     }
 
     private var statusHeader: some View {
@@ -141,7 +146,7 @@ struct IOSHomeSummaryView: View {
     @ViewBuilder private var summaryLines: some View {
         Text("Node: \(profile?.name ?? model.routerName) • \(locationText)")
         Text("Public endpoint: \(profile?.endpoint ?? model.endpoint)")
-        Text("Actual public VPN exit: \(actualExitText)")
+        Text("Public IP reported by ipify: \(actualExitText)")
         Text("Phase/path proof: \(model.iosCandidateTesting ? "Testing" : model.connected ? "connected • selected-node proof passed" : "off / not proven")")
         Text("Logical/runtime/base: \(model.selectedLogicalMode) • \(rawProfileText) • \(actualBase)")
         Text("Fallback: \(fallbackText)")
@@ -171,10 +176,10 @@ struct IOSHomeSummaryView: View {
     }
 
     @ViewBuilder private var actionButtons: some View {
-        Button(provingExit ? "Proving…" : "Prove actual exit") {
-            Task { await proveActualExit() }
+        Button(exitRequest == nil ? "Check public IP" : "Checking…") {
+            startExitCheck()
         }
-        .disabled(model.iosCandidateTesting || !model.connected || provingExit)
+        .disabled(!model.connected || model.activeSessionIdentity == nil || model.tunnelTransitioning || model.iosCandidateTesting || exitRequest != nil)
 
         Button("Advanced Settings") { showingSettings = true }
             .disabled(model.connected)
@@ -184,77 +189,96 @@ struct IOSHomeSummaryView: View {
     }
 
     private func disconnectEmergency() {
-        actualExitIP = ""
-        actualExitStatus = "not-connected"
-        exitError = ""
+        clearExitObservation()
         model.disconnect()
     }
 
-    @MainActor private func proveActualExit() async {
-        guard model.connected, !model.iosCandidateTesting, let bundle = model.bundle else { return }
-        let selectedNode = bundle.selectedRouterID
-        let engine = model.activeEngine
-        let rawProfile = model.activeRawProfile
-        provingExit = true
-        exitError = ""
-        actualExitStatus = "checking"
-        defer { provingExit = false }
+    private func startExitCheck() {
+        clearExitObservation()
+        // Capture the editor and native runtime independently. A linked route
+        // can have a compiled provider bundle distinct from its editable input.
+        guard let owner = try? IOSExternalComparisonSelection(model), owner.connected,
+              owner.identity != nil, !model.iosCandidateTesting, !model.tunnelTransitioning,
+              model.bundle != nil else {
+            exitError = "Wait for the selected connection to finish starting, then check its public IP."
+            return
+        }
+        exitOwner = owner
+        exitNodeRevision = IOSNodeBundleStore.shared.revision
+        exitNetwork = IOSViaEntryNetwork.shared.current
+        exitRequest = UUID()
+    }
+
+    private func selectionIsCurrent(_ owner: IOSExternalComparisonSelection) -> Bool {
+        !model.tunnelTransitioning && !model.iosUserDisconnectInProgress && !model.iosCandidateTesting &&
+            IOSNodeBundleStore.shared.revision == exitNodeRevision && (try? IOSExternalComparisonSelection(model)) == owner
+    }
+
+    private func exitIsCurrent(_ owner: IOSExternalComparisonSelection) -> Bool {
+        exitNetwork != nil && IOSViaEntryNetwork.shared.current == exitNetwork && selectionIsCurrent(owner)
+    }
+
+    @MainActor private func checkPublicIP(_ request: UUID) async {
+        guard !Task.isCancelled, exitRequest == request, let owner = exitOwner else { return }
+        defer { if exitRequest == request { exitRequest = nil } }
         do {
-            let value = try await fetchPublicIP()
-            guard model.connected, !model.iosCandidateTesting,
-                  model.bundle?.selectedRouterID == selectedNode,
-                  model.activeEngine == engine,
-                  model.activeRawProfile == rawProfile else {
-                throw NSError(
-                    domain: "RouterVPN.Home",
-                    code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: "VPN node/runtime changed while proving the public exit; result discarded."]
-                )
+            if exitNetwork == nil {
+                let snapshot = try await IOSViaEntryNetwork.shared.snapshot()
+                try Task.checkCancellation()
+                guard exitRequest == request, selectionIsCurrent(owner) else { return }
+                exitNetwork = snapshot
             }
+            func requireCurrent() throws {
+                try Task.checkCancellation()
+                guard exitRequest == request, exitIsCurrent(owner) else { throw CancellationError() }
+            }
+            try requireCurrent()
+            let value = try await fetchPublicIP(requireCurrent: requireCurrent)
+            try requireCurrent()
+            await model.refreshTunnelStatus()
+            try requireCurrent()
             actualExitIP = value
-            actualExitStatus = "proved"
         } catch {
-            actualExitIP = ""
-            actualExitStatus = model.connected ? "unproven" : "not-connected"
-            exitError = "Actual exit proof failed: \(error.localizedDescription)"
+            guard exitRequest == request, !Task.isCancelled, !(error is CancellationError), selectionIsCurrent(owner) else { return }
+            if let exitNetwork, exitNetwork != IOSViaEntryNetwork.shared.current { return }
+            exitError = "Public IP check failed: \(error.localizedDescription)"
         }
     }
 
-    private func fetchPublicIP() async throws -> String {
-        for raw in ["https://api64.ipify.org", "https://api.ipify.org"] {
-            guard let url = URL(string: raw) else { continue }
-            do {
-                var request = URLRequest(url: url)
-                request.timeoutInterval = 6
-                request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard let http = response as? HTTPURLResponse,
-                      (200..<300).contains(http.statusCode),
-                      data.count <= 128 else {
-                    continue
-                }
-                let value = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-                if IPv4Address(value) != nil || IPv6Address(value) != nil { return value }
-            } catch {
-                continue
+    @MainActor private func fetchPublicIP(requireCurrent: () throws -> Void) async throws -> String {
+        let session = IOSSpeedLabHTTP.makeSession(timeout: 6, userAgent: "RouterVPN-Home/1")
+        defer { session.invalidateAndCancel() }
+        return try await withTaskCancellationHandler {
+            for raw in ["https://api64.ipify.org/", "https://api.ipify.org/"] {
+                try requireCurrent()
+                guard let url = URL(string: raw) else { continue }
+                if let value = try? await Self.readPublicIP(session, url: url) { return value }
             }
+            throw URLError(.badServerResponse)
+        } onCancel: {
+            session.invalidateAndCancel()
         }
-        throw NSError(
-            domain: "RouterVPN.Home",
-            code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "Could not determine the public VPN exit through the current PacketTunnel."]
-        )
     }
 
-    private func clearExitProofForRuntimeChange() {
-        if actualExitStatus == "proved" {
-            actualExitIP = ""
-            actualExitStatus = model.connected ? "unproven" : "not-connected"
+    nonisolated private static func readPublicIP(_ session: URLSession, url: URL) async throws -> String? {
+        let (bytes, response) = try await session.bytes(from: url)
+        defer { bytes.task.cancel() }
+        guard let http = response as? HTTPURLResponse, http.url == url,
+              http.statusCode == 200, http.expectedContentLength <= 128 else { return nil }
+        var body = Data()
+        for try await byte in bytes {
+            guard body.count < 128 else { return nil }
+            body.append(byte)
         }
+        let value = String(decoding: body, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return IOSViaEntryTCP.publicHost(value) ? value : nil
+    }
+
+    private func clearExitObservation() {
+        exitRequest = nil
+        exitOwner = nil
+        exitNetwork = nil
+        actualExitIP = nil
+        exitError = ""
     }
 }
-
-// Apple Home contract: node/location/public endpoint/current-session actual exit,
-// phase/logical/runtime/base/fallback/DNS RTT/node latency/LAN/kill/MTU/warnings,
-// adaptive actions, editable supported settings, and Emergency Disconnect.
-// Cached profile.publicIP is never used as live proof.

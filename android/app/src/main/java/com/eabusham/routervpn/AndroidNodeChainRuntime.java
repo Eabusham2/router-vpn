@@ -488,7 +488,8 @@ final class AndroidNodeChainRuntime implements AutoCloseable {
         final long selectedOperation;
         synchronized (this) {
             captured = owner;
-            if (captured == null || !captured.home.sessionId.equals(home.sessionId)) return;
+            if (captured == null || !captured.home.sessionId.equals(home.sessionId)
+                    || !AndroidHomeStateStore.ownsProvedPath(context, home)) return;
             selectedOperation=operation;preparation=temporary;
             stopping = true; connected = false;
             if(preparation==null)captured.cancel();

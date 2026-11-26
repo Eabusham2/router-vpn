@@ -295,22 +295,57 @@ final class AndroidHomeStateStore {
         return before;
     }
 
+    static synchronized Snapshot beginPathRevalidation(Context context, Snapshot original, String reason) {
+        if (!ownsProvedPath(context, original)) return null;
+        return beginPathRevalidation(context, reason);
+    }
+
+    static synchronized boolean ownsProvedPath(Context context, Snapshot original) {
+        return ownsProvedExit(context, original, snapshot(context));
+    }
+
+    static synchronized boolean pendingRevalidation(Context context, Snapshot token) {
+        Snapshot now = snapshot(context);
+        return ownsRevalidation(context, token, now) && "connecting".equals(now.phase) && "pending".equals(now.pathProof);
+    }
+
+    private static boolean ownsRevalidation(Context context, Snapshot token, Snapshot now) {
+        return sameExitOwner(token, now) && now.pathGeneration == token.pathGeneration + 1L
+                && !now.connected && !emergencyDisconnectPending(context);
+    }
+
+    static synchronized long reserveRevalidationStop(Context context, Snapshot token, String channel) {
+        if (!pendingRevalidation(context, token)) return 0L;
+        long command = AndroidServiceStopConfirmation.reserve(channel);
+        prefs(context).edit().putString("phase", "disconnecting").putString("path_proof", "failed")
+                .putString("warning", "Network-change proof failed. Stopping the original VPN transport.").apply();
+        return command;
+    }
+
+    static synchronized void failRevalidation(Context context, Snapshot token, String message, boolean released) {
+        Snapshot now = snapshot(context);
+        if (!ownsRevalidation(context, token, now)
+                || !("disconnecting".equals(now.phase) && "failed".equals(now.pathProof)
+                || !released && "connecting".equals(now.phase) && "pending".equals(now.pathProof))) return;
+        if (released) failed(context, message);
+        else failedPreservingOwnership(context, message);
+    }
+
     /** Re-adopts proof only if the same session and exact next path generation still own the state. */
     static synchronized boolean completePathRevalidation(Context context, Snapshot before) {
-        if (before == null || before.sessionId == null || before.sessionId.isEmpty()) return false;
+        return completePathRevalidation(context, before, null);
+    }
+
+    static synchronized boolean completePathRevalidation(Context context, Snapshot before, String observedExit) {
         SharedPreferences p = prefs(context);
-        String currentSession = p.getString("session_id", "");
-        long currentGeneration = p.getLong("path_generation", -1L);
-        String currentPhase = p.getString("phase", "");
-        if (!before.sessionId.equals(currentSession)
-                || currentGeneration != before.pathGeneration + 1L
-                || !"connecting".equals(currentPhase) || emergencyDisconnectPending(context)) return false;
-        p.edit()
-                .putString("phase", "connected")
-                .putString("warning", "")
-                .putString("path_proof", "passed")
-                .putBoolean("connected", true)
-                .apply();
+        if (!pendingRevalidation(context, before)) return false;
+        SharedPreferences.Editor edit = p.edit().putString("phase", "connected").putString("warning", "")
+                .putString("path_proof", "passed").putBoolean("connected", true);
+        if (observedExit != null) {
+            if (!"external".equals(before.logicalMode) || clean(observedExit).isEmpty()) return false;
+            edit.putString("actual_exit_session", before.sessionId).putString("actual_exit_ip", clean(observedExit));
+        }
+        edit.apply();
         return true;
     }
 
@@ -351,8 +386,38 @@ final class AndroidHomeStateStore {
         SharedPreferences p=prefs(context);SharedPreferences.Editor e=p.edit().putLong("path_generation",p.getLong("path_generation",0L)+1L).putString("session_id","").putString("phase","off").putString("logical_mode","").putString("runtime_mode","").putString("actual_base","").putString("fallback","").putString("warning","").putString("path_proof","not-run").putBoolean("connected",false);clearAllIdentity(e).apply();
     }
 
-    static synchronized void saveActualExit(Context context, String sessionId, String ip) { prefs(context).edit().putString("actual_exit_session", clean(sessionId)).putString("actual_exit_ip", clean(ip)).apply(); }
-    static synchronized String actualExitForCurrentSession(Context context) { SharedPreferences p=prefs(context);String session=p.getString("session_id","");String proofSession=p.getString("actual_exit_session","");if(session==null||session.isEmpty()||!session.equals(proofSession))return"";return p.getString("actual_exit_ip",""); }
+    private static boolean sameExitOwner(Snapshot before, Snapshot now) {
+        return before != null && !before.sessionId.isEmpty() && before.sessionId.equals(now.sessionId)
+                && before.logicalMode.equals(now.logicalMode) && before.runtimeMode.equals(now.runtimeMode)
+                && before.actualBase.equals(now.actualBase) && before.fallback.equals(now.fallback) && before.activeNodeId.equals(now.activeNodeId)
+                && before.activeEntryId.equals(now.activeEntryId) && before.activeEntryMode.equals(now.activeEntryMode)
+                && before.activeExitId.equals(now.activeExitId) && before.activeChain.equals(now.activeChain)
+                && before.activeExternalId.equals(now.activeExternalId) && before.activeExternalProtocol.equals(now.activeExternalProtocol)
+                && before.expectedExternalIp.equals(now.expectedExternalIp);
+    }
+
+    private static boolean ownsProvedExit(Context context, Snapshot captured, Snapshot now) {
+        return sameExitOwner(captured, now) && captured.pathGeneration == now.pathGeneration
+                && captured.connected && now.connected && "connected".equals(captured.phase) && "connected".equals(now.phase)
+                && "passed".equals(captured.pathProof) && "passed".equals(now.pathProof) && !emergencyDisconnectPending(context);
+    }
+
+    static synchronized boolean saveActualExit(Context context, Snapshot captured, String ip) {
+        SharedPreferences p = prefs(context);
+        if (clean(ip).isEmpty() || !ownsProvedExit(context, captured, new Snapshot(p))) return false;
+        p.edit().putString("actual_exit_session", captured.sessionId).putString("actual_exit_ip", clean(ip)).apply();
+        return true;
+    }
+
+    static synchronized String actualExitForCurrentSession(Context context) {
+        return actualExitForCurrentSession(context, snapshot(context));
+    }
+
+    static synchronized String actualExitForCurrentSession(Context context, Snapshot captured) {
+        SharedPreferences p = prefs(context);
+        if (!ownsProvedExit(context, captured, new Snapshot(p)) || !captured.sessionId.equals(p.getString("actual_exit_session", ""))) return "";
+        return p.getString("actual_exit_ip", "");
+    }
 
     static String nodeIdFromBundleFile(File file) { if(file==null)return"";String name=file.getName();return name!=null&&name.matches("[0-9a-f]{32}\\.json")?name.substring(0,32):""; }
 
