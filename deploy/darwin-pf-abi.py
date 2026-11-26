@@ -346,8 +346,12 @@ def native_smoke(receipt_path):
         raise RuntimeError('Native PF fixture requires the pinned Go toolchain')
     subprocess.run(['git','diff','--exit-code','HEAD','--','internal/mobiletor','go.mod','go.sum','deploy/darwin-pf-abi.py'],cwd=root,check=True)
     source_sha = subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
-    files = [*source.rglob('*.go'),*source.rglob('*.h'),root/'go.mod',root/'go.sum',Path(__file__).resolve()]
+    files = [*source.rglob('*.go'),*source.rglob('*.h'),root/'go.mod',Path(__file__).resolve()]
     hashes = {p.relative_to(root).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(files)}
+    # This module may have only standard-library dependencies and no go.sum.
+    # Bind that absence into the identity; hash the file if a future source adds it.
+    sums = root/'go.sum'
+    hashes['go.sum'] = hashlib.sha256(sums.read_bytes()).hexdigest() if sums.exists() or sums.is_symlink() else None
     source_digest = hashlib.sha256(json.dumps(hashes,sort_keys=True).encode()).hexdigest()
     suffix = secrets.token_hex(4)
     runtime = Path('/opt/routervpn-pf-smoke-'+suffix)
