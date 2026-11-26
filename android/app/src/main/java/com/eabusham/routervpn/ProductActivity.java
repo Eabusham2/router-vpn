@@ -51,13 +51,13 @@ public final class ProductActivity extends Activity {
 
     private AndroidNodeStore nodeStore; private AndroidStandardExitStore exitStore; private AndroidUnifiedNodeCatalog catalog; private AndroidUnifiedConnectionController connection; private AndroidTelemetry telemetry; private AndroidForwardingMaster forwardingMaster; private AndroidViaEntryLatencyProbe viaEntryProbe;
     private RouterVpnNodeMapView mapView; private LinearLayout sheet; private ScrollView sheetScroll;
-    private TextView nodeButton,statusView,modeHint,dnsHint,multihopHint,liveLatency,autoRequirementsHint;
+    private TextView sheetHandle,nodeButton,statusView,modeHint,dnsHint,multihopHint,liveLatency,autoRequirementsHint;
     private Button connectButton,fastestButton,performanceButton,forwardButton,hopsButton;
     private static final String CREATE_CUSTOM_ACTION="action:create-custom";
     private static final String[] DNS_MODES={"home","fastest","custom","dot","doh","doh3","rescue"};
     private int displayedDnsIndex=-1;
     private CheckBox killSwitch,multihopToggle; private Spinner modeSpinner,dnsSpinner; private List<ModeChoice> modeChoices=new ArrayList<>();
-    private float sheetTouchY; private boolean sheetExpanded,telemetryBusy,forwardingBusy; private long lastTelemetryAt; private double currentPathMs;
+    private float sheetTouchY; private boolean sheetExpanded,telemetryBusy,forwardingBusy; private long lastTelemetryAt;
     private String pendingProbeEntryId=""; private ArrayList<String> pendingProbeCandidateIds=new ArrayList<>();
     private long viaEntryGeneration;
     private AlertDialog viaEntryDialog;
@@ -114,28 +114,52 @@ public final class ProductActivity extends Activity {
 
     private View buildUi(){
         LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(dp(10),dp(10),dp(10),dp(8));root.setBackgroundColor(Color.rgb(8,16,30));
+        if(android.os.Build.VERSION.SDK_INT>=35) {
+            // Current targets draw edge to edge. Keep both the map and controls
+            // clear of navigation bars and landscape display cutouts.
+            root.setOnApplyWindowInsetsListener((view,insets)->{
+                android.graphics.Insets safe=insets.getInsets(android.view.WindowInsets.Type.systemBars() | android.view.WindowInsets.Type.displayCutout());
+                view.setPadding(dp(10)+safe.left,dp(10)+safe.top,dp(10)+safe.right,dp(8)+safe.bottom);
+                return insets;
+            });
+        }
         nodeButton=text("Add / select node",14,true);nodeButton.setTextColor(Color.WHITE);nodeButton.setPadding(dp(12),dp(9),dp(12),dp(9));nodeButton.setBackground(round(Color.rgb(24,38,62),16));nodeButton.setOnClickListener(v->showNodes());root.addView(nodeButton,margins(0,0,0,dp(8)));
         mapView=new RouterVpnNodeMapView(this);mapView.setOnMarkerClickListener(marker->{String raw=marker.id==null?"":marker.id;int cut=raw.indexOf(':');if(cut<=0)return;selectCatalog(raw.substring(0,cut),raw.substring(cut+1));});LinearLayout.LayoutParams mapParams=new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,0,0.56f);root.addView(mapView,mapParams);
 
         sheet=new LinearLayout(this);sheet.setOrientation(LinearLayout.VERTICAL);sheet.setPadding(dp(14),dp(5),dp(14),dp(12));sheet.setBackground(round(Color.rgb(17,27,45),24));
         sheetScroll=new ScrollView(this);sheetScroll.setFillViewport(false);sheetScroll.setClipToPadding(false);sheetScroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);sheetScroll.addView(sheet,new ScrollView.LayoutParams(ScrollView.LayoutParams.MATCH_PARENT,ScrollView.LayoutParams.WRAP_CONTENT));sheetScroll.setOnTouchListener((v,event)->{if(event.getAction()==MotionEvent.ACTION_DOWN){sheetTouchY=event.getY();return false;}if(event.getAction()==MotionEvent.ACTION_UP){float delta=event.getY()-sheetTouchY;if(Math.abs(delta)>dp(40)){sheetExpanded=delta<0;applySheetWeight();}return false;}return false;});LinearLayout.LayoutParams sheetParams=new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,0,0.44f);sheetParams.setMargins(0,dp(8),0,0);root.addView(sheetScroll,sheetParams);
-        TextView handle=text("━━━━━━━━",16,true);handle.setTextColor(Color.rgb(112,126,148));handle.setGravity(Gravity.CENTER);sheet.addView(handle);
+        sheetHandle=text("━━━━━━━━",16,true);sheetHandle.setTextColor(Color.rgb(112,126,148));sheetHandle.setGravity(Gravity.CENTER);
+        sheetHandle.setContentDescription("Expand connection controls");sheetHandle.setMinimumHeight(dp(48));sheetHandle.setFocusable(true);
+        sheetHandle.setOnClickListener(v->{sheetExpanded=!sheetExpanded;applySheetWeight();});sheet.addView(sheetHandle);
         LinearLayout statusRow=row();statusView=text("Disconnected",13,false);statusView.setTextColor(Color.rgb(173,190,214));statusView.setTextIsSelectable(true);statusView.setOnClickListener(v->showConnectionDetails());statusRow.addView(statusView,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));Button connectionDetails=smallButton("Details / proof");connectionDetails.setOnClickListener(v->showConnectionDetails());statusRow.addView(connectionDetails);sheet.addView(statusRow,margins(0,0,0,dp(7)));
 
-        LinearLayout connectRow=row();
+        // Keep the primary actions in reading order at every width. Each column
+        // takes a share of the actual row and wraps its own label at large font sizes.
+        LinearLayout connectRow=new LinearLayout(this);
+        connectRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout primaryAction=new LinearLayout(this);
+        primaryAction.setOrientation(LinearLayout.VERTICAL);
+        primaryAction.setGravity(Gravity.CENTER);
         killSwitch=new CheckBox(this);killSwitch.setText("Kill");killSwitch.setContentDescription("Kill switch");
         killSwitch.setTextColor(Color.WHITE);killSwitch.setButtonTintList(ColorStateList.valueOf(Color.rgb(123,104,255)));
         killSwitch.setOnClickListener(v -> setQuickKillSwitch(killSwitch.isChecked()));
-        connectRow.addView(killSwitch);
+        killSwitch.setSingleLine(false);
+        connectRow.addView(killSwitch,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1.3f));
         connectButton=primaryButton("Connect");connectButton.setMinimumHeight(dp(50));connectButton.setOnClickListener(v->connectOrDisconnect());
-        connectRow.addView(connectButton,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));
+        connectButton.setSingleLine(false);
+        primaryAction.addView(connectButton,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
+        connectRow.addView(primaryAction,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1.65f));
         liveLatency=text("-- ms",11,true);liveLatency.setTextColor(Color.rgb(173,190,214));liveLatency.setGravity(Gravity.CENTER);
         liveLatency.setPadding(dp(6),0,dp(6),0);liveLatency.setContentDescription("Current path response; tap for measurement details");
-        liveLatency.setOnClickListener(v->showLiveTelemetry());connectRow.addView(liveLatency);
-        forwardButton=smallButton("Forward");forwardButton.setContentDescription("Server port-forwarding master");
-        forwardButton.setOnClickListener(v->showForwarding());connectRow.addView(forwardButton);
-        fastestButton=smallButton("⚡ Fastest ▾");fastestButton.setVisibility(View.GONE);fastestButton.setContentDescription("Compare Router nodes by direct TCP, or compare external paths using 50 routed HTTPS responses.");
-        fastestButton.setOnClickListener(v->showFastConnectMenu());connectRow.addView(fastestButton);sheet.addView(connectRow);
+        liveLatency.setOnClickListener(v->showLiveTelemetry());primaryAction.addView(liveLatency);
+        fastestButton=smallButton("Fastest ▾");fastestButton.setVisibility(View.GONE);fastestButton.setSingleLine(false);
+        fastestButton.setContentDescription("Compare Router nodes by direct TCP, or compare external paths using 50 routed HTTPS responses.");
+        fastestButton.setOnClickListener(v->showFastConnectMenu());
+        connectRow.addView(fastestButton,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));
+        forwardButton=smallButton("Forward");forwardButton.setContentDescription("Server port-forwarding master");forwardButton.setSingleLine(false);
+        forwardButton.setOnClickListener(v->showForwarding());
+        connectRow.addView(forwardButton,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1.05f));
+        sheet.addView(connectRow);
 
 
         LinearLayout multiRow=row();multihopToggle=new CheckBox(this);multihopToggle.setText("Multihop");multihopToggle.setTextColor(Color.WHITE);multihopToggle.setButtonTintList(ColorStateList.valueOf(Color.rgb(55,145,255)));
@@ -153,7 +177,7 @@ public final class ProductActivity extends Activity {
         LinearLayout footer=row();Button nodes=smallButton("Nodes");nodes.setContentDescription("Add / manage nodes");nodes.setOnClickListener(v->showNodes());footer.addView(nodes);Button profiles=smallButton("Router nodes");profiles.setContentDescription("Manage linked Router VPN node records");profiles.setOnClickListener(v->showProfileManager());footer.addView(profiles);Button pair=smallButton("Add Router");pair.setOnClickListener(v->showAddRouter());footer.addView(pair);Button custom=smallButton("Add custom");custom.setOnClickListener(v->openStandardExits());footer.addView(custom);Button help=smallButton("Help");help.setOnClickListener(v->showHelp());footer.addView(help);sheet.addView(footer,margins(0,dp(8),0,0));return root;
     }
 
-    private void applySheetWeight(){LinearLayout.LayoutParams p=(LinearLayout.LayoutParams)sheetScroll.getLayoutParams();p.weight=sheetExpanded?0.70f:0.44f;sheetScroll.setLayoutParams(p);LinearLayout.LayoutParams m=(LinearLayout.LayoutParams)mapView.getLayoutParams();m.weight=sheetExpanded?0.30f:0.56f;mapView.setLayoutParams(m);}
+    private void applySheetWeight(){sheetHandle.setContentDescription(sheetExpanded?"Collapse connection controls":"Expand connection controls");LinearLayout.LayoutParams p=(LinearLayout.LayoutParams)sheetScroll.getLayoutParams();p.weight=sheetExpanded?0.70f:0.44f;sheetScroll.setLayoutParams(p);LinearLayout.LayoutParams m=(LinearLayout.LayoutParams)mapView.getLayoutParams();m.weight=sheetExpanded?0.30f:0.56f;mapView.setLayoutParams(m);}
     private void refreshAll(){requestOrderedPresentation();refreshNodes();refreshFastestAvailability();refreshModeChoices();refreshConnectionState();refreshSettingsState();refreshDnsSelection();refreshMultihopSummary();refreshTelemetry(false);refreshLiveRoute();refreshForwardingState();}
     private boolean orderedPathEnabled(){AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(this);return home.connected&&"node-chain".equals(home.logicalMode)||AndroidOrderedPathPresentation.configured(this);}
     private AndroidOrderedPathPresentation currentOrderedPresentation(){return orderedPresentation!=null&&orderedPresentation.current(this)?orderedPresentation:null;}
@@ -217,7 +241,7 @@ public final class ProductActivity extends Activity {
     }
 
     private AndroidUnifiedConnectionController.Callback callback(){return new AndroidUnifiedConnectionController.Callback(){public boolean recordsNodeUsage(){return true;}public void progress(String message){runOnUiThread(()->{if(isFinishing()||isDestroyed())return;statusView.setText(message);connectButton.setText("Disconnect");});}public void finished(boolean ok,String message){runOnUiThread(()->{if(isFinishing()||isDestroyed())return;statusView.setText(message);String usageWarning=AndroidNodeUsage.saveWarning(message);if(!ok)toast(message);else if(!usageWarning.isEmpty())toast(usageWarning);refreshAll();refreshConnectionLater();});}};}
-    private void refreshConnectionState(){boolean active=connection!=null&&connection.isActiveOrTransitioning(),busy=mutationBusy(),candidate=AndroidNodeCandidatePreparation.busy()||AndroidViaEntryLatencyProbe.hasActiveOperation()||AndroidExternalNodeComparison.hasActiveOperation(),startup=startupCapturePending||connection!=null&&connection.isStartupPending(),permission=orderedConnectCapturePending||connection!=null&&connection.isPermissionPending();connectButton.setText(startup?"Cancel startup":candidate?"Cancel test":permission?"Cancel connection":active?"Disconnect":"Connect");nodeButton.setEnabled(!busy);fastestButton.setEnabled((!busy||connection.isConnected())&&!candidate&&!permission&&!startup&&!AndroidMTUMeasurementGate.held());killSwitch.setEnabled(!busy);multihopToggle.setEnabled(!busy);modeSpinner.setEnabled(!busy&&!isExternalSelected()&&!(prefs().getBoolean(MULTI_ON,false)&&!prefs().getString("multihop_nodes","").isEmpty()));dnsSpinner.setEnabled(!busy&&!isExternalSelected());if(startup)statusView.setText("Waiting for Android permission for the captured startup path. Cancel startup keeps the app disconnected.");else if(AndroidNodeCandidatePreparation.busy())statusView.setText("Testing saved path. Cancel test waits for the temporary VPN and candidate connections to stop.");else if(permission)statusView.setText("Waiting for Android permission for the captured connection. Cancel connection keeps the app disconnected.");else if(!candidate)statusView.setText(AndroidHomeSummary.format(this,nodeStore)+multihopExecutionSummary());else if(AndroidExternalNodeComparison.hasActiveOperation())statusView.setText("Comparing captured external paths. Cancel test waits for native cleanup and original restoration.");else if(!viaEntryProbe.isBusy())statusView.setText("A captured candidate test is draining. Cancel test retries only its temporary entry cleanup.");if(!connection.isConnected()){currentPathMs=0;liveLatency.setText("-- ms");}}
+    private void refreshConnectionState(){boolean active=connection!=null&&connection.isActiveOrTransitioning(),busy=mutationBusy(),candidate=AndroidNodeCandidatePreparation.busy()||AndroidViaEntryLatencyProbe.hasActiveOperation()||AndroidExternalNodeComparison.hasActiveOperation(),startup=startupCapturePending||connection!=null&&connection.isStartupPending(),permission=orderedConnectCapturePending||connection!=null&&connection.isPermissionPending();connectButton.setText(startup?"Cancel startup":candidate?"Cancel test":permission?"Cancel connection":active?"Disconnect":"Connect");nodeButton.setEnabled(!busy);fastestButton.setEnabled((!busy||connection.isConnected())&&!candidate&&!permission&&!startup&&!AndroidMTUMeasurementGate.held());killSwitch.setEnabled(!busy);multihopToggle.setEnabled(!busy);modeSpinner.setEnabled(!busy&&!isExternalSelected()&&!(prefs().getBoolean(MULTI_ON,false)&&!prefs().getString("multihop_nodes","").isEmpty()));dnsSpinner.setEnabled(!busy&&!isExternalSelected());if(startup)statusView.setText("Waiting for Android permission for the captured startup path. Cancel startup keeps the app disconnected.");else if(AndroidNodeCandidatePreparation.busy())statusView.setText("Testing saved path. Cancel test waits for the temporary VPN and candidate connections to stop.");else if(permission)statusView.setText("Waiting for Android permission for the captured connection. Cancel connection keeps the app disconnected.");else if(!candidate)statusView.setText(AndroidHomeSummary.format(this,nodeStore)+multihopExecutionSummary());else if(AndroidExternalNodeComparison.hasActiveOperation())statusView.setText("Comparing captured external paths. Cancel test waits for native cleanup and original restoration.");else if(!viaEntryProbe.isBusy())statusView.setText("A captured candidate test is draining. Cancel test retries only its temporary entry cleanup.");if(!connection.isConnected()){liveLatency.setText("-- ms");}}
 
     private void showConnectionDetails(){String truth=AndroidHomeSummary.format(this,nodeStore);new AlertDialog.Builder(this).setTitle("Connection details & proof").setMessage(truth+"\n\nConnected is not treated as a proved public exit until the current app-owned VPN network, frozen session node/path and current-session exit proof all agree.").setPositiveButton("Prove actual exit",(d,w)->{statusView.setText("Proving actual public VPN exit for this session…");AndroidHomeSummary.proveActualExit(this,nodeStore,(message,error)->runOnUiThread(()->{statusView.setText(message);if(error!=null)toast(message);refreshAll();}));}).setNeutralButton("Emergency disconnect",(d,w)->{statusView.setText("Emergency disconnect requested…");AndroidHomeSummary.emergencyDisconnect(this,(message,error)->runOnUiThread(()->{statusView.setText(message);if(error!=null)toast(message);refreshAll();refreshConnectionLater();}));}).setNegativeButton("Close",null).show();}
 
@@ -235,7 +259,7 @@ public final class ProductActivity extends Activity {
 
     private void runRouterNodeComparison(boolean chooseNode){
         if(mutationBusy()||fastestProgressDialog!=null){toast("Disconnect/finish the current VPN operation before changing the selected fastest node.");return;}
-        fastestButton.setEnabled(false);fastestButton.setText("Testing 50 TCP samples…");
+        fastestButton.setEnabled(false);fastestButton.setText("Testing…");
         final AlertDialog progress=new AlertDialog.Builder(this).setTitle(chooseNode?"Find fastest Router node":"Compare Router nodes")
             .setMessage("Collecting 50 TCP responses per node on one captured physical network. The lowest 10% trimmed mean wins; incomplete nodes receive no score. Saved benchmark statistics are preserved.")
             .setCancelable(false).setNegativeButton("Cancel measurement",null).create();
@@ -245,7 +269,7 @@ public final class ProductActivity extends Activity {
         progress.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v->{telemetry.cancelFastest();progress.setMessage("Cancelling; waiting for the captured sockets to drain…");progress.getButton(AlertDialog.BUTTON_NEGATIVE).setEnabled(false);});
         telemetry.measureFastest((values,error)->runOnUiThread(()->{
             if(fastestProgressDialog!=progress||isFinishing()||isDestroyed())return;
-            fastestProgressDialog=null;progress.dismiss();fastestButton.setEnabled(true);fastestButton.setText("⚡ Fastest ▾");refreshNodes();
+            fastestProgressDialog=null;progress.dismiss();fastestButton.setEnabled(true);fastestButton.setText("Fastest ▾");refreshNodes();
             if(error!=null){toast("Fastest-node test failed: "+safe(error));return;}
             if(values==null||values.isEmpty()){toast("No Router node completed all 50 TCP responses.");return;}
             if(!chooseNode){
@@ -264,7 +288,7 @@ public final class ProductActivity extends Activity {
         }));
     }
 
-    private void clearCurrentTelemetry(){currentPathReceipt=null;currentExternalReceipt=null;currentPathMs=0;liveLatency.setText("-- ms");}
+    private void clearCurrentTelemetry(){currentPathReceipt=null;currentExternalReceipt=null;liveLatency.setText("-- ms");}
     private void refreshTelemetry(boolean force){
         AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(this);
         if(connection==null||!connection.isConnected()){if(externalTelemetry!=null)externalTelemetry.cancel();clearCurrentTelemetry();refreshMap();return;}
@@ -277,7 +301,7 @@ public final class ProductActivity extends Activity {
         telemetryBusy=true;long ticket=telemetryGeneration;
         telemetry.currentPath(2,(path,error)->runOnUiThread(()->{
             telemetryBusy=false;if(!resumed||ticket!=telemetryGeneration||isFinishing()||isDestroyed())return;
-            try{if(error!=null)throw new IllegalStateException(safe(error));if(path==null)throw new IllegalStateException("No current RTT result.");path.requireCurrent();currentPathReceipt=path;currentPathMs=path.medianMs;liveLatency.setText(String.format(Locale.US,"%.1f ms%s",path.medianMs,path.publicExitId.isEmpty()?"":" HTTPS"));}
+            try{if(error!=null)throw new IllegalStateException(safe(error));if(path==null)throw new IllegalStateException("No current RTT result.");path.requireCurrent();currentPathReceipt=path;liveLatency.setText(String.format(Locale.US,"%.1f ms%s",path.medianMs,path.publicExitId.isEmpty()?"":" HTTPS"));}
             catch(Exception stale){clearCurrentTelemetry();}
             refreshMultihopSummary();refreshLiveRoute();
         }));
@@ -290,7 +314,7 @@ public final class ProductActivity extends Activity {
         lastTelemetryAt=now;telemetryBusy=true;long ticket=telemetryGeneration;
         externalTelemetry.measure(home.activeExternalId,(result,error)->runOnUiThread(()->{
             telemetryBusy=false;if(!resumed||ticket!=telemetryGeneration||isFinishing()||isDestroyed())return;
-            try{if(error!=null)throw new IllegalStateException(safe(error));if(result==null)throw new IllegalStateException("No current HTTPS response.");result.requireCurrent();currentExternalReceipt=result;currentPathReceipt=null;currentPathMs=result.medianMs;liveLatency.setText(String.format(Locale.US,"%.1f ms HTTPS",result.medianMs));}
+            try{if(error!=null)throw new IllegalStateException(safe(error));if(result==null)throw new IllegalStateException("No current HTTPS response.");result.requireCurrent();currentExternalReceipt=result;currentPathReceipt=null;liveLatency.setText(String.format(Locale.US,"%.1f ms HTTPS",result.medianMs));}
             catch(Exception stale){clearCurrentTelemetry();}
             refreshMultihopSummary();refreshMap();refreshLiveRoute();
         }));
@@ -628,16 +652,28 @@ public final class ProductActivity extends Activity {
                 else if(item.id.equals(selectedId)&&item.kind.equals(selectedKind))role=RouterVpnNodeMapView.ROLE_SELECTED;
                 else if(!item.isRouterVpn())role=RouterVpnNodeMapView.ROLE_EXTERNAL;
                 else role=RouterVpnNodeMapView.ROLE_NORMAL;
-                double ms=position>=0?presentation.members.get(position).httpResponseMs:item.isRouterVpn()?(telemetry==null?0:telemetry.cachedMedian(item.id)):liveExternalMedian(item.id);
-                if(position<0&&ms<=0&&item.hasMeasuredLatency())ms=item.latencyMedianMs;
-                String name=(position>=0?(presentation.testing?(presentation.members.get(position).testing?"Testing • ":"Saved • "):"")+(position+1)+". ":"")+item.name+(!item.isRouterVpn()&&ms>0?" • HTTPS":"");
-                if(position>=0&&ms>0)name+=" • routed HTTP proof";
-                markers.add(new RouterVpnNodeMapView.Marker(item.kind+":"+item.id,name,item.latitude,item.longitude,role,ms,!item.isRouterVpn()));
+                boolean routedPair=live && presentation==null && (RouterVpnNodeMapView.ROLE_ENTRY.equals(role)||RouterVpnNodeMapView.ROLE_EXIT.equals(role));
+                double ms=0;
+                String metric;
+                if(position>=0) {
+                    ms=presentation.members.get(position).httpResponseMs;
+                    metric=item.isRouterVpn()?"HTTP proof at startup":"public-path proof at startup";
+                } else if(item.isRouterVpn()) {
+                    if(!routedPair) {
+                        ms=telemetry==null?0:telemetry.cachedMedian(item.id);
+                        if(ms<=0 && item.hasMeasuredLatency())ms=item.latencyMedianMs;
+                    }
+                    metric="direct TCP";
+                } else {
+                    ms=liveExternalMedian(item.id);
+                    metric="routed HTTPS";
+                }
+                String name=(position>=0?(presentation.testing?(presentation.members.get(position).testing?"Testing • ":"Saved • "):"")+(position+1)+". ":"")+item.name;
+                markers.add(new RouterVpnNodeMapView.Marker(item.kind+":"+item.id,name,item.latitude,item.longitude,role,ms,!item.isRouterVpn(),metric));
             }
             mapView.setMarkers(markers);mapView.setOrderedPath(mapOrder,live,frameOwner);
             double chosenMs=presentation!=null?0:chosen==null?0:!chosen.isRouterVpn()?liveExternalMedian(chosen.id):telemetry!=null?telemetry.cachedMedian(chosen.id):chosen.hasMeasuredLatency()?chosen.latencyMedianMs:0;
             nodeButton.setText(chosen==null?"Add / select node":(chosen.isRouterVpn()?"Router • ":"Custom • ")+chosen.name+(chosen.location.isEmpty()?"":" • "+chosen.location)+(chosenMs>0?String.format(Locale.US," • %.1f ms%s",chosenMs,chosen.isRouterVpn()?"":" HTTPS"):"")+"  ▾");
-            if(fastestButton!=null)fastestButton.setText(chosen==null?"⚡ Fastest ▾":"⚡ "+chosen.name+" ▾");
         } catch(Exception error) {
             nodeButton.setText("Node catalog unavailable");mapView.setMarkers(new ArrayList<>());mapView.setOrderedPath(new ArrayList<>(),false,null);
         }
@@ -1018,8 +1054,13 @@ public final class ProductActivity extends Activity {
         }
 if(isExternalSelected()){boolean on=prefs().getBoolean(MULTI_ON,false);multihopToggle.setChecked(on);try{AndroidConnectionProfileStore.ExternalSelection path=new AndroidConnectionProfileStore(this,nodeStore,exitStore).currentExternalPath(prefs().getString(SELECTED_ID,""));multihopHint.setText(path.direct()?"Direct → "+path.exit.name:(path.ordinaryEntry!=null?path.ordinaryEntry.name:path.entry.name)+" → "+path.exit.name+" • "+path.entryMode+" → "+path.exit.protocol+" • "+("server".equals(path.execution)?"Server":"auto".equals(path.execution)?"Compare":"Local"));}catch(Exception invalid){multihopHint.setText("Choose external path in Edit hops");}return;}boolean live=connection.isMultihopConnected();boolean on=live||prefs().getBoolean(MULTI_ON,false);multihopToggle.setChecked(on);if(!on){multihopHint.setText("Off");return;}String entryId=live?connection.activeMultihopEntryId():prefs().getString(MULTI_ENTRY,""),exitId=live?connection.activeMultihopExitId():prefs().getString(MULTI_EXIT,""),mode=live?connection.activeMultihopExitMode():prefs().getString(MULTI_MODE,"");try{AndroidStandardExitStore.Entry ordinary=live?connection.activeImportedMultihopEntry():"external".equals(prefs().getString("multihop_entry_kind","router-vpn"))?exitStore.get(entryId):null;
         AndroidNodeStore.Node exit=nodeById(exitId);
-        if(ordinary!=null){if(exit==null)throw new IllegalStateException("The final node is unavailable.");multihopHint.setText((live?"LIVE • ":"")+ordinary.name+" → "+exit.name+" • "+("wireguard".equals(ordinary.protocol)?"WireGuard":"amneziawg".equals(ordinary.protocol)?"AmneziaWG":"hysteria2".equals(ordinary.protocol)?"Hysteria2":"socks5".equals(ordinary.protocol)?"SOCKS5":"openvpn".equals(ordinary.protocol)?"OpenVPN":"http".equals(ordinary.protocol)?"HTTP CONNECT":"https".equals(ordinary.protocol)?"HTTPS CONNECT":"Shadowsocks 2022")+" → "+(switch(mode){case "hysteria2"->"Hysteria2";case "wg"->"WireGuard";case "awg2-fast"->"AmneziaWG Fast";case "awg2-strong"->"AmneziaWG Strong";case "shadowsocks"->"Shadowsocks";case "reality-vision"->"REALITY Vision";case "reality-pq-vision"->"PQ REALITY Vision";case "reality-xhttp"->"REALITY XHTTP";case "naive-h2"->"Naive HTTP/2";case "naive-h3"->"Naive HTTP/3";default->"Unsupported final transport";})+" • Local"+(live&&currentPathMs>0?String.format(Locale.US," • PATH %.1f ms",currentPathMs):""));return;}
-        AndroidNodeStore.Node entry=nodeById(entryId);if(entry==null||exit==null){multihopHint.setText(live?"Live graph identity unavailable":"Choose hops");return;}double a=telemetry.cachedMedian(entry.id),b=telemetry.cachedMedian(exit.id);StringBuilder s=new StringBuilder(live?"LIVE • ":"").append(entry.name);if(a>0)s.append(String.format(Locale.US," %.1f ms",a));s.append(" → ").append(exit.name);if(b>0)s.append(String.format(Locale.US," %.1f ms",b));if(currentPathMs>0&&live)s.append(String.format(Locale.US," • PATH %.1f ms",currentPathMs));s.append(" • ").append(live?connection.activeMultihopEntryMode():prefs().getString("multihop_entry_mode","wg")).append(" → ").append(mode);multihopHint.setText(s.toString());}catch(Exception error){multihopHint.setText(live?"Live graph identity unavailable":"Choose hops");}}
+        if(ordinary!=null){if(exit==null)throw new IllegalStateException("The final node is unavailable.");multihopHint.setText((live?"LIVE • ":"")+ordinary.name+" → "+exit.name+" • "+("wireguard".equals(ordinary.protocol)?"WireGuard":"amneziawg".equals(ordinary.protocol)?"AmneziaWG":"hysteria2".equals(ordinary.protocol)?"Hysteria2":"socks5".equals(ordinary.protocol)?"SOCKS5":"openvpn".equals(ordinary.protocol)?"OpenVPN":"http".equals(ordinary.protocol)?"HTTP CONNECT":"https".equals(ordinary.protocol)?"HTTPS CONNECT":"Shadowsocks 2022")+" → "+(switch(mode){case "hysteria2"->"Hysteria2";case "wg"->"WireGuard";case "awg2-fast"->"AmneziaWG Fast";case "awg2-strong"->"AmneziaWG Strong";case "shadowsocks"->"Shadowsocks";case "reality-vision"->"REALITY Vision";case "reality-pq-vision"->"PQ REALITY Vision";case "reality-xhttp"->"REALITY XHTTP";case "naive-h2"->"Naive HTTP/2";case "naive-h3"->"Naive HTTP/3";default->"Unsupported final transport";})+" • Local");return;}
+        AndroidNodeStore.Node entry=nodeById(entryId);if(entry==null||exit==null){multihopHint.setText(live?"Live graph identity unavailable":"Choose hops");return;}StringBuilder s=new StringBuilder(live?"LIVE • ":"").append(entry.name);
+        double entryTCP=live?0:telemetry.cachedMedian(entry.id),exitTCP=live?0:telemetry.cachedMedian(exit.id);
+        if(entryTCP>0)s.append(String.format(Locale.US," • Direct TCP %.1f ms",entryTCP));
+        s.append(" → ").append(exit.name);
+        if(exitTCP>0)s.append(String.format(Locale.US," • Direct TCP %.1f ms",exitTCP));
+        s.append(" • ").append(live?connection.activeMultihopEntryMode():prefs().getString("multihop_entry_mode","wg")).append(" → ").append(mode);multihopHint.setText(s.toString());}catch(Exception error){multihopHint.setText(live?"Live graph identity unavailable":"Choose hops");}}
     private AndroidNodeStore.Node nodeById(String id)throws Exception{if(id==null||id.isEmpty())return null;for(AndroidNodeStore.Node n:nodeStore.list())if(n.id.equals(id))return n;return null;}
 
     private boolean isExternalSelected(){return "external".equals(prefs().getString(SELECTED_KIND,"router-vpn"));}

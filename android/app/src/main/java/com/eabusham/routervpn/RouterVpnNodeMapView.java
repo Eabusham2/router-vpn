@@ -35,7 +35,7 @@ final class RouterVpnNodeMapView extends View {
     private static final int[] HOP_COLORS={0xff45c778,0xffc29cf2,0xfff2d15c,0xff57cfd6,0xfff25aad,0xff8a9cff};
 
     static final class Marker {
-        final String id, name, role;
+        final String id, name, role, measurement;
         final double latitude, longitude, latencyMs;
         final boolean selected, explicitCoordinates;
         Marker(String id,String name,double latitude,double longitude,boolean selected){this(id,name,latitude,longitude,selected?ROLE_SELECTED:ROLE_NORMAL,0);}
@@ -43,15 +43,19 @@ final class RouterVpnNodeMapView extends View {
         Marker(String id,String name,double latitude,double longitude,String role,double latencyMs){this(id,name,latitude,longitude,role,latencyMs,false);}
         // Legacy Router profiles can use 0,0 as their unknown-location sentinel.
         // Typed external metadata retains absence separately from an explicit pair.
-        Marker(String id,String name,double latitude,double longitude,String role,double latencyMs,boolean explicitCoordinates){this.id=id;this.name=name;this.latitude=latitude;this.longitude=longitude;this.role=role==null?ROLE_NORMAL:role;this.selected=ROLE_SELECTED.equals(this.role);this.latencyMs=Double.isFinite(latencyMs)&&latencyMs>0?latencyMs:0;this.explicitCoordinates=explicitCoordinates;}
+        Marker(String id,String name,double latitude,double longitude,String role,double latencyMs,boolean explicitCoordinates){
+            this(id,name,latitude,longitude,role,latencyMs,explicitCoordinates,"");
+        }
+        Marker(String id,String name,double latitude,double longitude,String role,double latencyMs,boolean explicitCoordinates,String measurement){
+            this.id=id;this.name=name;this.latitude=latitude;this.longitude=longitude;this.role=role==null?ROLE_NORMAL:role;
+            this.selected=ROLE_SELECTED.equals(this.role);this.latencyMs=Double.isFinite(latencyMs)&&latencyMs>0?latencyMs:0;
+            this.explicitCoordinates=explicitCoordinates;this.measurement=measurement;
+        }
         String label(){
-            String label=name==null||name.trim().isEmpty()?"Router VPN node":name.trim(),measurement="";
-            for(String kind:new String[]{"routed HTTP proof","HTTPS"}){
-                String suffix=" • "+kind;if(latencyMs>0&&label.endsWith(suffix)){measurement=kind;label=label.substring(0,label.length()-suffix.length());break;}
-            }
+            String label=name==null||name.trim().isEmpty()?"Router VPN node":name.trim();
             if(label.length()>18)label=label.substring(0,17)+"…";
             if(latencyMs>0)label+="  "+String.format(Locale.US,"%.1f ms",latencyMs);
-            if(!measurement.isEmpty())label+=" "+measurement;
+            if(latencyMs>0&&!measurement.isEmpty())label+=" "+measurement;
             return label;
         }
     }

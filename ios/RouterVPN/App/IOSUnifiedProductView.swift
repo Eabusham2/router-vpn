@@ -160,6 +160,14 @@ struct IOSUnifiedMap: UIViewRepresentable {
         let exitID = ordered?.last?.id ?? (!hasOrderedSource && selected?.multihopEnabled == true ? selected?.multihopExitID : nil)
         let middleIDs = Set(ordered?.dropFirst().dropLast().map(\.id) ?? [])
         let routeIDs = ordered?.map(\.id) ?? ([entryID, exitID].compactMap { $0 })
+        let proofs = model.currentOrderedMapProofs
+        let owner = model.connected && !model.tunnelTransitioning && !model.iosCandidateTesting ? model.activeSessionIdentity : nil
+        let publicFinal = IOSExternalLiveTelemetry.supported(model)
+        var pathMS: Double?
+        if owner != nil, ordered?.last != nil {
+            pathMS = publicFinal ? IOSExternalLiveTelemetry.shared.currentMilliseconds(model: model)
+                : IOSUnifiedTelemetry.shared.currentMilliseconds(model: model)
+        }
         var coordinatesByID: [String: CLLocationCoordinate2D] = [:]
         for profile in profiles {
             guard profile.hasCoordinates, let lat = profile.latitude, let lon = profile.longitude else { continue }
@@ -174,8 +182,20 @@ struct IOSUnifiedMap: UIViewRepresentable {
             annotation.coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
             annotation.title = profile.name.isEmpty ? profile.id : profile.name
             let kind = profile.kind == "external" ? "Custom / external" : "Router node"
-            let ms = latencyByID[profile.id] ?? profile.savedLatency ?? 0
-            annotation.subtitle = ms > 0 ? String(format: "%@ • direct TCP %.1f ms", kind, ms) : kind
+            var detail = [String]()
+            if profile.id == ordered?.last?.id, let ms = pathMS {
+                detail.append(String(format: "%.1f ms live route total (%@)", ms, publicFinal ? "public HTTPS" : "final node HTTP"))
+            }
+            if let ms = proofs?[profile.id] {
+                let metric = profile.kind == "external" ? "public-path verification" : "routed HTTP verification"
+                detail.append(String(format: "%.1f ms %@ at startup", ms, metric))
+            } else if !model.tunnelTransitioning, !model.iosCandidateTesting,
+                      (owner == nil || role != "entry" && role != "hop" && role != "exit"), profile.kind == "router-vpn",
+                      let ms = latencyByID[profile.id] ?? profile.savedLatency, ms.isFinite, ms > 0 {
+                detail.append(String(format: "Direct TCP %.1f ms", ms))
+            }
+            detail.append(kind)
+            annotation.subtitle = detail.joined(separator: " • ")
             if let phase = IOSNodeChainPresentation.candidateLabel(id: profile.id, path: ordered, testing: model.iosCandidateTestingNodeIDs) {
                 annotation.subtitle = phase + " • " + (annotation.subtitle ?? kind)
             }
@@ -188,7 +208,6 @@ struct IOSUnifiedMap: UIViewRepresentable {
             for segment in segments { segment.title = position == routeIDs.count - 2 ? "exit" : position == 0 ? "entry" : "hop" }
             map.addOverlays(segments, level: .aboveLabels)
         }
-        let owner = model.connected && !model.tunnelTransitioning && !model.iosCandidateTesting ? model.activeSessionIdentity : nil
         context.coordinator.updatePacket(on: map, owner: owner, coordinates: routeIDs.map { coordinatesByID[$0] })
         let regular = map.annotations.filter { $0 !== context.coordinator.packet }
         if let deviceLocation {

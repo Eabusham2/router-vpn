@@ -388,6 +388,55 @@ jobs:
           adb shell uiautomator dump /sdcard/routervpn.xml
           adb pull /sdcard/routervpn.xml "$RUNNER_TEMP/android-ui/layout.xml"
           adb exec-out screencap -p > "$RUNNER_TEMP/android-ui/android-launch.png"
+          adb shell wm size 640x1280
+          adb shell wm density 320
+          adb shell settings put system font_scale 2.0
+          python3 - "$RUNNER_TEMP/android-ui" <<'PYUI'
+          from pathlib import Path
+          import re, subprocess, sys, xml.etree.ElementTree as ET
+
+          out = Path(sys.argv[1])
+          package = "com.eabusham.routervpn"
+          def shell(*args):
+              return subprocess.check_output(["adb", "shell", *map(str, args)], text=True).strip()
+          def bounds(node):
+              return tuple(map(int, re.findall(r"-?\d+", node.attrib["bounds"])))
+          def capture(name):
+              shell("uiautomator", "dump", "/sdcard/routervpn.xml")
+              data = subprocess.check_output(["adb", "exec-out", "cat", "/sdcard/routervpn.xml"])
+              (out / (name + ".xml")).write_bytes(data)
+              (out / (name + ".png")).write_bytes(subprocess.check_output(["adb", "exec-out", "screencap", "-p"]))
+              return list(ET.fromstring(data).iter("node"))
+
+          for name, rotation in [("portrait", 0), ("landscape", 1)]:
+              shell("wm", "user-rotation", "lock", rotation)
+              shell("am", "force-stop", package)
+              shell("am", "start", "-W", "-n", package + "/.ProductActivity")
+              pages = f"android-{name}-large-text"
+              initial = capture(pages)
+              handle = next(node for node in initial if node.get("content-desc") == "Expand connection controls")
+              left, top, right, bottom = bounds(handle)
+              shell("input", "tap", (left + right) // 2, (top + bottom) // 2)
+              required = {"Connect", "Kill switch", "Forward", "Multihop", "Open settings", "Profiles",
+                          "Performance", "MTU", "Mode", "DNS", "Help"}
+              for page in range(20):
+                  nodes = capture(f"{pages}-{page:02d}")
+                  scroll = next(node for node in nodes if node.get("class") == "android.widget.ScrollView")
+                  left, top, right, bottom = bounds(scroll)
+                  root = bounds(nodes[0])
+                  if (root[2] - root[0] > root[3] - root[1]) != (rotation == 1):
+                      raise RuntimeError(f"{name}: Activity has the wrong orientation")
+                  for node in nodes:
+                      x, y, end_x, end_y = bounds(node)
+                      if left <= x < end_x <= right and top <= y < end_y <= bottom:
+                          required.discard(node.get("text"))
+                  if not required:
+                      break
+                  x = (left + right) // 2
+                  shell("input", "swipe", x, bottom - 16, x, top + (bottom - top) // 3, 600)
+              if required:
+                  raise RuntimeError(f"{name}: controls were not reached by scrolling: {sorted(required)}")
+          PYUI
           adb logcat -b crash -d > "$RUNNER_TEMP/android-ui/crash.log"
           ! grep -F 'FATAL EXCEPTION' "$RUNNER_TEMP/android-ui/crash.log"
       - name: Save Android launch evidence

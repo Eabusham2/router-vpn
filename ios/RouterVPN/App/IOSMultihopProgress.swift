@@ -1,18 +1,43 @@
 import Foundation
 @preconcurrency import NetworkExtension
 
+/// The sample is from startup verification. Its continued display depends on
+/// a recent progress acknowledgement from the same connected provider.
+struct IOSOrderedMapProofs {
+    let identity: IOSSessionIdentity
+    let generation: UUID
+    let selectedExecution: String
+    let network: UInt64
+    let deadline: TimeInterval
+    let milliseconds: [String: Double]
+}
+
 @MainActor
 extension RouterVPNModel {
+    var currentOrderedMapProofs: [String: Double]? {
+        guard let proof = orderedMapProofs, connected, !tunnelTransitioning, !iosCandidateTesting,
+              proof.generation == multihopProgressGeneration, proof.identity == activeSessionIdentity,
+              IOSViaEntryNetwork.shared.current == proof.network, ProcessInfo.processInfo.systemUptime < proof.deadline else { return nil }
+        if proof.identity.nodeChainExecutionSource != nil {
+            guard let observed = orderedExecutionObservation, observed.identity == proof.identity,
+                  observed.selected == proof.selectedExecution else { return nil }
+        } else if proof.identity.nodeChainSource == nil || proof.selectedExecution != "local" { return nil }
+        return proof.milliseconds
+    }
+
     func refreshIOSMultihopExecutionProgress() async {
+        if orderedMapProofs != nil && currentOrderedMapProofs == nil { orderedMapProofs = nil }
         guard connected || tunnelTransitioning, selectedNodeProfile?.multihopEnabled == true else { return }
         if multihopProgressInFlight != nil {
             // An extension that never answers must not accumulate requests.
-            if Date() < multihopProgressDeadline { return }
+            if ProcessInfo.processInfo.systemUptime < multihopProgressDeadline { return }
             multihopProgressInFlight = nil
         }
         let ticket = UUID()
         multihopProgressInFlight = ticket
-        multihopProgressDeadline = Date().addingTimeInterval(3)
+        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        multihopProgressDeadline = deadline
+        let network = IOSViaEntryNetwork.shared.current
         let generation = multihopProgressGeneration
         let connectionGeneration = iosConnectGeneration
         let identity = activeSessionIdentity
@@ -76,7 +101,7 @@ extension RouterVPNModel {
             Task { @MainActor [weak self] in
                 guard let self, self.multihopProgressInFlight == ticket else { return }
                 self.multihopProgressInFlight = nil
-                guard let data, data.count <= progressLimit, Date() <= self.multihopProgressDeadline,
+                guard let data, data.count <= progressLimit, ProcessInfo.processInfo.systemUptime < deadline,
                       self.multihopProgressGeneration == generation,
                       self.iosConnectGeneration == connectionGeneration, self.activeSessionIdentity == identity,
                       session.connectedDate == connectedAt, [.connecting, .connected, .reasserting].contains(session.status),
@@ -86,8 +111,17 @@ extension RouterVPNModel {
                       self.selectedNodeProfile?.id == nodeID, self.connected || self.tunnelTransitioning,
                       let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
                 if let orderedNodes {
-                    guard let text = IOSNodeChainPresentation.progress(value, expected: orderedNodes.map(\.id), requestedExecution: capturedExecution, expectedPublicPositions: Set(orderedNodes.indices.filter { orderedNodes[$0].kind == "external" }), capturedExtendedCount: capturedExtendedCount) else { return }
-                    self.multihopProgressText = text
+                    guard let progress = IOSNodeChainPresentation.progress(value, expected: orderedNodes.map(\.id), requestedExecution: capturedExecution, expectedPublicPositions: Set(orderedNodes.indices.filter { orderedNodes[$0].kind == "external" }), capturedExtendedCount: capturedExtendedCount) else {
+                        self.orderedMapProofs = nil
+                        return
+                    }
+                    if let identity, let network, IOSViaEntryNetwork.shared.current == network,
+                       let selected = progress.selectedExecution, session.status == .connected,
+                       self.connected, !self.tunnelTransitioning, !self.iosCandidateTesting {
+                        self.orderedMapProofs = IOSOrderedMapProofs(identity: identity, generation: generation,
+                            selectedExecution: selected, network: network, deadline: deadline, milliseconds: progress.verificationMS)
+                    } else { self.orderedMapProofs = nil }
+                    self.multihopProgressText = progress.text
                     return
                 }
                 var lines = ["Multihop: \(value["stage"] as? String ?? "pending") • \(value["execution"] as? String ?? "comparing")"]

@@ -355,9 +355,15 @@ enum IOSNodeChainPresentation {
         return planned(selected: control, catalog: profiles)
     }
 
-    /// Progress durations are initial, routed private HTTP verifications.
+    struct Progress {
+        let text: String
+        let selectedExecution: String?
+        let verificationMS: [String: Double]
+    }
+
+    /// Progress durations are initial, routed private HTTP or public-path verifications.
     /// Periodic health renewals do not publish fresh RTT samples here.
-    static func progress(_ value: [String: Any], expected: [String], requestedExecution: String = "local", expectedPublicPositions: Set<Int>? = nil, capturedExtendedCount: Int = 0) -> String? {
+    static func progress(_ value: [String: Any], expected: [String], requestedExecution: String = "local", expectedPublicPositions: Set<Int>? = nil, capturedExtendedCount: Int = 0) -> Progress? {
         guard (2...8).contains(expected.count) || (9...IOSMultihopNodeSelection.physicalTraversalDepth).contains(expected.count) && expected.count == capturedExtendedCount && expectedPublicPositions != nil, Set(expected).count == expected.count,
               ["local", "server", "auto"].contains(requestedExecution),
               let execution = value["execution"] as? String,
@@ -374,6 +380,7 @@ enum IOSNodeChainPresentation {
         let lane = execution == "server" ? "Server" : execution == "local" ? "Local" : "Waiting"
         let title = requestedExecution == "auto" ? "Compare • \(lane)\(ready ? " selected" : "")" : lane
         var lines = [requestedExecution == "auto" && ready ? "Ordered route • \(title)" : "Ordered route • \(title) • \(stage)"]
+        var verificationMS = [String: Double]()
         for (position, row) in rows.enumerated() {
             guard let reported = row["position"] as? NSNumber, CFGetTypeID(reported) != CFBooleanGetTypeID(),
                   reported.doubleValue == Double(position), row["profile_id"] as? String == expected[position],
@@ -389,6 +396,7 @@ enum IOSNodeChainPresentation {
             } else {
                 guard row["kind"] == nil || publicPath && expected.count >= 3 && position == expected.count - 2 || row["kind"] as? String == "private-node" else { return nil }
             }
+            if ready { verificationMS[expected[position]] = response.doubleValue }
             lines.append(String(format: publicPath ? "%@ · %@: public path via custom node %.1f ms" : "%@ · %@: verification HTTP response %.1f ms", role, expected[position], response.doubleValue))
         }
         if rows.count < expected.count { lines.append("Verified \(rows.count) of \(expected.count) nodes") }
@@ -401,7 +409,7 @@ enum IOSNodeChainPresentation {
             }
         } else if stage == "selected" { lines.append("The captured path is not currently ready") }
         if stage == "closed" { lines.append("Captured path is closed") }
-        return lines.joined(separator: "\n")
+        return Progress(text: lines.joined(separator: "\n"), selectedExecution: ready ? execution : nil, verificationMS: verificationMS)
     }
 
     /// Display the original comparison receipts, never an inferred total or a stale score.

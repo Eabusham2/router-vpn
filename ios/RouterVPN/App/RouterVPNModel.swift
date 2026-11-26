@@ -22,9 +22,10 @@ final class RouterVPNModel: ObservableObject {
     @Published var tunnelTransitioning = false
     @Published var message = "Import a router bundle from Files or pair from your home LAN"
     @Published var multihopProgressText = ""
+    @Published var orderedMapProofs: IOSOrderedMapProofs?
     var multihopProgressGeneration = UUID()
     var multihopProgressInFlight: UUID?
-    var multihopProgressDeadline = Date.distantPast
+    var multihopProgressDeadline: TimeInterval = 0
     @Published var activeEngine = "none"
     @Published var activeRawProfile = ""
     private(set) var activeSessionIdentity: IOSSessionIdentity? {
