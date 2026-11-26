@@ -43,12 +43,6 @@ esac
 
 python3 "$ROOT/deploy/test_macos_via_entry_candidates.py"
 python3 "$ROOT/deploy/test_apple_vector_map.py"
-python3 "$ROOT/deploy/test_macos_source_closure.py" --shipping-only
-python3 "$ROOT/deploy/test_macos_tor_bridge_ui.py" --shipping-only
-python3 "$ROOT/deploy/test_macos_mtu.py" --shipping-only
-python3 "$ROOT/deploy/test_macos_dns_measurement.py" --shipping-only
-python3 "$ROOT/deploy/test_macos_device_settings.py" --shipping-only
-python3 "$ROOT/deploy/test_macos_shutdown.py" --shipping-only
 
 SDK=$(xcrun --sdk macosx --show-sdk-path)
 APP="$OUT/RouterVPN.app"

@@ -3,7 +3,7 @@
 Source scope reconciled November 7, 2026. Current admission,
 required executable inventories, earlier observed results, and pending native/device
 acceptance are distinguished below. The complete continuation evidence is in
-[CONTINUATION-EVIDENCE-2026-11-06.md](CONTINUATION-EVIDENCE-2026-11-06.md).
+[CONTINUATION-EVIDENCE-2026-11-06.md](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-06).
 
 ## Requirement and implemented direction
 

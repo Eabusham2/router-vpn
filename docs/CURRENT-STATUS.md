@@ -1,18 +1,18 @@
 # November 26 original source ownership and native gate repairs
 
-Ordered workers now retain the original registered file generation and raw bytes through bootstrap and joined cleanup. Equal-byte replacement and normalized-byte changes cannot adopt an existing owner. The native reader captures bytes and identity from the same open descriptor, and its new generation-rejection case is explicitly mandatory in the 138-verdict worker inventory. The independently registered candidate credential now also rejects same-inode content edits with restored file times. The full pinned native command package passed all 27 roots and 138 required verdicts with the race detector and its original bound. The integrated runner passed 21 tests, canonical worker preparation passed 11, and the mobile bridge gate now requires all four existing OpenVPN roots. The retained Naive receipt contains 81 shared graph exports and 126 native loopback verdicts; the subsequent hosted d887 workflow passed both complete proxy and packet reference roots, with 365 and 294 required verdicts respectively. [Original hosted receipt, complete job log and Apple graph artifacts](evidence/naive-h2-native-2026-11-26/README.md) are retained; OS TUN, installed-device and production-router acceptance remain separate. [Repair record and original evidence](IMPLEMENTATION-2026-11-26-OWNED-SOURCE-REPAIRS.md)
+Ordered workers now retain the original registered file generation and raw bytes through bootstrap and joined cleanup. Equal-byte replacement and normalized-byte changes cannot adopt an existing owner. The native reader captures bytes and identity from the same open descriptor, and its new generation-rejection case is explicitly mandatory in the 138-verdict worker inventory. The independently registered candidate credential now also rejects same-inode content edits with restored file times. The full pinned native command package passed all 27 roots and 138 required verdicts with the race detector and its original bound. The integrated runner passed 21 tests, canonical worker preparation passed 11, and the mobile bridge gate now requires all four existing OpenVPN roots. The retained Naive receipt contains 81 shared graph exports and 126 native loopback verdicts; the subsequent hosted d887 workflow passed both complete proxy and packet reference roots, with 365 and 294 required verdicts respectively. [Original hosted receipt, complete job log and Apple graph artifacts](evidence/naive-h2-native-2026-11-26/README.md) are retained; OS TUN, installed-device and production-router acceptance remain separate. [Repair record and original evidence](AI-DEVELOPMENT-HISTORY.md#note-implementation-2026-11-26-owned-source-repairs)
 
 The two iOS source mutation fixtures now target the retained original control profile. Complete local OpenVPN and imported Shadowsocks source suites passed 576 and 804 checks respectively, each with all four original compiled rejection controls. [Original logs and hosted failure boundary](evidence/ios-source-control-2026-11-26/README.md) are retained; app packaging and device acceptance remain separate.
 
 # November 25 native client and Setup Center repairs
 
-The integrated repairs bind mobile Connect to confirmed node selection, preserve failed-save errors, retire superseded onboarding requests, close download admission before shutdown waits, and correct the real macOS external-final candidate transport. Shared and native UI sources preserve the selected WireGuard, AWG2 Fast or AWG2 Strong entry and its original Start Layer through Local imported exits and replay. The six new encrypted AWG cases and eleven added entry-layer cases passed on Linux amd64. Linux's rebuilt GTK app passed eight size/label renders. Source and workflow corrections retain every native gate while avoiding 21 duplicate main-push jobs. The hosted Windows connected-controller diagnostic at `7d86b5c` passed all 18 roots and 91 required verdicts with the race detector, including all nine private-response cases in 115.16 seconds under the original 120-second limit. Exact-revision packaging, release and installed-device acceptance remain separate. [Repair record, measured results and remaining boundaries](IMPLEMENTATION-2026-11-25-NATIVE-REPAIRS.md)
+The integrated repairs bind mobile Connect to confirmed node selection, preserve failed-save errors, retire superseded onboarding requests, close download admission before shutdown waits, and correct the real macOS external-final candidate transport. Shared and native UI sources preserve the selected WireGuard, AWG2 Fast or AWG2 Strong entry and its original Start Layer through Local imported exits and replay. The six new encrypted AWG cases and eleven added entry-layer cases passed on Linux amd64. Linux's rebuilt GTK app passed eight size/label renders. Source and workflow corrections retain every native gate while avoiding 21 duplicate main-push jobs. The hosted Windows connected-controller diagnostic at `7d86b5c` passed all 18 roots and 91 required verdicts with the race detector, including all nine private-response cases in 115.16 seconds under the original 120-second limit. Exact-revision packaging, release and installed-device acceptance remain separate. [Repair record, measured results and remaining boundaries](AI-DEVELOPMENT-HISTORY.md#note-implementation-2026-11-25-native-repairs)
 
 Follow-up repairs pin Naive HTTP/2 header storage across its native stream-start call and make the Windows Xray fixture wait for its owned REALITY detector before traffic. At `526760a3e`, the original nine-case Windows Xray traffic root passed natively in 26.36 seconds on x64 and 25.30 seconds on ARM64 under the unchanged 90-second limit; both wrong-credential roots and all three detector controls also passed. The original receipts are [retained here](evidence/windows-xray-bootstrap-2026-11-25/README.md). The integrated iOS session now accepts the captured AWG2 Fast/Strong entry, and Android's pinned first node offers transport and measurement actions without unusable reorder/remove actions. Compiled session, callback, constructor and candidate-adoption regressions passed. The new physical-owner and same-peer AWG credential witnesses, Naive H2 native traffic, complete exact-revision release and installed-device acceptance remain required.
 
 # 2026-11-25: Ordered external exits and selected Server responses
 
-The [external-final and Server response record](IMPLEMENTATION-2026-11-25-EXTERNAL-FINAL-AND-SERVER-RESPONSES.md)
+The [external-final and Server response record](AI-DEVELOPMENT-HISTORY.md#note-implementation-2026-11-25-external-final-and-server-responses)
 implements Local three-to-96-member WireGuard-to-imported-Shadowsocks paths with
 an independently imported public exit. The original paired entry remains the
 control across native editors, profile replay, DNS status, latency history,
@@ -62,7 +62,7 @@ families described in this continuation.
 
 # 2026-11-25: Recursive selected-hop continuation and integration
 
-The [recursive continuation record](IMPLEMENTATION-2026-11-25-RECURSIVE-SELECTED-CONTINUATION.md)
+The [recursive continuation record](AI-DEVELOPMENT-HISTORY.md#note-implementation-2026-11-25-recursive-selected-continuation)
 extends the qualified Compare-selected Local response family to repeated
 independent paired/imported Shadowsocks interiors. Use preserves the remaining
 route, and native editors continue from the inserted hop with a fresh capture.
@@ -76,7 +76,7 @@ requirements. Earlier single-private restrictions below are historical.
 
 # 2026-11-25: Unsaved selected-hop insertion and system lifecycle repairs
 
-The [selected draft insertion record](IMPLEMENTATION-2026-11-25-SELECTED-DRAFT-INSERTION.md)
+The [selected draft insertion record](AI-DEVELOPMENT-HISTORY.md#note-implementation-2026-11-25-selected-draft-insertion)
 implements eligible earlier imported-hop response measurements and a separate
 Use action that inserts the measured hop into the original unsaved draft while
 preserving its suffix and final. Desktop, Android and iOS retain the original
@@ -86,7 +86,7 @@ The focused controller verification passed 31 roots and 73 subcases, with
 original source and declaration hashes recorded and its local memory limits
 stated explicitly.
 
-The [system repair record](IMPLEMENTATION-2026-11-25-SYSTEM-LIFECYCLE-REPAIRS.md)
+The [system repair record](AI-DEVELOPMENT-HISTORY.md#note-implementation-2026-11-25-system-lifecycle-repairs)
 covers retained package expiry, active transfer and compiler cleanup, original
 upstream cancellation, forwarding updates bound to the displayed router
 session, and the Windows firewall snapshot and mobile CI corrections. The
@@ -105,7 +105,7 @@ and are superseded by the qualified route family in the new insertion record.
 
 # 2026-11-25: Selected candidates through imported penultimate hops
 
-The [imported penultimate candidate record](IMPLEMENTATION-2026-11-25-IMPORTED-PENULTIMATE-CANDIDATES.md)
+The [imported penultimate candidate record](AI-DEVELOPMENT-HISTORY.md#note-implementation-2026-11-25-imported-penultimate-candidates)
 extends authenticated candidate measurement to a retained imported penultimate
 hop after Compare selects Local, with either no private interior or one earlier
 private interior. All clients retain the complete original source, selection
@@ -117,7 +117,7 @@ independent of the recorded source, callback and encrypted-fixture evidence.
 
 # 2026-11-25: Selected private-hop candidates and original cancellation
 
-The [private penultimate candidate record](IMPLEMENTATION-2026-11-25-PRIVATE-PENULTIMATE-CANDIDATES.md)
+The [private penultimate candidate record](AI-DEVELOPMENT-HISTORY.md#note-implementation-2026-11-25-private-penultimate-candidates)
 documents measurement through an original paired private hop after Compare
 selects Local, explicit named final-profile Save/Load, and complete source and
 selection retention across desktop and mobile clients. Connected and draft
@@ -129,7 +129,7 @@ imported-prefix candidate gap.
 
 # 2026-11-24: Integrated route consumers and release repairs
 
-The [integration repair record](IMPLEMENTATION-2026-11-24-INTEGRATED-ROUTE-REPAIRS.md)
+The [integration repair record](AI-DEVELOPMENT-HISTORY.md#note-implementation-2026-11-24-integrated-route-repairs)
 tracks the preserved diagnostic branch work, exact client admission for private
 selected routes and later Local hostnames, complete request bounds, AppKit
 cold-load restoration and native build corrections. The private-stream depth
@@ -151,7 +151,7 @@ release and installed-device results are tracked by their respective gates.
 
 # 2026-11-24: Exact saved choices and native release repairs
 
-The [preset and release repair record](IMPLEMENTATION-2026-11-24-PRESET-AND-RELEASE-REPAIRS.md)
+The [preset and release repair record](AI-DEVELOPMENT-HISTORY.md#note-implementation-2026-11-24-preset-and-release-repairs)
 describes exact CUSTOM name handling, conflicting-name refusal, captured-node
 Save & Connect, preflighted profile loads, saved DNS port retention and the
 inspected release-check failures. The Windows firewall monitor now checks both
@@ -161,7 +161,7 @@ the required hosted/native delivery evidence remain separately identified.
 
 # 2026-11-24: Native builds and saved client settings
 
-The [client regression repair record](IMPLEMENTATION-2026-11-24-CLIENT-REGRESSION-REPAIR.md)
+The [client regression repair record](AI-DEVELOPMENT-HISTORY.md#note-implementation-2026-11-24-client-regression-repair)
 describes the diagnosed Xcode, native preparation, Windows ABI guard, H3 peer
 and Darwin probe failures, together with accessibility, DNS, stale Settings
 and CUSTOM selection repairs. It records the affected executable checks and
@@ -170,7 +170,7 @@ physical/private acceptance gates require their own results.
 
 # 2026-11-24: Original hostname and Fast selected routes
 
-The [hostname and Fast continuation](IMPLEMENTATION-2026-11-24-HOSTNAME-FAST.md)
+The [hostname and Fast continuation](AI-DEVELOPMENT-HISTORY.md#note-implementation-2026-11-24-hostname-fast)
 records longer first-stream hostname Local paths, their original routed DNS
 and per-dial address validation, and the longer literal AWG2 Fast
 Server/Compare family. It preserves original saved sources, selected winners,
@@ -181,7 +181,7 @@ separate evidence.
 
 # 2026-11-24: Saved-route ownership and native regression repairs
 
-The [requirements repair record](IMPLEMENTATION-2026-11-24-REQUIREMENTS-REPAIR.md)
+The [requirements repair record](AI-DEVELOPMENT-HISTORY.md#note-implementation-2026-11-24-requirements-repair)
 describes complete named profiles preserving earlier measured private
 stream nodes and the original suffix, repeated Save/Load/extend across eight
 members, complete private/public latency and throughput roles, Android
@@ -191,7 +191,7 @@ with the remaining exact-SHA native and live acceptance requirements.
 
 # 2026-11-24: Packet prefixes and longer mixed Local routes
 
-The [mixed-prefix continuation](IMPLEMENTATION-2026-11-24-MIXED-PREFIXES.md)
+The [mixed-prefix continuation](AI-DEVELOPMENT-HISTORY.md#note-implementation-2026-11-24-mixed-prefixes)
 records the ordinary WG/AWG candidate-response and routed-hostname qualification,
 the longer contiguous packet/imported Local family, and the original
 private/public measurement boundary. It includes controlled encrypted peer
@@ -200,10 +200,10 @@ installed-device acceptance remain separate requirements.
 
 # 2026-11-23: Native repairs and original route measurements
 
-The [native repair record](IMPLEMENTATION-2026-11-23-NATIVE-REPAIR.md) covers
+The [native repair record](AI-DEVELOPMENT-HISTORY.md#note-implementation-2026-11-23-native-repair) covers
 the native engine lifetime, saved-layer reopening, guardian shutdown and
 map/source regressions found in the recovered requests and hosted gates.
-The [route measurement continuation](IMPLEMENTATION-2026-11-23-ROUTE-MEASUREMENTS.md)
+The [route measurement continuation](AI-DEVELOPMENT-HISTORY.md#note-implementation-2026-11-23-route-measurements)
 describes authenticated candidate replies through qualified imported prefixes,
 explicit named future-final profiles and the additional paired WireGuard Local
 family, including complete profile, MTU, latency and throughput ownership.
@@ -469,7 +469,7 @@ their original deadlines and negative controls. Native engines, Android OS
 handles and remote network exchanges remain explicit fixture boundaries;
 exact-current APK/ABI, encrypted networking and device acceptance are separate
 requirements. The detailed receipt is recorded in
-[the continuation evidence](CONTINUATION-EVIDENCE-2026-11-15.md).
+[the continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-15).
 
 A separate mandatory matrix now executes all six paired-prefix counts and all
 three SS2022 ciphers for Server/Compare, plus mixed WG/AWG four- and eight-node
@@ -543,7 +543,7 @@ the new shared restore matrix has its own mandatory phase under the unchanged
 180-second test bound. Source audit success and these tests do not close other
 graph families, longer Server paths, other imported positions, native packet
 acceptance or live deployment. See the
-[November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md) for exact
+[November 15 evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-15) for exact
 source manifests, tests, failure controls and publication boundaries.
 
 The three desktop editors use separate CONNECT trio capabilities and recheck
@@ -676,7 +676,7 @@ gate preserves fourteen original cases and adds eight imported-suffix cases
 using the shipping worker, independent SS2022 peers, selected DNS and joined
 retirement. Local race/source evidence, hosted kernel evidence, exact-SHA
 publication and physical-device acceptance remain distinct in the
-[November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md).
+[November 15 evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-15).
 
 ### macOS imported Shadowsocks Server/Compare
 
@@ -748,7 +748,7 @@ imported positions and the other requested graph families remain unfinished.
 MTU/layer capacity must fit the actual captured path; admitting eight members
 does not override an incompatible fixed MTU. The required source and encrypted
 native gates, their negative cases and their exact-source receipts are indexed
-in the [November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md).
+in the [November 15 evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-15).
 
 ### Longer Local imported OpenVPN paths
 
@@ -798,7 +798,7 @@ positions across WG, AWG Fast and AWG Strong. Installed desktop cases require
 the captured penultimate and final measurements and durable receipts. Local
 source/model checks and cross-compilation are recorded separately from actual
 hosted kernel execution, packages, physical devices and deployment in the
-[November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md).
+[November 15 evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-15).
 
 ### Longer Local CONNECT paths
 
@@ -840,7 +840,7 @@ four- and eight-node paths and their captured penultimate/final measurements.
 These mandatory gates remain distinct from local focused execution, published
 packages, physical-device acceptance and private deployment.
 
-The [November 15 evidence ledger](CONTINUATION-EVIDENCE-2026-11-15.md)
+The [November 15 evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-15)
 records the recovered original requirements and the earlier additions through
 `a1d8811f`, followed by subsequent source and gate corrections: macOS prefix-only candidate controls with purpose-safe dialog
 ownership, atomic native descriptor transfer, the measured Compare test oracle,
@@ -981,7 +981,7 @@ from the results above.
 
 Desktop CONNECT candidate Save/Load is published in `658414f3`, preserving
 exact HTTP/HTTPS sources through the complete transaction. The
-[updated evidence ledger](CONTINUATION-EVIDENCE-2026-11-14-CANDIDATE-PROFILES.md)
+[updated evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-14-candidate-profiles)
 records its race, actual route/store and compiled regression results, plus
 macOS (`d7ec85ee`), Windows (`3e3a554b`) and GTK (`3e0b8035`) editor adoption.
 Apple's compatible final picker and explicit unavailable saved row are
@@ -1026,7 +1026,7 @@ result after a replacement connection.
 
 ## November 14: supported proxy candidates and complete saved paths
 
-The [candidate and profile evidence](CONTINUATION-EVIDENCE-2026-11-14-CANDIDATE-PROFILES.md)
+The [candidate and profile evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-14-candidate-profiles)
 ties the original August 19 through-prefix timing and common-proxy request to
 the now-published shared, Android, Apple and desktop source paths. The shared
 native witness retains SS2022 and adds HTTP/HTTPS CONNECT and SOCKS5, with 114
@@ -1064,7 +1064,7 @@ native application packages or physical acceptance.
 
 ## Continuation from 35ff28a7: release convergence and retained scope
 
-The [release-convergence evidence](CONTINUATION-EVIDENCE-2026-11-12-RELEASE-CONVERGENCE.md)
+The [release-convergence evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-12-release-convergence)
 records original-source recovery, remote-main-verified repairs, local
 test boundaries, the temporary executor outage, recovery and exact reconstruction
 of reviewed pending work. It separates completed source fixes from hosted native
@@ -1079,7 +1079,7 @@ paths with WG/AWG prefixes and final Start Layer Off. iOS (`d5fa4a7f`) and Andro
 (`08013ed6`) source/editor adoption is published. The current desktop source
 and Windows/GTK editor changes preserve the same selected final through
 complete profiles, Startup Last and prefix-only preparation. The detailed
-[release-convergence evidence](CONTINUATION-EVIDENCE-2026-11-12-RELEASE-CONVERGENCE.md)
+[release-convergence evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-12-release-convergence)
 records exact source, test boundaries and retained failure logs. The mandatory
 Linux preflight's encrypted Hysteria2 gate passed all 37 verdicts for three
 three-node WG/AWG families, with actual TLS, selected DNS and owned shutdown.
@@ -1135,7 +1135,7 @@ carrier, graph family, latest release or private deployment.
 
 Desktop candidate API, Windows, AppKit and GTK source adoption is now published
 at `edf69b3`, `f30990f`, `2a7101a` and `baec547`; their details and bounded native
-checks are in [desktop candidate evidence](CONTINUATION-EVIDENCE-2026-11-12-DESKTOP-PREFIX-CANDIDATES.md).
+checks are in [desktop candidate evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-12-desktop-prefix-candidates).
 The older table's host-adoption statement is historical for these paths. Current
 package, physical-device, broader protocol and pre-connect acceptance remains
 open. The Windows source-copy fixture (`9f6a1ce`) and Linux native readback
@@ -1143,7 +1143,7 @@ inventory (`c5d4786`) repairs preserve their mandatory production checks.
 
 ## November 12: current ordered-source, candidate and acceptance boundaries
 
-The [November 12 evidence ledger](CONTINUATION-EVIDENCE-2026-11-12.md)
+The [November 12 evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-12)
 retains the full original numbered audit, C1–C7, later product corrections and
 August 19 map/custom-node request. The current additions below supersede the
 earlier AES-256-only and missing-encrypted-middle status. They do not narrow
@@ -1180,10 +1180,10 @@ Local/Server comparison scoring, 30-minute package retention from READY and
 image-only private production remain unchanged.
 
 Detailed scopes and receipts are linked from the ledger:
-[three-cipher middle](CONTINUATION-EVIDENCE-2026-11-12-CUSTOM-SS2022-MIDDLE.md),
+[three-cipher middle](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-12-custom-ss2022-middle),
 [tight MTU envelopes](SS2022-ORDERED-MTU-EVIDENCE.md),
-[candidate core](CONTINUATION-EVIDENCE-2026-11-12-PREFIX-CANDIDATES.md),
-[mobile bridge](CONTINUATION-EVIDENCE-2026-11-12-MOBILE-CANDIDATES.md), and
+[candidate core](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-12-prefix-candidates),
+[mobile bridge](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-12-mobile-candidates), and
 [encrypted candidate witness](ORDERED-PREFIX-CANDIDATE-NATIVE-EVIDENCE.md).
 Older dated sections below preserve their original evidence cutoffs. No live
 router, AdGuard setting, household forwarding or private deployment was changed.
@@ -1192,7 +1192,7 @@ router, AdGuard setting, household forwarding or private deployment was changed.
 
 The protected ordered macOS host, authenticated generated child and original
 MTU adapter are now source implementations. The latest
-[continuation evidence](CONTINUATION-EVIDENCE-2026-11-11-NATIVE-REPAIRS.md)
+[continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-11-native-repairs)
 records their separate compilation and test boundaries. Published commits
 `a971fbb6` and `a708fba8` retain the original process, source, PF baseline,
 selected-DNS proof, changing utun reader and joined retirement. `a653953e`
@@ -1215,7 +1215,7 @@ original checkpoints, not the newer source and evidence above.
 
 ## Latest desktop ordered Startup Last source
 
-The [continuation ledger](CONTINUATION-EVIDENCE-2026-11-11-NATIVE-REPAIRS.md)
+The [continuation ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-11-native-repairs)
 now records the corrected ordered startup/Last implementation and twelve new
 source/owned test roots. It restores the complete captured Local graph through
 the existing native transaction and uses an explicit `node-chain-v1` receipt,
@@ -1231,7 +1231,7 @@ release and live/device acceptance are still separate open requirements.
 
 ## Hosted follow-up after the local executor interruption
 
-The latest [continuation ledger](CONTINUATION-EVIDENCE-2026-11-11-NATIVE-REPAIRS.md)
+The latest [continuation ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-11-native-repairs)
 records the actual GTK label correction at `07c96a04` and three desktop/iOS
 fixture composition repairs at `ad530f16`. Production policy and existing
 negative controls were preserved. Local execution is unavailable; hosted
@@ -1250,7 +1250,7 @@ live acceptance boundaries below remain open.
 
 ## November 11 later continuation: native ordered paths and protected hosts
 
-The [native repair and ordered-path evidence ledger](CONTINUATION-EVIDENCE-2026-11-11-NATIVE-REPAIRS.md)
+The [native repair and ordered-path evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-11-native-repairs)
 continues from live `62bfab03` and records published source through `c4e55240`.
 Original requirement passages and the historical 1–356 index, C1–C7, product
 fixes, map-first request and additional-node corrections were recovered again.
@@ -1379,7 +1379,7 @@ physical-device acceptance and private deployment remain open.
 
 ## Historical November 11 earlier continuation: native repairs and imported-path ownership
 
-The [November 11 evidence ledger](CONTINUATION-EVIDENCE-2026-11-11.md) records
+The [November 11 evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-11) records
 the continuation from live `94658242`, recovered original requirements, and
 published source through `68b82316`. The bounded Linux imported WG-to-paired-SS
 parent/host is now reconstructed and published; its installed native acceptance
@@ -1419,7 +1419,7 @@ only for the specific reconstructed and published units it identifies.
 
 ## Historical November 10 continuation: measurements, DNS and release repairs
 
-The [evidence ledger](CONTINUATION-EVIDENCE-2026-11-10.md) records the recovered
+The [evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-10) records the recovered
 original sources and published source through `885fb23c935b4006d8766e9a0b184bd4184063c5`.
 Checked timing now covers the named DNS/RTT, Compare, private/hop throughput and
 Speed Lab paths. Clock faults cannot become a score, saved benchmark or partial
@@ -1432,7 +1432,7 @@ The Linux imported WG-to-paired-SS physical and authenticated-child
 prerequisites are published. The parent/host integration remains unfinished
 and unpublished, and public admission remains closed. The execution workspace
 became unavailable before its current source could be fully validated or
-backed up. The [recovery record](CONTINUATION-RECOVERY-2026-11-10.md) distinguishes
+backed up. The [recovery record](AI-DEVELOPMENT-HISTORY.md#note-continuation-recovery-2026-11-10) distinguishes
 the last successful compile from the later unverified edits and records the
 remaining restoration, ownership and actual-host tests.
 
@@ -1572,7 +1572,7 @@ where this section explicitly records a later change.
 
 The last independently read branch checkpoint for this section is
 `5670c8e383f90636c0d11447d4228bdc606cdc6b`. The
-[November 9 evidence ledger](CONTINUATION-EVIDENCE-2026-11-09.md) records the
+[November 9 evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-09) records the
 published changes and their distinct test, native and release boundaries.
 
 Published `6c1bcd81` extends Local imported-entry paths to the existing paired
@@ -1634,7 +1634,7 @@ passed all ten required jobs at `e5875af0520c992b2fa58dd75a1422d246fa12eb`.
 The actual [AMD64 succession log](https://github.com/Eabusham2/router-vpn/actions/runs/42546960251/job/128940397827)
 and [ARM64 succession log](https://github.com/Eabusham2/router-vpn/actions/runs/42546960251/job/128940397594)
 each show all twelve mode/layer cases passing, including `max-tls-awg/off`.
-The [dated evidence ledger](CONTINUATION-EVIDENCE-2026-11-09.md#native-windows-max-follow-up--observed-at-0304-utc)
+The [dated evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-09)
 records the exact durations and unchanged source boundary. This supersedes the
 old timeout as the latest observed gate result; `fe3e62d8` remains diagnostic,
 not an asserted causal repair. Newer MAX execution and the full current release
@@ -1643,7 +1643,7 @@ were still pending. Physical/off-LAN acceptance and deployment are unchanged.
 ## Earlier November 9 checkpoint: PQ graphs, imported MTU and release gates
 
 The published source checkpoint is `e5875af0520c992b2fa58dd75a1422d246fa12eb`.
-The [updated November 9 ledger](CONTINUATION-EVIDENCE-2026-11-09.md) preserves
+The [updated November 9 ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-09) preserves
 the original requirements and the distinct evidence for the changes below.
 
 The existing PQ REALITY runtime is now a Local paired final for the eight
@@ -1684,7 +1684,7 @@ remain open. No source/parser count substitutes for those requirements.
 
 ## Earlier November 9 checkpoint through e0c815c1
 
-The [November 9 evidence ledger](CONTINUATION-EVIDENCE-2026-11-09.md)
+The [November 9 evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-09)
 records published work through `e0c815c1`, including newer concurrent commits.
 Bounded desktop OpenVPN TCP/UDP entry-to-paired-final Local execution is now
 implemented (`578590ac`); the older absence statements below are historical.
@@ -1716,7 +1716,7 @@ The dated sections below preserve their original checkpoint meaning.
 
 ## November 7 resumed continuation
 
-The [resumed evidence ledger](CONTINUATION-EVIDENCE-2026-11-07-RESUMED.md)
+The [resumed evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-07-resumed)
 records another original-source reconciliation and the published coherent
 changes through `bab5ec8d`. Windows child encoding, native MTU/test inventories,
 Darwin route-prefix decoding, external proof execution and joined native
@@ -1776,7 +1776,7 @@ distinct. The passages below retain their dated checkpoint meaning.
 
 ## November 7 continuation: imported paths and native verification
 
-The [November 7 evidence ledger](CONTINUATION-EVIDENCE-2026-11-07.md) records
+The [November 7 evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-07) records
 fresh original-requirement recovery, preservation of the newer live branch,
 and the source/test corrections published during this continuation. Published
 `cb2d6296` adds independently provisioned CONNECT entry layers. Published
@@ -1957,7 +1957,7 @@ C1–C7, the later 32-item product/breakage request, the later map-first prompt,
 external node/hop/exit requirements and accepted later corrections. Original
 user passages were recovered again; repository contracts and shortened handoffs
 do not replace that authority. The
-[product continuation evidence ledger](CONTINUATION-EVIDENCE-2026-11-06-PRODUCT.md)
+[product continuation evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-06-product)
 records the source locators, published units, checks and remaining boundaries.
 
 This continuation initially found live `main` at `8f05dbe6`, already 1,352
@@ -2017,7 +2017,7 @@ from that attempt. CONNECT's wider transport/layer/selected-DNS extension,
 ordinary external constructor adoption and the Tor status prerequisite remain
 unpublished, with different test boundaries. Their last known local work and
 restart gates are in the
-[execution recovery record](CONTINUATION-RECOVERY-2026-11-06-EXECUTOR.md).
+[execution recovery record](AI-DEVELOPMENT-HISTORY.md#note-continuation-recovery-2026-11-06-executor).
 The record does not replace the code or declare these requirements complete.
 GitHub remains the authority for published work; fetch current main before
 restoring any local delta.
@@ -2639,7 +2639,7 @@ The recovered live baseline was `b04eccee`, already 1,294 commits ahead of the
 older `745b3e41` release. Coherent tested changes are published on `main`
 through `7f80131297c2a350d9f297fc2388c6f99c7b2adf`. Each remote tree was compared
 with its tested local tree before adopting the remote commit. The
-[November 6 evidence ledger](CONTINUATION-EVIDENCE-2026-11-06.md) records the
+[November 6 evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-06) records the
 original-source reconciliation, changes, executable evidence and open boundaries.
 
 * **Mobile nested packet paths:** imported WireGuard/AmneziaWG entries now reach
@@ -2713,7 +2713,7 @@ shared/Android/Windows work was implemented and tested against current `main`.
 The execution workspace became unavailable while three source units were still
 uncommitted. Their exact paths, available hashes, completed checks and unfinished
 validation are recorded in
-[RECOVERY-WORKSPACE-2026-11-05.md](RECOVERY-WORKSPACE-2026-11-05.md) and its
+[RECOVERY-WORKSPACE-2026-11-05.md](AI-DEVELOPMENT-HISTORY.md#note-recovery-workspace-2026-11-05) and its
 [JSON manifest](RECOVERY-WORKSPACE-2026-11-05.json). The metadata is not a patch
 bundle and does not establish that the former workspace is currently accessible.
 The last locally adopted published source was `68011cbb`; later remote commits
@@ -2721,7 +2721,7 @@ require safe adoption when access returns. Full source and release completion
 remain open.
 
 The separate mobile/Windows continuation workspace is recorded in
-[RECOVERY-MOBILE-WINDOWS-2026-11-05.md](RECOVERY-MOBILE-WINDOWS-2026-11-05.md)
+[RECOVERY-MOBILE-WINDOWS-2026-11-05.md](AI-DEVELOPMENT-HISTORY.md#note-recovery-mobile-windows-2026-11-05)
 and its [guarded recovery JSON](RECOVERY-MOBILE-WINDOWS-2026-11-05.json).
 Six frozen Apple files have exact hash-verified recovery operations; the shared
 nested engine, Android and Windows drafts still lack complete recoverable bytes
@@ -2820,7 +2820,7 @@ transfer cases; their privileged execution remains an exact-SHA CI obligation.
 Failed cipher authentication has a typed receipt distinct from EOF, timeout,
 cancellation and generic connection failure. The Darwin receipt consumer keeps
 the same strict schema; its portable interoperability check is separate from
-actual macOS execution. See the [November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md)
+actual macOS execution. See the [November 5 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-05)
 for source identity, negative controls and acceptance limits.
 
 ## Linux ordinary Shadowsocks entry to HTTP/HTTPS CONNECT final
@@ -2842,7 +2842,7 @@ installed inventory preserves the prior 484 cases and appends 23 CONNECT cases,
 for 507 plus the separate nine reverse-transfer cases. Their actual installed
 namespace execution remains mandatory CI. This increment does not enable the
 Windows retained-entry path, Server/Compare or layered SS entries; their original
-requirements remain open. The [continuation evidence](CONTINUATION-EVIDENCE-2026-11-05.md)
+requirements remain open. The [continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-05)
 distinguishes the frozen native runtime source from later upstream and gate work.
 
 ## Linux standard child: idle original-parent retirement
@@ -2869,7 +2869,7 @@ intended assertions. The actual TUN/parent-death fixture remains mandatory CI:
 its local child launch failed before execution because the workspace's active
 PID namespace and mounted proc view disagree. The executable exists and ordinary
 self-execution succeeds; the identical namespace launch fails with ENOENT.
-The [continuation evidence](CONTINUATION-EVIDENCE-2026-11-05.md) preserves the
+The [continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-05) preserves the
 frozen native source, preparation and precise acceptance boundary.
 
 ## Retained Always guard: transport hostname bootstrap
@@ -2950,7 +2950,7 @@ a physical device or a deployment.
 
 ## November 5 continuation — original caller ownership
 
-[The November 5 evidence](CONTINUATION-EVIDENCE-2026-11-05.md) records fresh
+[The November 5 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-05) records fresh
 original-source reconciliation, individually verified pushes including
 `dc2ad7f5`, the integrated observation change in `a94cde9d`, and the installed
 Linux service operation-channel foundation and observer correction described below.
@@ -3449,7 +3449,7 @@ does not cover the newer service-MTU or replacement-startup changes.
 The verified source cutoff is
 [`4d25725c`](https://github.com/Eabusham2/router-vpn/commit/4d25725ccef863a1e800a18483372308cd5d6a9f),
 tree `affa265d7522c0d3fcbee3ca96485f9864886789`.
-[The November 4 evidence](CONTINUATION-EVIDENCE-2026-11-04.md) records the
+[The November 4 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-04) records the
 individually published changes, original requirement recovery and exact
 validation limits. Changes and test counts are not a requirements denominator.
 
@@ -3682,7 +3682,7 @@ validation limits. Changes and test counts are not a requirements denominator.
 The verified source cutoff is
 [f22d5a32](https://github.com/Eabusham2/router-vpn/commit/f22d5a32a6d7a844801d8aa0cb61f7312fbc3e03),
 tree `78bbf93613d79143f93a169dbde2850c6a2c6000`.
-[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records the
+[The November 3 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-03) records the
 published changes, executed checks and exact native boundaries. Requirement
 recovery is complete; the original 356 requirements, C1–C7, later 32-item
 request and later corrections remain binding. Counts of commits or tests are
@@ -3730,7 +3730,7 @@ not counts of completed requirements.
 ## Earlier implementation continuation — through 14dc92e3
 
 The verified source cutoff is [14dc92e3](https://github.com/Eabusham2/router-vpn/commit/14dc92e32f788387b5f24b8c0ef505df9e50372a).
-[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records fifty-three
+[The November 3 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-03) records fifty-three
 published implementation/verification units. These are not a requirements
 completion denominator. The original 356 requirements, C1–C7, later 32-item request and later
 corrections remain binding.
@@ -3769,7 +3769,7 @@ corrections remain binding.
 
 The verified source cutoff is
 [9f779cf0](https://github.com/Eabusham2/router-vpn/commit/9f779cf05766bf232d7ff13ee4697cd073b41671).
-[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records thirty-eight
+[The November 3 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-03) records thirty-eight
 published implementation/verification units. These findings supersede older
 pending descriptions only for the identified source and native cases.
 
@@ -3814,7 +3814,7 @@ requirements remain open. No live router, AdGuard or forwarding changes occurred
 
 The verified source cutoff is
 [32b36a63](https://github.com/Eabusham2/router-vpn/commit/32b36a63952d92b70b10fb69f701aa8757ae6493).
-[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records twenty-nine
+[The November 3 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-03) records twenty-nine
 published implementation/verification units. The following supersedes the
 earlier pending descriptions for these specific changes.
 
@@ -3860,7 +3860,7 @@ No live router, AdGuard, forwarding or deployment configuration was changed.
 
 The independently verified source is
 [cea693a0](https://github.com/Eabusham2/router-vpn/commit/cea693a04faa9915430c3babffd6ebda8cd25199).
-[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) now records
+[The November 3 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-03) now records
 twenty-three published implementation/verification units and their distinct
 source, local execution, native CI and delivery boundaries.
 
@@ -3904,7 +3904,7 @@ AdGuard, forwarding or deployment configuration was changed.
 
 The independently verified source cutoff is
 [ec25dc63](https://github.com/Eabusham2/router-vpn/commit/ec25dc63ac517c8edae228ed6b72e61a3cebc40e).
-[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records fourteen new
+[The November 3 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-03) records fourteen new
 published units, their executable tests and the actual native results. Original
 requirement recovery was checked against the available original transcripts;
 no shortened handoff replaces the full scope.
@@ -3954,7 +3954,7 @@ private network setting was changed.
 The independently verified published source is
 [60d91297](https://github.com/Eabusham2/router-vpn/commit/60d9129777d453bfe8e98238c8b49316090d0c8c),
 tree d86831fb7950d68d47800725005de4f554a9946b. The
-[November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md) records each source,
+[November 2 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02) records each source,
 test, native observation and publication boundary. Original requirement
 recovery is complete; continue implementation from that full scope.
 
@@ -3999,7 +3999,7 @@ network or deployment configuration was changed.
 
 The verified published source is [d4096487](https://github.com/Eabusham2/router-vpn/commit/d40964870c1277c5b420cfdac70c03bbbc0a47f1),
 with tree b5a1a5fbb501e1fa7a01f99b41e535d113c15eda. The
-[November 2 evidence record](CONTINUATION-EVIDENCE-2026-11-02.md) preserves
+[November 2 evidence record](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02) preserves
 exact source, tests, native CI and publication boundaries. Requirement recovery
 is complete for the recorded collection; the original scope is unchanged.
 
@@ -4048,7 +4048,7 @@ No private router, AdGuard, forwarding or deployment configuration was changed.
 The independently read-back source cutoff is
 [`e97c8d22102ffbbfa82d6769bac6e25c91fcb224`](https://github.com/Eabusham2/router-vpn/commit/e97c8d22102ffbbfa82d6769bac6e25c91fcb224),
 with Git tree `94ebf287b0c79eb1405e9bed458de2e4146b9d8e`.
-[The November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md) records the
+[The November 2 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02) records the
 coherent source units, real native observations and remaining boundaries.
 Original requirement recovery is complete for the recorded collection;
 implementation and delivery remain open wherever the full ledger lacks proof.
@@ -4129,7 +4129,7 @@ full original all-platform and graph requirements continue to govern it.
 The independently verified published source cutoff is
 [`771abdea26822191ada7c1245390ca4a0042e455`](https://github.com/Eabusham2/router-vpn/commit/771abdea26822191ada7c1245390ca4a0042e455),
 with Git tree `46c171389ba87a059096acec5dcd3bb336ea479e`. The newer section in
-[the November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md) records each
+[the November 2 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02) records each
 coherent commit, native result and remaining boundary. Requirement recovery
 remains complete for the recorded collection; the full implementation scope
 has not been reduced.
@@ -4194,7 +4194,7 @@ No private router, AdGuard or deployment settings were changed.
 The independently verified published source cutoff is
 [`520050fcf97455bf7820f2af8d42d0133bcfcf8a`](https://github.com/Eabusham2/router-vpn/commit/520050fcf97455bf7820f2af8d42d0133bcfcf8a),
 tree `4af6a558ba506e2b0840844937394bd8415825c4`. The latest section in
-[the November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md) records the
+[the November 2 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02) records the
 intervening source units and exact native job boundaries. The original
 requirement reconciliation is complete; these status records do not reduce it.
 
@@ -4262,7 +4262,7 @@ not establish that those paths are available now.
 The independently verified published implementation cutoff is
 [`f2e750aa458050106a9b7f509e2f08bba5580c8e`](https://github.com/Eabusham2/router-vpn/commit/f2e750aa458050106a9b7f509e2f08bba5580c8e),
 with Git tree `6491966010fba12b67ecae81b6a5b7fe54071cac`.
-[The November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md) records the
+[The November 2 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02) records the
 source units, actual native tests and remaining delivery boundaries. Earlier
 sections preserve their own checkpoints; current findings here supersede their
 older active-gap wording without removing any original requirement.
@@ -4353,7 +4353,7 @@ older active-gap wording without removing any original requirement.
 The independently verified published implementation cutoff is
 [`55d9f285ff6bae4c9f2d50ba4960ecd7c35020d4`](https://github.com/Eabusham2/router-vpn/commit/55d9f285ff6bae4c9f2d50ba4960ecd7c35020d4),
 with Git tree `e570e88b3337f01489e9601e8279a015068b42eb`.
-[The November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md) records the six
+[The November 2 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02) records the six
 new source units and separates their local, kernel, packaged and live boundaries.
 All original requirements and later corrections remain binding.
 
@@ -4415,7 +4415,7 @@ All original requirements and later corrections remain binding.
 
 The latest independently verified implementation cutoff is
 [`34f65cb827bd20e8681bfc2e003d77d883a5848e`](https://github.com/Eabusham2/router-vpn/commit/34f65cb827bd20e8681bfc2e003d77d883a5848e).
-[The November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md) records all eleven
+[The November 2 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02) records all eleven
 new published units and their source, local-test, native and release boundaries.
 Original requirement passages and later corrections were rechecked; the scope
 and defaults were not reduced.
@@ -4456,7 +4456,7 @@ and defaults were not reduced.
 
 The independently verified published source cutoff is
 [`bbd684f860a4956e9f9d27d5c7c5d2faeeefb4c6`](https://github.com/Eabusham2/router-vpn/commit/bbd684f860a4956e9f9d27d5c7c5d2faeeefb4c6).
-[The November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md)
+[The November 2 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02)
 records each implementation, local/native boundary and historical failure.
 
 - The actual protected Linux TUN gate passes all six cases on AMD64 and ARM64
@@ -4503,7 +4503,7 @@ newer source and exact native outcomes above take precedence.
 
 The independently verified published source cutoff is
 [`f103637f63235872ba2c144dd87135d6a1832615`](https://github.com/Eabusham2/router-vpn/commit/f103637f63235872ba2c144dd87135d6a1832615).
-[November 2 continuation evidence](CONTINUATION-EVIDENCE-2026-11-02.md)
+[November 2 continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02)
 records the exact units, tests, source projections and native failures.
 
 - Windows, macOS and Linux now expose external Compare only and Compare and
@@ -4553,7 +4553,7 @@ implementation and corrections above supersede their then-open gap wording.
 
 The independently verified published source cutoff is
 [`6d6f4c155654503057e40cd398a0cf3cbac28a81`](https://github.com/Eabusham2/router-vpn/commit/6d6f4c155654503057e40cd398a0cf3cbac28a81).
-[November 2 continuation evidence](CONTINUATION-EVIDENCE-2026-11-02.md)
+[November 2 continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02)
 records complete On-connect release-intent recovery, retained Hysteria2/WG Start
 Layers, desktop native fifty-sample latency, the genuine Windows UAC fixture,
 the Swift 6.1 compiler repair and the Tor audit/Windows diagnostic follow-ups.
@@ -4590,7 +4590,7 @@ the Swift 6.1 compiler repair and the Tor audit/Windows diagnostic follow-ups.
 
 The independently verified published source cutoff is
 [`2f62badb9d9a74c8f93a8232f914ef63eb4f2d7f`](https://github.com/Eabusham2/router-vpn/commit/2f62badb9d9a74c8f93a8232f914ef63eb4f2d7f).
-[Current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-2f62badb)
+[Current continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-01)
 records the two mobile comparison implementations, retained Linux AWG2 and
 the source/dialog fixture repairs, with their exact verification boundaries.
 
@@ -4628,7 +4628,7 @@ the source/dialog fixture repairs, with their exact verification boundaries.
 
 The independently verified published source cutoff is
 [`60de6b396f7078c09204c327a50e8ca90128fa3b`](https://github.com/Eabusham2/router-vpn/commit/60de6b396f7078c09204c327a50e8ca90128fa3b).
-[Current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-60de6b39)
+[Current continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-01)
 records the retained Linux Hysteria2 implementation and Tor test-receipt repair.
 
 - Linux Hysteria2/Off now uses the retained native controller, exact original
@@ -4655,7 +4655,7 @@ records the retained Linux Hysteria2 implementation and Tor test-receipt repair.
 
 The independently verified published source cutoff is
 [`06a65417b09f993f98fde5efe3a9a5bea85e418c`](https://github.com/Eabusham2/router-vpn/commit/06a65417b09f993f98fde5efe3a9a5bea85e418c).
-[Earlier continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#earlier-source-and-native-evidence-through-06a65417)
+[Earlier continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-01)
 records five further source units and their separate native outcomes.
 
 - Both mobile apps now measure fifty routed HTTPS responses on the selected
@@ -4683,7 +4683,7 @@ records five further source units and their separate native outcomes.
 
 The independently verified published source cutoff is
 [`6e7032f52acecb13128443e52fadd82ee567068a`](https://github.com/Eabusham2/router-vpn/commit/6e7032f52acecb13128443e52fadd82ee567068a).
-[Current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#earlier-source-and-native-evidence-through-6e7032f5)
+[Current continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-01)
 records nine further tested source units and the exact native observations.
 
 - Protected Linux WG/Off now uses the retained native session and sealed source,
@@ -4716,7 +4716,7 @@ records nine further tested source units and the exact native observations.
 
 The independently verified published source cutoff is
 [`49a0c3bef8d3c0952bb8eb93ecb39e5e8bce004b`](https://github.com/Eabusham2/router-vpn/commit/49a0c3bef8d3c0952bb8eb93ecb39e5e8bce004b).
-[Earlier continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#earlier-source-and-native-evidence-through-49a0c3be)
+[Earlier continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-01)
 records the eight newly published units and their separate native outcomes.
 
 - Linux retained Shadowsocks now supports all three requested Start Layers:
@@ -4751,7 +4751,7 @@ records the eight newly published units and their separate native outcomes.
 
 The independently verified published source cutoff is
 [`c51e7b5944d835a4aa6a79881ec91a9c34bd779f`](https://github.com/Eabusham2/router-vpn/commit/c51e7b5944d835a4aa6a79881ec91a9c34bd779f).
-[Earlier continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#earlier-source-and-native-evidence-through-c51e7b59)
+[Earlier continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-01)
 records each source unit, executable boundary and remaining original requirement.
 Older dated sections below retain their own cutoffs.
 
@@ -4788,7 +4788,7 @@ Older dated sections below retain their own cutoffs.
 
 The independently verified source cutoff is
 [`17a6eb67142a59abb93935f80d02ff5a925b02f3`](https://github.com/Eabusham2/router-vpn/commit/17a6eb67142a59abb93935f80d02ff5a925b02f3).
-The [earlier November 1 evidence](CONTINUATION-EVIDENCE-2026-11-01.md#earlier-source-and-native-evidence-through-17a6eb67)
+The [earlier November 1 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-01)
 records the intervening source changes, original requirement recovery, focused
 validation and separate native outcomes. Earlier sections retain their own
 cutoffs; their pending source descriptions do not override this section.
@@ -4835,7 +4835,7 @@ cutoffs; their pending source descriptions do not override this section.
 
 The independently verified source cutoff is
 [`39fe1a02b9272611a0389c8c3880cff3d0fb9416`](https://github.com/Eabusham2/router-vpn/commit/39fe1a02b9272611a0389c8c3880cff3d0fb9416).
-The [November 1 evidence update](CONTINUATION-EVIDENCE-2026-11-01.md#earlier-source-and-native-evidence-through-39fe1a02)
+The [November 1 evidence update](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-01)
 records each publication and the current native results. Older sections below
 retain their original cutoffs; they do not override newer observations.
 
@@ -4874,7 +4874,7 @@ retain their original cutoffs; they do not override newer observations.
 
 The independently read source cutoff is
 [`74dbd3d43584cc38e77ea7730a97147d9bd3ae4b`](https://github.com/Eabusham2/router-vpn/commit/74dbd3d43584cc38e77ea7730a97147d9bd3ae4b).
-The [updated November 1 evidence](CONTINUATION-EVIDENCE-2026-11-01.md#earlier-source-and-native-evidence-through-74dbd3d4)
+The [updated November 1 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-01)
 records the intervening publications and their separate native results. The
 historical sections below retain their original cutoffs and requirement scope.
 
@@ -4937,7 +4937,7 @@ historical sections below retain their original cutoffs and requirement scope.
 
 The independently verified source cutoff is
 [`d8bb8018f7f28bd5c1fb39121381be6be3034c9d`](https://github.com/Eabusham2/router-vpn/commit/d8bb8018f7f28bd5c1fb39121381be6be3034c9d).
-[November 1 continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md)
+[November 1 continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-01)
 preserves the earlier publications and records each native result against its
 own source SHA. Passing jobs from different commits do not establish a release
 of this cutoff. The original requirements and later corrections remain binding.
@@ -4987,7 +4987,7 @@ of this cutoff. The original requirements and later corrections remain binding.
 
 The independently verified source cutoff is
 [`449abaad907b546229126869f047136b351f5415`](https://github.com/Eabusham2/router-vpn/commit/449abaad907b546229126869f047136b351f5415).
-[November 1 continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md)
+[November 1 continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-01)
 records each coherent direct-to-main publication, its validation boundaries,
 actual native failures and the remaining requirement ledger. Original scope
 and later user corrections remain binding.
@@ -5025,7 +5025,7 @@ and later user corrections remain binding.
 
 The independently verified source cutoff is
 [`4b095b069cc37f304137991d9286091af2df7424`](https://github.com/Eabusham2/router-vpn/commit/4b095b069cc37f304137991d9286091af2df7424).
-The [new continuation evidence](CONTINUATION-EVIDENCE-2026-10-31.md#native-graph-continuation-through-4b095b06)
+The [new continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-31)
 records the source publications, real native outcomes, and remaining integration.
 The earlier sections below retain their original dated scope.
 
@@ -5093,7 +5093,7 @@ was changed.
 
 The independently verified source cutoff is
 [`060f2e2c8264be1ecc3b654cc698585ddfba1250`](https://github.com/Eabusham2/router-vpn/commit/060f2e2c8264be1ecc3b654cc698585ddfba1250).
-The [fresh continuation evidence](CONTINUATION-EVIDENCE-2026-10-31.md#fresh-recovery-and-verification-through-060f2e2c)
+The [fresh continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-31)
 records ten further implementation publications after the previous status
 document, their actual tests, and the remaining requirements.
 
@@ -5148,7 +5148,7 @@ No live router, AdGuard, ASUS forwarding or Portainer deployment was changed.
 
 The verified source cutoff is
 [`6158792145becb0ef3bce579e020bdc663eddf9a`](https://github.com/Eabusham2/router-vpn/commit/6158792145becb0ef3bce579e020bdc663eddf9a).
-The [continued implementation evidence](CONTINUATION-EVIDENCE-2026-10-31.md#linux-owned-engine-and-journal-windows-native-gates-through-61587921)
+The [continued implementation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-31)
 records fifteen further implementation publications, their executable evidence,
 and the current remaining requirements. Earlier sections below are dated
 observations, not assertions that their former gaps are still present.
@@ -5209,7 +5209,7 @@ AdGuard, ASUS forwarding or Portainer deployment was changed.
 
 The verified source cutoff is
 [`cf8b98e3ea698dd109418c1c0e28eac96d877af3`](https://github.com/Eabusham2/router-vpn/commit/cf8b98e3ea698dd109418c1c0e28eac96d877af3).
-The [October 31 continuation evidence](CONTINUATION-EVIDENCE-2026-10-31.md#continued-source-and-native-verification-through-cf8b98e3)
+The [October 31 continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-31)
 records fourteen additional guarded publications and their distinct evidence.
 
 - Requirement recovery again located the original August 11/13 user passages,
@@ -5249,7 +5249,7 @@ was performed for this continuation.
 
 The verified source cutoff is
 [`5d903f677c3edbb8ff95cf5e1aeab7978fe04f64`](https://github.com/Eabusham2/router-vpn/commit/5d903f677c3edbb8ff95cf5e1aeab7978fe04f64).
-The [October 31 evidence](CONTINUATION-EVIDENCE-2026-10-31.md) records the
+The [October 31 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-31) records the
 individual source manifests, executable results and native acceptance limits.
 
 - The actual Linux CI source-closure failure is repaired (`c6cc6589`). Native
@@ -5287,7 +5287,7 @@ not a claim of full product or current release completion.
 
 The verified source cutoff is
 [`7517ed24664b2313b0568004a5057828a9016c59`](https://github.com/Eabusham2/router-vpn/commit/7517ed24664b2313b0568004a5057828a9016c59).
-The [October 31 UTC evidence](CONTINUATION-EVIDENCE-2026-10-31.md) records exact
+The [October 31 UTC evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-31) records exact
 source identities, test receipts and remaining acceptance boundaries.
 
 - Linux Node preparation now retains a Linux-specific captured policy/source
@@ -5343,7 +5343,7 @@ devices and deliberate private deployment remain open.
 
 The verified source cutoff is
 [`9f20f6e734b2ced6a6e609f2f0bd5f311aabe997`](https://github.com/Eabusham2/router-vpn/commit/9f20f6e734b2ced6a6e609f2f0bd5f311aabe997).
-The [public Node and Naive evidence](CONTINUATION-EVIDENCE-2026-10-30.md#public-windows-node-ownership-naive-composition-and-confirmed-startup-improvement)
+The [public Node and Naive evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-30)
 records the exact validation and remaining boundaries.
 
 - Public Windows Connect/AUTO/SMART/Speed Lab now use the captured owned native
@@ -5392,7 +5392,7 @@ fixtures. No private router deployment, signing or full completion is claimed.
 
 The verified source cutoff is
 [`d02bc9f68fb9ea522e50daa84b5fbab28c9f14f7`](https://github.com/Eabusham2/router-vpn/commit/d02bc9f68fb9ea522e50daa84b5fbab28c9f14f7).
-The [new native outcomes and active-table correction](CONTINUATION-EVIDENCE-2026-10-30.md#native-session-and-node-outcomes-active-linux-tables-and-profile-helper-loading)
+The [new native outcomes and active-table correction](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-30)
 record the exact commits, native jobs and validation limits.
 
 - The actual installed/Portable Windows Session passed at both `db6f789b` and
@@ -5438,7 +5438,7 @@ The verified source cutoff is
 [`2b1fb0c58a613e8265f59ba259f7aa41c66cd25e`](https://github.com/Eabusham2/router-vpn/commit/2b1fb0c58a613e8265f59ba259f7aa41c66cd25e).
 All five coherent units below were committed and pushed directly to `main`,
 with the resulting remote parent/tree/head independently checked. The
-[journal, Xray and Linux native evidence](CONTINUATION-EVIDENCE-2026-10-30.md#journal-materialization-xray-families-and-linux-native-observations)
+[journal, Xray and Linux native evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-30)
 records exact source identities, tests and remaining limits.
 
 - Windows app startup now consumes the native read-only absence proof and
@@ -5502,7 +5502,7 @@ The verified source publication cutoff is
 [`5f7e8e9703dc7998675e3d36a1480d02c51fa043`](https://github.com/Eabusham2/router-vpn/commit/5f7e8e9703dc7998675e3d36a1480d02c51fa043).
 Each coherent unit below was committed directly to `main`, with its remote
 parent, tree and resulting head independently checked. The branch may advance.
-The [captured proof, native startup and Unix adapter evidence](CONTINUATION-EVIDENCE-2026-10-30.md#captured-proof-native-startup-and-unix-adapters)
+The [captured proof, native startup and Unix adapter evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-30)
 provides exact commit identities and verification boundaries. Earlier sections
 remain historical evidence and do not override these newer results.
 
@@ -5577,7 +5577,7 @@ The latest verified source publication cutoff is
 [`d342000f2f41c36517ce3fedccf65611e13f608b`](https://github.com/Eabusham2/router-vpn/commit/d342000f2f41c36517ce3fedccf65611e13f608b).
 Completed units were committed and pushed directly to `main` with normal
 ancestry and independent remote parent/tree/head checks. The branch may advance.
-The [application recovery and graph evidence](CONTINUATION-EVIDENCE-2026-10-30.md#application-recovery-and-broader-node-execution)
+The [application recovery and graph evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-30)
 updates the older checkpoints below. Original requirements and their optional
 or feasible qualifications remain in the existing source reconciliation.
 
@@ -5663,10 +5663,10 @@ The verified publication cutoff is
 [`3e873649794e3f692bc9009166f28b971faba05f`](https://github.com/Eabusham2/router-vpn/commit/3e873649794e3f692bc9009166f28b971faba05f).
 Every completed unit below was committed and pushed directly to `main`, with
 the resulting remote parent, tree and branch checked. The branch may advance.
-The [latest evidence section](CONTINUATION-EVIDENCE-2026-10-30.md#durable-recovery-datagram-and-native-gate-continuation)
+The [latest evidence section](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-30)
 supersedes the older missing-feature and pending-test statements below only
 where it supplies newer evidence. Original scope and qualifications remain in
-the [source reconciliation](RECONCILIATION-2026-10-30-SOURCES.md).
+the [source reconciliation](AI-DEVELOPMENT-HISTORY.md#note-reconciliation-2026-10-30-sources).
 
 ### Published behavior and integration boundaries
 
@@ -5751,7 +5751,7 @@ The continuation recovered the original requirements and verified the preserved
 source against live `main`. The current verified publication cutoff is
 `a4966ca453d70fa33b2b9819acc791545d161f4a`. Eighteen recovered source/test
 changes and the new standalone-utility fixture repair are now published directly to `main`.
-The [publication recovery section](CONTINUATION-EVIDENCE-2026-10-30.md#publication-recovery-after-the-interrupted-session)
+The [publication recovery section](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-30)
 records every local-to-remote commit mapping and its validation limits.
 The branch may advance after this observation.
 
@@ -5762,7 +5762,7 @@ subsequent observer fix used the strictly tested unconnected-UDP peer helper.
 All branch updates were non-forced and followed by remote SHA/tree checks.
 The old interrupted-publication state is retained only as historical evidence.
 
-The [source reconciliation note](RECONCILIATION-2026-10-30-SOURCES.md) records
+The [source reconciliation note](AI-DEVELOPMENT-HISTORY.md#note-reconciliation-2026-10-30-sources) records
 actual original user turns, C1–C7, numbered-audit qualifications and retrieval
 limits. The original 356 requirements, later product/breakage list, map-first
 design, external nodes/hops/exits and later corrections remain binding.
@@ -5896,7 +5896,7 @@ native journal storage or Go/Python PF adoption unfinished, the newer source
 inventory above supersedes that status without converting pending native or
 live acceptance into a pass.
 
-The [October 30 evidence ledger](CONTINUATION-EVIDENCE-2026-10-30.md) records
+The [October 30 evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-30) records
 verified direct-`main` publication through
 `83ba21a7deffcf03b9ad9903b1ce43e34ce665f1`. The branch may advance after this
 cutoff. The original 356 requirements, C1–C7, later 32-item request, map-first
@@ -6017,9 +6017,9 @@ source continuation. Earlier passing releases do not close these newer gaps.
 The latest resumed check started at `f87b7809`, preserving the source already
 316 commits beyond historical release `745b3e41`. Current repairs and exact
 verified pushes through `f9c66253` are recorded in the
-[October 29 evidence ledger](CONTINUATION-EVIDENCE-2026-10-29.md), with
+[October 29 evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-29), with
 the preceding work retained in the
-[October 28 ledger](CONTINUATION-EVIDENCE-2026-10-28.md).
+[October 28 ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-28).
 
 Private Router Windows firewall handoff now retains the compiled addresses,
 ports and transports through single-node and Local/Server launches, environment
@@ -6202,7 +6202,7 @@ historical published `745b3e41` release. Personal/project context and the named
 private sources were retrieved. The complete numbered audit 1–356/C1–C7 and
 the original August 11, 13, 14 and 16 user passages were read separately; the
 numbered assistant audit is not presented as 356 verbatim user messages. The
-[October 28 evidence ledger](CONTINUATION-EVIDENCE-2026-10-28.md) records exact
+[October 28 evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-28) records exact
 source provenance, requirement refinements, tests and verified pushes.
 
 Ordinary imported WireGuard, AmneziaWG, SOCKS5, HTTP CONNECT, HTTPS CONNECT,
@@ -6278,7 +6278,7 @@ No live router, AdGuard, Portainer deployment or signing change has occurred.
 
 The October 27 continuation started at `936516e5`, preserving the newer source
 and pending work instead of restoring the historical `745b3e41` release. Its
-separate [evidence ledger](CONTINUATION-EVIDENCE-2026-10-27.md) records original
+separate [evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-10-27) records original
 source recovery limits, each verified push, focused tests and unfinished
 source/live obligations. At that checkpoint the complete original requirement
 transcripts had not been retrieved. The recovery and native-matrix observations

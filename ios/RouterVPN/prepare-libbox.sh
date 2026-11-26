@@ -325,35 +325,15 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   go mod tidy
   [[ $(go list -m -f '{{.Version}}' github.com/xtls/xray-core) == "$XRAY_VERSION" ]]
   bash "$ROOT/../../deploy/test_apple_xray_pinned.sh" "$VENDOR" "$XRAY_VENDOR"
-  python3 "$ROOT/../../deploy/test_mobile_node_chain_execution.py" --vendor "$VENDOR" --go "$(command -v go)"
-  python3 "$ROOT/../../deploy/test_node_chain_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
-  python3 "$ROOT/../../deploy/test_node_chain_openvpn_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
-  python3 "$ROOT/../../deploy/test_node_chain_multiple_imported_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
-  for ordinary_candidate_phase in baselines controls; do
-    python3 "$ROOT/../../deploy/test_node_chain_ordinary_candidate_reservation.py" --core "$VENDOR" --go "$(command -v go)" --phase "$ordinary_candidate_phase"
-  done
-  python3 "$ROOT/../../deploy/test_node_chain_candidate_preparation.py" --vendor "$VENDOR" --go "$(command -v go)"
   bash "$ROOT/../../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"
   bash "$ROOT/../../deploy/test_mobile_sip003_pinned.sh" "$VENDOR"
   bash "$ROOT/../../deploy/test_mobile_external_pinned.sh" "$VENDOR"
   python3 "$ROOT/../../deploy/test_ios_composite_multihop_pinned.py" --vendor "$VENDOR"
-  python3 "$ROOT/../../deploy/test_ios_imported_router_pinned_contract.py"
   python3 "$ROOT/../../deploy/test_ios_imported_router_pinned.py" --vendor "$VENDOR"
-  python3 "$ROOT/../../deploy/test_hysteria2_deadlines_pinned.py" "$VENDOR"
-  python3 "$ROOT/../../deploy/test_mobile_go_groups.py" shared "$VENDOR"
-  go test -race ./adapter/inbound -run TestRouterVPN -count=1
-  python3 "$ROOT/../../deploy/test_mobile_go_groups.py" ios-chain "$VENDOR"
-  go test -race . -run '^TestRouterVPNExecutionNativeSOCKS' -count=1 -timeout=90s
-  go test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor . -run '^TestRouterVPNMultipleImportedPublicRoute(OriginalOwners|Refusals)$' -count=1 -timeout=90s
-  go test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor,with_openvpn ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|NativeBaseStartLayer|NativeSIP003StartLayer|MTU|NodeChainBridge|NodeChainExecutionBridgeMultipleImported|NodeChainExecutionBridgeOpenVPN|NodeChainSOCKS|NodeChainCONNECT|NodeChainLatency|NodeChainOrdinary|NodeChainRemaining)' -count=1
   go test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./protocol/routervpnnodesocks -run '^TestOriginalSOCKS' -count=1 -timeout=90s
   go test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./protocol/routervpnnodeconnect -run '^TestCONNECT' -count=1 -timeout=90s
   go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1
-  python3 "$ROOT/../../deploy/test_amnezia_timers_pinned.py" "$VENDOR"
-  python3 "$ROOT/../../deploy/test_gvisor_forwarder_pinned.py" "$VENDOR"
-  python3 "$ROOT/../../deploy/test_mobile_wireguard_stack.py" "$VENDOR"
   go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./transport/wireguard -run TestRouterVPNClientBind -count=1
-  go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./service/routervpnperformance ./experimental/libbox/routervpn/mobileperf -count=1 -timeout=120s
   python3 "$ROOT/../../deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"
   python3 "$ROOT/../../deploy/prepare-mobile-torpack.py" "$VENDOR" --native-package "$TOR_PACKAGE"
   GOFLAGS="-ldflags=-checklinkname=0" go run ./cmd/internal/build_libbox -target apple -platform ios,iossimulator

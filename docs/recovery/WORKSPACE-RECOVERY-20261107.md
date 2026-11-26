@@ -18,7 +18,7 @@ Subsequent recovery-document commits must not be described as publication of
 the unfinished source listed below.
 
 The original requirement authority and current remaining gaps remain in
-[the continuation evidence ledger](../CONTINUATION-EVIDENCE-2026-11-07.md).
+[the continuation evidence ledger](../AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-07).
 The original 356-item historical index, C1–C7, later 32-item request, map-first
 design and later corrections were recovered earlier in this continuation.
 Do not replace them with this interrupted-work record.

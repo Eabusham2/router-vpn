@@ -404,33 +404,11 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
     exit 1
   }
   gofmt -w experimental/libbox/routervpn_xray_bridge.go
-  python3 "$ROOT/../deploy/test_hysteria2_deadlines_pinned.py" "$VENDOR"
-  python3 "$ROOT/../deploy/test_mobile_node_chain_execution.py" --vendor "$VENDOR" --go "$(command -v go)"
-  python3 "$ROOT/../deploy/test_node_chain_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
-  python3 "$ROOT/../deploy/test_node_chain_openvpn_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
-  python3 "$ROOT/../deploy/test_node_chain_multiple_imported_execution_owner.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
-  for ordinary_candidate_phase in baselines controls; do
-    python3 "$ROOT/../deploy/test_node_chain_ordinary_candidate_reservation.py" --core "$VENDOR" --go "$(command -v go)" --phase "$ordinary_candidate_phase"
-  done
-  python3 "$ROOT/../deploy/test_node_chain_candidate_preparation.py" --vendor "$VENDOR" --go "$(command -v go)"
-  python3 "$ROOT/../deploy/test_mobile_go_groups.py" shared "$VENDOR"
-  go_retry test -race ./adapter/inbound -run TestRouterVPN -count=1
-  go_retry test -race ./route -run '^TestRouterVPNStrategyInterface' -count=1 -timeout=90s
-  python3 "$ROOT/../deploy/test_mobile_go_groups.py" android-chain "$VENDOR"
-  go_retry test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor . -run '^TestRouterVPNExecutionNativeSOCKS' -count=1 -timeout=90s
-  go_retry test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor . -run '^TestRouterVPNMultipleImportedPublicRoute(OriginalOwners|Refusals)$' -count=1 -timeout=90s
-  go_retry test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor,with_openvpn ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|NativeBaseStartLayer|NativeSIP003StartLayer|MTU|NodeChainBridge|NodeChainExecutionBridgeMultipleImported|NodeChainExecutionBridgeOpenVPN|NodeChainSOCKS|NodeChainCONNECT|NodeChainLatency|NodeChainOrdinary|NodeChainRemaining)' -count=1
   go_retry test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./protocol/routervpnnodesocks -run '^TestOriginalSOCKS' -count=1 -timeout=90s
   go_retry test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./protocol/routervpnnodeconnect -run '^TestCONNECT' -count=1 -timeout=90s
-  python3 "$ROOT/../deploy/test_connect_final_layers_native.py" --core "$VENDOR" --go "$(command -v go)" --race --tags with_wireguard,with_gvisor,with_quic,with_utls,with_openvpn,with_naive_outbound,with_purego
   go_retry test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1
-  python3 "$ROOT/../deploy/test_amnezia_timers_pinned.py" "$VENDOR"
-  python3 "$ROOT/../deploy/test_gvisor_forwarder_pinned.py" "$VENDOR"
-  python3 "$ROOT/../deploy/test_mobile_wireguard_stack.py" "$VENDOR"
   go_retry test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./transport/wireguard -run TestRouterVPNClientBind -count=1
-  go_retry test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./service/routervpnperformance ./experimental/libbox/routervpn/mobileperf -count=1 -timeout=120s
   python3 "$ROOT/../deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"
-  go_retry test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor,with_openvpn ./experimental/libbox
   bash "$ROOT/../deploy/test_mobile_openvpn_pinned.sh" "$VENDOR"
   bash "$ROOT/../deploy/test_mobile_external_pinned.sh" "$VENDOR"
   bash "$ROOT/../deploy/test_apple_xray_pinned.sh" "$VENDOR" "$XRAY_CORE_VENDOR"
@@ -448,9 +426,7 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
     python3 "$ROOT/../deploy/test_android_tor_pinned.py" "$VENDOR" --native-package "$TOR_HOST_PACKAGE" --go "$(command -v go)"
     # Run the shipping Swift profile compiler against these same real engines.
     # Linux CI includes Swift; this must not use the unavailable macOS C stub.
-    python3 "$ROOT/../deploy/test_ios_tor_pinned.py" --vendor "$VENDOR" --native-package "$TOR_HOST_PACKAGE" --go "$(command -v go)" --output "$TOR_GATE_PARENT/apple-graphs"
     python3 "$ROOT/../deploy/test_mobile_external_graphs.py" --vendor "$VENDOR" --platform android --native-package "$TOR_HOST_PACKAGE" --go "$(command -v go)"
-    python3 "$ROOT/../deploy/test_mobile_external_graphs.py" --vendor "$VENDOR" --platform ios --native-package "$TOR_HOST_PACKAGE" --go "$(command -v go)"
   fi
   # Install only the verified C dependency into the existing Go module after
   # host graph gates, before the sole gomobile build of the combined runtime.

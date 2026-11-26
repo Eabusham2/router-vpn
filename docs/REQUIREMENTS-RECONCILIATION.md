@@ -20,7 +20,7 @@ deployment acceptance.
 
 ## November 15 continuation evidence
 
-[The November 15 ledger](CONTINUATION-EVIDENCE-2026-11-15.md) records recovery
+[The November 15 ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-15) records recovery
 of the complete historical 1–311 index, original August 11/13/14 user
 passages, published repairs and feature units through `dd9a608b`, current native
 failure evidence, Linux/Windows Off source, Android runtime/profile verification
@@ -51,7 +51,7 @@ separately accountable.
 
 ## November 12 current evidence refresh
 
-The current [November 12 ledger](CONTINUATION-EVIDENCE-2026-11-12.md#current-evidence-refresh)
+The current [November 12 ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-12)
 supersedes the earlier AES-256-only and missing-encrypted-middle status. All
 three original single-PSK SS2022 methods now have published mobile/desktop
 source adoption and a distinct nine-path encrypted native witness. Tight-MTU
@@ -81,7 +81,7 @@ from the newer source or test counts.
 
 ## November 10 original-source recovery and current boundaries
 
-The [November 10 evidence ledger](CONTINUATION-EVIDENCE-2026-11-10.md)
+The [November 10 evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-10)
 rechecks `mm.md`, the audit/addendum, the full later 32-topic request, and the
 August 13/14 external-node and August 19 map-first user passages. The 1–311
 list is an organized audit index embedded in conversation; it is not relabeled
@@ -107,7 +107,7 @@ question and the existing authenticated eligibility rules. Do not silently
 remove a recovered requirement, invent remote credentials, or count a refused
 combination as completed delivery.
 
-The [recovery record](CONTINUATION-RECOVERY-2026-11-10.md) names the published
+The [recovery record](AI-DEVELOPMENT-HISTORY.md#note-continuation-recovery-2026-11-10) names the published
 baseline, inaccessible pending files and remaining validation. It cannot
 substitute for a byte-exact patch or actual restored-workspace inspection.
 
@@ -121,7 +121,7 @@ Fast/Strong finals in Local execution. All 354 prior core and 155 entry-only
 native verdicts remain. Final evidence comprises 397 core and 651 native peer
 verdicts, Android 17,565 checks/five causal controls/472 native parser verdicts,
 and Apple 5,466 checks/236 native parser verdicts over its 235 actual exports.
-The [product evidence ledger](CONTINUATION-EVIDENCE-2026-11-06-PRODUCT.md#published-independent-socks-layers--reconciled-final-evidence)
+The [product evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-06-product)
 records exact source identities and execution boundaries.
 
 This closes the identified independent SOCKS layer source gap, not the complete
@@ -138,7 +138,7 @@ Original user passages were recovered from `mm.md`, the audit/addendum, the late
 32-item request, and the August 13/14 and August 19 external-node/map-first
 messages. The historical 356-item audit is an organized index; it must not be
 represented as 356 verbatim user sentences. Overlapping lists are not added into
-a completion denominator. See the [source and evidence ledger](CONTINUATION-EVIDENCE-2026-11-06.md).
+a completion denominator. See the [source and evidence ledger](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-06).
 
 | Required behavior | Current implementation and remaining evidence |
 |---|---|
@@ -208,7 +208,7 @@ original requirement set.
 ## Implementation reconciliation through 14dc92e3
 
 The verified source cutoff is [14dc92e3](https://github.com/Eabusham2/router-vpn/commit/14dc92e32f788387b5f24b8c0ef505df9e50372a).
-The [November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records fifty-three
+The [November 3 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-03) records fifty-three
 published implementation/verification units without converting them into a
 requirements completion percentage.
 
@@ -223,7 +223,7 @@ requirements completion percentage.
 ## Earlier implementation reconciliation through 9f779cf0
 
 The verified source cutoff is [9f779cf0](https://github.com/Eabusham2/router-vpn/commit/9f779cf05766bf232d7ff13ee4697cd073b41671).
-[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) records thirty-eight
+[The November 3 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-03) records thirty-eight
 published implementation/verification units. The full original requirements
 and their distinct source/native/device/deployment acceptance remain binding.
 
@@ -238,7 +238,7 @@ and their distinct source/native/device/deployment acceptance remain binding.
 ## Earlier implementation reconciliation through 32b36a63
 
 The verified source cutoff is [32b36a63](https://github.com/Eabusham2/router-vpn/commit/32b36a63952d92b70b10fb69f701aa8757ae6493).
-[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) now records
+[The November 3 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-03) now records
 twenty-nine published implementation/verification units. These rows supersede
 the earlier pending statements for the same changes; they do not close broader
 platform, graph or physical-device requirements.
@@ -254,7 +254,7 @@ platform, graph or physical-device requirements.
 ## Earlier implementation reconciliation through cea693a0
 
 The source cutoff is [cea693a0](https://github.com/Eabusham2/router-vpn/commit/cea693a04faa9915430c3babffd6ebda8cd25199).
-[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) preserves the
+[The November 3 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-03) preserves the
 original recovered scope and records twenty-three implementation/verification
 units. Later drafts are not included in this cutoff.
 
@@ -270,7 +270,7 @@ units. Later drafts are not included in this cutoff.
 ## Earlier implementation reconciliation through ec25dc63
 
 The source cutoff is [ec25dc63](https://github.com/Eabusham2/router-vpn/commit/ec25dc63ac517c8edae228ed6b72e61a3cebc40e).
-[The November 3 evidence](CONTINUATION-EVIDENCE-2026-11-03.md) distinguishes
+[The November 3 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-03) distinguishes
 published implementation, actual local execution, foreign-target compilation,
 native CI and release/device evidence. The original sources were recovered
 again for this continuation without replacing their scope or adding overlapping
@@ -288,7 +288,7 @@ lists into a completion denominator.
 ## Earlier implementation reconciliation through 60d91297
 
 The verified source cutoff is [60d91297](https://github.com/Eabusham2/router-vpn/commit/60d9129777d453bfe8e98238c8b49316090d0c8c).
-[The current evidence](CONTINUATION-EVIDENCE-2026-11-02.md) preserves source,
+[The current evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02) preserves source,
 actual local execution, compilation, native CI and publication separately.
 Original requirements are already recovered for the recorded collection.
 These rows refine their evidence without shrinking scope or inventing a
@@ -305,7 +305,7 @@ completion denominator.
 ## Earlier implementation reconciliation through d4096487
 
 The current published evidence cutoff is [d4096487](https://github.com/Eabusham2/router-vpn/commit/d40964870c1277c5b420cfdac70c03bbbc0a47f1).
-[The November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md) records the
+[The November 2 evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02) records the
 retained Linux OpenVPN/SOCKS units, Windows SS/HTTP/HTTPS integration, native
 route and lifecycle repairs, and exact delivery limits. Original-source
 recovery is complete for the recorded collection; these rows update evidence,
@@ -324,7 +324,7 @@ not the full requirement denominator or acceptance criteria.
 
 The current published implementation cutoff is
 [f2e750aa](https://github.com/Eabusham2/router-vpn/commit/f2e750aa458050106a9b7f509e2f08bba5580c8e).
-[The evidence record](CONTINUATION-EVIDENCE-2026-11-02.md) preserves the new
+[The evidence record](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02) preserves the new
 WireGuard unit `a276af2c` and source units `6cff6226`, `ed8640dd`,
 `ae43c489`, `bd3df93c`, `8e5a8b57`, `09f4dce1` and `f2e750aa`.
 These units extend evidence and runtime coverage;
@@ -345,7 +345,7 @@ external-node and lifecycle corrections retain their full authority.
 
 The current published implementation cutoff is
 [55d9f285](https://github.com/Eabusham2/router-vpn/commit/55d9f285ff6bae4c9f2d50ba4960ecd7c35020d4).
-[The evidence record](CONTINUATION-EVIDENCE-2026-11-02.md) records this unit, Hysteria2 in `74bd942a`, and
+[The evidence record](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02) records this unit, Hysteria2 in `74bd942a`, and
 `1720180d`, `90ffcbd2`, `296461bd` and `c7b03676`. These changes extend the existing
 reconciled scope; they do not replace original sources, change defaults or
 create a smaller completion denominator.
@@ -365,7 +365,7 @@ recovered again from the available private source documents. Personal-context
 retrieval was unavailable during this attempt; that does not remove an older
 requirement or establish complete conversation access. The current source
 cutoff is [34f65cb8](https://github.com/Eabusham2/router-vpn/commit/34f65cb827bd20e8681bfc2e003d77d883a5848e);
-[the evidence record](CONTINUATION-EVIDENCE-2026-11-02.md) identifies all eleven
+[the evidence record](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02) identifies all eleven
 published units and their exact tests.
 
 | Recovered scope | Current reconciliation |
@@ -380,7 +380,7 @@ published units and their exact tests.
 Original requirement recovery remains complete for the recorded source
 collection. The latest published source cutoff is
 [`bbd684f8`](https://github.com/Eabusham2/router-vpn/commit/bbd684f860a4956e9f9d27d5c7c5d2faeeefb4c6);
-[the continuation evidence](CONTINUATION-EVIDENCE-2026-11-02.md)
+[the continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02)
 records the exact changes, tests and native CI. These updates refine evidence,
 not the original requirement denominator or acceptance criteria.
 
@@ -407,7 +407,7 @@ implementation and acceptance work without replacing their scope or repeating
 recovery. Published source through
 [`f103637f`](https://github.com/Eabusham2/router-vpn/commit/f103637f63235872ba2c144dd87135d6a1832615)
 and exact local/native boundaries are recorded in
-[the current continuation evidence](CONTINUATION-EVIDENCE-2026-11-02.md).
+[the current continuation evidence](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-02).
 
 | Recovered scope | Current reconciliation |
 |---|---|
@@ -441,7 +441,7 @@ documents, without inventing a missing message date or timezone.
 Project/personal context was actively queried as a continuity index and the
 original files were retrieved separately. This does not claim access to every
 historical conversation. Current source and exact-SHA native/release evidence
-are recorded separately in [the November 1 continuation](CONTINUATION-EVIDENCE-2026-11-01.md).
+are recorded separately in [the November 1 continuation](AI-DEVELOPMENT-HISTORY.md#note-continuation-evidence-2026-11-01).
 Private transcripts and account/file identifiers are not reproduced here.
 
 ### Corrections retained during implementation

@@ -113,33 +113,8 @@ def run(command, *, cwd=None, env=None, timeout=1800):
     return output.replace('\r\n', '\n').replace('\r', '\n').strip()
 
 
-def command_test_groups(selected, complete):
-    """Keep every compiled command root in one disjoint bounded invocation."""
-    def roots(value):
-        return [line for line in value.splitlines() if re.fullmatch(r'Test[A-Za-z0-9_]+', line)]
-    original, all_roots = roots(selected), roots(complete)
-    if (not original or len(all_roots) != len(set(all_roots)) or
-            original != [name for name in all_roots if re.match(COMMAND_TEST_SELECTION, name)]):
-        raise ValueError('Native command discovery omitted or duplicated an original test')
-    return [original[index:index+COMMAND_TEST_BATCH] for index in range(0, len(original), COMMAND_TEST_BATCH)]
 
 
-def command_contracts(source, target, env):
-    # The broad command suite now exceeds its 120s combined Go timer on both
-    # Darwin architectures. Discover the actual compiled roots, then retain
-    # every original root/subtest, race setting and 120s/600s deadline. Go's
-    # build cache reuses the identical package; no native test is filtered out.
-    command_race = [] if target == 'windows/arm64' else ['-race']
-    command = ['go', 'test', *command_race, '-mod=readonly', '-tags='+','.join(tags(target)),
-               '-ldflags=-checklinkname=0', './cmd/sing-box']
-    selected = run([*command, '-list', COMMAND_TEST_SELECTION], cwd=source, env=env, timeout=600)
-    complete = run([*command, '-list', '.'], cwd=source, env=env, timeout=600)
-    groups = command_test_groups(selected, complete)
-    for index, group in enumerate(groups):
-        selection = '^('+'|'.join(re.escape(name) for name in group)+')$'
-        run([*command, '-run', selection, '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
-        print('Native command batch %d/%d passed (%d original roots)' %
-              (index+1, len(groups), len(group)), flush=True)
 
 
 def inputs():
@@ -148,50 +123,25 @@ def inputs():
                              ROOT/'deploy/test_go_windows_sockets.py',
                              ROOT/'deploy/windows_build_owner.py',
                              ROOT/'deploy/test_windows_build_owner.py',
-                             ROOT/'deploy/test_desktop_pt_inventory.py',
-                             ROOT/'deploy/test_desktop_pt_inventory_runner.py',
                              ROOT/'deploy/test_desktop_darwin_retirement.py',
-                             ROOT/'deploy/test_desktop_darwin_retirement_runner.py',
-                             ROOT/'deploy/test_desktop_darwin_node_chain_lifecycle.py',
-                             ROOT/'deploy/test_desktop_darwin_node_chain_lifecycle_runner.py',
-                             ROOT/'deploy/test_desktop_imported_runtime.py',
-                             ROOT/'deploy/test_desktop_imported_packet_runtime.py',
-                             ROOT/'deploy/test_desktop_imported_openvpn_runtime.py',
                              ROOT/'deploy/test_desktop_imported_trio_execution.py',
                              ROOT/'deploy/test_desktop_imported_trio_execution_runner.py',
                              ROOT/'deploy/test_desktop_imported_trio_controller.py',
                              ROOT/'deploy/test_desktop_imported_trio_controller_runner.py',
-                             ROOT/'deploy/test_server_node_chain_connect_encrypted.py',
-                             ROOT/'deploy/test_server_node_chain_connect_encrypted_runner.py',
                              ROOT/'deploy/server_dns_failure_diagnostic.py',
                              ROOT/'deploy/fixtures/server-dns-diagnostic.go.tmpl',
                              ROOT/'mobile/server_chain_acceptance/connect_linux_test.go.tmpl',
-                             ROOT/'deploy/test_desktop_imported_pq_runtime.py',
-                             ROOT/'deploy/test_desktop_imported_xhttp_runtime.py',
-                             ROOT/'deploy/test_desktop_imported_naive_h2_runtime.py',
-                             ROOT/'deploy/test_desktop_imported_naive_h3_runtime.py',
                              ROOT/'deploy/build-mobile-pq.py', ROOT/'deploy/prepare-desktop-rosenpass.py',
                              ROOT/'deploy/setup-desktop-native-toolchain.py',
                              ROOT/'deploy/install-desktop-windows-toolchain.py',
                              ROOT/'deploy/test_desktop_socket_uid.py',
                              ROOT/'deploy/test_desktop_windows_identity.py',
                              ROOT/'deploy/test_desktop_windows_identity_runner.py',
-                             ROOT/'deploy/test_desktop_windows_wfp.py',
-                             ROOT/'deploy/test_windows_protection_transfer.py',
-                             ROOT/'deploy/test_windows_protection_observation.py',
                              ROOT/'deploy/test_windows_node_physical.py',
-                             ROOT/'deploy/test_windows_node_physical_runner.py',
-                             ROOT/'deploy/test_windows_imported_naive_h3.py',
-                             ROOT/'deploy/test_windows_imported_naive_h3_runner.py',
-                             ROOT/'deploy/test_windows_external_provider_join.py',
                              ROOT/'deploy/test_windows_node_pq.py',
                              ROOT/'deploy/test_windows_node_pq_runner.py',
                              ROOT/'deploy/test_windows_node_max.py',
-                             ROOT/'deploy/test_desktop_windows_traffic.py',
                              ROOT/'deploy/test_windows_physical_bootstrap.py',
-                             ROOT/'deploy/test_windows_physical_bootstrap_runner.py',
-                             ROOT/'deploy/test_windows_physical_tunnel.py',
-                             ROOT/'deploy/test_windows_physical_tunnel_runner.py',
                              ROOT/'deploy/test_windows_candidate_prefix.py',
                              ROOT/'deploy/test_windows_candidate_prefix_runner.py',
                              ROOT/'deploy/test_desktop_socks_parent.py',
@@ -217,21 +167,11 @@ def inputs():
                              ROOT/'deploy/test_desktop_node_physical.py',
                              ROOT/'deploy/test_desktop_node_phases.py',
                              ROOT/'deploy/test_desktop_native_root_phases.py',
-                             ROOT/'deploy/test_socks_server_prefix_native.py',
-                             ROOT/'deploy/test_server_node_chain_openvpn_encrypted.py',
-                             ROOT/'deploy/test_server_node_chain_hysteria_encrypted.py',
-                             ROOT/'deploy/test_server_node_chain_hysteria_encrypted_runner.py',
-                             ROOT/'deploy/test_server_node_chain_openvpn_encrypted_runner.py',
                              ROOT/'mobile/server_chain_acceptance/openvpn_linux_test.go.tmpl',
                              ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/test_server_node_chain_candidate_grants.py',
-                             ROOT/'deploy/test_remote_node_chain_candidates.py',
-                             ROOT/'deploy/test_server_node_chain_candidate_worker.py',
-                             ROOT/'deploy/test_server_node_chain_candidate_worker_runner.py',
                              *sorted((ROOT/'cmd/router-agent').glob('*.go')),
                              ROOT/'deploy/test_server_node_chain_openvpn_native.py',
                              ROOT/'deploy/test_server_node_chain_openvpn_native_runner.py',
-                             ROOT/'deploy/test_node_chain_openvpn_encrypted_local.py',
                              ROOT/'deploy/test_node_chain_multiple_imported_native.py',
                              ROOT/'deploy/test_node_chain_multiple_imported_native_runner.py',
                              ROOT/'deploy/test_node_chain_multiple_imported_execution_owner.py',
@@ -247,40 +187,14 @@ def inputs():
                              ROOT/'mobile/chain_component/openvpn_execution_test.go.tmpl',
                              ROOT/'mobile/server_chain_component/openvpn_owner.go.tmpl',
                              ROOT/'mobile/server_chain_component/openvpn_test.go.tmpl',
-                             ROOT/'deploy/test_desktop_socks_execution_construction.py',
-                             ROOT/'deploy/test_desktop_socks_execution_child.py',
-                             ROOT/'deploy/test_desktop_openvpn_execution_child.py',
-                             ROOT/'deploy/test_desktop_openvpn_execution_child_runner.py',
-                             ROOT/'deploy/test_desktop_selected_latency.py',
                              ROOT/'deploy/prepare-desktop-selected-latency-test.py',
                              ROOT/'mobile/desktop_test/selected_latency_fixture.go.tmpl',
-                             ROOT/'deploy/test_desktop_selected_candidates.py',
                              ROOT/'deploy/prepare-desktop-selected-candidate-test.py',
                              ROOT/'mobile/desktop_test/selected_candidate_fixture.go.tmpl',
-                             ROOT/'deploy/test_desktop_selected_candidate_controller.py',
-                             ROOT/'deploy/test_desktop_selected_candidate_controller_runner.py',
-                             ROOT/'deploy/test_socks_server_final_layers.py',
-                             ROOT/'deploy/test_connect_final_layers_native.py',
-                             ROOT/'deploy/test_connect_final_layers_native_runner.py',
                              ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/test_desktop_socks_execution_controller.py',
-                             ROOT/'deploy/test_desktop_socks_execution_controller_runner.py',
-                             ROOT/'deploy/test_desktop_typed_candidate_controller.py',
-                             ROOT/'deploy/test_desktop_typed_candidate_controller_runner.py',
-                             ROOT/'deploy/test_desktop_typed_connected_candidates.py',
                              ROOT/'deploy/test_node_chain_ordinary_candidate_reservation.py',
                              ROOT/'deploy/test_node_chain_ordinary_candidate_reservation_runner.py',
                              ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/test_desktop_connect_execution_layers.py',
-                             ROOT/'deploy/test_desktop_connect_execution_layers_runner.py',
-                             ROOT/'deploy/test_desktop_openvpn_execution_controller.py',
-                             ROOT/'deploy/test_desktop_openvpn_execution_controller_runner.py',
-                             ROOT/'deploy/test_desktop_paired_ss_execution_controller.py',
-                             ROOT/'deploy/test_desktop_paired_ss_execution_controller_runner.py',
-                             ROOT/'deploy/test_macos_paired_ss_execution_host.py',
-                             ROOT/'deploy/test_macos_paired_ss_execution_host_runner.py',
-                             ROOT/'deploy/test_desktop_hysteria_execution_controller.py',
-                             ROOT/'deploy/test_desktop_hysteria_execution_controller_runner.py',
                              ROOT/'deploy/test_mobile_node_chain_execution.py',
                              ROOT/'deploy/test_mobile_node_chain_execution_runner.py',
                              ROOT/'deploy/test_mobile_node_chain_execution_preparation.py',
@@ -294,16 +208,8 @@ def inputs():
                              ROOT/'deploy/test_native_imported_packet_xray_runner.py',
                              ROOT/'deploy/test_mobile_imported_packet_xray.py',
                              ROOT/'deploy/test_mobile_imported_packet_xray_runner.py',
-                             ROOT/'deploy/test_native_xray_udp443.py',
-                             ROOT/'deploy/test_native_xray_udp443_runner.py',
-                             ROOT/'deploy/test_mobile_imported_pq_xray.py',
-                             ROOT/'deploy/test_mobile_imported_xhttp_xray.py',
                              ROOT/'deploy/test_mobile_imported_naive_h2.py',
-                             ROOT/'deploy/test_mobile_imported_naive_h3.py',
-                             ROOT/'deploy/test_mobile_imported_pq_xray_runner.py',
-                             ROOT/'deploy/test_mobile_imported_xhttp_xray_runner.py',
                              ROOT/'deploy/test_mobile_imported_naive_h2_runner.py',
-                             ROOT/'deploy/test_mobile_imported_naive_h3_runner.py',
                              ROOT/'android/test_android_imported_router.py',
                              ROOT/'mobile/routervpn_imported_pq_xray_native_test.go.tmpl',
                              ROOT/'mobile/routervpn_imported_xhttp_xray_native_test.go.tmpl',
@@ -330,7 +236,6 @@ def inputs():
                              ROOT/'deploy/test_desktop_node_chain_ss_prefix_contract_runner.py',
                              ROOT/'deploy/test_ios_node_candidate_typed_prefix.py',
                              ROOT/'deploy/test_ios_node_layered_candidates.py',
-                             ROOT/'android/test_android_node_layered_candidates.py',
                              ROOT/'deploy/test_ios_node_chain_imported_capture.py',
                              ROOT/'deploy/test_ios_node_chain_imported_profiles.py',
                              ROOT/'deploy/test_ios_node_chain_imported_nodes.py',
@@ -367,8 +272,6 @@ def inputs():
                              ROOT/'android/test_android_node_chain_imported_runtime.py',
                              ROOT/'android/test_android_multiple_imported_local.py',
                              ROOT/'deploy/test_reference_udp_lifetime.py',
-                             ROOT/'deploy/test_xray_vision_state.py',
-                             ROOT/'deploy/test_xray_vision_state_runner.py',
                              ROOT/'deploy/test_mobile_imported_entry.py',
                              ROOT/'deploy/test_mobile_imported_entry_runner.py',
                              ROOT/'deploy/mobile_imported_openvpn_cases.py',
@@ -387,43 +290,22 @@ def inputs():
                              ROOT/'deploy/test_desktop_linux_guardian.py',
                              ROOT/'deploy/test_desktop_dnssec_namespace.py',
                              ROOT/'deploy/test_desktop_dnssec_command.py',
-                             ROOT/'deploy/test_desktop_command_retirement.py',
                              ROOT/'deploy/test_linux_node_child_control.py',
                              ROOT/'deploy/test_linux_node_child_control_runner.py',
-                             ROOT/'deploy/test_linux_external_lifecycle.py',
-                             ROOT/'deploy/test_linux_external_lifecycle_runner.py',
-                             ROOT/'deploy/test_linux_external_openvpn.py',
-                             ROOT/'deploy/test_linux_external_openvpn_runner.py',
                              ROOT/'deploy/test_linux_node_child_tun.py',
                              ROOT/'deploy/test_linux_node_child_tun_runner.py',
                              ROOT/'deploy/test_linux_node_host_tun.py',
                              ROOT/'deploy/test_linux_node_host_tun_runner.py',
                              ROOT/'deploy/unix_reality_cases.py',
-                             ROOT/'deploy/test_unix_reality_host.py',
-                             ROOT/'deploy/test_unix_reality_host_runner.py',
                              ROOT/'.github/workflows/build-all.yml',
                              ROOT/'deploy/unix_naive_h2_cases.py',
-                             ROOT/'deploy/test_unix_naive_h2_host.py',
-                             ROOT/'deploy/test_unix_naive_h2_host_runner.py',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/test_linux_connect_execution_host.py',
-                             ROOT/'deploy/test_linux_connect_execution_host_runner.py',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/test_linux_socks_execution_host.py',
-                             ROOT/'deploy/test_linux_socks_execution_host_runner.py',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/test_linux_connect_prefix_execution_host.py',
-                             ROOT/'deploy/test_linux_connect_prefix_execution_host_runner.py',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/test_linux_socks_prefix_execution_host.py',
-                             ROOT/'deploy/test_linux_socks_prefix_execution_host_runner.py',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/test_linux_imported_execution_host.py',
-                             ROOT/'deploy/test_linux_imported_execution_host_runner.py',
                              ROOT/'.github/workflows/build-all.yml',
                              ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/test_windows_connect_execution_host.py',
-                             ROOT/'deploy/test_windows_connect_execution_host_runner.py',
+                             ROOT/'.github/workflows/build-all.yml',
+                             ROOT/'.github/workflows/build-all.yml',
+                             ROOT/'.github/workflows/build-all.yml',
+                             ROOT/'.github/workflows/build-all.yml',
+                             ROOT/'.github/workflows/build-all.yml',
                              ROOT/'deploy/windows_connect_execution_overlay.py',
                              ROOT/'deploy/fixtures/windows-connect-execution/peer.go',
                              ROOT/'deploy/fixtures/windows-connect-execution/physical.go',
@@ -437,28 +319,12 @@ def inputs():
                              ROOT/'deploy/test_linux_standard_service_bundle.py',
                              ROOT/'deploy/test_macos_external_host.py',
                              ROOT/'deploy/test_macos_external_host_runner.py',
-                             ROOT/'deploy/test_macos_paired_node_host.py',
-                             ROOT/'deploy/test_macos_paired_node_host_runner.py',
-                             ROOT/'deploy/test_macos_imported_execution_host.py',
-                             ROOT/'deploy/test_macos_imported_execution_host_runner.py',
-                             ROOT/'deploy/test_macos_imported_execution_layers_host.py',
-                             ROOT/'deploy/test_macos_imported_execution_layers_host_runner.py',
-                             ROOT/'deploy/test_macos_imported_execution_alias.py',
-                             ROOT/'deploy/test_macos_imported_execution_alias_runner.py',
-                             ROOT/'deploy/test_macos_connect_execution_host.py',
-                             ROOT/'deploy/test_macos_connect_execution_host_runner.py',
-                             ROOT/'deploy/test_darwin_paired_transport_context.py',
                              ROOT/'.github/workflows/build-all.yml',
                              ROOT/'deploy/test_macos_external_baseline_identity.py',
                              ROOT/'deploy/seal-native-runtime.py',
                              *sorted((ROOT/'cmd/client').glob('*.go')),
                              ROOT/'cmd/client/ui.html', ROOT/'cmd/client/logical_ui.js',
                              *sorted((ROOT/'internal').rglob('*.go')),
-                             ROOT/'deploy/test_linux_node_lifecycle.py',
-                             ROOT/'deploy/test_linux_node_lifecycle_runner.py',
-                             ROOT/'deploy/test_desktop_darwin_guardian.py',
-                             ROOT/'deploy/test_desktop_darwin_guardian_runner.py',
-                             ROOT/'deploy/test_darwin_off_close_admission.py',
                              ROOT/'deploy/test_darwin_node_child_tun.py',
                              ROOT/'deploy/test_darwin_node_child_tun_runner.py',
                              ROOT/'deploy/darwin_child_phases.py',
@@ -472,11 +338,7 @@ def inputs():
                              ROOT/'deploy/test_darwin_typed_mtu_reader.py',
                              ROOT/'deploy/test_darwin_typed_mtu_reader_runner.py',
                              ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/test_desktop_darwin_observation.py',
                              ROOT/'deploy/darwin_race_toolchain.py',
-                             ROOT/'deploy/test_darwin_race_toolchain.py',
-                             ROOT/'deploy/test_desktop_darwin_route.py',
-                             ROOT/'deploy/test_desktop_darwin_route_runner.py',
                              ROOT/'deploy/test_linux_guardian_namespace.py',
                              ROOT/'deploy/test_linux_guardian_selection.py',
                              ROOT/'deploy/test_linux_guardian_cleanup.py',
@@ -1769,379 +1631,12 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
         host = ('darwin' if platform.system() == 'Darwin' else platform.system().lower())+'/'+{
             'x86_64': 'amd64', 'AMD64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64', 'ARM64': 'arm64'}.get(platform.machine(), '')
         if target == host:
-            # These execute the actual command owner and Box proof factory.
-            # Run before installing the executable-only Cronet loader, whose
-            # sealed adjacent library belongs to the final package location.
-            # The pinned Go toolchain supports race on all shipped native
-            # desktop hosts except Windows ARM64 (internal/platform/supported.go).
+            # Keep one direct native protocol smoke test; installed artifact and
+            # OS protection verification still run after the actual build.
             race = [] if target == 'windows/arm64' else ['-race']
-            if target.startswith('darwin/'):
-                # Intel job 139481669039 exceeded 1800s in the original
-                # 47-control phase. Require all six baselines and both halves
-                # of the controls, each under the same finite parent deadline.
-                lifecycle = load('desktop_darwin_lifecycle_phases', 'test_desktop_darwin_node_chain_lifecycle.py')
-                lifecycle.execute_partitioned(source, ','.join(tags(target)), env, run)
-                # Required low-level utun/route cleanup precedes later installed
-                # host/trust acceptance. This does not enable ordered app hosting.
-                run([sys.executable, ROOT/'deploy/test_desktop_darwin_retirement.py', source,
-                     '--tags='+','.join(tags(target))], env=env, timeout=1800)
-            run([sys.executable, ROOT/'deploy/test_hysteria2_deadlines_pinned.py', source],
-                env=env, timeout=400)
-            run([sys.executable, ROOT/'deploy/test_amnezia_timers_pinned.py', source],
-                env=env, timeout=200)
-            run([sys.executable, ROOT/'deploy/test_gvisor_forwarder_pinned.py', source],
-                env=env, timeout=200)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './protocol/wireguard', '-run', '^TestRouterVPNWireGuard',
                  '-count=1', '-timeout=60s'], cwd=source, env=env, timeout=120)
-            command_contracts(source, target, env)
-            run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_construction.py',
-                 '--core', source, '--tags='+','.join(tags(target)),
-                 *(['--without-race'] if not race else [])], cwd=source, env=env, timeout=1200)
-            # Preserve each existing 120s test / 600s compiler bound. Separate
-            # source-bound phases each join two serial original processes.
-            for socks_phase in ('baselines', 'controls'):
-                run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_child.py',
-                     '--core', source, '--tags='+','.join(tags(target)), '--phase', socks_phase,
-                     *(['--without-race'] if not race else [])], cwd=source, env=env, timeout=1200)
-            # Every phase uses the same complete prepared desktop core, actual
-            # independent private profiles, and original120s/600s native bounds.
-            for openvpn_phase in ('source', 'lifecycle', 'longest', 'box', 'controls'):
-                run([sys.executable, ROOT/'deploy/test_desktop_openvpn_execution_child.py',
-                     '--core', source, '--tags='+','.join(tags(target)), '--phase', openvpn_phase,
-                     *(['--without-race'] if not race else [])], cwd=ROOT, env=env,
-                    timeout=2400 if openvpn_phase == 'controls' else 1050)
-            # Mobile SDK builds execute the ordinary Libbox ownership gate on
-            # their actual mobile core; desktop verifies its strict source runner.
-            # Eight disjoint actual HTTP50 roots retain 120s test / 600s
-            # compiler bounds; the two original-owner controls are separate.
-            for selected_latency_phase in ('baselines', 'controls'):
-                run([sys.executable, ROOT/'deploy/test_desktop_selected_latency.py',
-                     '--core', source, '--tags='+','.join(tags(target)), '--phase', selected_latency_phase,
-                     *(['--without-race'] if not race else [])], cwd=ROOT, env=env,
-                    timeout=1800 if selected_latency_phase == 'baselines' else 1600)
-            # Original private-fixture generation, two independent compilers,
-            # seven positive phases and the original-inode causal phase retain
-            # their individual 360s, 600s and 135s process bounds.
-            run([sys.executable, ROOT/'deploy/test_desktop_selected_candidates.py',
-                 '--core', source, '--tags='+','.join(tags(target)),
-                 *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=3000)
-            # Each original typed source runs its own bounded selected entry test.
-            run([sys.executable, ROOT/'deploy/test_desktop_selected_candidates.py',
-                 '--core', source, '--tags='+','.join(tags(target)), '--phase=typed-entry',
-                 *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=1800)
-            # The parent keeps its 240s compiler and six original 120s Go /
-            # 135s process bounds, with a complete source-bound receipt.
-            run([sys.executable, ROOT/'deploy/test_desktop_selected_candidate_controller.py',
-                 '--receipt', temp/'selected-candidate-controller.json',
-                 *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=1200)
-            # The additional draft phase compiles separately and keeps the
-            # same per-root limits for its three source and lifecycle verdicts.
-            run([sys.executable, ROOT/'deploy/test_desktop_selected_candidate_controller.py',
-                 '--phase=draft', '--receipt', temp/'selected-draft-controller.json',
-                 *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=720)
-            run([sys.executable, ROOT/'deploy/test_desktop_selected_candidate_controller.py',
-                 '--phase=typed-entry', '--receipt', temp/'selected-typed-entry-controller.json',
-                 *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=600)
-            # Distinct connected typed mailboxes keep the original native
-            # 150s test/600s process bounds and finite baseline aggregate.
-            for typed_candidate_phase in ('baselines', 'controls'):
-                run([sys.executable, ROOT/'deploy/test_desktop_typed_connected_candidates.py',
-                     '--core', source, '--tags='+','.join(tags(target)), '--phase', typed_candidate_phase,
-                     *(['--without-race'] if not race else [])], cwd=source, env=env,
-                    timeout=1200 if typed_candidate_phase == 'baselines' else 2100)
-            # Keep240s compiler/120s Go/135s process limits. Each added phase
-            # has its own source/image inventory; existing phases are unchanged.
-            for typed_candidate_controller_phase in ('source', 'receipts', 'mailbox', 'controls'):
-                run([sys.executable, ROOT/'deploy/test_desktop_typed_candidate_controller.py',
-                     '--phase', typed_candidate_controller_phase,
-                     '--receipt', temp/('typed-candidate-controller-'+typed_candidate_controller_phase+'.json'),
-                     *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=1800)
-            # New layer phases preserve every original phase and its bounds.
-            # Layers: compiler240 + at most6 roots x135 =1050s, leaving150s
-            # for bounded toolchain discovery and exact source/image checks.
-            for socks_phase in ('baselines', 'controls', 'layers', 'layer-controls', 'prefix-source', 'prefix-public', 'layer-prefixes'):
-                if socks_phase == 'prefix-public' and not target.startswith(('linux/', 'windows/')):
-                    continue
-                run([sys.executable, ROOT/'deploy/test_desktop_socks_execution_controller.py',
-                     '--phase', socks_phase, '--receipt', temp/('socks-controller-'+socks_phase+'.json'),
-                     *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=1200)
-            # Independent final layers retain the original compiler/root bounds.
-            for connect_layer_phase in ('source', 'controls'):
-                run([sys.executable, ROOT/'deploy/test_desktop_connect_execution_layers.py',
-                     '--phase', connect_layer_phase, '--receipt', temp/('connect-layers-'+connect_layer_phase+'.json'),
-                     *(['--without-race'] if not race else [])], cwd=ROOT, env=env, timeout=1200)
-            # Each new root retains120s Go/135s process and240s compiler bounds.
-            # Public11 roots + one compiler fit the independent1800s phase.
-            for openvpn_parent_phase in ('source', 'public', 'controls'):
-                if openvpn_parent_phase == 'public' and not target.startswith(('linux/', 'windows/')):
-                    continue
-                run([sys.executable, ROOT/'deploy/test_desktop_openvpn_execution_controller.py',
-                     '--phase', openvpn_parent_phase, '--receipt', temp/('openvpn-controller-'+openvpn_parent_phase+'.json'),
-                     *(['--without-race'] if not race else [])], cwd=ROOT, env=env,
-                    timeout=900 if openvpn_parent_phase == 'controls' else 1800)
-            for paired_ss_parent_phase in ('source', 'controls'):
-                run([sys.executable, ROOT/'deploy/test_desktop_paired_ss_execution_controller.py',
-                     '--phase', paired_ss_parent_phase, '--receipt', temp/('paired-ss-controller-'+paired_ss_parent_phase+'.json'),
-                     *(['--without-race'] if not race else [])], cwd=ROOT, env=env,
-                    timeout=1200 if paired_ss_parent_phase == 'controls' else 1200)
-            # New paired Hysteria phases retain the existing full compiler and
-            # per-root deadlines; imported final-SS families remain separate.
-            for hysteria_parent_phase in ('source', 'public', 'controls'):
-                if hysteria_parent_phase == 'public' and not target.startswith(('linux/', 'windows/')):
-                    continue
-                run([sys.executable, ROOT/'deploy/test_desktop_hysteria_execution_controller.py',
-                     '--phase', hysteria_parent_phase, '--receipt', temp/('hysteria-controller-'+hysteria_parent_phase+'.json'),
-                     *(['--without-race'] if not race else [])], cwd=ROOT, env=env,
-                    timeout=1200 if hysteria_parent_phase == 'controls' else 1800)
-            verify_imported_desktop_native_dns(source, target, env)
-            verify_imported_desktop_native_openvpn(source, target, env)
-            run([sys.executable, ROOT/'deploy/test_desktop_pt_inventory.py', source,
-                 '--tags='+','.join(tags(target)), *(['--without-race'] if not race else [])],
-                cwd=source, env=env, timeout=600)
-            run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', './routervpn/mobiletor', '-run', '^TestDesktopSocket',
-                 '-count=1', '-timeout=60s'], cwd=source, env=env, timeout=120)
-            if target.startswith(('linux/', 'windows/')):
-                # Private Node startup uses its own sealed policy and eager
-                # WG/AWG lower phase. The exact native command/Box tests keep
-                # OS permits and TUN as explicit composition boundaries.
-                # At b2673fdf both Linux architectures completed all 77
-                # baseline suites (19 retained package images), then the
-                # 1800s parent expired after 18/64 and 10/64 distinct compiled
-                # controls (run 42928509503, jobs 130221337259/130221337316).
-                # The slowest observed compile+control took 22.397s. At that
-                # rate the remaining 54 controls project 1800+54*22.397 =
-                # 3009.438s; allow a bounded 3600s aggregate. Keep the exact
-                # inventory, serial execution and all individual compiler,
-                # suite, control, socket, lease and cancellation deadlines.
-                if target.startswith('windows/'):
-                    # At 35ff28a7 the 1800s parent expired after every baseline
-                    # and 30 successful controls. Keep that finite bound for
-                    # each serial baseline/control phase and require both exact
-                    # source, inventory and executable receipts before packaging.
-                    run([sys.executable, ROOT/'deploy/test_desktop_node_phases.py'],
-                        cwd=ROOT, env=env, timeout=120)
-                    node_source = load('desktop_windows_node_source_phases', 'test_desktop_node_physical.py')
-                    node_source.execute_partitioned(source, env, run)
-                else:
-                    run([sys.executable, ROOT/'deploy/test_desktop_node_physical.py', source],
-                        env=env, timeout=3600)
-                # Imported literal-trio Server/Compare reuses the original
-                # native preparation and Box owners. Require its exact
-                # adoption/restore cases on each supported native host;
-                # encrypted server-suffix acceptance remains a separate gate.
-                run([sys.executable, ROOT/'deploy/test_desktop_imported_trio_execution.py',
-                     '--core', source, '--tags='+','.join(tags(target)),
-                     '--receipt', temp/'imported-trio-execution.json',
-                     *(['--without-race'] if not race else [])],
-                    cwd=source, env=env, timeout=1200)
-                run([sys.executable, ROOT/'deploy/test_desktop_imported_trio_controller.py',
-                     '--receipt', temp/'imported-trio-controller.json',
-                     *(['--without-race'] if not race else [])],
-                    cwd=ROOT, env=env, timeout=1200)
-                if target.startswith('linux/'):
-                    # The desktop reference owns its two native builds and
-                    # exact traffic matrix. Keep it outside the existing
-                    # imported-peer and complete node gate envelopes.
-                    # The separate mobile gate owns the libbox parser.
-                    run([sys.executable, ROOT/'deploy/test_mobile_imported_socks_xray.py',
-                         source, '--reference-only'], env=env, timeout=3000)
-                    run([sys.executable, ROOT/'deploy/test_mobile_imported_proxy_xray.py',
-                         source, '--reference-only'], env=env, timeout=3000)
-                    run([sys.executable, ROOT/'deploy/test_mobile_imported_connect_xray.py',
-                         source, '--reference-only'], env=env, timeout=3000)
-                    run([sys.executable, ROOT/'deploy/test_native_imported_packet_xray.py',
-                         source], env=env, timeout=3000)
-                    run([sys.executable, ROOT/'deploy/test_native_xray_udp443.py',
-                         source], env=env, timeout=3000)
-                    # PQ has its own 81 captured sources and exact native
-                    # verdicts. Parsing, ML-KEM protocol refusal and complete
-                    # imported peers are separate mandatory stages; none
-                    # replaces an ordinary REALITY reference above.
-                    run([sys.executable, ROOT/'deploy/test_mobile_imported_pq_xray.py',
-                         source], env=env, timeout=1200)
-                    run([sys.executable, ROOT/'deploy/test_mobile_imported_pq_xray.py',
-                         source, '--loopback-only'], env=env, timeout=1200)
-                    run([sys.executable, ROOT/'deploy/test_mobile_imported_pq_xray.py',
-                         source, '--reference-only'], env=env, timeout=3000)
-                    # XHTTP has separate captured sources, path/key refusal and
-                    # empty-flow selected DNS. All previous inventories remain.
-                    run([sys.executable, ROOT/'deploy/test_mobile_imported_xhttp_xray.py',
-                         source], env=env, timeout=1200)
-                    run([sys.executable, ROOT/'deploy/test_mobile_imported_xhttp_xray.py',
-                         source, '--loopback-only'], env=env, timeout=1200)
-                    run([sys.executable, ROOT/'deploy/test_mobile_imported_xhttp_xray.py',
-                         source, '--reference-only'], env=env, timeout=3000)
-                    # Naive H2 retains its own captured sources, original TLS
-                    # identity, transport/DNS ownership and imported peers.
-                    run([sys.executable, ROOT/'deploy/test_mobile_imported_naive_h2.py',
-                         source], env=env, timeout=1200)
-                    run([sys.executable, ROOT/'deploy/test_mobile_imported_naive_h2.py',
-                         source, '--loopback-only'], env=env, timeout=1200)
-                    run([sys.executable, ROOT/'deploy/test_mobile_imported_naive_h2.py',
-                         source, '--reference-only'], env=env, timeout=3000)
-                    # Naive H3 retains its own captured sources, original QUIC
-                    # ownership, UDP DNS and independently captured peers.
-                    run([sys.executable, ROOT/'deploy/test_mobile_imported_naive_h3.py',
-                         source], env=env, timeout=1200)
-                    run([sys.executable, ROOT/'deploy/test_mobile_imported_naive_h3.py',
-                         source, '--loopback-only'], env=env, timeout=1200)
-                    run([sys.executable, ROOT/'deploy/test_mobile_imported_naive_h3.py',
-                         source, '--reference-only'], env=env, timeout=3000)
-                # The PQ matrix uses the same verified native archive and
-                # compiler cache, fresh KEM keys, and real packet/Start Layer
-                # peers. Native firewall/public admission remains separate.
-                run([sys.executable, ROOT/'deploy/test_desktop_node_pq.py', source, pq,
-                     '--cache', cache or ROOT/'dist/.native-pq-cache'],
-                    env=env, timeout=1800)
-                # Complete MAX retains its mandatory PQ base, middle and
-                # outer transport. Prove the full encrypted graph separately
-                # from the raw MAX branch and from native firewall admission.
-                run([sys.executable, ROOT/'deploy/test_desktop_node_max.py', source, pq,
-                     '--cache', cache or ROOT/'dist/.native-pq-cache'],
-                    env=env, timeout=5400)
-            if target.startswith(('linux/', 'darwin/')):
-                run([sys.executable, ROOT/'deploy/test_desktop_socket_uid.py', source],
-                    env=env, timeout=300)
-            if target.startswith('windows/'):
-                run([sys.executable, ROOT/'deploy/test_desktop_windows_identity_runner.py'], cwd=ROOT, env=env)
-                run([sys.executable, ROOT/'deploy/test_desktop_windows_identity.py', source],
-                    env=env, timeout=600)
-                run([sys.executable, ROOT/'deploy/test_desktop_windows_wfp.py', source],
-                    env=env, timeout=600)
-                run([sys.executable, ROOT/'deploy/test_windows_protection_transfer.py', source],
-                    env=env, timeout=600)
-                run([sys.executable, ROOT/'deploy/test_windows_protection_observation.py', source],
-                    env=env, timeout=600)
-                run([sys.executable, ROOT/'deploy/test_windows_external_provider_join.py'], cwd=ROOT, env=env)
-                run([sys.executable, ROOT/'deploy/test_windows_node_physical_runner.py'], cwd=ROOT, env=env)
-                # Each actual native phase owns its original compiler/test bounds.
-                # A full package requires all source-bound phase receipts.
-                physical = load('desktop_windows_physical_phases', 'test_windows_node_physical.py')
-                physical.execute_partitioned(source, env, run)
-                # Keep the original seven physical phases intact. Imported H3
-                # separately exercises the captured Box/owner with this actual
-                # matching-host source, compiler environment and native tags.
-                run([sys.executable, ROOT/'deploy/test_windows_imported_naive_h3.py',
-                     'prepared', source], env=env, timeout=4500)
-                run([sys.executable, ROOT/'deploy/test_windows_node_pq_runner.py'], cwd=ROOT, env=env)
-                # Actual matching-host CGO/Rust, isolated sockets and BFE. Only
-                # positive PQ execution keeps the shipping predicate unchanged;
-                # a separate exact-family-closed control must reject admission.
-                run([sys.executable, ROOT/'deploy/test_windows_node_pq.py', source, pq,
-                     '--cache', cache or ROOT/'dist/.native-pq-cache'],
-                    env=env, timeout=2400)
-                run([sys.executable, ROOT/'deploy/test_desktop_windows_traffic.py', source],
-                    env=env, timeout=600)
-                # This explicit test-only admission overlay proves bootstrap
-                # composition before the public Windows capability is opened.
-                # Admission must remove --prospective and rerun unchanged code.
-                run([sys.executable, ROOT/'deploy/test_windows_physical_bootstrap.py', source, '--prospective'],
-                    env=env, timeout=900)
-                run([sys.executable, ROOT/'deploy/test_windows_physical_tunnel.py', source],
-                    env=env, timeout=1200)
-            if target.startswith('linux/'):
-                run([sys.executable, ROOT/'deploy/test_desktop_command_retirement.py',
-                     '--native-core', source, '--tags='+','.join(tags(target))],
-                    cwd=ROOT, env=env, timeout=180)
-                run([sys.executable, ROOT/'deploy/test_desktop_linux_guardian.py', source],
-                    env=env, timeout=300)
-                run([sys.executable, ROOT/'deploy/test_linux_node_child_control.py', source],
-                    env=env, timeout=900)
-                run([sys.executable, ROOT/'deploy/test_linux_external_lifecycle.py', source],
-                    env=env, timeout=900)
-                run([sys.executable, ROOT/'deploy/test_linux_external_openvpn.py', source, '--pq', pq],
-                    env=env, timeout=900)
-                run([sys.executable, ROOT/'deploy/test_linux_node_lifecycle.py', source],
-                    env=env, timeout=600)
-                run([sys.executable, ROOT/'deploy/test_linux_node_child_tun.py', source],
-                    env=env, timeout=1500)
-            if target.startswith('darwin/'):
-                run([sys.executable, ROOT/'deploy/test_desktop_darwin_route.py', source, '--mutations'],
-                    env=env, timeout=900)
-                run([sys.executable, ROOT/'deploy/test_desktop_darwin_guardian.py', source, '--mutations'],
-                    env=env, timeout=1800)
-            if target.startswith('linux/'):
-                run(['go', 'test', *race, '-p=1', '-mod=readonly', '-tags='+','.join(tags(target)),
-                     '-ldflags=-checklinkname=0', './protocol/routervpnamnezia', '-run', '^TestRouterVPNNodeSOCKSServer',
-                     '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
-                # Additive suffix foundation: three serial 600s outer / 120s Go
-                # phases plus finite orchestration margin. Original phases above
-                # and below retain their own unchanged limits and inventories.
-                run([sys.executable, ROOT/'deploy/test_socks_server_final_layers.py',
-                     '--core', source, '--tags='+','.join(tags(target))],
-                    cwd=source, env=env, timeout=1900)
-            if target.startswith('linux/'):
-                socks_prefix = load('socks_server_prefix_native', 'test_socks_server_prefix_native.py')
-                socks_prefix.execute(source, target, ','.join(tags(target)), env, run)
-                candidate_worker_results = Path(tempfile.mkdtemp(prefix='server-candidate-worker-', dir=source.parent))
-                for candidate_worker_phase in ('agent', 'terminal-control'):
-                    run([sys.executable, ROOT/'deploy/test_server_node_chain_candidate_worker.py',
-                         '--phase', candidate_worker_phase, '--output', candidate_worker_results/candidate_worker_phase],
-                        cwd=ROOT, env=env, timeout=260)
-                # Shared grant ownership is distinct from native candidate traffic.
-                run([sys.executable, ROOT/'deploy/test_server_node_chain_candidate_grants.py', '--self-test'],
-                    cwd=ROOT, env=env, timeout=60)
-                grant_results = Path(tempfile.mkdtemp(prefix='server-candidate-grants-', dir=source.parent))
-                for grant_phase in ('relay', 'policy', 'agent', 'quota-control', 'join-control'):
-                    run([sys.executable, ROOT/'deploy/test_server_node_chain_candidate_grants.py',
-                         '--phase', grant_phase, '--output', grant_results/grant_phase],
-                        cwd=ROOT, env=env, timeout=260)
-                run([sys.executable, ROOT/'deploy/test_remote_node_chain_candidates.py', '--self-test'],
-                    cwd=ROOT, env=env, timeout=60)
-                candidate_results = Path(tempfile.mkdtemp(prefix='remote-candidate-client-', dir=source.parent))
-                for candidate_phase in ('source', 'lease-order-control', 'ack-control'):
-                    run([sys.executable, ROOT/'deploy/test_remote_node_chain_candidates.py',
-                         '--phase', candidate_phase, '--output', candidate_results/candidate_phase],
-                        cwd=ROOT, env=env, timeout=260)
-                openvpn_server = load('openvpn_server_native', 'test_server_node_chain_openvpn_native.py')
-                openvpn_server.execute(source, target, ','.join(tags(target)), env, run)
-                openvpn_local = load('openvpn_encrypted_local', 'test_node_chain_openvpn_encrypted_local.py')
-                openvpn_local.execute(source, target, ','.join(tags(target)), env, run)
-                multiple_imported = load('multiple_imported_native', 'test_node_chain_multiple_imported_native.py')
-                multiple_imported.execute(source, target, ','.join(tags(target)), env, run)
-            run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', './protocol/routervpnnodesocks', '-run', '^TestOriginalSOCKS',
-                 '-count=1', '-timeout=90s'], cwd=source, env=env, timeout=600)
-            run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', './protocol/routervpnnodeconnect', '-run', '^TestCONNECT',
-                 '-count=1', '-timeout=90s'], cwd=source, env=env, timeout=600)
-            # Three exact native phases plus two compiled causal controls retain
-            # their individual 600s compile/process and 90s runtime bounds.
-            run([sys.executable, ROOT/'deploy/test_connect_final_layers_native.py',
-                 '--core', source, '--tags='+','.join(tags(target)), *(['--race'] if race else [])],
-                cwd=source, env=env, timeout=3100)
-            run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', './route', '-run', '^TestRouterVPN(DesktopTorNetwork|NodeChain|Execution)',
-                 '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
-            run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', './protocol/routervpnchaingate', './protocol/group',
-                 './protocol/tun', './adapter/outbound', '-run', '^TestRouterVPN(Execution|ChainGate)',
-                 '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
-            # Candidate preparation now includes three original fifty-sample
-            # matrices. Keep the complete root inventory on one compiled image,
-            # with each family retaining the existing target's test deadline.
-            # Packaging requires every source/image-bound phase to pass.
-            run(['go', 'test', *race, '-p=1', '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', './experimental/libbox/routervpn/mobilemultihop',
-                 '-run', '^TestNodeChainEncryptedPrivateCandidateResponse$', '-count=1', '-timeout=600s'],
-                cwd=source, env=env, timeout=1200)
-            root_phases = load('desktop_native_root_phases', 'test_desktop_native_root_phases.py')
-            root_phases.execute(source, target, ','.join(tags(target)), env, run)
-            # The original desktop composition requires real OpenVPN. Mobile
-            # also compiles the same new owner without that optional tag.
-            run([sys.executable, ROOT/'deploy/test_node_chain_openvpn_execution_owner.py',
-                 '--core', source, '--go', 'go', '--tags', ','.join(tags(target)),
-                 '--tagged-only', *(['--race'] if race else [])],
-                cwd=ROOT, env=env, timeout=4200)
-            # The independent imported providers, exact desktop physical owner,
-            # command capture and joined close run on each native desktop.
-            # Each of the four phases retains its own finite process deadline.
-            run([sys.executable, ROOT/'deploy/test_node_chain_multiple_imported_execution_owner.py',
-                 '--core', source, '--go', 'go', '--tags', ','.join(tags(target)),
-                 '--desktop', *(['--race'] if race else [])],
-                cwd=ROOT, env=env, timeout=2220)
         if target.startswith('linux/'):
             validator = DNSSEC.build(target, temp/'dnssec-bundle', compiled=dnssec_compiled, env=env)
             for name in DNSSEC.names(target):

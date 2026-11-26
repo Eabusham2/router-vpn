@@ -20,12 +20,9 @@ Run commands from the repository root. For README or installation-policy edits, 
 
 ```sh
 git diff --check
-python3 deploy/docs-native-fallback-policy-audit.py
-python3 deploy/recovered-requirements-265-311-audit.py
-python3 deploy/binding-edge-requirements-audit.py
 ```
 
-The [repository-state workflow](.github/workflows/repository-state-audit.yml) also checks public README links, tracked generated files, source-workflow integrity, and remote branch inventory. Check changed Markdown links and headings locally; a source-contract check alone does not validate a rendered document.
+Check Markdown links locally; keep only the two canonical workflows.
 
 For code changes, run focused existing behavioral tests. Keep routine CI to the single CI workflow; do not add independent push or pull-request workflows, redundant source-shape tests, or test shards merely to prove the test infrastructure. Run expensive native diagnostics and the full release only when needed. Follow [docs/BUILDS.md](docs/BUILDS.md), `go.mod`, and the workflow's pinned dependency setup. Go code declares Go 1.25 with the Go 1.26.3 toolchain. Native Windows, macOS, Linux, Android, and iOS builds have different dependencies; a generic host build cannot certify all platforms. Report unavailable checks explicitly instead of weakening them.
 
@@ -48,4 +45,4 @@ Documentation should use adaptable public examples and link to canonical guides.
 
 ## CI and release scope
 
-Maintain exactly two workflows: `.github/workflows/ci.yml` for routine checks and `.github/workflows/build-all.yml` for manual release. Release requires successful CI for the same commit. Do not recreate per-feature workflows, test-of-test scripts or source-score systems. Keep meaningful behavioral, security, platform and artifact verification; do not duplicate routine CI in release.
+Maintain exactly two workflows: `.github/workflows/ci.yml` for routine checks and `.github/workflows/build-all.yml` for manual release. Release requires successful CI for the same commit. Do not recreate per-feature workflows, test-of-test scripts or source-score systems. Aim for roughly 20 small, generalized behavioral tests in routine CI. Extend an existing small test instead of introducing another file for a single scenario. Native builds must not rerun the full development regression inventory. Keep only necessary dependency, security and real artifact smoke checks. Keep meaningful behavioral, security, platform and artifact verification; do not duplicate routine CI in release.
