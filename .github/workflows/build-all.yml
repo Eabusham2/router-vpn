@@ -433,6 +433,16 @@ jobs:
                           "Performance", "MTU", "Mode", "DNS", "Help"}
               for page in range(20):
                   nodes = capture(f"{pages}-{page:02d}")
+                  if any(node.get("text") == "Cancel startup" for node in nodes):
+                      # An empty fresh install must settle at Connect without a VPN permission request.
+                      for attempt in range(3):
+                          nodes = capture(f"{pages}-startup-{attempt}")
+                          if not any(node.get("text") == "Cancel startup" for node in nodes):
+                              break
+                      else:
+                          raise RuntimeError(f"{name}: empty-profile startup never returned to idle")
+                  if not any(node.get("package") == package for node in nodes):
+                      raise RuntimeError(f"{name}: the installed Activity lost the foreground")
                   scroll = next(node for node in nodes if node.get("class") == "android.widget.ScrollView")
                   left, top, right, bottom = bounds(scroll)
                   root = bounds(nodes[0])
@@ -534,21 +544,40 @@ jobs:
                   raise SystemExit('No installed ' + family + ' simulator')
               print(family.lower(), selected['udid'])
           PY
-          while read -r family simulator; do
-            xcrun simctl boot "$simulator"
-            trap 'xcrun simctl shutdown "$simulator" >/dev/null 2>&1 || true' EXIT
-            xcrun simctl bootstatus "$simulator" -b
-            xcrun simctl install "$simulator" build/SimulatorDerivedData/Build/Products/Release-iphonesimulator/RouterVPN.app
+          xcrun simctl help ui > "$RUNNER_TEMP/ios-ui/simctl-ui-help.txt" 2>&1
+          grep -F 'content_size' "$RUNNER_TEMP/ios-ui/simctl-ui-help.txt"
+          largest=accessibility-extra-extra-extra-large
+          content_size() { xcrun simctl ui "$simulator" content_size | awk 'NF {print $NF}'; }
+          capture_launch() {
+            local name="$1" launch app_pid
             launch="$(xcrun simctl launch "$simulator" com.eabusham.routervpn)"
-            printf '%s\n' "$launch" > "$RUNNER_TEMP/ios-ui/$family-launch.txt"
+            printf '%s\n' "$launch" > "$RUNNER_TEMP/ios-ui/$name.txt"
             app_pid="$(printf '%s\n' "$launch" | awk '/: [0-9]+$/ {print $NF}')"
             [[ "$app_pid" =~ ^[0-9]+$ ]]
             sleep 3
             kill -0 "$app_pid"
-            xcrun simctl io "$simulator" screenshot "$RUNNER_TEMP/ios-ui/$family-launch.png"
+            xcrun simctl io "$simulator" screenshot "$RUNNER_TEMP/ios-ui/$name.png"
+          }
+          while read -r family simulator; do
+            original_size=''
+            xcrun simctl boot "$simulator"
+            trap 'if [[ -n "$original_size" ]]; then xcrun simctl ui "$simulator" content_size "$original_size" || echo "Failed to restore simulator content size" >&2; fi; xcrun simctl shutdown "$simulator" || true' EXIT
+            xcrun simctl bootstatus "$simulator" -b
+            original_size="$(content_size)"
+            [[ "$original_size" =~ ^[a-z]+(-[a-z]+)*$ ]]
+            xcrun simctl install "$simulator" build/SimulatorDerivedData/Build/Products/Release-iphonesimulator/RouterVPN.app
+            capture_launch "$family-launch"
+            xcrun simctl terminate "$simulator" com.eabusham.routervpn
+            xcrun simctl ui "$simulator" content_size "$largest"
+            [[ "$(content_size)" == "$largest" ]]
+            capture_launch "$family-largest-text"
+            xcrun simctl ui "$simulator" content_size "$original_size"
+            [[ "$(content_size)" == "$original_size" ]]
+            printf 'Original: %s\nCaptured: %s\nRestored: %s\n' "$original_size" "$largest" "$original_size" > "$RUNNER_TEMP/ios-ui/$family-content-size.txt"
+            original_size=''
             xcrun simctl shutdown "$simulator"
+            trap - EXIT
           done < "$RUNNER_TEMP/ios-ui/selected.txt"
-          trap - EXIT
       - name: Save iPhone and iPad launch evidence
         uses: actions/upload-artifact@v4
         if: always()

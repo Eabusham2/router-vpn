@@ -94,6 +94,11 @@ _policy_spec.loader.exec_module(_artifact_policy)
 NATIVE_PACKAGE_ARTIFACTS = _artifact_policy.NATIVE_PACKAGE_ARTIFACTS
 DIRECT_ARTIFACTS = _artifact_policy.DIRECT_ARTIFACTS
 ARTIFACT_PRODUCER_WORKFLOWS = _artifact_policy.ARTIFACT_PRODUCER_WORKFLOWS
+MAPPED_PACKAGE_SOURCES = {
+    source for sources in NATIVE_PACKAGE_ARTIFACTS.values() for source in sources
+} | {
+    source for package in DIRECT_ARTIFACTS.values() for source in package["sources"]
+}
 
 _mobile_provenance_spec = spec_from_file_location("router_vpn_mobile_artifact_provenance", SCRIPT_DIR / "mobile-artifact-provenance.py")
 if _mobile_provenance_spec is None or _mobile_provenance_spec.loader is None:
@@ -293,8 +298,10 @@ def _safe_artifact_name(name: str) -> None:
         raise RuntimeError("GitHub artifact contains an unsafe member path")
 
 
-def _pick_member(zf: zipfile.ZipFile, wanted: str) -> zipfile.ZipInfo:
+def _pick_member(zf: zipfile.ZipFile, wanted: str, artifact_name: str) -> zipfile.ZipInfo:
     matches = []
+    # The outer Actions ZIP carries an entire release package as one member.
+    selected_limit = MAX_GITHUB_ARTIFACT if (artifact_name, wanted) in MAPPED_PACKAGE_SOURCES else MAX_MEMBER
     items = zf.infolist()
     if len(items) > MAX_ARTIFACT_MEMBERS:
         raise RuntimeError("GitHub artifact contains too many members")
@@ -305,13 +312,14 @@ def _pick_member(zf: zipfile.ZipFile, wanted: str) -> zipfile.ZipInfo:
             raise RuntimeError("GitHub artifact contains a symlink")
         if item.flag_bits & 0x1:
             raise RuntimeError("GitHub artifact contains an encrypted member")
-        if item.file_size > MAX_MEMBER:
+        p = PurePosixPath(item.filename.replace("\\", "/"))
+        selected = p.name == wanted and not item.is_dir()
+        if item.file_size > (selected_limit if selected else MAX_MEMBER):
             raise RuntimeError("GitHub artifact member exceeds safety limit")
         if item.compress_size > 0 and item.file_size > 8 * 1024 * 1024:
             if item.file_size / item.compress_size > MAX_COMPRESSION_RATIO:
                 raise RuntimeError("GitHub artifact member compression ratio is unsafe")
-        p = PurePosixPath(item.filename.replace("\\", "/"))
-        if p.name == wanted and not item.is_dir():
+        if selected:
             matches.append(item)
     if len(matches) != 1:
         raise RuntimeError(f"GitHub artifact contains {len(matches)} copies of {wanted}")
@@ -418,7 +426,7 @@ def fetch_artifact_member(artifact_name: str, wanted: str, temp: Path, output_na
     try:
         with os.fdopen(fd, "wb") as w, _verified_artifact_zip(outer, expected_digest) as verified_outer:
             with zipfile.ZipFile(verified_outer) as zf:
-                item = _pick_member(zf, wanted)
+                item = _pick_member(zf, wanted, artifact_name)
                 with zf.open(item) as r:
                     digest = hashlib.sha256()
                     while chunk := r.read(CHUNK):

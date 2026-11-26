@@ -20,6 +20,7 @@ import android.text.StaticLayout;
 import android.text.TextPaint;
 import android.text.TextUtils;
 import android.util.AttributeSet;
+import android.util.TypedValue;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -78,8 +79,9 @@ final class RouterVpnNodeMapView extends View {
     private final Paint locationButton=paint(Color.rgb(30,55,82),1f);
     private final Paint path=paint(Color.rgb(83,166,255),4f);
     private final Paint packet=paint(Color.WHITE,1f);
-    private final Paint text=paint(Color.WHITE,1f);
-    private final Paint secondary=paint(Color.rgb(160,180,208),1f);
+    private static final String EMPTY_LABEL="No node coordinates";
+    private final TextPaint text=new TextPaint(paint(Color.WHITE,1f));
+    private final TextPaint secondary=new TextPaint(paint(Color.rgb(160,180,208),1f));
     private List<Marker> markers=Collections.emptyList();
     private List<String> orderedPath=Collections.emptyList();
     private boolean orderedLive;
@@ -100,30 +102,28 @@ final class RouterVpnNodeMapView extends View {
         super(context,attrs);
         text.setTextSize(sp(12));secondary.setTextSize(sp(10));
         setMinimumHeight((int)dp(260));
-        setContentDescription("Router VPN globe. Only real coordinates from linked profiles are shown. Your location is hidden until you choose Locate me.");
         setFocusable(true);
         setClickable(true);
         locationManager=(LocationManager)context.getSystemService(Context.LOCATION_SERVICE);
         land=new AndroidMapLand(context.getAssets());
+        refreshLocationControl();
     }
 
-    void setMarkers(List<Marker>value){markers=value==null?Collections.emptyList():new ArrayList<>(value);invalidate();}
+    void setMarkers(List<Marker>value){markers=value==null?Collections.emptyList():new ArrayList<>(value);refreshLocationControl();}
     void setOrderedPath(List<String> value,boolean live,java.util.function.BooleanSupplier owner){orderedPath=value==null?Collections.emptyList():Collections.unmodifiableList(new ArrayList<>(value));orderedLive=live;frameOwner=owner;invalidate();}
     void setOnMarkerClickListener(OnMarkerClickListener listener){markerClickListener=listener;}
 
     @Override protected void onDraw(Canvas canvas){
         super.onDraw(canvas);MapLayout layout=mapLayout();RectF world=layout.world;
         canvas.drawRoundRect(layout.outer,dp(18),dp(18),background);
-        drawTextBlock(canvas,layout.title,layout.outer.left,layout.outer.top+(layout.button.height()-(layout.title==null?0:layout.title.getHeight()))/2);
+        if(layout.status!=null)drawTextBlock(canvas,layout.status,layout.outer.left,layout.button.centerY()-layout.status.getHeight()/2f);
         drawLocationButton(canvas,layout);
-        drawTextBlock(canvas,layout.legend,layout.outer.left,layout.outer.bottom-(layout.legend==null?0:layout.legend.getHeight()));
         if(world.width()<=0||world.height()<=0)return;
         canvas.save();canvas.clipRect(world);
         RectF glow=new RectF(world.left+dp(4),world.top+dp(4),world.right-dp(4),world.bottom-dp(4));canvas.drawOval(glow,oceanGlow);
         for(int lon=-120;lon<=120;lon+=60){float x=xFor(lon,world);canvas.drawLine(x,world.top,x,world.bottom,lon==0?axis:grid);}
         for(int lat=-60;lat<=60;lat+=30){float y=yFor(lat,world);canvas.drawLine(world.left,y,world.right,y,lat==0?axis:grid);}
         land.draw(canvas,world);
-        text.setTextAlign(Paint.Align.LEFT);
 
         if(orderedLive && frameOwner!=null && !frameOwner.getAsBoolean())orderedLive=false;
         boolean animate=false;
@@ -200,10 +200,10 @@ final class RouterVpnNodeMapView extends View {
         float gap=radius+dp(4),right=world.right-x-gap,left=x-gap-world.left;
         boolean before=left>right;float width=Math.max(0,before?left:right);
         if(width<dp(24)||world.height()<text.getFontSpacing())return;
-        CharSequence fitted=TextUtils.ellipsize(label,new TextPaint(text),width,TextUtils.TruncateAt.END);
-        float start=before?x-gap-text.measureText(fitted.toString()):x+gap;
+        String fitted=TextUtils.ellipsize(label,text,width,TextUtils.TruncateAt.END).toString();
+        float start=before?x-gap-text.measureText(fitted):x+gap;
         float baseline=Math.max(world.top-text.ascent(),Math.min(y-dp(4),world.bottom-text.descent()));
-        canvas.drawText(fitted.toString(),start,baseline,text);
+        canvas.drawText(fitted,start,baseline,text);
     }
 
     @Override public boolean onTouchEvent(MotionEvent event){
@@ -317,8 +317,8 @@ final class RouterVpnNodeMapView extends View {
 
     private void refreshLocationControl(){
         String status = validUserLocation() ? "Your location is visible." :
-                "LOCATE ME".equals(locationState) ? "Your location is hidden." : locationState.toLowerCase(Locale.ROOT);
-        setContentDescription("Router VPN globe. Only real coordinates from linked profiles are shown. " + status);
+                "LOCATE ME".equals(locationState) ? "Your location is hidden until you choose Locate me." : locationState.toLowerCase(Locale.ROOT);
+        setContentDescription("Router VPN globe. Only real coordinates from linked profiles are shown. " + (markers.isEmpty()?EMPTY_LABEL+". ":"") + status);
         invalidate();
     }
 
@@ -338,11 +338,12 @@ final class RouterVpnNodeMapView extends View {
         int width,height;
         String label;
         RectF outer,button,world;
-        StaticLayout title,location,legend,empty;
+        StaticLayout status,location,empty;
     }
 
     private MapLayout mapLayout(){
-        String label=validUserLocation()?"YOU • HIDE":locationState;
+        boolean showLocation=validUserLocation();
+        String label=showLocation?"YOU • HIDE":locationState;
         if(cachedLayout!=null&&cachedLayout.width==getWidth()&&cachedLayout.height==getHeight()&&label.equals(cachedLayout.label))return cachedLayout;
         MapLayout value=new MapLayout();value.width=getWidth();value.height=getHeight();value.label=label;
         float padX=Math.min(dp(14),getWidth()/12f),padY=Math.min(dp(14),Math.max(0,(getHeight()-dp(48))/2f));
@@ -355,28 +356,22 @@ final class RouterVpnNodeMapView extends View {
             // In a shallow landscape map, place the action beside the globe
             // instead of consuming its entire height with a text header.
             value.world=new RectF(value.outer.left,value.outer.top,value.button.left-dp(8),value.outer.bottom);
-            value.empty=textBlock("No real node coordinates in linked profiles",text,value.world.width()-dp(12),value.world.height(),3,Layout.Alignment.ALIGN_CENTER);
-            cachedLayout=value;return value;
+        }else{
+            float statusWidth=value.button.left-value.outer.left-dp(8);
+            value.status=textBlock(showLocation?"Location shown":"Location hidden",secondary,statusWidth,buttonHeight,2,Layout.Alignment.ALIGN_NORMAL);
+            if(value.status!=null && value.status.getEllipsisCount(value.status.getLineCount()-1)>0)value.status=null;
+            float worldTop=Math.min(value.outer.bottom,value.button.bottom+dp(8));
+            value.world=new RectF(value.outer.left,worldTop,value.outer.right,value.outer.bottom);
         }
-        value.title=textBlock("ROUTER VPN GLOBE",secondary,value.outer.width()-buttonWidth-dp(8),buttonHeight,2,Layout.Alignment.ALIGN_NORMAL);
-        float worldTop=Math.min(value.outer.bottom,value.button.bottom+dp(8));
-        // A short landscape viewport keeps the location action usable. Extra
-        // explanatory text appears only when it leaves room for the real map;
-        // its full meaning remains in the accessibility description.
-        float legendBudget=value.outer.bottom-worldTop-Math.max(dp(60),text.getFontSpacing()*2)-dp(8);
-        value.legend=textBlock("Only real coordinates • device location appears only after LOCATE ME",secondary,value.outer.width(),legendBudget,3,Layout.Alignment.ALIGN_NORMAL);
-        float worldBottom=value.outer.bottom-(value.legend==null?0:value.legend.getHeight()+dp(8));
-        value.world=new RectF(value.outer.left,worldTop,value.outer.right,Math.max(worldTop,worldBottom));
-        value.empty=textBlock("No real node coordinates in linked profiles",text,value.world.width()-dp(12),value.world.height(),3,Layout.Alignment.ALIGN_CENTER);
+        value.empty=textBlock(EMPTY_LABEL,text,value.world.width()-dp(12),value.world.height(),3,Layout.Alignment.ALIGN_CENTER);
         cachedLayout=value;return value;
     }
 
-    private StaticLayout textBlock(String value,Paint paint,float width,float height,int maximumLines,Layout.Alignment alignment){
+    private StaticLayout textBlock(String value,TextPaint paint,float width,float height,int maximumLines,Layout.Alignment alignment){
         if(width<dp(24)||height<=0)return null;
-        TextPaint measured=new TextPaint(paint);measured.setTextAlign(Paint.Align.LEFT);
         int lines=Math.min(maximumLines,(int)(height/paint.getFontSpacing()));
         while(lines>0){
-            StaticLayout block=StaticLayout.Builder.obtain(value,0,value.length(),measured,Math.max(1,(int)width))
+            StaticLayout block=StaticLayout.Builder.obtain(value,0,value.length(),paint,Math.max(1,(int)width))
                     .setAlignment(alignment).setIncludePad(false).setEllipsize(TextUtils.TruncateAt.END).setMaxLines(lines).build();
             if(block.getHeight()<=height)return block;
             lines--;
@@ -395,5 +390,5 @@ final class RouterVpnNodeMapView extends View {
     private Paint halo(int color){Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);p.setColor(Color.argb(58,Color.red(color),Color.green(color),Color.blue(color)));return p;}
     private Paint paint(int color,float widthDp){Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);p.setColor(color);p.setStrokeWidth(dp(widthDp));p.setStrokeCap(Paint.Cap.ROUND);return p;}
     private float dp(float value){return value*getResources().getDisplayMetrics().density;}
-    private float sp(float value){return value*getResources().getDisplayMetrics().scaledDensity;}
+    private float sp(float value){return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP,value,getResources().getDisplayMetrics());}
 }

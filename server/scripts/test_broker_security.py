@@ -10,6 +10,8 @@ import os
 from pathlib import Path
 import tempfile
 import threading
+from unittest import mock
+import zipfile
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("router_vpn_broker_security", SCRIPT_DIR / "download-broker.py")
@@ -69,8 +71,35 @@ def test_github_redirect_credentials() -> None:
         raise AssertionError("authenticated GitHub request was allowed to start cross-origin")
 
 
+def test_selected_actions_package_size() -> None:
+    producer = "RouterVPN-Android-release-candidate"
+    wanted = "app-debug.apk"
+    # Scale both production limits down so the positive case can read actual ZIP bytes.
+    cases = (
+        (producer, 539, 0, True),
+        (producer, 768, 512, True),
+        (producer, 769, 0, False),
+        (producer, 539, 513, False),
+        ("RouterVPN-iOS-release-candidate", 539, 0, False),
+    )
+    with mock.patch.multiple(b, MAX_MEMBER=512, MAX_GITHUB_ARTIFACT=768):
+        for artifact, size, other_size, allowed in cases:
+            archive = io.BytesIO()
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:
+                output.writestr("release/" + wanted, b"A" * size)
+                output.writestr("other", b"B" * other_size)
+            with zipfile.ZipFile(archive) as package:
+                try:
+                    item = b._pick_member(package, wanted, artifact)
+                except RuntimeError as exc:
+                    assert not allowed and "exceeds safety limit" in str(exc)
+                else:
+                    assert allowed and package.read(item) == b"A" * size
+
+
 def main() -> int:
     test_github_redirect_credentials()
+    test_selected_actions_package_size()
     with tempfile.TemporaryDirectory(prefix="router-vpn-broker-auth-") as td:
         base = Path(td)
         (base / "config").mkdir()

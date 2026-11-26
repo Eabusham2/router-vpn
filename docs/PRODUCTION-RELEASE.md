@@ -67,14 +67,15 @@ Router VPN uses one immutable source identity from CI through the private Setup 
 
 ```text
 commit to main
-→ authoritative build-all CI
+→ successful routine CI and manual release gates for the same commit
 → native packages and server images prove the same full exact source SHA
 → CI publishes the native packages to a prerelease tagged router-vpn-sha-<40-hex SHA>
 → the private Setup Center downloads only that exact-SHA GitHub Release asset
 → validates GitHub's SHA-256 digest and embedded package provenance
-→ temporarily repacks/customizes only the requested package
+→ validates and temporarily repacks only the requested generic package
 → streams it to the authenticated user
-→ deletes the request workspace after delivery, cancellation, interruption, or expiry
+→ retains the package and owned workspace until 30 minutes from READY for retry
+→ removes them at expiry, or immediately on Cancel, Delete now, or shutdown
 ```
 
 The release is not `latest`, does not follow a moving branch, and is rejected unless both its tag and `target_commitish` resolve directly to the requested full exact source SHA.
@@ -87,7 +88,7 @@ For Windows, Windows Portable, macOS, and Linux requests:
 2. Same-SHA GitHub Actions artifact from the mapped producer workflow.
 3. Bounded router-local build of only the requested generic desktop/Portable package.
 
-The router-local path is a fallback, not the normal build farm. It uses the checked-out pinned source, builds one requested package, injects private home/node data only in a temporary request directory, streams the result, and removes the temporary input/output. It never builds every platform at once.
+The router-local path builds only a requested generic Windows or Windows Portable package from the approved same-image inputs. It uses the pinned source and keeps private node linking separate from the application package. The package and its owned build workspace remain available for retry until 30 minutes from READY; delivery does not extend the deadline. Cancel, Delete now, shutdown and expiry follow the same cleanup policy as a GitHub-sourced package. macOS and Linux require their native build environments outside the production host.
 
 For Android and iOS:
 

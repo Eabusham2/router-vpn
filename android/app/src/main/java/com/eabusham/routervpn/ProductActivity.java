@@ -12,9 +12,11 @@ import android.net.VpnService;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.text.InputType;
+import android.view.ContextThemeWrapper;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -133,10 +135,7 @@ public final class ProductActivity extends Activity {
         sheetHandle.setOnClickListener(v->{sheetExpanded=!sheetExpanded;applySheetWeight();});sheet.addView(sheetHandle);
         LinearLayout statusRow=row();statusView=text("Disconnected",13,false);statusView.setTextColor(Color.rgb(173,190,214));statusView.setTextIsSelectable(true);statusView.setOnClickListener(v->showConnectionDetails());statusRow.addView(statusView,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));Button connectionDetails=smallButton("Details / proof");connectionDetails.setOnClickListener(v->showConnectionDetails());statusRow.addView(connectionDetails);sheet.addView(statusRow,margins(0,0,0,dp(7)));
 
-        // Keep the primary actions in reading order at every width. Each column
-        // takes a share of the actual row and wraps its own label at large font sizes.
-        LinearLayout connectRow=new LinearLayout(this);
-        connectRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout connectRow=row();
         LinearLayout primaryAction=new LinearLayout(this);
         primaryAction.setOrientation(LinearLayout.VERTICAL);
         primaryAction.setGravity(Gravity.CENTER);
@@ -144,21 +143,21 @@ public final class ProductActivity extends Activity {
         killSwitch.setTextColor(Color.WHITE);killSwitch.setButtonTintList(ColorStateList.valueOf(Color.rgb(123,104,255)));
         killSwitch.setOnClickListener(v -> setQuickKillSwitch(killSwitch.isChecked()));
         killSwitch.setSingleLine(false);
-        connectRow.addView(killSwitch,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1.3f));
+        connectRow.addView(killSwitch);
         connectButton=primaryButton("Connect");connectButton.setMinimumHeight(dp(50));connectButton.setOnClickListener(v->connectOrDisconnect());
         connectButton.setSingleLine(false);
         primaryAction.addView(connectButton,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
-        connectRow.addView(primaryAction,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1.65f));
+        connectRow.addView(primaryAction,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));
         liveLatency=text("-- ms",11,true);liveLatency.setTextColor(Color.rgb(173,190,214));liveLatency.setGravity(Gravity.CENTER);
         liveLatency.setPadding(dp(6),0,dp(6),0);liveLatency.setContentDescription("Current path response; tap for measurement details");
         liveLatency.setOnClickListener(v->showLiveTelemetry());primaryAction.addView(liveLatency);
         fastestButton=smallButton("Fastest ▾");fastestButton.setVisibility(View.GONE);fastestButton.setSingleLine(false);
         fastestButton.setContentDescription("Compare Router nodes by direct TCP, or compare external paths using 50 routed HTTPS responses.");
         fastestButton.setOnClickListener(v->showFastConnectMenu());
-        connectRow.addView(fastestButton,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));
+        connectRow.addView(fastestButton);
         forwardButton=smallButton("Forward");forwardButton.setContentDescription("Server port-forwarding master");forwardButton.setSingleLine(false);
         forwardButton.setOnClickListener(v->showForwarding());
-        connectRow.addView(forwardButton,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1.05f));
+        connectRow.addView(forwardButton);
         sheet.addView(connectRow);
 
 
@@ -168,8 +167,8 @@ public final class ProductActivity extends Activity {
         multihopTotal=text("",12,true);multihopTotal.setOnClickListener(v->showLiveRoute());sheet.addView(multihopTotal);
 
         LinearLayout settingsRow=controlRow("Settings");Button settings=smallButton("Open settings");settings.setOnClickListener(v->showSettings());settingsRow.addView(settings);Button connectionProfiles=smallButton("Profiles");connectionProfiles.setContentDescription("Add, load, update or delete a whole non-secret connection profile");connectionProfiles.setOnClickListener(v->showConnectionProfiles());settingsRow.addView(connectionProfiles);performanceButton=smallButton("Performance");performanceButton.setOnClickListener(v->showPerformance());settingsRow.addView(performanceButton);Button mtu=smallButton("MTU");mtu.setOnClickListener(v->showMtuHelp());settingsRow.addView(mtu);sheet.addView(settingsRow,margins(0,dp(7),0,0));autoRequirementsHint=text("AUTO requirements: Off",11,false);autoRequirementsHint.setTextColor(Color.rgb(145,160,184));autoRequirementsHint.setPadding(dp(72),0,0,0);sheet.addView(autoRequirementsHint);
-        LinearLayout modeRow=controlRow("Mode");modeSpinner=new Spinner(this);modeSpinner.setPopupBackgroundDrawable(round(Color.rgb(29,43,68),12));modeRow.addView(modeSpinner,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));Button modeDetails=smallButton("Presets");modeDetails.setOnClickListener(v->showCustomPresetManager());modeRow.addView(modeDetails);sheet.addView(modeRow,margins(0,dp(7),0,0));modeHint=text("SMART AUTO is the default.",11,false);modeHint.setTextColor(Color.rgb(145,160,184));sheet.addView(modeHint);
-        LinearLayout dnsRow=controlRow("DNS");dnsSpinner=new Spinner(this);String[]dns={"Home AdGuard","Fastest measured","Custom","DoT","DoH","DoH3","Rescue"};dnsSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,dns));dnsRow.addView(dnsSpinner,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));Button dnsDetails=smallButton("Details");dnsDetails.setOnClickListener(v->{if(!openSelectedExternal(false))AndroidProductParity.showDNS(this,nodeStore,null,this::refreshDnsSelection);});dnsRow.addView(dnsDetails);sheet.addView(dnsRow,margins(0,dp(7),0,0));dnsHint=text("DNS changes the next tunnel resolver path; Connected still requires runtime DNS/path proof.",11,false);dnsHint.setTextColor(Color.rgb(145,160,184));sheet.addView(dnsHint);dnsSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+        LinearLayout modeRow=controlRow("Mode");modeSpinner=homeSpinner();modeRow.addView(modeSpinner,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));Button modeDetails=smallButton("Presets");modeDetails.setOnClickListener(v->showCustomPresetManager());modeRow.addView(modeDetails);sheet.addView(modeRow,margins(0,dp(7),0,0));modeHint=text("SMART AUTO is the default.",11,false);modeHint.setTextColor(Color.rgb(145,160,184));sheet.addView(modeHint);
+        LinearLayout dnsRow=controlRow("DNS");dnsSpinner=homeSpinner();dnsSpinner.setAdapter(homeChoices(dnsSpinner,java.util.Arrays.asList("Home AdGuard","Fastest measured","Custom","DoT","DoH","DoH3","Rescue")));dnsRow.addView(dnsSpinner,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));Button dnsDetails=smallButton("Details");dnsDetails.setOnClickListener(v->{if(!openSelectedExternal(false))AndroidProductParity.showDNS(this,nodeStore,null,this::refreshDnsSelection);});dnsRow.addView(dnsDetails);sheet.addView(dnsRow,margins(0,dp(7),0,0));dnsHint=text("DNS changes the next tunnel resolver path; Connected still requires runtime DNS/path proof.",11,false);dnsHint.setTextColor(Color.rgb(145,160,184));sheet.addView(dnsHint);dnsSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
             public void onNothingSelected(android.widget.AdapterView<?> parent){}
             public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){selectHomeDns(position);}
         });
@@ -201,10 +200,14 @@ public final class ProductActivity extends Activity {
     private void applyStartupPolicy(boolean restoredActivity){
         if(AndroidExternalNodeComparison.hasActiveOperation()||startupCapturePending)return;
         final long epoch=AndroidStartupPolicy.captureEpoch(),ticket=++startupCaptureTicket;
+        final String selected;
+        try{selected=AndroidStartupPolicy.claimColdLaunch(this,nodeStore,restoredActivity,epoch);}
+        catch(RuntimeException invalid){statusView.setText("Automatic startup stayed disconnected: "+safe(invalid));return;}
+        if(selected==null)return;
         startupCapturePending=true;
         new Thread(()->{
             AndroidStartupPolicy.Attempt captured=null;Exception failure=null;
-            try{captured=AndroidStartupPolicy.coldLaunch(this,nodeStore,connection,restoredActivity,epoch);}catch(Exception unavailable){failure=unavailable;}
+            try{captured=AndroidStartupPolicy.captureColdLaunch(this,nodeStore,connection,selected,epoch);}catch(Exception unavailable){failure=unavailable;}
             final AndroidStartupPolicy.Attempt capture=captured;final Exception error=failure;
             runOnUiThread(()->{
                 if(ticket!=startupCaptureTicket||isFinishing()||isDestroyed()){if(capture!=null)capture.cancel();return;}
@@ -245,7 +248,7 @@ public final class ProductActivity extends Activity {
     }
 
     private AndroidUnifiedConnectionController.Callback callback(){return new AndroidUnifiedConnectionController.Callback(){public boolean recordsNodeUsage(){return true;}public void progress(String message){runOnUiThread(()->{if(isFinishing()||isDestroyed())return;statusView.setText(message);connectButton.setText("Disconnect");});}public void finished(boolean ok,String message){runOnUiThread(()->{if(isFinishing()||isDestroyed())return;statusView.setText(message);String usageWarning=AndroidNodeUsage.saveWarning(message);if(!ok)toast(message);else if(!usageWarning.isEmpty())toast(usageWarning);refreshAll();refreshConnectionLater();});}};}
-    private void refreshConnectionState(){boolean active=connection!=null&&connection.isActiveOrTransitioning(),busy=mutationBusy(),candidate=AndroidNodeCandidatePreparation.busy()||AndroidViaEntryLatencyProbe.hasActiveOperation()||AndroidExternalNodeComparison.hasActiveOperation(),startup=startupCapturePending||connection!=null&&connection.isStartupPending(),permission=orderedConnectCapturePending||connection!=null&&connection.isPermissionPending();connectButton.setText(startup?"Cancel startup":candidate?"Cancel test":permission?"Cancel connection":active?"Disconnect":"Connect");nodeButton.setEnabled(!busy);fastestButton.setEnabled((!busy||connection.isConnected())&&!candidate&&!permission&&!startup&&!AndroidMTUMeasurementGate.held());killSwitch.setEnabled(!busy);multihopToggle.setEnabled(!busy);modeSpinner.setEnabled(!busy&&!isExternalSelected()&&!(prefs().getBoolean(MULTI_ON,false)&&!prefs().getString("multihop_nodes","").isEmpty()));dnsSpinner.setEnabled(!busy&&!isExternalSelected());if(startup)statusView.setText("Waiting for Android permission for the captured startup path. Cancel startup keeps the app disconnected.");else if(AndroidNodeCandidatePreparation.busy())statusView.setText("Testing saved path. Cancel test waits for the temporary VPN and candidate connections to stop.");else if(permission)statusView.setText("Waiting for Android permission for the captured connection. Cancel connection keeps the app disconnected.");else if(!candidate)statusView.setText(AndroidHomeSummary.format(this,nodeStore)+multihopExecutionSummary());else if(AndroidExternalNodeComparison.hasActiveOperation())statusView.setText("Comparing captured external paths. Cancel test waits for native cleanup and original restoration.");else if(!viaEntryProbe.isBusy())statusView.setText("A captured candidate test is draining. Cancel test retries only its temporary entry cleanup.");if(!connection.isConnected()){liveLatency.setText("-- ms");}}
+    private void refreshConnectionState(){boolean active=connection!=null&&connection.isActiveOrTransitioning(),busy=mutationBusy(),candidate=AndroidNodeCandidatePreparation.busy()||AndroidViaEntryLatencyProbe.hasActiveOperation()||AndroidExternalNodeComparison.hasActiveOperation(),startup=startupCapturePending||connection!=null&&connection.isStartupPending(),permission=orderedConnectCapturePending||connection!=null&&connection.isPermissionPending();connectButton.setText(startup?"Cancel startup":candidate?"Cancel test":permission?"Cancel connection":active?"Disconnect":"Connect");nodeButton.setEnabled(!busy);fastestButton.setEnabled((!busy||connection.isConnected())&&!candidate&&!permission&&!startup&&!AndroidMTUMeasurementGate.held());killSwitch.setEnabled(!busy);multihopToggle.setEnabled(!busy);modeSpinner.setEnabled(!busy&&!isExternalSelected()&&!(prefs().getBoolean(MULTI_ON,false)&&!prefs().getString("multihop_nodes","").isEmpty()));dnsSpinner.setEnabled(!busy&&!isExternalSelected());if(startupCapturePending)statusView.setText("Checking saved startup settings…");else if(startup)statusView.setText("Waiting for Android permission for the captured startup path. Cancel startup keeps the app disconnected.");else if(AndroidNodeCandidatePreparation.busy())statusView.setText("Testing saved path. Cancel test waits for the temporary VPN and candidate connections to stop.");else if(permission)statusView.setText("Waiting for Android permission for the captured connection. Cancel connection keeps the app disconnected.");else if(!candidate)statusView.setText(AndroidHomeSummary.format(this,nodeStore)+multihopExecutionSummary());else if(AndroidExternalNodeComparison.hasActiveOperation())statusView.setText("Comparing captured external paths. Cancel test waits for native cleanup and original restoration.");else if(!viaEntryProbe.isBusy())statusView.setText("A captured candidate test is draining. Cancel test retries only its temporary entry cleanup.");if(!connection.isConnected()){liveLatency.setText("-- ms");}}
 
     private void showConnectionDetails(){String truth=AndroidHomeSummary.format(this,nodeStore);new AlertDialog.Builder(this).setTitle("Connection details & proof").setMessage(truth+"\n\nConnected is not treated as a proved public exit until the current app-owned VPN network, frozen session node/path and current-session exit proof all agree.").setPositiveButton("Prove actual exit",(d,w)->{statusView.setText("Proving actual public VPN exit for this session…");AndroidHomeSummary.proveActualExit(this,nodeStore,(message,error)->runOnUiThread(()->{statusView.setText(message);if(error!=null)toast(message);refreshAll();}));}).setNeutralButton("Emergency disconnect",(d,w)->{statusView.setText("Emergency disconnect requested…");AndroidHomeSummary.emergencyDisconnect(this,(message,error)->runOnUiThread(()->{statusView.setText(message);if(error!=null)toast(message);refreshAll();refreshConnectionLater();}));}).setNegativeButton("Close",null).show();}
 
@@ -465,10 +468,10 @@ public final class ProductActivity extends Activity {
         modeSpinner.setOnItemSelectedListener(null);
         if(orderedPathEnabled()) {
             modeChoices=new ArrayList<>();modeChoices.add(new ModeChoice("node-chain","Per-hop transports • ordered path"));
-            modeSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,modeChoices));modeSpinner.setSelection(0,false);modeSpinner.setEnabled(false);
+            modeSpinner.setAdapter(homeChoices(modeSpinner,modeChoices));modeSpinner.setSelection(0,false);modeSpinner.setEnabled(false);
             modeHint.setText("Each ordered node keeps its selected transport. Use Edit hops to change the path; the single-node mode is remembered separately.");return;
         }
-        AndroidUnifiedNodeCatalog.Item external=selectedCatalogItem();if(external!=null&&!external.isRouterVpn()){modeChoices=new ArrayList<>();modeChoices.add(new ModeChoice("external",external.protocol+" • saved external protocol"));modeSpinner.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,modeChoices));modeSpinner.setSelection(0,false);modeHint.setText("Saved external protocol and path; edit DNS and device policy in Settings.");return;}
+        AndroidUnifiedNodeCatalog.Item external=selectedCatalogItem();if(external!=null&&!external.isRouterVpn()){modeChoices=new ArrayList<>();modeChoices.add(new ModeChoice("external",external.protocol+" • saved external protocol"));modeSpinner.setAdapter(homeChoices(modeSpinner,modeChoices));modeSpinner.setSelection(0,false);modeHint.setText("Saved external protocol and path; edit DNS and device policy in Settings.");return;}
         String wanted = prefs().getString(MODE_KEY, "smart-auto");
         List<ModeChoice> values = new ArrayList<>();
         values.add(new ModeChoice("smart-auto", "SMART AUTO — recommended"));
@@ -493,7 +496,7 @@ public final class ProductActivity extends Activity {
         }
         values.add(new ModeChoice(CREATE_CUSTOM_ACTION,"New CUSTOM preset…"));
         modeChoices = values;
-        ArrayAdapter<ModeChoice> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, values);
+        ArrayAdapter<ModeChoice> adapter = homeChoices(modeSpinner,values);
         modeSpinner.setAdapter(adapter);
         modeSpinner.setSelection(index, false);
         final int initialIndex=index;
@@ -1368,6 +1371,36 @@ if(isExternalSelected()){boolean on=prefs().getBoolean(MULTI_ON,false);multihopT
     }
     private void dialog(String title,String message){new AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK",null).show();}
     private SharedPreferences prefs(){return getSharedPreferences(PREFS,MODE_PRIVATE);}
+    private Spinner homeSpinner(){
+        Spinner spinner=new Spinner(new ContextThemeWrapper(this,android.R.style.Theme_Material),Spinner.MODE_DROPDOWN);
+        spinner.setPopupBackgroundDrawable(round(Color.rgb(29,43,68),12));
+        return spinner;
+    }
+    private <T> ArrayAdapter<T> homeChoices(Spinner spinner,List<T> choices){
+        ArrayAdapter<T> adapter=new ArrayAdapter<T>(spinner.getContext(),android.R.layout.simple_spinner_item,choices){
+            private TextView readableLabel(View view){
+                TextView label=(TextView)view;
+                label.setSingleLine(false);
+                label.setEllipsize(null);
+                label.setTextColor(Color.WHITE);
+                return label;
+            }
+            @Override public View getView(int position,View recycled,ViewGroup parent){
+                return readableLabel(super.getView(position,recycled,parent));
+            }
+            @Override public View getDropDownView(int position,View recycled,ViewGroup parent){
+                TextView label=readableLabel(super.getDropDownView(position,recycled,parent));
+                ViewGroup.LayoutParams params=label.getLayoutParams();
+                if(params!=null && params.height>0){
+                    label.setMinimumHeight(Math.max(label.getMinimumHeight(),params.height));
+                    params.height=ViewGroup.LayoutParams.WRAP_CONTENT;
+                }
+                return label;
+            }
+        };
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        return adapter;
+    }
     private LinearLayout row(){return new AndroidControlRow(this);}
     private LinearLayout controlRow(String title){LinearLayout r=row();TextView label=text(title,13,true);label.setTextColor(Color.WHITE);label.setGravity(Gravity.END);label.setMinimumWidth(dp(72));r.addView(label);return r;}
     private TextView text(String value,int sp,boolean bold){TextView v=new TextView(this);v.setText(value);v.setTextSize(sp);v.setTextColor(Color.WHITE);if(bold)v.setTypeface(v.getTypeface(),Typeface.BOLD);return v;}

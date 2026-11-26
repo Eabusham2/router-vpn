@@ -30,6 +30,7 @@ final class AndroidStartupPolicy {
     private static final int MAX_LAST=4096, MAX_ORDERED_LAST=40*1024;
     private static final String[] CHOICES={"smart-auto","auto","last","manual"};
     private static boolean coldLaunchClaimed;
+    private static String claimedStartupNode;
     private static long startupEpoch;
     private static Attempt pending;
 
@@ -163,22 +164,28 @@ final class AndroidStartupPolicy {
         void cancel(){synchronized(AndroidStartupPolicy.class){retired=true;if(pending==this)pending=null;}}
     }
 
-    /** Rotation/resume never creates another request, and a saved Activity from a
-     * dead process cannot revive private permission state from its old nonce. */
-    static Attempt coldLaunch(Context context,AndroidNodeStore nodes,AndroidUnifiedConnectionController connection,boolean restoredActivity)throws Exception {
-        return coldLaunch(context,nodes,connection,restoredActivity,captureEpoch());
-    }
     static synchronized long captureEpoch(){return startupEpoch;}
-    static Attempt coldLaunch(Context context,AndroidNodeStore nodes,AndroidUnifiedConnectionController connection,boolean restoredActivity,long expectedEpoch)throws Exception {
+
+    /** Claim this process's decision before a new node can be selected. Rotation
+     * cannot replay it and an empty installation has no startup path to prepare. */
+    static synchronized String claimColdLaunch(Context context,AndroidNodeStore nodes,boolean restoredActivity,long expectedEpoch){
+        if(expectedEpoch!=startupEpoch||coldLaunchClaimed)return null;
+        coldLaunchClaimed=true;
+        if(restoredActivity)return null;
+        String selected=prefs(context).getString("selected_id",nodes.activeId());
+        if(selected==null||selected.isEmpty())return null;
+        claimedStartupNode=selected;
+        return selected;
+    }
+
+    static Attempt captureColdLaunch(Context context,AndroidNodeStore nodes,AndroidUnifiedConnectionController connection,String selected,long expectedEpoch)throws Exception {
         synchronized(AndroidStartupPolicy.class){
-            if(expectedEpoch!=startupEpoch)return null;
-            if(coldLaunchClaimed)return null;
-            coldLaunchClaimed=true;
-            if(restoredActivity)return null;
+            if(expectedEpoch!=startupEpoch||selected==null||!selected.equals(claimedStartupNode))return null;
+            claimedStartupNode=null;
         }
         SharedPreferences prefs=prefs(context);
-        String selected=prefs.getString("selected_id",nodes.activeId());
-        if(selected==null||selected.isEmpty())return null;
+        if(!selected.equals(prefs.getString("selected_id",nodes.activeId())))
+            throw new IllegalStateException("The selected node changed during the startup decision.");
         String kind=prefs.getString("selected_kind","router-vpn");
         if("external".equals(kind))return captureExternal(context,nodes,connection,selected,expectedEpoch);
         if(!"router-vpn".equals(kind))throw new IllegalStateException("The selected startup node kind is unsupported.");
@@ -262,7 +269,7 @@ final class AndroidStartupPolicy {
         capture.epoch=expectedEpoch;pending=capture;
     }
     static synchronized Attempt restore(String nonce){return nonce!=null&&nonce.matches("[0-9a-f]{32}")&&pending!=null&&pending.current()&&nonce.equals(pending.nonce)?pending:null;}
-    static synchronized void cancelPending(){startupEpoch++;coldLaunchClaimed=true;if(pending!=null)pending.cancel();}
+    static synchronized void cancelPending(){startupEpoch++;coldLaunchClaimed=true;claimedStartupNode=null;if(pending!=null)pending.cancel();}
 
     static String startupMode(JSONObject profile)throws Exception {
         Object value=profile.opt("startup_mode");
