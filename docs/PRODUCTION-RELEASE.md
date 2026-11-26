@@ -55,3 +55,117 @@ sudo -E bash server/manage.sh
 `server/install.sh` and `server/upgrade.sh` call `server/scripts/verify-production-compose.py` before Docker. The verifier requires the generated exact-SHA header, exact Router VPN custom-image counts/pins, matching broker provenance, no moving Router VPN tag, and no production `build:`/remote Git context.
 
 After the update, prove the one-shot init/finalizer exit cleanly, all expected long-running services stay running, Setup Center `/healthz` returns 200, the running image IDs/tags match the selected SHA, and the selected VPN path itself passes the separate live release matrix before calling the whole release complete.
+
+
+---
+
+<a id="section-exact-sha-download-delivery"></a>
+
+# Router VPN exact-SHA download delivery
+
+Router VPN uses one immutable source identity from CI through the private Setup Center.
+
+```text
+commit to main
+→ authoritative build-all CI
+→ native packages and server images prove the same full exact source SHA
+→ CI publishes the native packages to a prerelease tagged router-vpn-sha-<40-hex SHA>
+→ the private Setup Center downloads only that exact-SHA GitHub Release asset
+→ validates GitHub's SHA-256 digest and embedded package provenance
+→ temporarily repacks/customizes only the requested package
+→ streams it to the authenticated user
+→ deletes the request workspace after delivery, cancellation, interruption, or expiry
+```
+
+The release is not `latest`, does not follow a moving branch, and is rejected unless both its tag and `target_commitish` resolve directly to the requested full exact source SHA.
+
+## Ordered delivery sources
+
+For Windows, Windows Portable, macOS, and Linux requests:
+
+1. Immutable exact-SHA GitHub Release asset.
+2. Same-SHA GitHub Actions artifact from the mapped producer workflow.
+3. Bounded router-local build of only the requested generic desktop/Portable package.
+
+The router-local path is a fallback, not the normal build farm. It uses the checked-out pinned source, builds one requested package, injects private home/node data only in a temporary request directory, streams the result, and removes the temporary input/output. It never builds every platform at once.
+
+For Android and iOS:
+
+1. Immutable exact-SHA GitHub Release asset.
+2. Same-SHA GitHub Actions mobile artifact.
+3. No Linux router-local fallback.
+
+Android and iOS remain GitHub-only because the Linux home node cannot truthfully reproduce the Android toolchain, Xcode, NetworkExtension packaging, Apple signing, or IPA provenance. A missing mobile artifact fails closed instead of returning a fake package.
+
+## Release contents
+
+Every exact-SHA prerelease contains these ten native package assets plus `RouterVPN-RELEASE.json` and `SHA256SUMS`:
+
+```text
+RouterVPN-Windows-amd64.zip
+RouterVPN-Windows-arm64.zip
+RouterVPN-Portable-Windows-amd64.zip
+RouterVPN-Portable-Windows-arm64.zip
+RouterVPN-darwin-amd64.tar.gz
+RouterVPN-darwin-arm64.tar.gz
+RouterVPN-linux-amd64.tar.gz
+RouterVPN-linux-arm64.tar.gz
+app-debug.apk
+RouterVPN-native-unsigned-resignable.ipa
+```
+
+Generic release assets contain no private Router VPN node, WireGuard private key, API token, Setup Center credential, SOCKS password, or home-specific endpoint secret. Private linking remains a separate authenticated bundle/pairing operation.
+
+## Portainer and Setup Center boundary
+
+Portainer pulls exact-SHA server images through the production compose/update controller. The Setup Center serves client downloads from private port `8786`; it does not expose release credentials or private client material to WAN. The Setup Center may use a server-side GitHub token for rate limits/private retrieval, but strips authorization before GitHub's cross-origin blob-storage redirect.
+
+This delivery pipeline does not make source, shipping, CI, artifact, physical runtime, selected-path proof, and production deployment equivalent. Each remains a separate evidence gate.
+
+
+---
+
+<a id="section-current-certification"></a>
+
+# Current exact-head certification
+
+Router VPN accepts GitHub/release completion only when one exact public `main` commit proves all of the following without borrowing evidence from an older SHA:
+
+- reconciled requirements, recovered requirements 1–356 and C1–C7;
+- real shipping composition for Windows, macOS, Linux, Android and iOS/iPadOS;
+- unified map-first product, session-mutation, profile, durability and fail-open contracts;
+- Windows installed and Portable x64/ARM64 packages;
+- macOS Intel/Apple Silicon and Linux x64/ARM64 packages;
+- Android APK and real iOS `xcodebuild`/IPA;
+- ARM64 production images and Portainer preflight;
+- one generated image-only production compose whose broker and custom images share the exact SHA;
+- immutable exact-SHA prerelease assets, release manifest and SHA-256 checksums.
+
+Setup Center package delivery is exact-SHA GitHub Release first, matching exact-SHA Actions artifact second, and a bounded supported desktop/Portable local build only when GitHub delivery is unavailable. Android and iOS remain artifact-only. A completed package and its owned build workspace remain retryable for 30 minutes from READY; downloading does not extend the deadline; Cancel/Delete/Shutdown removes it immediately.
+
+Physical-device, private AI Board/Portainer, ASUS-router, off-LAN, live-provider and Apple distribution evidence remain separate and may not be inferred from source or CI.
+
+
+---
+
+<a id="section-exact-head-certification"></a>
+
+# Exact-Head Certification
+
+This file marks the authoritative Router VPN source generation that must be certified as one exact Git commit.
+
+The certification matrix must prove, for the same SHA:
+
+- recovered requirements 1–356 and corrections C1–C7;
+- native map-first shipping composition on Windows, macOS, Linux, Android, and iOS/iPadOS;
+- backend session/mutation serialization and stale-result rejection;
+- private/durable state, endpoint ownership, updater rollback, and ASUS fail-open source contracts;
+- Windows installed and Portable x64/ARM64 packages;
+- macOS Intel/Apple Silicon and Linux x64/ARM64 packages;
+- Android APK and real iOS/iPadOS build/IPA;
+- ARM64 production images and exact-SHA Portainer compose;
+- aggregate package provenance, checksums, licenses, and secret-free archives.
+
+Setup Center package delivery is exact-SHA GitHub Release first, exact-SHA Actions artifact second, then only a bounded supported local desktop/Portable fallback. Generated local packages and their owned workspaces remain available for retry for 30 minutes from READY and are then deleted; explicit cancel/delete and shutdown clean them immediately. Mobile remains exact-SHA artifact-only.
+
+Physical devices, private production infrastructure, ASUS hardware, off-LAN interoperability, live AI providers, and Apple distribution are separate evidence gates and must never be inferred from CI.

@@ -1,7 +1,0 @@
-{"Action":"start","Package":"router-vpn/cmd/client"}
-{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidatePendingRetirementPreservesForeignMetadata"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidatePendingRetirementPreservesForeignMetadata","Output":"=== RUN   TestDesktopSelectedCandidatePendingRetirementPreservesForeignMetadata\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidatePendingRetirementPreservesForeignMetadata","Output":"--- PASS: TestDesktopSelectedCandidatePendingRetirementPreservesForeignMetadata (4.98s)\n"}
-{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedCandidatePendingRetirementPreservesForeignMetadata"}
-{"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
-{"Action":"pass","Package":"router-vpn/cmd/client"}

@@ -75,7 +75,7 @@ Windows source includes native raw WireGuard, full-device layered TUN/DNS paths,
 
 The current native external-node path supports WireGuard, AmneziaWG, SOCKS5, HTTP(S) CONNECT, Shadowsocks, Hysteria2 and bounded inline OpenVPN. OpenVPN readiness depends on the verified packaged native engine; the older helper API's Windows restriction does not describe this path. Every accepted graph requires its selected DNS and expected-public-exit proof before Connected.
 
-Tor bridges use an owned standalone Tor process and native Go pluggable transports. Windows ARM64 runs the verified x64 Tor process through checked Windows 11 userspace compatibility while retaining ARM64 app, packet engine and driver components. See [WINDOWS-TOR-ARM64.md](WINDOWS-TOR-ARM64.md) for the exact boundary.
+Tor bridges use an owned standalone Tor process and native Go pluggable transports. Windows ARM64 runs the verified x64 Tor process through checked Windows 11 userspace compatibility while retaining ARM64 app, packet engine and driver components. See [WINDOWS-TOR-ARM64.md](PLATFORM-INTEGRATION.md#section-windows-tor-arm64) for the exact boundary.
 
 Physical Windows full-device routing, DNS/IPv4/IPv6, reconnect/network-change, leak-negative, custom-exit and package-variant testing remain release gates.
 

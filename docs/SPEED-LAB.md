@@ -79,7 +79,7 @@ protocol. Its complete graph, final-owned policy, physical sockets and native
 preflight are captured before suspension. A retained protection owner that
 cannot transfer into the multihop runtime is still rejected by the existing
 transition guard; completing that handoff remains required. See
-[DESKTOP-IMPORTED-ROUTER-PATH.md](DESKTOP-IMPORTED-ROUTER-PATH.md).
+[DESKTOP-IMPORTED-ROUTER-PATH.md](MULTIHOP-EXECUTION.md#section-desktop-imported-router-path).
 
 A saved node, entry mode or execution that is no longer valid remains visibly
 unavailable and cannot silently select another route. Current path and System
@@ -95,7 +95,7 @@ system TUN: independent entry values, both nodes, DNS and credentials stay in
 the captured graph. A historical saved MTU or the initial configuration's MTU
 is not substituted for that live readback. Holds that interrupt Auto before
 request registration still resume it after the temporary transaction drains.
-See [DESKTOP-MTU.md](DESKTOP-MTU.md).
+See [DESKTOP-MTU.md](NETWORKING-REFERENCE.md#section-desktop-mtu).
 
 ### iPhone/iPad
 

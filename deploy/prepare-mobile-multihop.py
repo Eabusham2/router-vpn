@@ -63,7 +63,7 @@ for _name in ('prepare-node-chain-execution-gate', 'prepare-node-chain-execution
     _execution_modules.append(_module)
 
 def inputs():
-    paths = [ROOT / 'ios/RouterVPN/App/IOSHomeDNSPolicy.swift', ROOT / 'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift', ROOT / 'deploy/testfixtures/xray-entry/main.go', ROOT / 'mobile/routervpn_hop_measurement.go.tmpl', ROOT / 'mobile/routervpn_multihop_bridge.go.tmpl', ROOT / 'mobile/routervpn_external_policy_bridge.go.tmpl', ROOT / 'mobile/routervpn_sip003_bridge.go.tmpl']
+    paths = [ROOT / 'ios/RouterVPN/App/IOSHomeDNSPolicy.swift', ROOT / 'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift', ROOT / 'mobile/routervpn_hop_measurement.go.tmpl', ROOT / 'mobile/routervpn_multihop_bridge.go.tmpl', ROOT / 'mobile/routervpn_external_policy_bridge.go.tmpl', ROOT / 'mobile/routervpn_sip003_bridge.go.tmpl']
     paths.append(ROOT/'mobile/routervpn_external_measurement_bridge.go.tmpl')
     paths.append(ROOT/'mobile/routervpn_dns_measurement.go.tmpl')
     paths.append(ROOT/'mobile/routervpn_imported_entry.go.tmpl')

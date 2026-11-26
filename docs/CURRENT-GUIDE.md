@@ -146,7 +146,7 @@ UDP      51820   -> 51820
 UDP      51822   -> 51822
 ```
 
-`14443/TCP` (OverTLS) and `15443/TCP+UDP` (legacy SSR) remain because current source still publishes those services. Standard REALITY defaults to `24443/TCP` for fresh deployments. Existing installations retain their preserved port until an explicit opt-in migration; see [AdGuard block-page / REALITY coexistence](ADGUARD-BLOCKPAGE-REALITY.md). External TCP `80` maps to internal `18080` for ACME; never change it to `80 -> 80`.
+`14443/TCP` (OverTLS) and `15443/TCP+UDP` (legacy SSR) remain because current source still publishes those services. Standard REALITY defaults to `24443/TCP` for fresh deployments. Existing installations retain their preserved port until an explicit opt-in migration; see [AdGuard block-page / REALITY coexistence](NETWORKING-REFERENCE.md#section-adguard-blockpage-reality). External TCP `80` maps to internal `18080` for ACME; never change it to `80 -> 80`.
 
 Never WAN-expose:
 
@@ -323,13 +323,13 @@ The daily-use app is native GTK. Linux has native runtime coverage, nftables pro
 
 ### Android
 
-Android uses one owned `VpnService` with WireGuard, AmneziaWG and the pinned combined Libbox/Xray runtime. Source includes AUTO/SMART/CUSTOM, Tor, supported layered/MAX and multihop graphs, selected-node/DNS proofs and validated external imports, including the [native OpenVPN inline-profile subset](MOBILE-OPENVPN.md). Imported SS2022 or Hysteria2 entries can use the [captured Local paired SS2022/Hysteria2 final](MOBILE-IMPORTED-ROUTER-PATH.md). Other graph or execution choices retain their own readiness and remaining implementation obligations.
+Android uses one owned `VpnService` with WireGuard, AmneziaWG and the pinned combined Libbox/Xray runtime. Source includes AUTO/SMART/CUSTOM, Tor, supported layered/MAX and multihop graphs, selected-node/DNS proofs and validated external imports, including the [native OpenVPN inline-profile subset](MOBILE-OPENVPN.md). Imported SS2022 or Hysteria2 entries can use the [captured Local paired SS2022/Hysteria2 final](MULTIHOP-EXECUTION.md#section-mobile-imported-router-path). Other graph or execution choices retain their own readiness and remaining implementation obligations.
 
 **Release gate:** physical Android VPN permission, lockdown, reconnect/network-change, DNS/IPv4/IPv6, custom-exit traffic and leak-negative tests.
 
 ### iOS / iPadOS
 
-The SwiftUI app uses one owned PacketTunnel, pinned WireGuardKit for applicable raw WireGuard paths and the pinned Libbox/Xray integration for supported graphs. Source includes imported AmneziaWG, the [native OpenVPN inline-profile subset](MOBILE-OPENVPN.md), Tor, layered/MAX and multihop paths. Strict sessions require the captured NetworkExtension route-lockdown and LAN policy; ordinary external exits require selected DNS and expected-public-exit proof. Imported SS2022/Hysteria2 entries support the [captured Local paired-final path](MOBILE-IMPORTED-ROUTER-PATH.md). Every graph still requires its real credentials, engine and proof; a MAX/ALL label does not grant readiness.
+The SwiftUI app uses one owned PacketTunnel, pinned WireGuardKit for applicable raw WireGuard paths and the pinned Libbox/Xray integration for supported graphs. Source includes imported AmneziaWG, the [native OpenVPN inline-profile subset](MOBILE-OPENVPN.md), Tor, layered/MAX and multihop paths. Strict sessions require the captured NetworkExtension route-lockdown and LAN policy; ordinary external exits require selected DNS and expected-public-exit proof. Imported SS2022/Hysteria2 entries support the [captured Local paired-final path](MULTIHOP-EXECUTION.md#section-mobile-imported-router-path). Every graph still requires its real credentials, engine and proof; a MAX/ALL label does not grant readiness.
 
 **Release gate:** physical iPhone/iPad permission, route lockdown, reconnect/network change, DNS/IPv4/IPv6, Libbox/external-exit traffic, leak-negative behavior and signing validation.
 

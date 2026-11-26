@@ -2,11 +2,41 @@ package mobilemtu
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+type testPreferences struct {
+	mu         sync.Mutex
+	data       string
+	fail       bool
+	afterWrite func()
+}
+
+func (p *testPreferences) ReadMTUCache() (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.data, nil
+}
+func (p *testPreferences) CompareAndSwapMTUCache(old, next string) (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.fail {
+		return false, errors.New("injected private persistence failure")
+	}
+	if p.data != old {
+		return false, nil
+	}
+	p.data = next
+	if p.afterWrite != nil {
+		p.afterWrite()
+	}
+	return true, nil
+}
 
 func fixtureProfile() map[string]any {
 	return map[string]any{"id": "home", "node_kind": "router-vpn", "node_proof_id": strings.Repeat("a", 64), "router_api": "http://10.77.0.1:8787", "api_token": "private-fixture-token", "daita_host": "10.77.0.1", "daita_port": 45999, "socks_host": "10.77.0.1", "mtu_policy": "auto"}

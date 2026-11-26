@@ -47,7 +47,7 @@ chmod 755 "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/router-vpn-start-
 # schema-v4 AUTO/SMART requirement controls. It executes a temporary copy in
 # client/linux so the base builder keeps its normal ROOT semantics.
 set +e
-"$ROOT/client/linux/build-native-app-current.sh" "$dir/router-vpn-app"
+"$ROOT/client/linux/build-native-app.sh" "$dir/router-vpn-app"
 native_rc=$?
 set -e
 if (( native_rc != 0 )); then

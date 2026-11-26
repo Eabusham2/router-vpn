@@ -59,7 +59,7 @@ Release CI builds the native AppKit/MapKit macOS application for amd64/arm64 and
 
 The AI Board runtime image intentionally does **not** contain AppKit or GTK native build SDK environments. Therefore if the matching same-SHA macOS/Linux native artifact is unavailable, the download broker fails closed with an exact reason instead of returning a controller-only archive pretending to be the finished native app. This is the deliberate “requested package only / where possible” boundary, not a loss of platform support.
 
-Physical macOS/Linux networking, custom-exit and leak-negative validation remain separate. Under recovered requirement #339, macOS release signing/notarization is optional polish when practical; iOS signing and provisioning remain necessary for legitimate device installation. See the [recovered qualification](AI-DEVELOPMENT-HISTORY.md#note-reconciliation-2026-10-30-sources).
+Physical macOS/Linux networking, custom-exit and leak-negative validation remain separate. Under recovered requirement #339, macOS release signing/notarization is optional polish when practical; iOS signing and provisioning remain necessary for legitimate device installation. See the [recovered qualification](https://github.com/Eabusham2/router-vpn/blob/13b7624cda832920ce0b4f647d7552e07f0bf083/docs/AI-DEVELOPMENT-HISTORY.md#note-reconciliation-2026-10-30-sources).
 
 ## Home Setup Center download policy
 

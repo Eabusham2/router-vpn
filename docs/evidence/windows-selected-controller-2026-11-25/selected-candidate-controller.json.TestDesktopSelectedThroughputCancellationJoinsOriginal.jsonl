@@ -1,7 +1,0 @@
-{"Action":"start","Package":"router-vpn/cmd/client"}
-{"Action":"run","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputCancellationJoinsOriginal"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputCancellationJoinsOriginal","Output":"=== RUN   TestDesktopSelectedThroughputCancellationJoinsOriginal\n"}
-{"Action":"output","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputCancellationJoinsOriginal","Output":"--- PASS: TestDesktopSelectedThroughputCancellationJoinsOriginal (7.13s)\n"}
-{"Action":"pass","Package":"router-vpn/cmd/client","Test":"TestDesktopSelectedThroughputCancellationJoinsOriginal"}
-{"Action":"output","Package":"router-vpn/cmd/client","Output":"PASS\n"}
-{"Action":"pass","Package":"router-vpn/cmd/client"}
