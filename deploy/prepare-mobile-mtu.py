@@ -76,6 +76,7 @@ def prepare(vendor, *, mobile=True):
     vendor=vendor.resolve()
     if subprocess.check_output(['git','-C',str(vendor),'rev-parse','HEAD'],text=True).strip()!=PIN:raise ValueError('MTU core pin changed')
     mappings=mapping_source() if mobile else ''
+    if mobile: RETAINED.prepare_mobile_tun(vendor)
     RETAINED.prepare(vendor)
     changes={
       'protocol/tun/inbound.go':[

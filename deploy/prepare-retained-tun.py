@@ -3,6 +3,7 @@
 from pathlib import Path
 import argparse
 import hashlib
+import json
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +14,71 @@ OBSERVATION_TARGET = 'adapter/routervpn_observation.go'
 INBOUND_OBSERVATION_TEMPLATES = {ROOT / 'mobile/strategy/inbound_context.go.tmpl': 'adapter/inbound/routervpn_observation.go'}
 # Exact previous published preparation, accepted only for this bounded upgrade.
 PREVIOUS_TEMPLATES = {'routervpn_mtu.go': ('79603bccd07497e8d01cc99b87e61bce7b45c3c0f9c89c1725c697e0f4878669', '7241c2a70cc00f8ff8eeeaf4ad2f95312fb19fd4cede8512a4b9e4ff09762830')}
+
+
+TUN_MODULE = 'github.com/sagernet/sing-tun'
+TUN_VERSION = 'v0.9.3'
+FLOW_NAT_SHA256 = '55f38abaaffacef2d3c9da453994a9869759fcd8809b87b009e8b36afb371b4f'
+
+
+def flow_nat_patch(raw):
+    """Preserve a free original port when the outbound has no selector range."""
+    before = b'\t\tclientSelector >= rangeStart && uint32(clientSelector-rangeStart) < rangeCount {'
+    after = b'\t\t(n.selectorCount == 0 || clientSelector >= rangeStart && uint32(clientSelector-rangeStart) < rangeCount) {'
+    if hashlib.sha256(raw).hexdigest() != FLOW_NAT_SHA256 or raw.count(before) != 1:
+        raise ValueError('Pinned native port selector source changed')
+    # Source ports below 49152 must not collapse onto the first fallback port
+    # after every engine restart; the remote TCP TIME_WAIT may still be live.
+    # Explicit port ranges, collision lookup and fallback allocation stay intact.
+    return raw.replace(before, after, 1)
+
+
+def prepare_mobile_tun(vendor):
+    """Give Libbox the shared selector correction without desktop ownership code."""
+    vendor = Path(vendor).resolve()
+    destination = vendor / 'routervpn-mobile-tun'
+    replacement = {'Old': {'Path': TUN_MODULE}, 'New': {'Path': './' + destination.name}}
+    manifest = json.loads(subprocess.check_output(['go', 'mod', 'edit', '-json'], cwd=vendor, text=True))
+    replacements = [item for item in (manifest.get('Replace') or []) if item['Old']['Path'] == TUN_MODULE]
+    if replacements and replacements != [replacement]:
+        raise ValueError('Refusing to replace another prepared native TUN module')
+    module = json.loads(subprocess.check_output(['go', 'mod', 'download', '-json', TUN_MODULE+'@'+TUN_VERSION], cwd=vendor, text=True))
+    expected = [line.split()[2] for line in (vendor/'go.sum').read_text().splitlines()
+                if line.startswith(TUN_MODULE+' '+TUN_VERSION+' ')]
+    if expected != [module.get('Sum')] or module.get('Version') != TUN_VERSION:
+        raise ValueError('Mobile selector preparation requires the checksum-pinned TUN module')
+    source = Path(module['Dir']).resolve()
+    if destination.is_symlink() or (destination.exists() and not destination.is_dir()):
+        raise ValueError('Unsafe prepared mobile TUN destination')
+    outputs = {}
+    for path in source.rglob('*'):
+        if path.is_symlink():
+            raise ValueError('Linked native TUN source')
+        if not path.is_file() and not path.is_dir():
+            raise ValueError('Unexpected native TUN source entry')
+        if path.is_file():
+            relative = path.relative_to(source)
+            raw = path.read_bytes()
+            outputs[relative] = flow_nat_patch(raw) if relative.as_posix() == 'flow_nat.go' else raw
+    if Path('flow_nat.go') not in outputs:
+        raise ValueError('Pinned native TUN selector source is missing')
+    if destination.exists():
+        existing = {}
+        for path in destination.rglob('*'):
+            if path.is_symlink():
+                raise ValueError('Linked prepared mobile TUN source')
+            if not path.is_file() and not path.is_dir():
+                raise ValueError('Unexpected prepared mobile TUN entry')
+            if path.is_file():
+                existing[path.relative_to(destination)] = path.read_bytes()
+        if existing != outputs:
+            raise ValueError('Refusing to overwrite a changed prepared mobile TUN module')
+    else:
+        for relative, raw in outputs.items():
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(raw)
+    subprocess.run(['go', 'mod', 'edit', '-replace='+TUN_MODULE+'=./'+destination.name], cwd=vendor, check=True)
 
 
 def patch_manager(source):

@@ -9,6 +9,9 @@ import importlib.util
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = 'github.com/sagernet/sing-tun'
 VERSION = 'v0.9.3'
+spec = importlib.util.spec_from_file_location('desktop_retained_tun', ROOT/'deploy/prepare-retained-tun.py')
+RETAINED = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(RETAINED)
 
 # Exact v0.9.3 source, before the existing owned-interface and receipt transforms.
 # An occupied route belongs to its existing owner; an MTU successor is started
@@ -321,6 +324,8 @@ def prepare(vendor):
             if target.is_symlink():
                 raise ValueError('Linked prepared native TUN source')
             raw = path.read_bytes()
+            if relative.as_posix() == 'flow_nat.go':
+                raw = RETAINED.flow_nat_patch(raw)
             if relative.as_posix() == 'tun.go':
                 before = b'return nil, E.New("no IPv4 server configured and no usable next address in ", o.Inet6Address[0], " for DNS")'
                 after = b'return nil, E.New("no IPv4 server configured and no usable next address in ", o.Inet4Address[0], " for DNS")'
