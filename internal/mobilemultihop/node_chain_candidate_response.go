@@ -88,6 +88,12 @@ func (c *NodeChain) candidatePrefixMeasurementValidated(position int) string {
 	if position < 0 || position >= len(c.proofs) {
 		return ""
 	}
+	if c.socksSource != nil {
+		return c.socksSource.CandidatePrefixMeasurement(position)
+	}
+	if c.connectSource != nil {
+		return c.connectSource.CandidatePrefixMeasurement(position)
+	}
 	if c.nodes[position] != nil && NodeChainPrefixMode(c.proofs[position].Mode) && !((c.openVPNMiddle != nil || c.importedMiddle != nil) && position >= len(c.nodes)-2) {
 		if position > 7 && (position >= len(c.proofs)-1 || c.ExtendedPairedLocalNodeCount() != len(c.nodes) && position >= c.ExtendedMixedLocalPacketCount()) {
 			return ""

@@ -203,11 +203,12 @@ private final class IOSCandidateReply: @unchecked Sendable {
             guard info.requested_execution == nil, info.execution == nil, info.candidate_positions == nil,
                   info.proposal_source_sha256 == nil, info.proposal_config_sha256 == nil else { throw IOSNodeCandidateResult.issue() }
             if IOSMultihopNodeSelection.extendedMixedPacketCount(info.proofs.map(\.mode), execution: "local") > 0 ||
+               info.proofs.contains(where: { $0.typedImportedResponse }) ||
                info.proofs.contains(where: { $0.metric == "routed-public-candidate-response" }) ||
                binding.identity.nodeChainSource.flatMap({ (try? JSONSerialization.jsonObject(with: $0) as? [String: Any])?["schema"] as? Int }) == 8 ||
                info.proofs.contains(where: { ($0.position >= IOSMultihopNodeSelection.maximumNodes - 1 || !$0.node_id.isEmpty) && $0.metric == "routed-candidate-response" }) {
                 guard let original = binding.identity.nodeChainSource else { throw IOSNodeCandidateResult.issue() }
-                try IOSNodeCandidateOriginalCapture.validateExtendedResponseInfo(input: original, bundle: binding.identity.bundleData,
+                try IOSNodeCandidateOriginalCapture.validateLocalResponseInfo(input: original, bundle: binding.identity.bundleData,
                     proofs: info.proofs, sourceSHA256: info.source_sha256, configSHA256: info.config_sha256)
             }
         }
@@ -369,7 +370,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                                     sourceSHA256: capture.chainSource, configSHA256: capture.chainConfig)
                                 defer { try? original.close() }
                                 proposal = try IOSNodeCandidateProposal.compile(original: original, records: capture.records,
-                                    position: position, candidateID: score.id, measuredInput: row.input, retainFinal: retainFinal)
+                                    position: position, candidateID: score.id, measuredInput: row.input, retainFinal: retainFinal, connectedLocal: temporary == nil)
                             }
                             try currentResult(score)
                             return proposal

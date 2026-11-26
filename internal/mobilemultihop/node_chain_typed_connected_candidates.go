@@ -10,6 +10,41 @@ import (
 // runtime. It never exposes that runtime's private generic chain, and is
 // unrelated to the source-only, application-closed saved-prefix preparation.
 
+// This source-only description grants no native route. The connected factory
+// below separately retains the exact typed runtime and its complete proof.
+// The imported penultimate can carry a fresh authenticated SS candidate
+// response through its original stream, without guessing a candidate UDP
+// endpoint or starting another graph. A saved-prefix preparation still stops
+// before that imported member.
+func (s *NodeChainSOCKSSource) CandidatePrefixMeasurement(position int) string {
+	if s == nil || s.validate() != nil {
+		return ""
+	}
+	return nodeChainTypedCandidateMeasurement(s.metadata.Proofs, position, "socks5")
+}
+
+func (s *NodeChainCONNECTSource) CandidatePrefixMeasurement(position int) string {
+	if s == nil || s.validate() != nil {
+		return ""
+	}
+	return nodeChainTypedCandidateMeasurement(s.metadata.Proofs, position, s.middle.selection.Protocol)
+}
+
+func nodeChainTypedCandidateMeasurement(proofs []NodeChainProof, position int, importedMode string) string {
+	if len(proofs) < 3 || len(proofs) > NodeChainMaximumNodes || position < 0 || position >= len(proofs)-1 {
+		return ""
+	}
+	proof := proofs[position]
+	if position < len(proofs)-2 && NodeChainPrefixMode(proof.Mode) && proof.NodeKind == "" && proof.Kind == "" {
+		return hopmeasure.CandidateTCPMeasurement
+	}
+	if position == len(proofs)-2 && proof.Mode == importedMode && proof.NodeKind == "external" && proof.Kind == "public-path" &&
+		proof.StartLayer == "off" && proofs[len(proofs)-1].Mode == "shadowsocks" {
+		return hopmeasure.CandidatePrivateResponseMeasurement
+	}
+	return ""
+}
+
 type NodeChainSOCKSConnectedCandidateOwner interface {
 	NodeChainSOCKSMeasurementOwner
 	CandidateInventoryCurrentContext(context.Context, string) error
@@ -21,8 +56,8 @@ type NodeChainSOCKSConnectedCandidatePlan struct {
 }
 
 func NewNodeChainSOCKSConnectedCandidatePlan(original *NodeChainSOCKSRuntime, position int, inventory string) (*NodeChainSOCKSConnectedCandidatePlan, error) {
-	if original == nil || original.connectedCandidateSelf != original || original.source == nil || original.chain == nil || original.chain.socksSource != original.source || position < 0 || position >= len(original.chain.nodes)-2 {
-		return nil, errors.New("connected SOCKS candidates require the exact original typed packet prefix")
+	if original == nil || original.connectedCandidateSelf != original || original.source == nil || original.chain == nil || original.chain.socksSource != original.source || original.source.CandidatePrefixMeasurement(position) == "" {
+		return nil, errors.New("connected SOCKS candidates require the exact original typed prefix")
 	}
 	plan, err := original.chain.newPacketCandidatePlan(position, inventory)
 	if err != nil {
@@ -110,8 +145,8 @@ type NodeChainCONNECTConnectedCandidatePlan struct {
 }
 
 func NewNodeChainCONNECTConnectedCandidatePlan(original *NodeChainCONNECTRuntime, position int, inventory string) (*NodeChainCONNECTConnectedCandidatePlan, error) {
-	if original == nil || original.connectedCandidateSelf != original || original.source == nil || original.chain == nil || original.chain.connectSource != original.source || position < 0 || position >= len(original.chain.nodes)-2 {
-		return nil, errors.New("connected CONNECT candidates require the exact original typed packet prefix")
+	if original == nil || original.connectedCandidateSelf != original || original.source == nil || original.chain == nil || original.chain.connectSource != original.source || original.source.CandidatePrefixMeasurement(position) == "" {
+		return nil, errors.New("connected CONNECT candidates require the exact original typed prefix")
 	}
 	plan, err := original.chain.newPacketCandidatePlan(position, inventory)
 	if err != nil {

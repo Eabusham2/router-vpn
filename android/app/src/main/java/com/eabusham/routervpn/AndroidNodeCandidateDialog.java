@@ -23,18 +23,17 @@ final class AndroidNodeCandidateDialog {
     AndroidNodeCandidateDialog(Activity activity){this.activity=activity;}
     void show(){
         AndroidNodeChainSession session=AndroidNodeChainSession.retained();
-        if(session==null){message("Connect an ordered Router path first. Candidate TCP timing uses its retained original prefix.");return;}
+        if(session==null){message("Connect an ordered Router path first. Candidate measurements use its retained original prefix.");return;}
         List<Integer> positions=new ArrayList<>();List<String> names=new ArrayList<>();
         for(int i=0;i<session.source.modes.size();i++){
             if(session.execution!=null&&!session.capture.ownsSelectedCandidatePrefix(session.source,i))continue;
             String mode=session.source.modes.get(i);
             boolean response=false;
-            if ("shadowsocks".equals(mode)) {
-                try {
-                    response=(session.execution==null || AndroidNodeChainCapture.selectedResponseWinner(session.source.execution,session.candidateExecutionOwner().execution()))
-                            && AndroidNodeChainCapture.responsePrefix(session.source.members,session.source.modes,i,session.source.execution);
-                } catch (Exception retired) { return; }
-            }
+            try {
+                String metric=AndroidNodeCandidateCatalog.candidateMeasurement(session.capture,session.source,i);
+                response=java.util.List.of("routed-candidate-response","routed-public-candidate-response").contains(metric)
+                        && (session.execution==null || AndroidNodeChainCapture.selectedResponseWinner(session.source.execution,session.candidateExecutionOwner().execution()));
+            } catch (Exception retired) { return; }
             if("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)||response){positions.add(i);names.add("Through node "+(i+1)+" • "+mode);}
         }
         if(positions.isEmpty()){message("This path has no retained prefix with a supported candidate measurement. No score is available.");return;}

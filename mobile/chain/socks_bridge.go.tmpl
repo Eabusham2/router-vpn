@@ -100,6 +100,12 @@ func (m *RouterNodeChainSOCKS) ConfigSHA256() string {
 	}
 	return meta.ConfigSHA256
 }
+func (m *RouterNodeChainSOCKS) CandidatePrefixMeasurement(position int32) string {
+	if m == nil || m.self != m || m.source == nil {
+		return ""
+	}
+	return m.source.CandidatePrefixMeasurement(int(position))
+}
 func (m *RouterNodeChainSOCKS) Metadata() string {
 	if m == nil || m.source == nil {
 		return ""

@@ -5,6 +5,106 @@ import importlib.util, json, os, pathlib, subprocess, sys, tempfile
 SCRIPT=pathlib.Path(__file__).with_name('kill-switch.py')
 spec=importlib.util.spec_from_file_location('router_vpn_killswitch',SCRIPT);mod=importlib.util.module_from_spec(spec);assert spec and spec.loader;spec.loader.exec_module(mod)
 
+
+def native_linux_check():
+    """Run the shipping nftables helper only inside disposable namespaces."""
+    import secrets, select
+    assert sys.platform.startswith('linux') and os.geteuid() == 0, 'Native nftables check requires an elevated Linux build host'
+    suffix = secrets.token_hex(6)
+    client, server = 'rvpn-client-'+suffix, 'rvpn-server-'+suffix
+    namespaces, target = [], None
+
+    def command(*args, env=None, check=True):
+        return subprocess.run(args, env=env, text=True, capture_output=True, timeout=15, check=check)
+
+    try:
+        for name in (client, server):
+            command('ip', 'netns', 'add', name)
+            info = pathlib.Path('/run/netns', name).stat()
+            namespaces.append((name, (info.st_dev, info.st_ino)))
+            command('ip', '-n', name, 'link', 'set', 'lo', 'up')
+        for local, peer, network in (('phy', 'physical', '198.18.0'), ('wg', 'tunnel', '198.19.0')):
+            command('ip', '-n', client, 'link', 'add', local, 'type', 'veth', 'peer', 'name', peer)
+            command('ip', '-n', client, 'link', 'set', peer, 'netns', server)
+            for namespace, interface, address in ((client, local, network+'.1/24'), (server, peer, network+'.2/24')):
+                command('ip', '-n', namespace, 'addr', 'add', address, 'dev', interface)
+                command('ip', '-n', namespace, 'link', 'set', interface, 'up')
+        command('ip', '-n', server, 'addr', 'add', '198.18.0.3/24', 'dev', 'physical')
+        code = '''import socketserver
+class Echo(socketserver.BaseRequestHandler):
+    def handle(self):
+        self.request.settimeout(3)
+        self.request.sendall(self.request.recv(64))
+with socketserver.ThreadingTCPServer(('0.0.0.0',0),Echo) as server:
+    server.daemon_threads=True
+    print(server.server_address[1],flush=True)
+    server.serve_forever()
+'''
+        target = subprocess.Popen(['ip', 'netns', 'exec', server, sys.executable, '-u', '-c', code], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        assert select.select([target.stdout], [], [], 5)[0], 'Native traffic target did not start'
+        port = int(target.stdout.readline().strip())
+        token = secrets.token_hex(24)
+        probe = '''import socket,sys
+with socket.create_connection((sys.argv[1],int(sys.argv[2])),timeout=1) as peer:
+    expected=bytes.fromhex(sys.argv[3]);peer.sendall(expected)
+    actual=b''
+    while len(actual)<len(expected):
+        part=peer.recv(len(expected)-len(actual))
+        if not part:break
+        actual+=part
+    assert actual==expected,'Native target payload changed'
+'''
+
+        def reachable(address):
+            result = command('ip', 'netns', 'exec', client, sys.executable, '-c', probe, address, str(port), token, check=False)
+            assert target.poll() is None, 'Native traffic target exited'
+            return result.returncode == 0
+
+        with tempfile.TemporaryDirectory(prefix='routervpn-native-kill-') as directory:
+            root = pathlib.Path(directory)
+            store = root/'routers.json'
+            store.write_text(json.dumps({'selected_id': 'native', 'profiles': [
+                {'id': 'native', 'endpoint': '198.18.0.2', 'kill_switch_policy': 'always', 'home_lan_access': False}]}))
+            store.chmod(0o600)
+            env = {key: value for key, value in os.environ.items() if not key.startswith('HOMEVPN_')}
+            env.update(HOMEVPN_ROOT=str(root), HOMEVPN_PROFILE_ID='native', HOMEVPN_ENDPOINT='198.18.0.2')
+
+            def policy(action):
+                command('ip', 'netns', 'exec', client, sys.executable, str(SCRIPT), action, env=env)
+
+            assert reachable('198.18.0.3'), 'Unprotected target was already unreachable'
+            policy('apply')
+            assert not reachable('198.18.0.3') and reachable('198.18.0.2'), 'Pre-tunnel denial or selected-endpoint permission failed'
+            command('ip', '-n', client, 'route', 'add', '198.18.0.3/32', 'via', '198.19.0.2', 'dev', 'wg')
+            assert reachable('198.18.0.3'), 'Traffic through the allowed tunnel interface failed'
+            command('ip', '-n', client, 'link', 'delete', 'wg')
+            assert not reachable('198.18.0.3') and reachable('198.18.0.2'), 'Tunnel loss leaked through the still-live physical route'
+            policy('release')
+            assert not reachable('198.18.0.3'), 'Always policy disappeared on ordinary release'
+            policy('force-off')
+            assert reachable('198.18.0.3'), 'Explicit owned cleanup did not restore ordinary traffic'
+            tables = json.loads(command('ip', 'netns', 'exec', client, 'nft', '-j', 'list', 'tables').stdout)['nftables']
+            assert not any(row.get('table', {}).get('name') == mod.TABLE for row in tables), 'Owned nftables table remained after cleanup'
+        print('Native nftables: selected endpoint allowed; routed payload passed; tunnel loss and Always release denied physical fallback; owned cleanup restored traffic')
+    finally:
+        if target is not None:
+            if target.poll() is None:
+                target.terminate()
+            try:
+                target.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                target.kill(); target.wait(timeout=5)
+            target.stdout.close(); target.stderr.close()
+        for name, identity in reversed(namespaces):
+            info = pathlib.Path('/run/netns', name).stat()
+            assert (info.st_dev, info.st_ino) == identity, 'Refusing cleanup of a replaced network namespace'
+            command('ip', 'netns', 'delete', name)
+
+
+if os.environ.get('ROUTERVPN_NATIVE_KILLSWITCH') == '1':
+    native_linux_check()
+    raise SystemExit(0)
+
 # Input validation must not touch DNS before the strict firewall is installed,
 # including diagnostic/error formatting. This contract is entirely offline.
 from unittest import mock

@@ -2095,6 +2095,7 @@ final class RouterVPNLibboxEngine {
             var selectedFields: [String: Any] = [:]
             var selectedResponses: [Int] = []
             var selectedResponseMetric = ""
+            var localPrefixes: [IOSNodeCandidatePrefix] = []
             if let execution {
                 let capture = execution.capture
                 var selected: String?
@@ -2119,15 +2120,15 @@ final class RouterVPNLibboxEngine {
                 else if let connect { source = .connect(connect.capture) }
                 else { return nil }
                 members = source.members; sourceSHA256 = source.sourceSHA256; configSHA256 = source.configSHA256
+                localPrefixes = source.connectedCandidatePrefixes
             }
             let safe: [[String: Any]] = members.enumerated().map { position, member in
                 var prefix: [String: Any] = ["position": position, "profile_id": member.id,
                     "node_id": member.profile["node_proof_id"] as? String ?? "", "mode": member.mode]
                 if selectedResponses.contains(position) {
                     prefix["measurement"] = selectedResponseMetric
-                } else if execution == nil, let plan, member.mode == "shadowsocks" {
-                    let metric = LibboxRouterNodeChainCandidatePrefixMeasurement(plan, Int32(position))
-                    if metric == "routed-candidate-response" || metric == "routed-public-candidate-response" { prefix["measurement"] = metric }
+                } else if execution == nil, localPrefixes.indices.contains(position), let metric = localPrefixes[position].measurement {
+                    prefix["measurement"] = metric
                 }
                 return prefix
             }
@@ -2151,6 +2152,10 @@ final class RouterVPNLibboxEngine {
                         }
                     }
                 } catch { return nil }
+            } else if let socks {
+                guard ["routed-tcp-connect", "routed-candidate-response"].contains(socks.capture.plan.candidatePrefixMeasurement(position)) else { return nil }
+            } else if let connect {
+                guard ["routed-tcp-connect", "routed-candidate-response"].contains(connect.capture.plan.candidatePrefixMeasurement(position)) else { return nil }
             }
             let originalSource = try? IOSCandidateCatalogPublication.shared.reopen(request: ownerRequest)
             ownershipLock.lock()

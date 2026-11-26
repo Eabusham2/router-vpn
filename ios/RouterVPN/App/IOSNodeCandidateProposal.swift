@@ -19,9 +19,9 @@ import Libbox
     }
 
     static func compile(original: IOSNodeCandidateOriginalCapture, records: [String: Data], position: Int,
-                        candidateID: String, measuredInput: String, retainFinal: Bool = false) throws -> Self {
+                        candidateID: String, measuredInput: String, retainFinal: Bool = false, connectedLocal: Bool = false) throws -> Self {
         try compileCaptured(original: original, records: records, position: position,
-            candidateID: candidateID, measuredInput: measuredInput, selectedExecution: false, retainFinal: retainFinal)
+            candidateID: candidateID, measuredInput: measuredInput, selectedExecution: false, retainFinal: retainFinal, connectedLocal: connectedLocal)
     }
 
     static func selectedPositions(input: Data, bundle: Data, proofs: [IOSNodeCandidatePrefix],
@@ -64,12 +64,16 @@ import Libbox
     }
 
     private static func compileCaptured(original: IOSNodeCandidateOriginalCapture, records: [String: Data], position: Int,
-            candidateID: String, measuredInput: String, selectedExecution: Bool, multipleImported: Bool = false, selectedResponse: Bool = false, selectedPublic: Bool = false, retainFinal: Bool = false) throws -> Self {
+            candidateID: String, measuredInput: String, selectedExecution: Bool, multipleImported: Bool = false, selectedResponse: Bool = false, selectedPublic: Bool = false, retainFinal: Bool = false, connectedLocal: Bool = false) throws -> Self {
+        let prefixes = connectedLocal ? original.connectedCandidatePrefixes : original.candidatePrefixes
+        let typedResponse = connectedLocal && !selectedExecution && original.requiresIndependentPrefix &&
+            prefixes.indices.contains(position) && prefixes[position].typedImportedResponse && prefixes[position].supported(in: prefixes)
         guard !selectedExecution || ["server", "auto"].contains(original.selectionExecution),
               selectedExecution || !original.requiresIndependentPrefix || original.selectionExecution == "local",
               original.members.indices.contains(position),
-              position < original.members.count - (original.requiresIndependentPrefix && !selectedExecution ? 2 : 1),
-              selectedResponse || multipleImported || !selectedExecution && ["routed-candidate-response", "routed-public-candidate-response"].contains(original.candidatePrefixes[position].metric) || original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
+              typedResponse || position < original.members.count - (original.requiresIndependentPrefix && !selectedExecution ? 2 : 1),
+              !typedResponse || !retainFinal && position == original.members.count - 2,
+              selectedResponse || multipleImported || !selectedExecution && ["routed-candidate-response", "routed-public-candidate-response"].contains(prefixes[position].metric) || original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
               !measuredInput.isEmpty else { throw IOSNodeCandidateCapture.issue() }
         func source(_ id: String) throws -> (root: [String: Any], profile: [String: Any], files: [String: [String: String]]) {
             var found: ([String: Any], [String: Any], [String: [String: String]])?
@@ -84,14 +88,14 @@ import Libbox
         }
         let candidate = try source(candidateID)
         guard try IOSNodeCandidateCapture.member(profile: candidate.profile, files: candidate.files) == measuredInput else { throw IOSNodeCandidateCapture.issue() }
-        let publicResponse = selectedPublic || !selectedExecution && original.candidatePrefixes[position].metric == "routed-public-candidate-response"
+        let publicResponse = selectedPublic || !selectedExecution && prefixes[position].metric == "routed-public-candidate-response"
         if publicResponse {
             guard original.members.count < IOSMultihopNodeSelection.physicalTraversalDepth else {
                 throw NSError(domain: "RouterVPN.CandidateProposal", code: 3, userInfo: [NSLocalizedDescriptionKey:
                     "This route has 96 nodes. Remove a node before inserting the measured public candidate."])
             }
             guard case .ordinary(let source) = original, source.sourceSchema == 8, selectedPublic ? selectedExecution && selectedResponse : source.selectionExecution == "local",
-                  selectedPublic || original.candidatePrefixes[position].supported(in: original.candidatePrefixes),
+                  selectedPublic || prefixes[position].supported(in: prefixes),
                   !original.members.contains(where: { $0.id == candidateID }),
                   LibboxRouterNodeChainCandidateInputSupportedForMeasurement(measuredInput, "routed-public-candidate-response") else { throw IOSNodeCandidateCapture.issue() }
         }
@@ -99,7 +103,7 @@ import Libbox
             guard let proof = candidate.profile["node_proof_id"] as? String, !proof.isEmpty,
                   !original.members.contains(where: { $0.id == candidateID || $0.profile["node_proof_id"] as? String == proof }) else { throw IOSNodeCandidateCapture.issue() }
         }
-        if !publicResponse && (selectedResponse || !selectedExecution && original.candidatePrefixes[position].metric == "routed-candidate-response") {
+        if !publicResponse && (selectedResponse || !selectedExecution && prefixes[position].metric == "routed-candidate-response") {
             guard LibboxRouterNodeChainCandidateInputSupportedForMeasurement(measuredInput, "routed-candidate-response") else {
                 throw IOSNodeCandidateCapture.issue()
             }
@@ -119,7 +123,7 @@ import Libbox
         // Preserve the rest of the complete saved path; its compiler decides
         // whether the replacement can occupy this exact role.
         var selected = original.members.map { (id: $0.id, mode: $0.mode) }
-        let response = selectedResponse || !selectedExecution && original.candidatePrefixes[position].metric == "routed-candidate-response"
+        let response = selectedResponse || !selectedExecution && prefixes[position].metric == "routed-candidate-response"
         guard !retainFinal || response || publicResponse else { throw IOSNodeCandidateCapture.issue() }
         let insertStream = publicResponse || response && (retainFinal || replacement < selected.count - 1)
         if insertStream {

@@ -8,10 +8,13 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
     let mode: String
     var measurement: String? = nil
     var metric: String { measurement ?? "routed-tcp-connect" }
+    var typedImportedResponse: Bool {
+        metric == "routed-candidate-response" && ["socks5", "http-connect", "https-connect"].contains(mode)
+    }
     var supported: Bool {
         switch metric {
         case "routed-tcp-connect": return ["wg", "awg2-fast", "awg2-strong"].contains(mode)
-        case "routed-candidate-response": return mode == "shadowsocks" && (1..<(IOSMultihopNodeSelection.physicalTraversalDepth - 1)).contains(position)
+        case "routed-candidate-response": return (mode == "shadowsocks" || typedImportedResponse && node_id.isEmpty) && (1..<(IOSMultihopNodeSelection.physicalTraversalDepth - 1)).contains(position)
         case "routed-public-candidate-response": return mode == "shadowsocks" && node_id.isEmpty && (1..<(IOSMultihopNodeSelection.physicalTraversalDepth - 1)).contains(position)
         default: return false
         }
@@ -36,6 +39,19 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
     }
     func supported(in proofs: [Self]) -> Bool {
         guard supported else { return false }
+        if typedImportedResponse {
+            guard (3...IOSMultihopNodeSelection.maximumNodes).contains(proofs.count),
+                  position == proofs.count - 2, proofs[position] == self,
+                  Set(proofs.map(\.profile_id)).count == proofs.count else { return false }
+            let privateIDs = proofs.map(\.node_id).filter { !$0.isEmpty }
+            guard privateIDs.count == proofs.count - 1, Set(privateIDs).count == privateIDs.count else { return false }
+            return proofs.enumerated().allSatisfy { index, row in
+                guard row.position == index, !row.profile_id.isEmpty else { return false }
+                if index == position { return row.node_id.isEmpty && row.typedImportedResponse }
+                if index == proofs.count - 1 { return row.mode == "shadowsocks" && !row.node_id.isEmpty && row.measurement == nil }
+                return IOSMultihopNodeSelection.supportsNativePrefix(row.mode) && !row.node_id.isEmpty && row.measurement == nil
+            }
+        }
         if metric == "routed-public-candidate-response" {
             guard (3...IOSMultihopNodeSelection.physicalTraversalDepth).contains(proofs.count),
                   proofs.indices.contains(position), position > 0, position < proofs.count - 1, proofs[position] == self,
@@ -96,7 +112,12 @@ enum IOSNodeCandidateOriginalCapture {
     }
     var requiresIndependentPrefix: Bool { if case .ordinary = self { return false }; return true }
 
-    var candidatePrefixes: [IOSNodeCandidatePrefix] {
+    // A dormant typed preparation stops before its imported member. Only the
+    // connected provider may describe a response through that retained hop.
+    var candidatePrefixes: [IOSNodeCandidatePrefix] { makeCandidatePrefixes(connectedTyped: false) }
+    var connectedCandidatePrefixes: [IOSNodeCandidatePrefix] { makeCandidatePrefixes(connectedTyped: true) }
+
+    private func makeCandidatePrefixes(connectedTyped: Bool) -> [IOSNodeCandidatePrefix] {
         members.enumerated().map { position, member in
             var prefix = IOSNodeCandidatePrefix(position: position, profile_id: member.id,
                 node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode)
@@ -105,6 +126,15 @@ enum IOSNodeCandidateOriginalCapture {
                 if metric == "routed-candidate-response" || capture.sourceSchema == 8 && metric == "routed-public-candidate-response" {
                     prefix.measurement = metric
                 }
+            }
+            if connectedTyped, selectionExecution == "local" {
+                let metric: String
+                switch self {
+                case .ordinary: metric = ""
+                case .socks(let capture): metric = capture.plan.candidatePrefixMeasurement(Int32(position))
+                case .connect(let capture): metric = capture.plan.candidatePrefixMeasurement(Int32(position))
+                }
+                if metric == "routed-candidate-response" { prefix.measurement = metric }
             }
             return prefix
         }
@@ -136,7 +166,7 @@ enum IOSNodeCandidateOriginalCapture {
         }
         return original
     }
-    static func validateExtendedResponseInfo(input: Data, bundle: Data, proofs: [IOSNodeCandidatePrefix],
+    static func validateLocalResponseInfo(input: Data, bundle: Data, proofs: [IOSNodeCandidatePrefix],
                                              sourceSHA256: String, configSHA256: String) throws {
         guard let record = try JSONSerialization.jsonObject(with: bundle) as? [String: Any],
               let finalID = record["selectedRouterID"] as? String,
@@ -146,9 +176,13 @@ enum IOSNodeCandidateOriginalCapture {
         let original = try reopenConnected(String(decoding: input, as: UTF8.self), selectedProfile: final,
                                            sourceSHA256: sourceSHA256, configSHA256: configSHA256)
         defer { try? original.close() }
-        guard case .ordinary(let source) = original, source.sourceSchema == 6 || source.sourceSchema == 8,
-              source.sourceSchema == 8 || (4...IOSMultihopNodeSelection.maximumNodes).contains(proofs.count) || Int(source.plan.extendedLocalNodeCount()) == proofs.count,
-              original.candidatePrefixes == proofs else { throw issue() }
+        if case .ordinary(let source) = original {
+            guard source.sourceSchema == 6 || source.sourceSchema == 8,
+                  source.sourceSchema == 8 || (4...IOSMultihopNodeSelection.maximumNodes).contains(proofs.count) || Int(source.plan.extendedLocalNodeCount()) == proofs.count else { throw issue() }
+        } else {
+            guard proofs.contains(where: { $0.typedImportedResponse && $0.supported(in: proofs) }) else { throw issue() }
+        }
+        guard original.connectedCandidatePrefixes == proofs else { throw issue() }
     }
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.CandidateOriginal", code: 1,

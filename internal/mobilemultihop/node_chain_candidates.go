@@ -81,7 +81,7 @@ func (c *NodeChain) NewCandidatePlanFromInputs(position int, inventory string, i
 func (c *NodeChain) newPacketCandidatePlanInputs(position int, inventory string, multiple *nodeChainCandidateMultipleOriginal, inputs []*NodeChainCandidateInput) (*NodeChainCandidatePlan, error) {
 	measurement := c.CandidatePrefixMeasurement(position)
 	if measurement == "" {
-		return nil, errors.New("candidate requires a captured packet prefix or a qualified imported Shadowsocks2022 response path")
+		return nil, errors.New("candidate requires a captured packet prefix or a qualified routed response path")
 	}
 	if multiple == nil && c.importedNodes != nil || multiple != nil && !multiple.currentValidated(c) {
 		return nil, nodeChainCandidatePreparationError
@@ -89,6 +89,9 @@ func (c *NodeChain) newPacketCandidatePlanInputs(position int, inventory string,
 	// A later saved OpenVPN member is only source provenance for a temporary
 	// prefix preparation. The selected position must precede it; neither that
 	// member nor the final becomes a candidate route or a TCP timing target.
+	// A connected typed SOCKS/CONNECT owner can instead retain its imported
+	// prefix for an authenticated candidate response. Its dormant preparation
+	// still has no imported native owner and remains packet-prefix only.
 	var record NodeChainCandidateInventory
 	if exactJSON([]byte(inventory), &record, NodeChainInputLimit) != nil || record.Schema != 1 ||
 		!nodeChainIdentityText(record.Revision) || len(record.Inputs) == 0 {
