@@ -953,6 +953,16 @@ def apply(*, retained_state: dict[str, Any] | None = None) -> int:
     runtime_profile = required_profile(store, runtime_id, "runtime/entry")
     control_profile = required_profile(store, control_id, "policy/control")
     policy = policy_value(control_profile)
+    # Rollback of a bundled Linux wrapper can only observe Off. A guard
+    # installed since the controller's preflight belongs to its own creator.
+    restore_session = os.environ.get("HOMEVPN_SMART_RESTORE_OFF", "")
+    if restore_session:
+        if (not re.fullmatch(r"[a-f0-9]{32}", restore_session)
+                or restore_session != os.environ.get("HOMEVPN_NODE_SESSION")
+                or policy != "off" or read_state(root)):
+            raise RuntimeError("SMART restore lost its original unprotected session")
+        _standard_native_tables_absent()
+        return 0
     if policy == "off":
         state = read_state(root)
         if state or table_exists():

@@ -12,6 +12,7 @@ import (
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
+	"router-vpn/internal/mobiletor"
 )
 
 // This is a narrow platform dispatcher, not a new graph capability predicate.
@@ -35,15 +36,16 @@ func validateDesktopLinuxNodeConnection(profile common.RouterProfile, mode strin
 // Captured before preparation, so neither a DNS/package callback nor a later
 // native preflight may adopt whichever connection happens to be selected then.
 type desktopLinuxNodeConnectPreflight struct {
-	app        *app
-	controller *ownedDesktopController
-	operation  context.Context
-	command    *exec.Cmd
-	state      state
-	prior      *desktopNodeStopCapture
-	session    *desktopLinuxNodeSession
-	host       *desktopLinuxNodeHost
-	selected   string // External Connect retains its explicit initial UI selection.
+	app              *app
+	controller       *ownedDesktopController
+	operation        context.Context
+	command          *exec.Cmd
+	state            state
+	smartPredecessor *desktopSmartLegacyCapture
+	prior            *desktopNodeStopCapture
+	session          *desktopLinuxNodeSession
+	host             *desktopLinuxNodeHost
+	selected         string // External Connect retains its explicit initial UI selection.
 }
 
 func (capture *desktopLinuxNodeConnectPreflight) current(ctx context.Context) error {
@@ -62,7 +64,15 @@ func (capture *desktopLinuxNodeConnectPreflight) current(ctx context.Context) er
 	if s.journalErr != nil || !sameDesktopLinuxParentCapture(s.parent, h.parent) || s.active == h {
 		return errors.New("Linux Connect preflight cannot reuse an incomplete or foreign retained session")
 	}
-	if prior := capture.prior; prior != nil {
+	if capture.smartPredecessor != nil {
+		if capture.prior != nil || h.standardTransfer != nil || h.selection.Policy != "off" ||
+			capture.smartPredecessor.wrapper.root != linuxOwnedControllerRoot {
+			return errors.New("SMART cannot transfer a protected wrapper or another native owner")
+		}
+		if err := s.unclaimedStopLocked(ctx); err != nil {
+			return err
+		}
+	} else if prior := capture.prior; prior != nil {
 		if prior.session != s || prior.host != s.active || prior.predecessor != s.predecessor || prior.journal != s.journal ||
 			prior.command != capture.command || prior.currentApp(capture.command, false) != nil {
 			return errors.New("Linux Connect preflight replaced its captured previous source")
@@ -111,8 +121,16 @@ func (capture *desktopLinuxNodeConnectPreflight) currentAppLocked() error {
 			return err
 		}
 	}
-	_, duplicate := desktopNodeOwners.Load(a)
-	if duplicate || a.localController != capture.controller || a.checkCapturedConnectionOperationLocked(capture.operation) != nil ||
+	registered, duplicate := desktopNodeOwners.Load(a)
+	if capture.smartPredecessor != nil {
+		if !duplicate || capture.smartPredecessor.wrapper == nil || registered != capture.smartPredecessor.wrapper || capture.smartPredecessor.wrapper.command != capture.command {
+			return errors.New("SMART native preflight lost its captured predecessor wrapper")
+		}
+		if err := capture.smartPredecessor.currentLocked(capture.state.Phase); err != nil {
+			return err
+		}
+	}
+	if duplicate && capture.smartPredecessor == nil || a.localController != capture.controller || a.checkCapturedConnectionOperationLocked(capture.operation) != nil ||
 		a.connectionCancelIntent == capture.operation || h.parent.currentAppLocked(false) != nil ||
 		a.cmd != capture.command || a.state != capture.state || !exists || a.profiles.SelectedID != selected ||
 		desktopOwnedNodeProfileToken(profile) != h.revision ||
@@ -158,12 +176,19 @@ func (a *app) startDesktopLinuxNodeConnection(operation context.Context, profile
 		return true, err
 	}
 	capture.prior = prior
+	var outcome *modeAttemptTransition
+	if len(transition) == 1 {
+		outcome = transition[0]
+	}
+	if outcome != nil && outcome.legacy != nil && outcome.legacy.wrapper != nil {
+		capture.smartPredecessor = outcome.legacy
+	}
 	profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled = options[0], options[1], options[2]
 	ctx, cancel := context.WithTimeout(operation, 7*time.Minute)
 	defer cancel()
 	host, err := prepareDesktopLinuxNodeHost(operation, a, profile, mode.ID, 0)
 	capture.host = host
-	stopped := false
+	stopped, cleaned := false, false
 	if host != nil {
 		defer func() {
 			if failure == nil {
@@ -171,7 +196,9 @@ func (a *app) startDesktopLinuxNodeConnection(operation context.Context, profile
 			}
 			cleanup, finish := context.WithTimeout(context.Background(), 20*time.Second)
 			defer finish()
-			failure = errors.Join(failure, capture.cleanup(cleanup, stopped, holdOnFailure), a.speedLabCheckLaunchedRuntime())
+			cleanupErr := errors.Join(capture.cleanup(cleanup, stopped, holdOnFailure), a.speedLabCheckLaunchedRuntime())
+			cleaned = cleanupErr == nil
+			failure = errors.Join(failure, cleanupErr)
 			if stopped {
 				capture.publishFailure(failure)
 			}
@@ -199,8 +226,30 @@ func (a *app) startDesktopLinuxNodeConnection(operation context.Context, profile
 	if err := capture.current(ctx); err != nil {
 		return true, err
 	}
-	if len(transition) == 1 && transition[0] != nil {
-		transition[0].StopBegun = true
+	if capture.smartPredecessor != nil {
+		plan := &speedLabRestorePlan{profile: cloneRouterProfile(profile),
+			request: speedLabRequest{Topology: "router", NodeID: profile.ID, Mode: capture.state.RuntimeMode, Base: capture.state.Base, Execution: "local"}}
+		if err := plan.captureWrapper(ctx, capture.smartPredecessor.wrapper); err != nil {
+			return true, err
+		}
+		outcome.wrapperPlan = plan
+		outcome.restoreWrapper = func() error {
+			if !stopped || !cleaned {
+				return errors.New("SMART wrapper restoration requires its original Stop and completed candidate cleanup")
+			}
+			return capture.restoreWrapper(plan)
+		}
+		// The restore copy includes live MTU. Recheck both owners after reading
+		// it and before entering the predecessor's ordinary checked Stop.
+		if err := mobiletor.ReadDesktopLinuxProtectionAbsence(ctx); err != nil {
+			return true, err
+		}
+		if err := capture.current(ctx); err != nil {
+			return true, err
+		}
+	}
+	if outcome != nil {
+		outcome.StopBegun = true
 	}
 	if err := a.stopModeWithIntent(true); err != nil {
 		return true, err
@@ -269,7 +318,10 @@ func (capture *desktopLinuxNodeConnectPreflight) cleanup(ctx context.Context, st
 		// A transfer failure is not an explicit Disconnect. Once native source
 		// removal committed, retain the destination guard for this original
 		// retry; before commit, settlement retains the original service guard.
-		return s.Retire(ctx, h, !hold && h.standardTransfer == nil)
+		// An Off wrapper needs an empty checkpoint for restoration. Only
+		// retire this candidate's own Off target through its original session.
+		release := !hold || capture.smartPredecessor != nil && h.selection.Policy == "off"
+		return s.Retire(ctx, h, release && h.standardTransfer == nil)
 	}
 	if h.standardTransfer != nil {
 		if err := h.standardTransfer.resolve(ctx); err != nil {
@@ -294,6 +346,52 @@ func (capture *desktopLinuxNodeConnectPreflight) cleanup(ctx context.Context, st
 		return errors.New("Linux failed startup cannot release a replaced request's retained protection")
 	}
 	return s.Retire(ctx, nil, true)
+}
+
+// A failed trial may restart only the captured wrapper, after its exact
+// candidate has fully retired and both firewall families are proved absent.
+func (capture *desktopLinuxNodeConnectPreflight) restoreWrapper(plan *speedLabRestorePlan) error {
+	a, h, s := capture.app, capture.host, capture.session
+	ctx, cancel := context.WithTimeout(capture.operation, 10*time.Second)
+	defer cancel()
+	if err := s.enter(ctx); err != nil {
+		return err
+	}
+	err := s.currentLocked(ctx)
+	if err == nil {
+		err = s.unclaimedStopLocked(ctx)
+	}
+	s.gate <- struct{}{}
+	if err != nil {
+		return err
+	}
+	if err := mobiletor.ReadDesktopLinuxProtectionAbsence(ctx); err != nil {
+		return err
+	}
+	network, err := physicalNetworkIdentityContext(ctx)
+	if err != nil || network != h.network {
+		return errors.Join(err, errors.New("SMART wrapper restoration lost its original physical network"))
+	}
+	a.mu.Lock()
+	profile, exists := a.profileByIDLocked(plan.profile.ID)
+	_, registered := lookupDesktopNativeLaunch(a)
+	_, standard := linuxStandardServiceOwners.Load(a)
+	current := !registered && !standard && a.cmd == nil && !a.state.Connected && a.state.Mode == "off" && a.state.RuntimeMode == "" &&
+		h.parent.currentAppLocked(false) == nil &&
+		a.checkCapturedConnectionOperationLocked(capture.operation) == nil && a.profiles.SelectedID == plan.profile.ID && exists &&
+		desktopOwnedNodeProfileToken(profile) == h.revision && desktopOwnedNodeProtectionPolicy(profile) == "off" &&
+		[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} == h.options
+	a.mu.Unlock()
+	if !current {
+		return errors.New("SMART wrapper restoration lost its original request, policy or connection slot")
+	}
+	err = a.restartCapturedDesktopNode(capture.operation, *plan, "smart:restore")
+	if err != nil && a.sameConnectionOperation(capture.operation) && a.ownsConnectionRuntime(plan.native.command) {
+		if raw, found := desktopNodeOwners.Load(a); found && raw == plan.native {
+			err = errors.Join(err, a.stopModeWithIntent(true))
+		}
+	}
+	return err
 }
 
 func (capture *desktopLinuxNodeConnectPreflight) publishFailure(failure error) {

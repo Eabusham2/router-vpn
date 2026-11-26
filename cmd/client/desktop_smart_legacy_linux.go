@@ -23,8 +23,18 @@ func (a *app) captureSmartLegacyPredecessor(operation context.Context, profile c
 	if command == nil || !previous.Connected {
 		return nil, nil
 	}
-	if _, native := lookupDesktopNativeLaunch(a); native {
-		return nil, nil
+	var wrapper *desktopNodeLaunch
+	if _, external := desktopExternalRetainedLaunches.Load(a); external {
+		return nil, errors.New("SMART predecessor has a retained external runtime")
+	}
+	if raw, registered := desktopNodeOwners.Load(a); registered {
+		wrapper, _ = raw.(*desktopNodeLaunch)
+		if wrapper == nil || wrapper.command != command ||
+			wrapper.profileID != profile.ID || wrapper.mode != mode || wrapper.mtuSession == "" || wrapper.configSHA256 == "" ||
+			wrapper.ownedNode != nil || wrapper.pairedNode != nil || wrapper.chain != nil || wrapper.candidatePrefix != nil ||
+			wrapper.external != nil || wrapper.tor != nil || wrapper.importedEntry {
+			return nil, errors.New("SMART predecessor has another native runtime owner")
+		}
 	}
 	if _, standard := linuxStandardServiceOwners.Load(a); standard {
 		return nil, errors.New("SMART legacy witness cannot adopt an installed standard service")
@@ -55,16 +65,19 @@ func (a *app) captureSmartLegacyPredecessor(operation context.Context, profile c
 		return nil, err
 	}
 	controller, protection := a.localController, a.nodeProtection
-	return &desktopSmartLegacyCapture{currentLocked: func(phase string) error {
+	return &desktopSmartLegacyCapture{wrapper: wrapper, currentLocked: func(phase string) error {
 		if err := a.checkCapturedConnectionOperationLocked(operation); err != nil {
 			return err
 		}
 		currentRevision, err := a.candidateCatalogRevisionLocked()
 		expected := previous
 		expected.Phase = phase
-		_, native := lookupDesktopNativeLaunch(a)
+		current, registered := desktopNodeOwners.Load(a)
+		sameOwner := !registered && wrapper == nil || registered && wrapper != nil && current == wrapper
+		_, external := desktopExternalRetainedLaunches.Load(a)
 		_, standard := linuxStandardServiceOwners.Load(a)
-		if err != nil || native || standard || phase == "" || a.cmd != command || command.Process != process || a.state != expected ||
+		if err != nil || !sameOwner || external || standard || phase == "" ||
+			a.cmd != command || command.Process != process || a.state != expected ||
 			a.localController != controller || a.nodeProtection != protection || currentRevision != revision {
 			return errors.Join(err, errors.New("SMART legacy predecessor changed during candidate preflight"))
 		}

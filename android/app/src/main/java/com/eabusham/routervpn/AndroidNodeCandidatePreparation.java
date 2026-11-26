@@ -101,9 +101,8 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
     static synchronized boolean cancelActive(){if(active==null)return false;active.cancelFromUser();return true;}
     static boolean packetPrefix(AndroidNodeStore.ChainCapture source,int prefix){
         if(source==null||!"local".equals(source.execution)||prefix<0||prefix>=source.modes.size()-1)return false;
-        if(AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,source.execution))return true;
-        for(int i=0;i<=prefix;i++){String mode=source.modes.get(i);if(!("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)))return false;}
-        return true;
+        return AndroidNodeChainCapture.localPacketPrefix(source.members,source.modes,prefix)
+                || AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,source.execution);
     }
     boolean prefixOnly(){return capturedPrefix!=null;}
     boolean testsSavedPosition(int position){return position>=0&&position<source.modes.size()&&(!packetPrefix(source,prefix)||position<=prefix);}

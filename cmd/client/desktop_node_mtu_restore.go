@@ -52,14 +52,10 @@ func captureDesktopNodeRestoreMTU(launch *desktopNodeLaunch) (int, error) {
 	return record.MTU, nil
 }
 
-func capturedDesktopNodeRestoreGraph(launch *desktopNodeLaunch, config, metadata []byte) ([]byte, []byte, error) {
+func capturedDesktopNodeRestoreGraph(launch *desktopNodeLaunch, config, metadata []byte, mtu int) ([]byte, []byte, error) {
 	original := sha256.Sum256(config)
 	if launch == nil || launch.configSHA256 == "" || hex.EncodeToString(original[:]) != launch.configSHA256 {
 		return nil, nil, errors.New("native restore graph differs from the captured process")
-	}
-	mtu, err := captureDesktopNodeRestoreMTU(launch)
-	if err != nil {
-		return nil, nil, err
 	}
 	restored, err := restoreDesktopNodeTUNMTU(config, mtu)
 	if err != nil {

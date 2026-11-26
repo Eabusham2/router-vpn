@@ -10,12 +10,18 @@ import (
 // StopBegun records the actual transition boundary, rather than inferring a
 // disconnect from an error returned by preparation. It is request-local and
 // never supplies process, graph, or protection authority.
-type modeAttemptTransition struct{ StopBegun bool }
+type modeAttemptTransition struct {
+	StopBegun      bool
+	legacy         *desktopSmartLegacyCapture
+	wrapperPlan    *speedLabRestorePlan
+	restoreWrapper func() error
+}
 
-// A legacy script witness can preserve a still-running predecessor after a
-// preflight refusal. It grants no restoration or protection-transfer right.
+// The witness identifies a still-running script or registered Router wrapper.
+// An Off wrapper trial captures its restore graph separately before Stop.
 // currentLocked is checked under app.mu, including final winner publication.
 type desktopSmartLegacyCapture struct {
+	wrapper       *desktopNodeLaunch
 	currentLocked func(string) error
 }
 
@@ -64,14 +70,14 @@ func (r smartStrategyRuntime) startMode(a *app, id string, hold bool, outcome *m
 	return a.startModeAttempt(id, hold, outcome)
 }
 
-func (r smartStrategyRuntime) restoreNode(a *app, plan speedLabRestorePlan) error {
+func (r smartStrategyRuntime) restoreNode(operation context.Context, a *app, plan speedLabRestorePlan) error {
 	if r.restore != nil {
 		return r.restore(a, plan)
 	}
 	if plan.linux != nil {
 		return a.restartCapturedDesktopLinuxNode(plan, "smart:restore")
 	}
-	return a.restartCapturedDesktopNode(plan, "smart:restore")
+	return a.restartCapturedDesktopNode(operation, plan, "smart:restore")
 }
 
 func (a *app) sameConnectionOperation(ctx context.Context) bool {
@@ -227,7 +233,7 @@ func (a *app) restoreSmartDesktopNode(saved *desktopSmartNodeCapture, runtime sm
 	if err := a.checkCapturedConnectionOperation(saved.operation); err != nil {
 		return err
 	}
-	if err := runtime.restoreNode(a, saved.plan); err != nil {
+	if err := runtime.restoreNode(saved.operation, a, saved.plan); err != nil {
 		_, stopErr := a.stopDesktopNodeForOperation(saved.operation)
 		return errors.Join(err, stopErr)
 	}

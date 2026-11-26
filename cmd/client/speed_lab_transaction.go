@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -44,6 +42,7 @@ type speedLabRestorePlan struct {
 	profile          common.RouterProfile
 	request          speedLabRequest
 	native           *desktopNodeLaunch
+	wrapperMTU       int
 	linux            *desktopLinuxNodeRestore
 	pairedNode       desktopMacOSPairedNodeRestore
 	external         *speedLabExternalRestore
@@ -689,44 +688,54 @@ func (a *app) speedLabCaptureRestorePlanContext(ctx context.Context, snapshot sp
 			}
 			return plan, nil
 		}
-		if err := desktopExternalDirectoryCurrent(launch); err != nil {
-			return plan, err
-		}
-		config, err := readDesktopRuntimeFile(launch, "sing-box.json", 4<<20)
+		err = plan.captureWrapper(ctx, launch)
 		if err != nil {
 			return plan, err
 		}
-		metadata, err := readDesktopRuntimeFile(launch, "capture.json", 1<<20)
-		if err != nil {
-			clear(config)
-			return plan, err
-		}
-		var receipt struct {
-			Schema    int    `json:"schema"`
-			ProfileID string `json:"profile_id"`
-			Mode      string `json:"mode"`
-			ConfigSHA string `json:"config_sha256"`
-		}
-		sum := sha256.Sum256(config)
-		if json.Unmarshal(metadata, &receipt) != nil || receipt.Schema != 1 || receipt.ProfileID != st.RouterID || receipt.Mode != plan.request.Mode || launch.configSHA256 == "" || receipt.ConfigSHA != launch.configSHA256 || receipt.ConfigSHA != hex.EncodeToString(sum[:]) {
-			clear(config)
-			clear(metadata)
-			return plan, errors.New("previous native configuration differs from its captured identity")
-		}
-		restoredConfig, restoredMetadata, err := capturedDesktopNodeRestoreGraph(launch, config, metadata)
-		clear(config)
-		clear(metadata)
-		if err != nil {
-			return plan, err
-		}
-		plan.native = &desktopNodeLaunch{root: launch.root, endpoint: launch.endpoint, profileID: launch.profileID, mode: launch.mode, config: restoredConfig, metadata: restoredMetadata,
-			nodePhysicalEgress: append([]mobilemultihop.PhysicalEgress(nil), launch.nodePhysicalEgress...)}
 	}
 	if err := validateSpeedLabIdentityContext(ctx, a, identity); err != nil {
 		clearSpeedLabRestorePlan(plan)
 		return speedLabRestorePlan{}, err
 	}
 	return plan, nil
+}
+
+// Capture the verified graph and the MTU of this original wrapper before Stop.
+func (plan *speedLabRestorePlan) captureWrapper(ctx context.Context, launch *desktopNodeLaunch) error {
+	if err := desktopExternalDirectoryCurrent(launch); err != nil {
+		return err
+	}
+	config, err := readDesktopRuntimeFileContext(ctx, launch, "sing-box.json", 4<<20)
+	if err != nil {
+		return err
+	}
+	defer clear(config)
+	metadata, err := readDesktopRuntimeFileContext(ctx, launch, "capture.json", 1<<20)
+	if err != nil {
+		return err
+	}
+	defer clear(metadata)
+	var receipt struct {
+		Schema    int    `json:"schema"`
+		ProfileID string `json:"profile_id"`
+		Mode      string `json:"mode"`
+	}
+	if json.Unmarshal(metadata, &receipt) != nil || receipt.Schema != 1 || receipt.ProfileID != launch.profileID || receipt.Mode != launch.mode {
+		return errors.New("previous native configuration differs from its captured identity")
+	}
+	live, err := readDesktopNodeMTUContext(ctx, launch)
+	if err != nil || live.Active || live.Failure != "" {
+		return errors.Join(err, errors.New("native wrapper has no stable captured TUN MTU"))
+	}
+	mtu := live.MTU
+	restoredConfig, restoredMetadata, err := capturedDesktopNodeRestoreGraph(launch, config, metadata, mtu)
+	if err != nil {
+		return err
+	}
+	plan.wrapperMTU = mtu
+	plan.native = &desktopNodeLaunch{root: launch.root, endpoint: launch.endpoint, profileID: launch.profileID, mode: launch.mode, config: restoredConfig, metadata: restoredMetadata,
+		nodePhysicalEgress: append([]mobilemultihop.PhysicalEgress(nil), launch.nodePhysicalEgress...)}
+	return nil
 }
 
 // Runtime boundaries are explicit so ownership, cancellation, state and durable
@@ -918,7 +927,7 @@ func (a *app) speedLabRestartPlanWithTorRuntimeContext(ctx context.Context, plan
 	case plan.external != nil:
 		_, err = a.startSpeedLabExternalPathCaptured(plan.request, plan.external)
 	case plan.native != nil:
-		err = a.speedLabRestartNative(plan)
+		err = a.restartCapturedDesktopNode(ctx, plan, "speed-lab:restore")
 	case plan.multihop != nil:
 		_, err = a.startSpeedLabMultihopSelection(*plan.multihop, plan.request)
 	case plan.request.Topology == "external":
@@ -945,15 +954,10 @@ func (a *app) speedLabRestartPlanWithTorRuntimeContext(ctx context.Context, plan
 	return err
 }
 
-func (a *app) speedLabRestartNative(plan speedLabRestorePlan) error {
-	return a.restartCapturedDesktopNode(plan, "speed-lab:restore")
-}
-
-func (a *app) restartCapturedDesktopNode(plan speedLabRestorePlan, scope string) (resultErr error) {
+func (a *app) restartCapturedDesktopNode(operation context.Context, plan speedLabRestorePlan, scope string) (resultErr error) {
 	if scope != "speed-lab:restore" && scope != "smart:restore" {
 		return errors.New("captured native restore has no recognized operation")
 	}
-	operation := a.connectionOperationContextOrBackground()
 	if err := a.checkCapturedConnectionOperation(operation); err != nil {
 		return err
 	}
@@ -991,6 +995,9 @@ func (a *app) restartCapturedDesktopNode(plan speedLabRestorePlan, scope string)
 	}
 	if err := stageDesktopNodeLaunch(a, launch); err != nil {
 		return err
+	}
+	if scope == "smart:restore" && plan.wrapperMTU != 0 {
+		launch.command.Env = envWithValue(launch.command.Env, "HOMEVPN_SMART_RESTORE_OFF", launch.mtuSession)
 	}
 	started := false
 	defer func() {
@@ -1049,7 +1056,14 @@ func (a *app) restartCapturedDesktopNode(plan speedLabRestorePlan, scope string)
 	if err := a.speedLabOwnRuntime(launch.command); err != nil {
 		return err
 	}
-	deadline := time.Now().Add(25 * time.Second)
+	// Retained admission already waited for the first key. A restored wrapper
+	// still has to acquire it before its TUN and private path can be proved.
+	proofBudget := 25 * time.Second
+	if launch.ownedNode == nil {
+		proofBudget += desktopNodeInitialKeyAllowance(launch)
+	}
+	proof, cancelProof := context.WithTimeout(operation, proofBudget)
+	defer cancelProof()
 	for {
 		if err := a.checkCapturedConnectionOperation(operation); err != nil {
 			return err
@@ -1057,22 +1071,24 @@ func (a *app) restartCapturedDesktopNode(plan speedLabRestorePlan, scope string)
 		if !a.ownsConnectionRuntime(launch.command) {
 			return errors.New("restored native runtime changed during startup")
 		}
-		var proofErr error
-		if launch.ownedNode != nil {
-			_, proofErr = a.testDesktopOwnedNodeHealth(operation, plan.profile, launch)
-		} else {
-			_, proofErr = a.testHealth(plan.profile)
+		_, proofErr := a.testStartedModeHealth(proof, operation, plan.profile, launch)
+		if proofErr == nil && scope == "smart:restore" && plan.wrapperMTU != 0 {
+			mtu, err := readDesktopNodeMTUContext(proof, launch)
+			if err != nil || mtu.Active || mtu.Failure != "" || mtu.MTU != plan.wrapperMTU {
+				proofErr = errors.Join(err, errors.New("restored wrapper did not prove its captured TUN MTU"))
+			}
+		}
+		if err := proof.Err(); err != nil {
+			return errors.Join(err, proofErr)
 		}
 		if proofErr == nil {
 			break
-		} else if !time.Now().Before(deadline) {
-			return proofErr
 		}
 		timer := time.NewTimer(150 * time.Millisecond)
 		select {
-		case <-operation.Done():
+		case <-proof.Done():
 			timer.Stop()
-			return errConnectionOperationCancelled
+			return errors.Join(proof.Err(), proofErr, a.checkCapturedConnectionOperation(operation))
 		case <-timer.C:
 		}
 	}

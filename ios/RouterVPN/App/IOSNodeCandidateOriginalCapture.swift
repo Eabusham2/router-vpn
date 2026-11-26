@@ -113,13 +113,10 @@ enum IOSNodeCandidateOriginalCapture {
     var selectionExecution: String { switch self { case .ordinary(let v): return v.selectionExecution; case .socks(let v): return v.selectionExecution; case .connect(let v): return v.selectionExecution } }
     var strict: Bool { switch self { case .ordinary(let v): return v.strict; case .socks(let v): return v.strict; case .connect(let v): return v.strict } }
     var homeLANAccess: Bool { switch self { case .ordinary(let v): return v.homeLANAccess; case .socks(let v): return v.homeLANAccess; case .connect(let v): return v.homeLANAccess } }
-    func preparationKind(at position: Int) -> String {
+    var preparationKind: String {
         switch self {
         case .ordinary(let capture):
-            if capture.sourceSchema == 8 && (position == 0 || LibboxRouterNodeChainCandidatePrefixMeasurement(capture.plan, Int32(position)) == "routed-public-candidate-response") { return "routervpn-node-chain-multiple-imported-candidate-preparation" }
-            if capture.sourceSchema == 6, capture.selectionExecution == "local",
-               Int(capture.plan.extendedLocalNodeCount()) == capture.members.count ||
-                LibboxRouterNodeChainCandidatePrefixMeasurement(capture.plan, Int32(position)) == "routed-candidate-response" {
+            if capture.sourceSchema == 6 || capture.sourceSchema == 8 {
                 return "routervpn-node-chain-multiple-imported-candidate-preparation"
             }
             return "routervpn-node-chain-candidate-preparation"
@@ -128,6 +125,22 @@ enum IOSNodeCandidateOriginalCapture {
         }
     }
     var requiresIndependentPrefix: Bool { if case .ordinary = self { return false }; return true }
+
+    func canPreparePrefix(at position: Int) -> Bool {
+        guard selectionExecution == "local", position >= 0, position < members.count - 1 else { return false }
+        let prefix = members.prefix(position + 1)
+        if prefix.allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) { return true }
+        guard case .ordinary(let capture) = self else { return false }
+        let metric = LibboxRouterNodeChainCandidatePrefixMeasurement(capture.plan, Int32(position))
+        if ["routed-candidate-response", "routed-public-candidate-response"].contains(metric) { return true }
+        guard capture.sourceSchema == 6, metric == "routed-tcp-connect" else { return false }
+        return prefix.allSatisfy { member in
+            if IOSMultihopNodeSelection.supportsNativePrefix(member.mode) { return true }
+            guard member.mode == "shadowsocks", member.profile["node_kind"] as? String == "external",
+                  let profile = try? JSONDecoder().decode(RouterProfile.self, from: Data(member.profileJSON.utf8)) else { return false }
+            return IOSImportedShadowsocksSource.eligibleLiteral(profile)
+        }
+    }
 
     // A dormant preparation does not gain these imported routes. Only the
     // connected provider may describe a response through that retained hop.

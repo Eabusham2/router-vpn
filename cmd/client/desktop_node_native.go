@@ -312,7 +312,7 @@ func desktopNativeEnvironmentForPackage(environment []string, root, profile, end
 	for _, entry := range result {
 		name, _, _ := strings.Cut(entry, "=")
 		name = strings.ToUpper(name)
-		if strings.HasPrefix(name, "HOMEVPN_EXTERNAL_PHYSICAL_") || name == "HOMEVPN_STANDARD_ENGINE" || name == "HOMEVPN_ROOT" || name == "HOMEVPN_PROFILE_ID" || name == "HOMEVPN_POLICY_PROFILE_ID" || name == "HOMEVPN_ENDPOINT" || name == "HOMEVPN_NATIVE_ENDPOINTS_JSON" || name == "HOMEVPN_NATIVE_EGRESS_JSON" || name == "HOMEVPN_NODE_SESSION" || name == "HOMEVPN_NODE_CONFIG_SHA256" || name == "HOMEVPN_NODE_PHYSICAL_REQUIRED" {
+		if strings.HasPrefix(name, "HOMEVPN_EXTERNAL_PHYSICAL_") || name == "HOMEVPN_STANDARD_ENGINE" || name == "HOMEVPN_ROOT" || name == "HOMEVPN_PROFILE_ID" || name == "HOMEVPN_POLICY_PROFILE_ID" || name == "HOMEVPN_ENDPOINT" || name == "HOMEVPN_NATIVE_ENDPOINTS_JSON" || name == "HOMEVPN_NATIVE_EGRESS_JSON" || name == "HOMEVPN_NODE_SESSION" || name == "HOMEVPN_NODE_CONFIG_SHA256" || name == "HOMEVPN_NODE_PHYSICAL_REQUIRED" || name == "HOMEVPN_SMART_RESTORE_OFF" {
 			continue
 		}
 		clean = append(clean, entry)

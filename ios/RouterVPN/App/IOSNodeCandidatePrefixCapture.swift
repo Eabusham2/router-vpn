@@ -8,7 +8,7 @@ import Libbox
 struct IOSNodeCandidatePrefixCapture {
     struct Metadata: Decodable {
         struct Target: Decodable { let id: String, source_sha256: String }
-        struct Prefix: Decodable {
+        struct Prefix: Decodable, Equatable {
             let position: Int
             let node_kind: String?, kind: String?
             let profile_id: String, node_id: String, mode: String, start_layer: String, source_sha256: String, tag: String
@@ -50,7 +50,7 @@ struct IOSNodeCandidatePrefixCapture {
         guard original.selectionExecution == "local", let source = original.originalSource,
               !source.isEmpty, source.utf8.count <= IOSNodeChainCapture.maximumInputBytes,
               position >= 0, position < original.members.count - 1,
-              ["routed-candidate-response", "routed-public-candidate-response"].contains(original.candidatePrefixes[position].metric) || original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
+              original.canPreparePrefix(at: position),
               !inventory.isEmpty, inventory.utf8.count <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw issue() }
         var failure: NSError?
         let created: LibboxRouterNodeChainCandidatePreparation?
@@ -89,7 +89,7 @@ struct IOSNodeCandidatePrefixCapture {
         guard !launch.isEmpty, launch.utf8.count <= IOSNodeChainCapture.maximumInputBytes,
               !raw.isEmpty, raw.utf8.count <= 65536, !config.isEmpty, config.utf8.count <= 4 * 1024 * 1024,
               let source = try JSONSerialization.jsonObject(with: Data(launch.utf8)) as? [String: Any],
-              source["kind"] as? String == original.preparationKind(at: position),
+              source["kind"] as? String == original.preparationKind,
               Self.integer(source["schema"]) == 1, Self.integer(source["prefix_position"]) == position,
               source["inventory"] as? String == inventory else { throw Self.issue() }
         var pages = try IOSCandidateMetadataPages(raw, inventoryBytes: inventory.utf8.count, legacyLimit: 65536, family: .preparation)
@@ -112,16 +112,16 @@ struct IOSNodeCandidatePrefixCapture {
                   prefix.start_layer == (layer.isEmpty ? "off" : layer), Self.digest(prefix.source_sha256),
                   !prefix.tag.isEmpty else { throw Self.issue() }
             if member.mode == "shadowsocks" {
-                guard index > 0,
-                      prefix.start_layer == "off", case .ordinary(let capture) = original,
-                      value.measurement == (capture.sourceSchema == 8 ? "routed-public-candidate-response" : "routed-candidate-response"),
+                guard index > 0, prefix.start_layer == "off", case .ordinary(let capture) = original else { throw Self.issue() }
+                let retained: String? = LibboxRouterNodeChainCandidatePrefixProof(capture.plan, Int32(index))
+                guard let retained, try JSONDecoder().decode(Metadata.Prefix.self, from: Data(retained.utf8)) == prefix,
                       let graph = try JSONSerialization.jsonObject(with: Data(capture.config.utf8)) as? [String: Any],
                       let outbounds = graph["outbounds"] as? [[String: Any]],
                       outbounds.filter({ $0["tag"] as? String == prefix.tag && $0["type"] as? String == "shadowsocks" }).count == 1 else { throw Self.issue() }
                 if member.profile["node_kind"] as? String == "external" {
                     guard prefix.node_id.isEmpty, prefix.node_kind == "external", prefix.kind == "public-path" else { throw Self.issue() }
                 } else {
-                    guard capture.sourceSchema == 6, (4...IOSMultihopNodeSelection.physicalTraversalDepth).contains(capture.members.count),
+                    guard value.measurement == "routed-candidate-response", capture.sourceSchema == 6, (4...IOSMultihopNodeSelection.physicalTraversalDepth).contains(capture.members.count),
                           member.profile["node_kind"] as? String == "router-vpn", member.profile["external"] == nil,
                           !prefix.node_id.isEmpty, prefix.node_id == member.profile["node_proof_id"] as? String,
                           prefix.node_kind == nil, prefix.kind == nil else { throw Self.issue() }

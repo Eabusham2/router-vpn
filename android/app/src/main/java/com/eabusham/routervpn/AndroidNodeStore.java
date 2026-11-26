@@ -591,31 +591,24 @@ final class AndroidNodeStore {
     private synchronized ChainCapture captureCandidateDraft(ChainCatalog catalog,List<ChainSource> sources,List<String> modes,int prefix,
                                                            java.util.function.BooleanSupplier current) throws Exception { synchronized(STORE_LOCK) {
         requireChainCatalog(catalog);
-        boolean extended = sources.size() > 8;
         if(current==null||!current.getAsBoolean()||sources.size()<2||sources.size()>PHYSICAL_TRAVERSAL_DEPTH||
                 modes.size()!=sources.size()||prefix<0||prefix>=sources.size()-1)
             throw new IllegalStateException("The complete draft or intended next position changed.");
-        boolean response=AndroidNodeChainCapture.responsePrefix(sources,modes,prefix,"local");
-        boolean externalExit = sources.get(sources.size()-1).imported;
-        if (externalExit && (!catalog.selectedId.equals(sources.get(0).id) || prefix!=0 && !response))
-            throw new IllegalStateException("An imported final measures candidates through its original paired packet entry.");
-        if (!externalExit&&!extended&&!response&&prefix!=sources.size()-2)
-            throw new IllegalStateException("The complete draft or intended next position changed.");
-        if (extended||response||externalExit) AndroidNodeChainCapture.requireCompleteShape(sources, modes, "local");
-        boolean extendedPaired=extended&&!sources.get(prefix).imported&&java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(modes.get(prefix));
-        if(extended&&!extendedPaired&&prefix!=0&&!response) throw new IllegalStateException("The selected imported prefix cannot measure candidates.");
+        AndroidNodeChainCapture.requireCompleteShape(sources,modes,"local");
+        if(sources.get(sources.size()-1).imported && !catalog.selectedId.equals(sources.get(0).id))
+            throw new IllegalStateException("The imported final requires its original selected paired entry.");
+        if(!AndroidNodeChainCapture.localPacketPrefix(sources,modes,prefix)
+                && !AndroidNodeChainCapture.responsePrefix(sources,modes,prefix,"local"))
+            throw new IllegalStateException("The selected prefix has no supported candidate measurement.");
         List<ChainSource> originals=new ArrayList<>();JSONArray refs=new JSONArray();Set<String> proofs=new HashSet<>(),ids=new HashSet<>();long bytes=0;
         for(int i=0;i<sources.size();i++){
             ChainSource expected=sources.get(i),original=catalog.source(expected.id);String mode=modes.get(i);
-            if(original.imported&&!externalExit&&!extended&&!response||!java.util.Arrays.equals(original.original,expected.original)||!ids.add(original.profileId)||!proofs.add(original.identityKey()))
-                throw new IllegalStateException("Each draft position needs a distinct original paired node.");
+            if(!java.util.Arrays.equals(original.original,expected.original)||!ids.add(original.profileId)||!proofs.add(original.identityKey()))
+                throw new IllegalStateException("Each draft position needs its own original node source.");
             if (original.imported) ChainSource.requireImported(original.external());
             else original.requirePairedIdentity();
             bytes+=original.original.length;
-            // requireCompleteShape above checked the role of each stream, including the paired intermediate.
-            boolean streamPrefix=response&&i>0&&i<=prefix&&"shadowsocks".equals(mode);
-            if(bytes>MAX_CHAIN_SOURCE||!extendedPaired&&!streamPrefix&&!(i<=prefix?List.of("wg","awg2-fast","awg2-strong"):List.of("shadowsocks","hysteria2")).contains(mode))
-                throw new IllegalStateException("The draft requires a supported packet prefix and its original final transport.");
+            if(bytes>MAX_CHAIN_SOURCE)throw new IllegalStateException("The complete draft exceeds its private source bound.");
             if (!original.imported) {
                 JSONObject asset=original.bundle().getJSONObject("profiles").optJSONObject(mode);
                 if(asset==null||asset.length()==0)throw new IllegalStateException("The draft node lost its exact transport.");

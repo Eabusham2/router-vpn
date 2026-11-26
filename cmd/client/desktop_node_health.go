@@ -15,11 +15,10 @@ import (
 // borrow another node's global fallback URL during SMART/Speed Lab restoration.
 // The native DNS/TUN receipt and the same active protection generation bracket
 // the real HTTP exchange; neither a source ID nor a historical receipt is proof.
-func (a *app) testDesktopOwnedNodeHealth(parent context.Context, profile common.RouterProfile, launch *desktopNodeLaunch) (time.Duration, error) {
+func (a *app) testDesktopOwnedNodeHealth(parent, operation context.Context, profile common.RouterProfile, launch *desktopNodeLaunch) (time.Duration, error) {
 	if a == nil || parent == nil || parent.Err() != nil || launch == nil || launch.ownedNode == nil {
 		return 0, errors.New("native Router proof has no captured connection")
 	}
-	operation := a.connectionOperationContextOrBackground()
 	owned := launch.ownedNode
 	if owned.policy == nil || owned.policy.Validate() != nil || owned.slot == nil || owned.attempt == nil ||
 		desktopOwnedNodeProfileToken(profile) != owned.profileToken {

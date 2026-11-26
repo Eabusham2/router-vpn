@@ -97,11 +97,11 @@ import Foundation
                     let initial = try IOSHopMeasurementBinding.decode(data, request: id, mtuSession: binding.session)
                     let path: IOSExternalNodeStatistics.PathReceipt?
                     if let local {
-                        guard initial.ordered_execution == nil, let binding = initial.local_public_final,
+                        guard initial.node_id == nil, initial.execution == nil, initial.ordered_execution == nil, let binding = initial.local_public_final,
                               binding.source_sha256 == local.source, binding.config_sha256 == local.config else { throw CancellationError() }
                         path = nil
                     } else if let ordered {
-                        guard initial.local_public_final == nil, let execution = initial.ordered_execution, execution.source_sha256 == ordered.source,
+                        guard initial.node_id == nil, initial.execution == nil, initial.local_public_final == nil, let execution = initial.ordered_execution, execution.source_sha256 == ordered.source,
                               execution.config_sha256 == ordered.config, execution.requested == requested,
                               execution.nodes == ordered.ids.count, ["local", "server"].contains(execution.selected),
                               requested == "auto" || requested == execution.selected else { throw CancellationError() }

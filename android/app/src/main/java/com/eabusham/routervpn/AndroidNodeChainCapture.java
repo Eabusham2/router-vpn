@@ -36,6 +36,20 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         return position == 0 && sourceSchema(source.members, source.modes) == 8;
     }
 
+    static boolean localPacketPrefix(List<AndroidNodeStore.ChainSource> sources,List<String> modes,int prefix) {
+        if(sources.size()!=modes.size() || prefix<0 || prefix>=modes.size()-1 || sources.get(prefix).imported
+                || !List.of("wg","awg2-fast","awg2-strong").contains(modes.get(prefix)))return false;
+        for(int i=0;i<=prefix;i++) {
+            if(sources.get(i).imported) {
+                try {
+                    if(i==0 || !"shadowsocks".equals(modes.get(i)))return false;
+                    requireLiteralImportedSS(sources.get(i));
+                } catch(Exception unsupported){return false;}
+            } else if(!List.of("wg","awg2-fast","awg2-strong").contains(modes.get(i)))return false;
+        }
+        return true;
+    }
+
     static boolean responsePrefix(List<AndroidNodeStore.ChainSource> sources,List<String> modes,int prefix,String execution) {
         if (sources.size()!=modes.size()||prefix<1||prefix>=sources.size()-1) return false;
         if ("auto".equals(execution) || "server".equals(execution)) {

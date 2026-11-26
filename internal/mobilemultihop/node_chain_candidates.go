@@ -52,13 +52,7 @@ func (c *NodeChain) NewCandidatePlan(position int, inventory string) (*NodeChain
 	// route. NewMeasurementContext separately requires that same full chain's
 	// fresh native owner and complete private/public/DNS readiness. Temporary
 	// closed-prefix preparations retain their distinct admission and lifetime.
-	if c != nil && c.validateCapture() == nil && c.connectedFinalResponsePrefix(position) {
-		return c.newCandidatePlanInputs(position, inventory, nil, nil, true)
-	}
-	if c != nil && (c.HasExternalFinal() || c.importedNodes != nil && len(c.nodes) > NodeChainMaximumNodes && c.ExtendedLocalNodeCount() == len(c.nodes) || c.importedNodes != nil && c.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement) {
-		return c.NewMultipleImportedCandidatePlan(position, inventory)
-	}
-	return c.newPacketCandidatePlan(position, inventory)
+	return c.NewCandidatePlanFromInputs(position, inventory, nil)
 }
 
 func (c *NodeChain) newPacketCandidatePlan(position int, inventory string) (*NodeChainCandidatePlan, error) {
@@ -69,14 +63,15 @@ func (c *NodeChain) newPacketCandidatePlanOwned(position int, inventory string, 
 	return c.newPacketCandidatePlanInputs(position, inventory, multiple, nil)
 }
 
-// NewCandidatePlanFromInputs uses an original parse result only when its exact
-// source bytes occur at the same ordinal in the full original inventory.
+// NewCandidatePlanFromInputs chooses the owner from the complete original
+// graph. A supplied parse result is reused only if its exact source bytes
+// occur at the same ordinal in the complete inventory.
 func (c *NodeChain) NewCandidatePlanFromInputs(position int, inventory string, inputs []*NodeChainCandidateInput) (*NodeChainCandidatePlan, error) {
 	if c != nil && c.validateCapture() == nil && c.connectedFinalResponsePrefix(position) {
 		return c.newCandidatePlanInputs(position, inventory, nil, inputs, true)
 	}
 	var multiple *nodeChainCandidateMultipleOriginal
-	if c != nil && (c.HasExternalFinal() || c.importedNodes != nil && len(c.nodes) > NodeChainMaximumNodes && c.ExtendedLocalNodeCount() == len(c.nodes) || c.importedNodes != nil && c.CandidatePrefixMeasurement(position) == hopmeasure.CandidatePrivateResponseMeasurement) {
+	if c != nil && c.importedNodes != nil {
 		var err error
 		multiple, err = newNodeChainCandidateMultipleOriginal(c)
 		if err != nil {

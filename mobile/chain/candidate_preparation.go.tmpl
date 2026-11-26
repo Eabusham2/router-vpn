@@ -53,7 +53,7 @@ type routerCandidatePreparationState struct {
 }
 
 func NewRouterNodeChainCandidatePreparation(source string, prefixPosition int32, inventory string) (*RouterNodeChainCandidatePreparation, error) {
-	prep, err := mobilemultihop.NewNodeChainCandidatePreparation(source, int(prefixPosition), inventory)
+	prep, err := mobilemultihop.NewCapturedNodeChainCandidatePreparation(source, int(prefixPosition), inventory)
 	if err != nil {
 		return nil, err
 	}

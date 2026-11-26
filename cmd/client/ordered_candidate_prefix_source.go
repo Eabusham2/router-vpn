@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -29,9 +30,12 @@ func captureDesktopNodeCandidatePrefixSource(ctx context.Context, selection mult
 		return nil, errors.New("candidate prefix requires its complete original saved source and a non-final position")
 	}
 	original := selection.Native.chain.chain
-	response := original != nil && desktopCandidateResponseMetric(original.CandidatePrefixMeasurement(position))
+	metric := ""
+	if original != nil {
+		metric = original.CandidatePrefixMeasurement(position)
+	}
 	for i, member := range selection.Nodes[:position+1] {
-		if response && i > 0 {
+		if i > 0 && (desktopCandidateResponseMetric(metric) || i < position && metric == hopmeasure.CandidateTCPMeasurement && desktopNodeChainImportedExecutionMiddle(member.Profile)) {
 			continue
 		}
 		if !mobilemultihop.NodeChainPrefixMode(member.Mode) || !mobilemultihop.DesktopNodePhysicalGraphSupported(member.Mode, member.Profile.StartLayer) {
@@ -87,7 +91,7 @@ func captureDesktopNodeCandidatePrefixOriginal(original *desktopNodeChainCapture
 			return nil, err
 		}
 		defer clear(raw)
-		return mobilemultihop.NewNodeChainCandidatePreparation(string(raw), position, inventory)
+		return mobilemultihop.NewCapturedNodeChainCandidatePreparation(string(raw), position, inventory)
 	default:
 		return nil, bad
 	}

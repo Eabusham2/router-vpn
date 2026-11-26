@@ -81,6 +81,8 @@ The 16 logical choices are:
 
 **SMART AUTO** gets connected first, remembers the last-good stack, tests declared simplifications/replacements, and restores the last-good path when a reduction fails.
 
+On an installed Linux client, SMART can test WireGuard from bundled WG-PQ or test Hysteria2 or Naive H2 from bundled Naive H3 when Kill Switch is Off. It checks that the previous firewall guard is absent and saves the working graph and tunnel MTU before stopping the original process. A failed trial must finish cleanup before SMART can restart and prove that saved path. With On-connect or Always, the wrapper retains its firewall guard and SMART keeps it running. A protected trial requires the initial WG-PQ or Naive H3 connection to start under the retained Linux controller. That path still needs an installed Linux test with real Rosenpass and WireGuard peers or an authenticated Naive H3 peer, including firewall continuity and rollback. A missing native package or installed controller also leaves the working predecessor in place.
+
 **CUSTOM** selects the lightest already-validated compatible stack containing every requested layer/property without unnecessary layers.
 
 ## MAX / ALL

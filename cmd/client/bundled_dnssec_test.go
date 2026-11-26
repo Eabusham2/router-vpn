@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"debug/elf"
 	"encoding/hex"
 	"os"
 	"path/filepath"
@@ -43,14 +45,71 @@ func TestBundledDNSSECActualPackage(t *testing.T) {
 	if original.Build.ABI != 1 {
 		t.Fatal("actual private ABI changed")
 	}
-    t.Run("missing", func(t *testing.T) {
-        directory := t.TempDir()
-        for _, name := range bundledDNSSECNames {
-            if name == bundledDNSSECReceiptName { continue }
-            raw, err := os.ReadFile(filepath.Join(source, name))
-            if err != nil { t.Fatal(err) }
-            if err := os.WriteFile(filepath.Join(directory, name), raw, 0600); err != nil { t.Fatal(err) }
-        }
-        if _, err := verifyBundledDNSSECPayload(directory, target); err == nil { t.Fatal("package without receipt accepted") }
-    })
+	// Change only a real producer's dynamic dependency string. The complete
+	// native ELF parser must still reject ambient crypto and a foreign loader.
+	raw, err := os.ReadFile(filepath.Join(source, bundledDNSSECLibrary))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := elf.NewFile(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parsed.Close()
+	strings := parsed.Section(".dynstr")
+	if strings == nil {
+		t.Fatal("actual validator has no dynamic string table")
+	}
+	replaceDependency := func(from, to string) {
+		t.Helper()
+		data, err := strings.Data()
+		if err != nil {
+			t.Fatal(err)
+		}
+		needed, err := parsed.DynValue(elf.DT_NEEDED)
+		if err != nil {
+			t.Fatal(err)
+		}
+		index := -1
+		for _, offset := range needed {
+			if offset < uint64(len(data)) && bytes.HasPrefix(data[offset:], append([]byte(from), 0)) {
+				index = int(offset)
+				break
+			}
+		}
+		if index < 0 || len(to) > len(from) {
+			t.Fatal("actual validator is missing its captured dependency", from)
+		}
+		changed := bytes.Clone(raw)
+		offset := int(strings.Offset) + index
+		clear(changed[offset : offset+len(from)+1])
+		copy(changed[offset:], to)
+		if _, _, _, err := bundledDNSSECIdentity(changed, target); err == nil {
+			t.Fatal("native validator accepted an unowned dependency", to)
+		}
+	}
+	replaceDependency("libc.so.6", "libssl.so")
+	for _, dependency := range original.Build.Needed {
+		if dependency == "ld-linux-aarch64.so.1" {
+			replaceDependency(dependency, "ld-linux-x86-64.so.2")
+		}
+	}
+	t.Run("missing", func(t *testing.T) {
+		directory := t.TempDir()
+		for _, name := range bundledDNSSECNames {
+			if name == bundledDNSSECReceiptName {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(source, name))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(directory, name), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := verifyBundledDNSSECPayload(directory, target); err == nil {
+			t.Fatal("package without receipt accepted")
+		}
+	})
 }

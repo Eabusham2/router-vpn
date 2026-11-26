@@ -800,6 +800,10 @@ private struct IOSUnifiedSettingsView: View {
     @EnvironmentObject var model: RouterVPNModel
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var telemetry: IOSUnifiedTelemetry
+    @ObservedObject private var externalLive = IOSExternalLiveTelemetry.shared
+    private var liveResponse: Double? {
+        IOSExternalLiveTelemetry.supported(model) ? externalLive.currentMilliseconds(model: model) : telemetry.currentMilliseconds(model: model)
+    }
     @State private var showingAdvanced = false
     @State private var showingPerformance = false
     @State private var showingProfiles = false
@@ -829,7 +833,7 @@ private struct IOSUnifiedSettingsView: View {
                     Button("Advanced node settings / MTU…") { showingAdvanced = true }
                 }
                 Section("Performance") {
-                    LabeledContent("Live path", value: telemetry.currentMilliseconds(model: model).map { String(format: "%.1f ms", $0) } ?? "Not connected")
+                    LabeledContent("Live path", value: liveResponse.map { String(format: "%.1f ms", $0) } ?? (model.connected ? "No current measurement" : "Not connected"))
                     if let speed = telemetry.lastSpeedResult {
                         LabeledContent("Last real path speed", value: String(format: "↓ %.1f • ↑ %.1f Mbps", speed.downloadMbps, speed.uploadMbps))
                     }
@@ -870,6 +874,8 @@ private struct IOSUnifiedPerformanceView: View {
     @ObservedObject private var externalBenchmark = IOSExternalNodeBenchmark.shared
     @ObservedObject private var externalComparison = IOSExternalNodeComparison.shared
     @ObservedObject private var externalLive = IOSExternalLiveTelemetry.shared
+    @StateObject private var routedProbe = IOSHopMeasurements()
+    @State private var showingRoutedSpeeds = false
     @State private var output = "Choose a real measurement."
     @State private var canRankExternal = false
     @State private var busy = false
@@ -889,12 +895,20 @@ private struct IOSUnifiedPerformanceView: View {
                         LabeledContent("Private node response", value: telemetry.currentMilliseconds(model: model).map { String(format: "%.1f ms", $0) } ?? "No current measurement")
                         Button("Measure private node response") { runLive() }.disabled(!model.connected || busy || telemetry.measuring || externalBenchmark.running || externalComparison.running)
                     }
-                    Button(telemetry.isSpeedTesting ? "Testing real VPN path speed…" : "Run real current VPN path speed") { runSpeed() }
-                        .disabled(!model.connected || model.unifiedSelectedProfile?.normalizedNodeKind != "router-vpn" || IOSExternalLiveTelemetry.supported(model) || busy || telemetry.measuring || externalBenchmark.running || externalComparison.running)
-                    if let speed = telemetry.lastSpeedResult {
-                        Text(speed.detail).font(.caption.monospaced()).textSelection(.enabled)
+                    if model.connected && model.activeEngine == "multihop-libbox" {
+                        Button("Measure routed hop and final path speeds") {
+                            showingRoutedSpeeds = true
+                            routedProbe.start(model: model)
+                        }
+                            .disabled(busy || telemetry.measuring || externalLive.running || externalBenchmark.running || externalComparison.running || model.iosSpeedLabOwnership.active || IOSMTUMeasurementGate.held)
+                    } else {
+                        Button(telemetry.isSpeedTesting ? "Testing real VPN path speed…" : "Run real current VPN path speed") { runSpeed() }
+                            .disabled(!model.connected || model.unifiedSelectedProfile?.normalizedNodeKind != "router-vpn" || IOSExternalLiveTelemetry.supported(model) || busy || telemetry.measuring || externalBenchmark.running || externalComparison.running)
+                        if let speed = telemetry.lastSpeedResult {
+                            Text(speed.detail).font(.caption.monospaced()).textSelection(.enabled)
+                        }
+                        Text("Real speed transfers 8 MiB down and 8 MiB up through the captured PacketTunnel after its private Router VPN node proves its identity. Auto MTU is held until native sockets finish cleanup. Response time includes a new TCP connection and the complete private health response.").font(.caption).foregroundStyle(.secondary)
                     }
-                    Text("Real speed transfers 8 MiB down and 8 MiB up through the captured PacketTunnel after its private Router VPN node proves its identity. Auto MTU is held until native sockets finish cleanup. Response time includes a new TCP connection and the complete private health response.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Nodes") {
                     if model.unifiedSelectedProfile?.normalizedNodeKind == "external" {
@@ -943,6 +957,15 @@ private struct IOSUnifiedPerformanceView: View {
             .task(id: IOSNodeBundleStore.shared.revision) { canRankExternal = IOSExternalNodeComparison.hasMultipleEligible(model) }
             .navigationTitle("Performance")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { cancelMeasurement(); dismiss() } } }
+            .sheet(isPresented: $showingRoutedSpeeds) {
+                NavigationStack {
+                    ScrollView {
+                        IOSHopMeasurementsCard(probe: routedProbe, otherTestRunning: false).padding()
+                    }
+                    .navigationTitle("Routed speeds")
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingRoutedSpeeds = false } } }
+                }
+            }
             .onAppear { telemetry.showPerformance(true); telemetry.invalidateResults(model: model); externalLive.showPerformance(true); externalLive.invalidate(model: model); externalBenchmark.refreshSaved(model: model) }
             .onDisappear { cancelMeasurement(); telemetry.showPerformance(false); externalLive.showPerformance(false) }
             .onChange(of: model.connected) { _ in telemetry.invalidateResults(model: model); externalLive.cancel(); externalLive.invalidate(model: model); externalBenchmark.cancel(); externalBenchmark.refreshSaved(model: model) }

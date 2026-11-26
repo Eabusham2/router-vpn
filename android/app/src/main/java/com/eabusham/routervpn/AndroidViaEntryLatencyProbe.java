@@ -9,6 +9,7 @@ import android.os.Process;
 import com.wireguard.android.backend.Tunnel;
 
 import java.io.File;
+import java.net.InetSocketAddress;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -32,12 +33,12 @@ final class AndroidViaEntryLatencyProbe {
         final List<AndroidNodeStore.Node> candidates;
         final List<AndroidTelemetry.Result> values;
         private final AndroidViaEntryLatencyProbe probe;
-        private final Map<File,byte[]> sources;
+        private final Sources sources;
         private final long generation, created=System.nanoTime();
         private final String home;
         private final Network idleNetwork;
         Result(AndroidViaEntryLatencyProbe probe, AndroidNodeStore.Node entry, List<AndroidNodeStore.Node> candidates,
-               List<AndroidTelemetry.Result> values, Map<File,byte[]> sources,long generation,String home,Network idleNetwork) {
+               List<AndroidTelemetry.Result> values, Sources sources,long generation,String home,Network idleNetwork) {
             this.probe=probe;this.entry=entry;this.sources=sources;
             this.candidates=Collections.unmodifiableList(new ArrayList<>(candidates));
             this.values=Collections.unmodifiableList(new ArrayList<>(values));
@@ -49,7 +50,7 @@ final class AndroidViaEntryLatencyProbe {
                     ||!java.util.Objects.equals(idleNetwork,probe.connectivity().getActiveNetwork())
                     ||System.nanoTime()-created>120_000_000_000L)
                 throw new IllegalStateException("The measured entry/candidates or network decision changed. Retest before selecting this result.");
-            checkSources(sources);
+            sources.requireCurrent();
         }
         AndroidTelemetry.Result measurement(String id) {
             for(AndroidTelemetry.Result value:values)if(value.id.equals(id))return value;
@@ -85,7 +86,7 @@ final class AndroidViaEntryLatencyProbe {
         final AndroidViaEntryLatencyProbe owner;
         final AndroidNodeStore.Node entry;
         final List<AndroidNodeStore.Node> candidates;
-        final Map<File,byte[]> sources;
+        final Sources sources;
         final Callback callback;
         final int samples;
         final String home;
@@ -96,7 +97,7 @@ final class AndroidViaEntryLatencyProbe {
         boolean connected, stopping, cleanupFailed;
         List<AndroidTelemetry.Result> values=Collections.emptyList();
         Throwable failure;
-        Job(AndroidViaEntryLatencyProbe owner,AndroidNodeStore.Node entry,List<AndroidNodeStore.Node> candidates,Map<File,byte[]> sources,int samples,String home,Network idleNetwork,Callback callback){
+        Job(AndroidViaEntryLatencyProbe owner,AndroidNodeStore.Node entry,List<AndroidNodeStore.Node> candidates,Sources sources,int samples,String home,Network idleNetwork,Callback callback){
             this.owner=owner;this.entry=entry;this.candidates=candidates;this.sources=sources;this.samples=samples;this.home=home;this.idleNetwork=idleNetwork;this.callback=callback;
         }
     }
@@ -113,13 +114,16 @@ final class AndroidViaEntryLatencyProbe {
     boolean isBusy(){return busy.get();}
 
     void measure(AndroidNodeStore.Node entry,List<AndroidNodeStore.Node> candidates,int samples,Callback callback){
+        measure(entry,candidates,samples,null,callback);
+    }
+    void measure(AndroidNodeStore.Node entry,List<AndroidNodeStore.Node> candidates,int samples,AndroidNodeStore.ChainCatalog catalog,Callback callback){
         final Job job;
         try{
             if(samples!=50)throw new IllegalArgumentException("Via-entry candidate comparison requires 50 samples.");
             synchronized(PROCESS_LOCK){
                 if(processOwner!=null||busy.get()||AndroidVpnMutationGuard.isBusy(context))throw new IllegalStateException("Disconnect/finish the current VPN operation before measuring via-entry candidates.");
-                List<AndroidNodeStore.Node> captured=captureCandidates(entry,candidates);
-                Map<File,byte[]> sources=captureSources(entry,captured);
+                List<AndroidNodeStore.Node> captured=captureCandidates(entry,candidates,catalog);
+                Sources sources=new Sources(entry,captured,catalog);
                 job=new Job(this,entry,captured,sources,samples,homeIdentity(context),connectivity().getActiveNetwork(),callback);
                 result=null;active=job;processOwner=job;busy.set(true);
             }
@@ -150,28 +154,29 @@ final class AndroidViaEntryLatencyProbe {
 
     Result unmeasured(AndroidNodeStore.Node entry,List<AndroidNodeStore.Node> candidates)throws Exception{
         if(isBusy()||AndroidVpnMutationGuard.isBusy(context))throw new IllegalStateException("Finish the current VPN operation before choosing hops.");
-        List<AndroidNodeStore.Node> captured=captureCandidates(entry,candidates);
+        List<AndroidNodeStore.Node> captured=captureCandidates(entry,candidates,null);
         long generation=wireGuard.generation();String home=homeIdentity(context);Network network=connectivity().getActiveNetwork();
-        Result value=new Result(this,entry,captured,Collections.emptyList(),captureSources(entry,captured),generation,home,network);
+        Result value=new Result(this,entry,captured,Collections.emptyList(),new Sources(entry,captured,null),generation,home,network);
         result=value;value.requireCurrent();return value;
     }
 
     private void measureOwned(Job job){
         try{
-            checkJob(job);checkSources(job.sources);
+            checkJob(job);job.sources.requireCurrent();
             Network network=connectivity().getActiveNetwork();
             requireVPN(network);
             long deadline=System.nanoTime()+90_000_000_000L;
             AndroidViaEntryProbeIO io=new AndroidViaEntryProbeIO(()->{
                 checkJob(job);
+                job.sources.requirePublication();
                 if(System.nanoTime()>deadline)throw new IllegalStateException("Via-entry candidate measurement timed out.");
                 requireVPN(network);
                 if(!network.equals(connectivity().getActiveNetwork()))throw new IllegalStateException("The captured entry VPN network changed; all results discarded.");
             },network::getAllByName,network.getSocketFactory());
             job.io=io;io.attach();if(job.cancelled)io.cancel();
             progress(job,"Entry proof passed; measuring 50 TCP samples for each of "+job.candidates.size()+" candidate(s) through "+job.entry.name+"…");
-            job.values=AndroidViaEntryPathMeter.measure(job.entry,wireGuard,job.candidates,job.samples,io);
-            checkJob(job);checkSources(job.sources);
+            job.values=AndroidViaEntryPathMeter.measure(job.entry,wireGuard,job.candidates,job.samples,io,job.sources.imported);
+            checkJob(job);job.sources.requireCurrent();
         }catch(Throwable error){job.failure=error;job.values=Collections.emptyList();}
         finally{AndroidViaEntryProbeIO io=job.io;if(io!=null)io.drain();stop(job);}
     }
@@ -193,7 +198,7 @@ final class AndroidViaEntryLatencyProbe {
                 }
                 if(job.cancelled){finish(job,null,new CancellationException("Via-entry candidate measurement cancelled; captured work drained."));return;}
                 try{
-                    checkSources(job.sources);
+                    job.sources.requireCurrent();
                     if(!job.session.retained())throw new NativeWireGuardController.SessionReplaced();
                     if(!job.home.equals(homeIdentity(context)))throw new IllegalStateException("A newer connection decision replaced the candidate measurement.");
                     Result value=new Result(this,job.entry,job.candidates,job.failure==null?job.values:Collections.emptyList(),job.sources,job.session.generation(),job.home,job.idleNetwork);
@@ -227,20 +232,59 @@ final class AndroidViaEntryLatencyProbe {
         AndroidHomeStateStore.Snapshot state=AndroidHomeStateStore.snapshot(context);
         return state.sessionId+"\n"+state.pathGeneration+"\n"+state.phase+"\n"+state.activeNodeId+"\n"+state.activeEntryId+"\n"+state.activeExitId;
     }
-    private static List<AndroidNodeStore.Node> captureCandidates(AndroidNodeStore.Node entry,List<AndroidNodeStore.Node> candidates){
-        if(entry==null||entry.file==null||entry.id==null||entry.id.isEmpty()||candidates==null||candidates.isEmpty()||candidates.size()>AndroidNodeStore.MAX_NODES)throw new IllegalArgumentException("Choose a stored entry and bounded candidate node list.");
+    private static List<AndroidNodeStore.Node> captureCandidates(AndroidNodeStore.Node entry,List<AndroidNodeStore.Node> candidates,AndroidNodeStore.ChainCatalog catalog){
+        if(entry==null||entry.file==null||entry.id==null||entry.id.isEmpty()||candidates==null||candidates.isEmpty()||candidates.size()>(catalog==null?AndroidNodeStore.MAX_NODES:catalog.nodes.size()))throw new IllegalArgumentException("Choose a stored entry and bounded candidate node list.");
         List<AndroidNodeStore.Node> out=new ArrayList<>();Set<String> seen=new HashSet<>();
-        for(AndroidNodeStore.Node node:candidates){if(node==null||node.file==null||node.id==null||node.id.isEmpty())throw new IllegalArgumentException("Candidate node identity is missing.");if(entry.id.equals(node.id))continue;if(!seen.add(node.id))throw new IllegalArgumentException("Candidate node identity is duplicated.");out.add(node);}
+        for(AndroidNodeStore.Node node:candidates){if(node==null||node.file==null&&catalog==null||node.id==null||node.id.isEmpty())throw new IllegalArgumentException("Candidate node identity is missing.");if(entry.id.equals(node.id))continue;if(!seen.add(node.id))throw new IllegalArgumentException("Candidate node identity is duplicated.");out.add(node);}
         if(out.isEmpty())throw new IllegalArgumentException("Choose at least one different candidate exit.");
         return Collections.unmodifiableList(out);
     }
     private static byte[] digest(File file)throws Exception{return MessageDigest.getInstance("SHA-256").digest(AndroidPrivateFileStore.read(file,AndroidNodeStore.MAX_BUNDLE));}
-    private static Map<File,byte[]> captureSources(AndroidNodeStore.Node entry,List<AndroidNodeStore.Node> candidates)throws Exception{
-        Map<File,byte[]> sources=new LinkedHashMap<>();sources.put(entry.file,digest(entry.file));
-        for(AndroidNodeStore.Node node:candidates){if(sources.put(node.file,digest(node.file))!=null)throw new IllegalArgumentException("Different hop identities cannot share a private node file.");}
-        return Collections.unmodifiableMap(sources);
-    }
-    private static void checkSources(Map<File,byte[]> sources)throws Exception{
-        for(Map.Entry<File,byte[]> source:sources.entrySet())if(!MessageDigest.isEqual(source.getValue(),digest(source.getKey())))throw new IllegalStateException("A captured entry/candidate node changed; all results discarded.");
+    private static final class Sources {
+        final Map<File,byte[]> files = new LinkedHashMap<>();
+        final Map<String,InetSocketAddress> imported = new LinkedHashMap<>();
+        final AndroidNodeStore.ChainCatalog catalog;
+        final long nodesGeneration, importedGeneration;
+
+        Sources(AndroidNodeStore.Node entry,List<AndroidNodeStore.Node> candidates,AndroidNodeStore.ChainCatalog catalog) throws Exception {
+            this.catalog=catalog;
+            nodesGeneration=AndroidNodeStore.publicationGeneration();
+            importedGeneration=AndroidStandardExitStore.publicationGeneration();
+            files.put(entry.file,digest(entry.file));
+            for(AndroidNodeStore.Node node:candidates) {
+                if(node.file!=null) {
+                    if(files.put(node.file,digest(node.file))!=null)throw new IllegalArgumentException("Different hop identities share a private node file.");
+                    continue;
+                }
+                if(catalog==null)throw new IllegalArgumentException("Missing original candidate catalog.");
+                AndroidNodeStore.ChainSource source=catalog.source(node.id);
+                try {
+                    AndroidNodeChainCapture.requireLiteralImportedSS(source);
+                    String input=AndroidNodeChainCapture.memberInput(source,"shadowsocks",source.profile());
+                    if(io.nekohasekai.libbox.Libbox.routerNodeChainCandidateInputSupported(input)) {
+                        AndroidStandardExitStore.Entry original=source.external();
+                        imported.put(node.id,new InetSocketAddress(AndroidNumericAddress.parse(original.server),original.serverPort));
+                    }
+                } catch(Exception unsupported) {
+                    // The picker keeps this row unmeasured. It has no probe destination.
+                }
+            }
+            if(catalog!=null)catalog.requireCurrent();
+            requirePublication();
+        }
+        void requirePublication() {
+            if(catalog!=null&&(nodesGeneration!=AndroidNodeStore.publicationGeneration()||
+                    importedGeneration!=AndroidStandardExitStore.publicationGeneration()))
+                throw new IllegalStateException("The ordered candidate catalog changed.");
+        }
+        void requireCurrent() throws Exception {
+            requirePublication();
+            if(catalog!=null)catalog.requireCurrent();
+            for(Map.Entry<File,byte[]> source:files.entrySet()) {
+                if(!MessageDigest.isEqual(source.getValue(),digest(source.getKey())))
+                    throw new IllegalStateException("A captured entry or candidate changed.");
+            }
+            requirePublication();
+        }
     }
 }

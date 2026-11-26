@@ -12,6 +12,14 @@ Android and iOS live public-final responses use three fresh HTTPS responses, bou
 
 The selected-route Speed Lab retains the original winner, complete node inventory and public-final identity through status, download/upload measurement, result display and cleanup. It uses the original 8 MiB transfer in each direction. Native network checks and controller/UI capacity checks have distinct scopes: the longest native latency paths exercised 96 members, and the native throughput checks exercised three members with independently counted bytes at every peer.
 
+Recursive Local candidate timing retains the complete captured registry when a packet hop appears before or after an imported Shadowsocks member. Android and iOS can also measure eligible literal-address Shadowsocks candidates through the selected first paired entry while a public-exit draft is still incomplete. Those candidates use their original saved TCP port; changed sources, sessions or network decisions invalidate the result. The mobile Performance action opens the original routed per-hop and final-path speed measurements.
+
+## SMART startup and restoration
+
+Installed Linux clients can trial lighter transports from the bundled WG-PQ or Naive H3 wrapper with Kill Switch Off, after capturing the original graph and live tunnel MTU. A failed candidate must finish cleanup before the captured path can restart and earn a fresh proof. A firewall guard that appears during rollback is preserved. The single-node PQ startup and restoration budgets include the existing first-key window and remain bounded by the original connection operation.
+
+With On-connect or Always, SMART preserves the working wrapper when its guard cannot transfer to the retained controller. Completing that protected trial still requires the initial transport to use the retained Linux owner and an installed test of the actual peer, TUN, firewall continuity and rollback. Source captures and protocol-only checks do not complete that platform requirement. See [mode behavior](MODES.md).
+
 ## Verification and release
 
 The routine workflow is [Router VPN CI](../.github/workflows/ci.yml). The manual [Router VPN Release](../.github/workflows/build-all.yml) workflow builds and packages the supported desktop/mobile platforms and ARM64 server images. Use the latest exact-commit [CI results](https://github.com/Eabusham2/router-vpn/actions) and [published releases](https://github.com/Eabusham2/router-vpn/releases) to determine current readiness. Passing source checks alone does not establish cross-platform packaging, physical-device operation, private router deployment, or live networking acceptance.

@@ -78,10 +78,13 @@ final class AndroidOrderedPathSelection {
         source.requireCurrent();return source;
     }
 
-    boolean canMeasureResponseThrough(int position) {
+    boolean canMeasureThrough(int position) {
         List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();List<String> modes=new ArrayList<>();
         for(Member member:members){sources.add(member.source);modes.add(member.mode);}
-        return AndroidNodeChainCapture.responsePrefix(sources,modes,position,execution);
+        if(AndroidNodeChainCapture.responsePrefix(sources,modes,position,execution))return true;
+        if(!"local".equals(execution) || !AndroidNodeChainCapture.localPacketPrefix(sources,modes,position))return false;
+        try { AndroidNodeChainCapture.requireCompleteShape(sources,modes,execution);return true; }
+        catch(Exception unavailable){return false;}
     }
 
     java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> candidateDraftCapture(int prefix) throws Exception {

@@ -225,8 +225,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                 let originalPrefixes = capture.candidatePrefixes
                 prefixes = originalPrefixes.filter { $0.supported(in: originalPrefixes) }
                 independentPrefixes = Set(prefixes.filter { prefix in
-                    prefix.position < capture.members.count - 1 &&
-                        (["routed-candidate-response", "routed-public-candidate-response"].contains(prefix.metric) || capture.members.prefix(prefix.position + 1).allSatisfy { ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) })
+                    capture.canPreparePrefix(at: prefix.position)
                 }.map(\.position))
                 if !prefixes.contains(where: { $0.position == selectedPrefix }) { selectedPrefix = prefixes.first?.position ?? 0 }
                 text = independentOnly ? "Test the selected prefix. The saved proxy suffix stays unused, and the test returns to Disconnected before future-profile choices appear." : "Test only the selected prefix, or test the complete saved Local path. Both return to Disconnected before future-profile choices appear."

@@ -375,6 +375,7 @@ public final class ProductActivity extends Activity {
 
     private void runCurrentSpeed(){
         if(!connection.isConnected()){toast("Connect Router VPN before testing current path speed.");return;}
+        if(connection.isOrderedConnected()){runRoutedHopSpeeds();return;}
         if(currentSpeedDialog!=null){toast("Finish or cancel the current speed test first.");return;}
         AlertDialog progress=new AlertDialog.Builder(this).setTitle("Current VPN path speed").setMessage("Verifying the exact private Router identity, then transferring 8 MiB down and 8 MiB up through its captured VPN network. MTU work remains paused until all test sockets have drained.").setNegativeButton("Cancel test",(d,w)->telemetry.cancelCurrent()).create();
         currentSpeedDialog=progress;progress.setOnDismissListener(d->{if(currentSpeedDialog==progress){currentSpeedDialog=null;telemetry.cancelCurrent();}});progress.show();
@@ -860,7 +861,7 @@ public final class ProductActivity extends Activity {
             actions.add("Remove this intermediate node");destinations.add(-1);
         }
         actions.add("Change transport");destinations.add(-2);
-        if(draft.canMeasureResponseThrough(position) || position==0 && draft.members().size()>=3 && draft.members().get(draft.members().size()-1).source.imported){actions.add("Measure candidates through this hop");destinations.add(-3);}
+        if(draft.canMeasureThrough(position) || position==0 && draft.members().size()>=3 && draft.members().get(draft.members().size()-1).source.imported){actions.add("Measure candidates through this hop");destinations.add(-3);}
         new AlertDialog.Builder(this).setTitle("Hop "+(position+1)).setItems(actions.toArray(new CharSequence[0]),(d,w)->{
             try{if(mutationBusy())throw new IllegalStateException("The VPN state changed while editing the ordered path.");int target=destinations.get(w);
                 if(target==-3){measureOrderedDraft(draft,position);return;}
@@ -874,7 +875,7 @@ public final class ProductActivity extends Activity {
         try {
             var members=draft.members();
             boolean canRetest=members.size()<AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || members.get(members.size()-1).source.imported;
-            if(canRetest && draft.canMeasureResponseThrough(inserted)) {
+            if(canRetest && draft.canMeasureThrough(inserted)) {
                 measureOrderedDraft(draft,inserted);
                 return;
             }

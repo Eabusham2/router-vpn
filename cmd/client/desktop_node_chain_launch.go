@@ -146,7 +146,7 @@ func desktopNodeReadyBudget(launch *desktopNodeLaunch) (time.Duration, error) {
 		return desktopCandidatePrefixReadyBudget(launch)
 	}
 	if launch == nil || launch.chain == nil {
-		return 25 * time.Second, nil
+		return 25*time.Second + desktopNodeInitialKeyAllowance(launch), nil
 	}
 	chain := launch.chain
 	if !chain.hasPolicy() || !chain.originalPolicyCurrent() || chain.selection.Native == nil ||

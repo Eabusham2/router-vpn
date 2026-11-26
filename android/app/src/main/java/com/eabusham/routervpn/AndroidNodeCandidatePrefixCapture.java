@@ -54,6 +54,8 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
             }
             throw invalid();
         }
+        if(original.multipleImported && packetMode(selected.optString("mode")) && original.plan!=null
+                && "routed-tcp-connect".equals(Libbox.routerNodeChainCandidatePrefixMeasurement(original.plan,prefix)))return;
         for(int i=0;i<=prefix;i++)if(!packetMode(new JSONObject(original.memberInputs.get(i)).optString("mode")))throw invalid();
     }
 
@@ -69,7 +71,7 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
         metadata=meta.toString();
         sourceSHA256=plan.sourceSHA256();configSHA256=plan.configSHA256();captureSHA256=plan.captureSHA256();
         JSONObject source=new JSONObject(launchInput),graph=new JSONObject(config);
-        if(!purposeKind(original,meta).equals(source.getString("kind"))||integer(source,"schema")!=1
+        if(!purposeKind(original).equals(source.getString("kind"))||integer(source,"schema")!=1
                 ||original.connect!=null&&!original.connect.source.equals(source.getString("original_source"))
                 ||original.socks!=null&&!original.socks.source.equals(source.getString("original_source"))
                 ||integer(source,"prefix_position")!=prefix||!inventory.equals(source.getString("inventory"))
@@ -96,7 +98,7 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
         for(int i=0;i<proofs.length();i++){
             JSONObject proof=proofs.getJSONObject(i),member=new JSONObject(original.memberInputs.get(i));
             if ("routervpn-node-chain-imported-member".equals(member.optString("kind"))) {
-                if(original.plan==null || !Libbox.routerNodeChainCandidatePrefixMeasurement(original.plan,prefix).equals(meta.optString("measurement")))throw invalid();
+                if(original.plan==null || !Libbox.routerNodeChainCandidatePrefixMeasurement(original.plan,prefix).equals(meta.optString("measurement","routed-tcp-connect")))throw invalid();
                 JSONObject retained=new JSONObject(Libbox.routerNodeChainCandidatePrefixProof(original.plan,i));
                 for(String key:new String[]{"position","profile_id","node_id","source_sha256","tag","kind","node_kind","mode","start_layer"})
                     if(!retained.get(key).equals(proof.get(key)))throw invalid();
@@ -128,13 +130,12 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
 
     void requireCurrent()throws Exception {original.requireCurrent();}
     @Override public void close()throws Exception {plan.close();}
-    private static String purposeKind(AndroidNodeChainCapture original,JSONObject metadata) throws Exception {
-        if (original.plan != null && "routervpn-node-chain-external-final".equals(
-                new JSONObject(original.memberInputs.get(original.memberInputs.size()-1)).optString("kind")))
+    private static String purposeKind(AndroidNodeChainCapture original) {
+        if (original.externalFinal || original.multipleImported)
             return "routervpn-node-chain-multiple-imported-candidate-preparation";
         return original.connect!=null?"routervpn-node-chain-connect-candidate-preparation"
                 :original.socks!=null?"routervpn-node-chain-socks-candidate-preparation"
-                :original.multipleImported && (original.memberInputs.size()>8||"routed-candidate-response".equals(metadata.optString("measurement")))?"routervpn-node-chain-multiple-imported-candidate-preparation":"routervpn-node-chain-candidate-preparation";
+                :"routervpn-node-chain-candidate-preparation";
     }
     private static boolean packetMode(String mode){return "wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode);}
     private static boolean digest(String value){return value!=null&&value.matches("[0-9a-f]{64}");}

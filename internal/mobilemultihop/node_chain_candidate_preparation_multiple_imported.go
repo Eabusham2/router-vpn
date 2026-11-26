@@ -52,11 +52,30 @@ func NewNodeChainMultipleImportedCandidatePreparation(source string, position in
 	if err != nil {
 		return nil, err
 	}
-	owner, err := newNodeChainCandidateMultipleOriginal(original)
+	return original.newMultipleImportedCandidatePreparation(position, inventory)
+}
+
+// NewCapturedNodeChainCandidatePreparation dispatches on the complete parsed
+// Local source. Every prefix of a multi-import route retains that registry,
+// including a packet stop before the first import. The strict purpose parsers
+// still reproduce and verify their own original envelope.
+func NewCapturedNodeChainCandidatePreparation(source string, position int, inventory string) (*NodeChainCandidatePreparation, error) {
+	original, err := NewNodeChain(source)
 	if err != nil {
 		return nil, err
 	}
-	return newNodeChainCandidatePreparationOwned(original, nil, owner, position, inventory)
+	if original.importedNodes != nil {
+		return original.newMultipleImportedCandidatePreparation(position, inventory)
+	}
+	return newNodeChainCandidatePreparation(original, nil, position, inventory)
+}
+
+func (c *NodeChain) newMultipleImportedCandidatePreparation(position int, inventory string) (*NodeChainCandidatePreparation, error) {
+	owner, err := newNodeChainCandidateMultipleOriginal(c)
+	if err != nil {
+		return nil, err
+	}
+	return newNodeChainCandidatePreparationOwned(c, nil, owner, position, inventory)
 }
 
 // NewPublicCandidatePreparation retains this validated original Local capture.
@@ -67,11 +86,7 @@ func (c *NodeChain) NewPublicCandidatePreparation(position int, inventory string
 		position < 1 || position >= len(c.proofs)-1 {
 		return nil, nodeChainCandidatePreparationError
 	}
-	owner, err := newNodeChainCandidateMultipleOriginal(c)
-	if err != nil {
-		return nil, err
-	}
-	return newNodeChainCandidatePreparationOwned(c, nil, owner, position, inventory)
+	return c.newMultipleImportedCandidatePreparation(position, inventory)
 }
 
 func ParseNodeChainMultipleImportedCandidatePreparation(input string) (*NodeChainCandidatePreparation, error) {

@@ -109,7 +109,7 @@ func (l *routerNodeChainLocalResponse) statusJSON() string {
 	status.Results = []hopmeasure.Result{}
 	if status.Complete && status.Drained && status.Stage == "complete" && status.Failure == "" {
 		if !l.invalidated && l.current(l.state) {
-			verified, err := l.service.CompletedOrderedResponseContext(ctx, l.request, 3)
+			verified, err := l.service.CompletedOrderedResponseContext(ctx, l.request, hopmeasure.PathResponseSamples)
 			if err == nil && l.current(l.state) {
 				encoded, _ := json.Marshal(verified)
 				return string(encoded)

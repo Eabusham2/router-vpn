@@ -1250,7 +1250,7 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*mod
 	}
 	a.state.Phase = "checking"
 	a.mu.Unlock()
-	latency, healthErr := a.testStartedModeHealth(startupCtx, p, native)
+	latency, healthErr := a.testStartedModeHealth(startupCtx, startupCtx, p, native)
 	if healthErr == nil && native != nil && native.ownedNode != nil {
 		_, healthErr = a.readDesktopOwnedNodeReady(native, false)
 	}

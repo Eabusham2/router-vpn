@@ -73,7 +73,7 @@ import Libbox
               original.members.indices.contains(position),
               finalResponse || position < original.members.count - (original.requiresIndependentPrefix && !selectedExecution ? 2 : 1),
               !finalResponse || !retainFinal && position == original.members.count - 2,
-              selectedResponse || multipleImported || !selectedExecution && ["routed-candidate-response", "routed-public-candidate-response"].contains(prefixes[position].metric) || original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
+              selectedResponse || multipleImported || finalResponse || !selectedExecution && original.canPreparePrefix(at: position) || original.members.prefix(position + 1).allSatisfy({ ["wg", "awg2-fast", "awg2-strong"].contains($0.mode) }),
               !measuredInput.isEmpty else { throw IOSNodeCandidateCapture.issue() }
         func source(_ id: String) throws -> (root: [String: Any], profile: [String: Any], files: [String: [String: String]]) {
             var found: ([String: Any], [String: Any], [String: [String: String]])?

@@ -105,6 +105,16 @@ func (c *NodeChain) connectedFinalResponsePrefix(position int) bool {
 	return c.HasImportedEntry() && position == 1 && proof.Mode == "shadowsocks"
 }
 
+// CandidatePrefixProof returns one descriptive row from the original sealed
+// route. A stream that carries a later packet prefix need not itself be a
+// measurable stop. This readback does not grant dial authority for either.
+func (c *NodeChain) CandidatePrefixProof(position int) (NodeChainProof, bool) {
+	if c == nil || c.validateCapture() != nil || position < 0 || position >= len(c.proofs)-1 {
+		return NodeChainProof{}, false
+	}
+	return c.proofs[position], true
+}
+
 // The complete capture has already validated each source and proof, including
 // the independent private identities attached to the schema-six stream route.
 func (c *NodeChain) pairedCandidateStream(position int) bool {

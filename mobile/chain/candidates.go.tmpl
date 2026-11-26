@@ -70,7 +70,7 @@ func (m *RouterNodeChain) newCandidateMeasurementContext(ctx context.Context, se
 	}
 	// The live proof controller owns the exact imported registry. The dormant
 	// launch plan has matching bytes but cannot substitute for that owner.
-	plan, err := state.chain.NewCandidatePlan(position, inventory)
+	plan, err := state.chain.NewCandidatePlanFromInputs(position, inventory, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -365,11 +365,14 @@ func RouterNodeChainCandidateInputSupportedForMeasurement(input, measurement str
 
 // Compare a prepared public prefix row to its complete original native owner.
 func RouterNodeChainCandidatePrefixProof(plan *RouterNodeChain, position int32) string {
-	if plan == nil || plan.self != plan || plan.chain == nil || plan.chain.CandidatePrefixMeasurement(int(position)) == "" {
+	if plan == nil || plan.self != plan || plan.chain == nil {
 		return ""
 	}
-	proofs := plan.chain.ProofInventory()
-	raw, err := json.Marshal(proofs[position])
+	proof, ok := plan.chain.CandidatePrefixProof(int(position))
+	if !ok {
+		return ""
+	}
+	raw, err := json.Marshal(proof)
 	if err != nil {
 		return ""
 	}

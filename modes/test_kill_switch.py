@@ -334,6 +334,20 @@ with tempfile.TemporaryDirectory(prefix='router-vpn-killswitch-reassert-') as td
     p=subprocess.run([sys.executable,str(SCRIPT),'reassert'],env=env,text=True,capture_output=True);assert p.returncode==0,p.stderr
     assert not (root/'run'/'kill-switch.json').exists(),p.stderr
 
+    # A guard that appears during SMART rollback must survive the wrapper's own startup.
+    session = '2' * 32
+    env.update(HOMEVPN_PROFILE_ID='node', HOMEVPN_SMART_RESTORE_OFF=session, HOMEVPN_NODE_SESSION=session)
+    tables = [{'metainfo': {}}, {'table': {'name': mod.TABLE, 'family': 'inet', 'handle': 9}}]
+    with mock.patch.dict(os.environ, env), mock.patch.object(mod, 'run_nft') as nft:
+        nft.return_value = subprocess.CompletedProcess([], 0, json.dumps({'nftables': tables}))
+        try:
+            mod.apply()
+        except RuntimeError as exc:
+            assert 'another native table' in str(exc), str(exc)
+        else:
+            raise AssertionError('SMART restoration accepted a replacement guard')
+        nft.assert_called_once_with(['-j', '-n', 'list', 'tables'])
+
 # Multihop persistent `always`: policy comes from control, public exception comes
 # from the physical entry. The exit endpoint must never be opened directly.
 with tempfile.TemporaryDirectory(prefix='router-vpn-killswitch-multihop-') as td:

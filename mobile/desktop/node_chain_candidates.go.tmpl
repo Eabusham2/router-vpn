@@ -163,7 +163,7 @@ func (owner *routerVPNNodeChainRuntime) pollCandidates(ctx context.Context) erro
 			return err
 		}
 		defer clear(inventory)
-		plan, err := chain.NewCandidatePlan(request.Position, string(inventory))
+		plan, err := chain.NewCandidatePlanFromInputs(request.Position, string(inventory), nil)
 		if err != nil || plan.CaptureSHA256() != request.CaptureSHA {
 			return routerVPNExternalFailure
 		}

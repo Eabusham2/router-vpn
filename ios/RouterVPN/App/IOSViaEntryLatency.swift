@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Libbox
 
 struct IOSViaEntryValue: Identifiable, Sendable {
     let id: String
@@ -142,6 +143,14 @@ final class IOSViaEntryCapture {
         return try encoder.encode(JSONDecoder().decode(ClientBundle.self, from: data))
     }
 
+    static func literalTCPTarget(_ candidate: RouterProfile) throws -> IOSViaEntryTCPTarget {
+        guard IOSImportedShadowsocksSource.eligibleLiteral(candidate), let ss = candidate.external?.shadowsocks,
+              let port = UInt16(exactly: ss.port), port > 0,
+              let profile = try JSONSerialization.jsonObject(with: JSONEncoder().encode(candidate)) as? [String: Any],
+              LibboxRouterNodeChainCandidateInputSupported(try IOSNodeCandidateCapture.member(profile: profile, files: [:])) else { throw issue("The imported candidate has no original literal TCP endpoint.") }
+        return IOSViaEntryTCPTarget(id: candidate.id, name: candidate.name, endpoint: ss.server, originalPort: port)
+    }
+
     static func issue(_ text: String) -> NSError {
         NSError(domain: "RouterVPN.ViaEntry", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
     }
@@ -206,7 +215,7 @@ final class IOSViaEntryLatency: ObservableObject {
         }
     }
 
-    func measure(model: RouterVPNModel, entryID: String, mode: String, candidates: [RouterProfile], expectedGeneration: UInt64? = nil) async {
+    func measure(model: RouterVPNModel, entryID: String, mode: String, candidates: [RouterProfile], exactImportedCandidates: Bool = false, expectedGeneration: UInt64? = nil) async {
         guard !running, expectedGeneration == nil || expectedGeneration == cancellationGeneration else { return }
         let generation = cancellationGeneration
         receipt = nil; error = ""; running = true
@@ -235,7 +244,8 @@ final class IOSViaEntryLatency: ObservableObject {
                         throw IOSViaEntryCapture.issue("The temporary entry did not prove the exact selected single-hop transport.")
                     }
                 }, measure: {
-                    guard IOSViaEntryNetwork.shared.current == network else { throw CancellationError() }
+                    guard IOSViaEntryNetwork.shared.current == network, let proved = model.activeSessionIdentity else { throw CancellationError() }
+                    let generation = model.iosConnectGeneration
                     self.progress = "Measuring 50 TCP responses per candidate through \(capture.entryName)…"
                     let deadline = ProcessInfo.processInfo.systemUptime + 120
                     var values: [IOSViaEntryValue] = []
@@ -244,10 +254,15 @@ final class IOSViaEntryLatency: ObservableObject {
                         guard IOSViaEntryNetwork.shared.current == network,
                               ProcessInfo.processInfo.systemUptime < deadline else { throw CancellationError() }
                         self.progress = "\(capture.entryName) → \(candidate.name.isEmpty ? candidate.id : candidate.name) • \(values.count + 1)/\(capture.candidates.count)"
-                        let target = IOSViaEntryTCPTarget(id: candidate.id, name: candidate.name, endpoint: candidate.endpoint)
+                        let target: IOSViaEntryTCPTarget?
+                        if exactImportedCandidates { target = try? IOSViaEntryCapture.literalTCPTarget(candidate) }
+                        else { target = IOSViaEntryTCPTarget(id: candidate.id, name: candidate.name, endpoint: candidate.endpoint) }
+                        guard let target else { continue }
                         let value = try await IOSViaEntryTCP.measure(target, excluding: capture.excludedHosts, allowIPv6: capture.allowsIPv6, network: network, deadline: deadline)
+                        await model.refreshTunnelStatus()
                         try Task.checkCancellation()
-                        guard IOSViaEntryNetwork.shared.current == network,
+                        guard model.connected, model.activeSessionIdentity == proved, model.iosConnectGeneration == generation,
+                              IOSViaEntryNetwork.shared.current == network,
                               ProcessInfo.processInfo.systemUptime < deadline else { throw CancellationError() }
                         values.append(value)
                     }

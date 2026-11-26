@@ -430,8 +430,11 @@ func (a *app) runSmartStrategyWith(runtime smartStrategyRuntime) (strategyResult
 			}
 			a.state.Phase = trialPhase
 			a.mu.Unlock()
-			transition := &modeAttemptTransition{}
+			transition := &modeAttemptTransition{legacy: legacy}
 			tryErr := runtime.startMode(a, candidate.ID, true, transition)
+			if transition.wrapperPlan != nil {
+				defer clearSpeedLabRestorePlan(*transition.wrapperPlan)
+			}
 			attempt := strategyAttempt{Mode: candidate.ID, Action: "simplify", Success: tryErr == nil}
 			if tryErr == nil {
 				retainedLegacy = nil
@@ -482,13 +485,25 @@ func (a *app) runSmartStrategyWith(runtime smartStrategyRuntime) (strategyResult
 			}
 			sessionTrackerFor(a).strategyEvent("strategy-restore", fmt.Sprintf("SMART simplification %s failed; restoring %s", candidate.ID, lastGood.ID))
 			var restoreErr error
-			if saved != nil {
+			retainedLegacy = nil
+			if transition.restoreWrapper != nil {
+				restoreErr = transition.restoreWrapper()
+				if restoreErr == nil {
+					retainedLegacy, restoreErr = a.captureSmartLegacyPredecessor(operation, p, lastGood.ID)
+					if restoreErr == nil && (retainedLegacy == nil || retainedLegacy.wrapper != transition.wrapperPlan.native) {
+						restoreErr = errors.New("SMART lost its freshly restored wrapper")
+					}
+				}
+			} else if saved != nil {
 				restoreErr = a.restoreSmartDesktopNode(saved, runtime)
 			} else {
 				restoreErr = runtime.startMode(a, lastGood.ID, true, nil)
 			}
 			if restoreErr != nil {
 				result.Attempts = append(result.Attempts, strategyAttempt{Mode: lastGood.ID, Action: "restore", Success: false, Error: restoreErr.Error()})
+				if transition.restoreWrapper != nil {
+					return result, errors.Join(tryErr, restoreErr)
+				}
 				if errors.Is(restoreErr, errConnectionOperationCancelled) {
 					return result, a.finalizeCancelledFallbackFor("SMART AUTO", operation)
 				}
@@ -500,7 +515,6 @@ func (a *app) runSmartStrategyWith(runtime smartStrategyRuntime) (strategyResult
 			}
 			result.Attempts = append(result.Attempts, strategyAttempt{Mode: lastGood.ID, Action: "restore", Success: true})
 			result.RestoredMode = lastGood.ID
-			retainedLegacy = nil
 			best = lastGood
 		}
 		if !changed {

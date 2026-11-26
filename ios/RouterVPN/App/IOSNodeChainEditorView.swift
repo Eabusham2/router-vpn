@@ -8,6 +8,20 @@ struct IOSNodeChainEditorView: View {
     @State private var detail = ""
     @State private var execution = "local"
     @StateObject private var candidates = IOSNodeCandidates()
+    @StateObject private var firstHop = IOSViaEntryLatency()
+
+    private var needsFirstPublicHop: Bool {
+        execution == "local" && draft.hasExternalFinal && draft.nodes.count >= 3 &&
+            draft.nodes[1].id.isEmpty && IOSMultihopNodeSelection.supportsNativePrefix(draft.nodes[0].mode) &&
+            available.contains { $0.id == draft.controlID && [nil, "", "off"].contains($0.startLayer) }
+    }
+    private var firstHopScores: [String: Double] {
+        guard needsFirstPublicHop, let receipt = firstHop.receipt,
+              (try? receipt.requireCurrent(model: model, entryID: draft.controlID, entryMode: draft.nodes[0].mode)) != nil else { return [:] }
+        return receipt.values.reduce(into: [:]) { scores, value in
+            if value.eligible, let time = value.trimmedMeanMS { scores[value.id] = time }
+        }
+    }
     private struct PrefixRequest: Equatable {
         let position: Int
         let id = UUID()
@@ -23,6 +37,7 @@ struct IOSNodeChainEditorView: View {
     }
 
     var body: some View {
+        let firstScores = firstHopScores
         Form {
             Section("Nodes in connection order") {
                 Text("A packet prefix measures 50 TCP connections to each saved candidate. A qualified Shadowsocks prefix measures 50 authenticated responses from a paired candidate, or 50 verified HTTPS responses from an imported candidate on a Local public-exit route. Use in draft inserts the candidate after the measured hop. Save future profile creates a named route that you can Load separately.")
@@ -48,7 +63,7 @@ struct IOSNodeChainEditorView: View {
                                 if !exits.isEmpty {
                                     Menu("Choose an imported exit") {
                                         ForEach(exits, id: \.id) { exit in
-                                            Button(exit.name) { change { try draft.chooseExternalFinal(exit, profiles: available, execution: execution) } }
+                                            Button(exit.name) { change(measureAfter: 0) { try draft.chooseExternalFinal(exit, profiles: available, execution: execution) } }
                                         }
                                     }
                                 }
@@ -95,8 +110,9 @@ struct IOSNodeChainEditorView: View {
                             Text("Choose linked node").tag("")
                             ForEach(IOSNodeChainEditorVisible.candidates(available, nodes: draft.nodes, position: position, execution: execution)) { candidate in
                                 let name = candidate.name.isEmpty ? candidate.id : candidate.name
-                                let ms = candidates.editorScore(node: candidate.id, after: position - 1)
-                                Text(ms.map { String(format: "%@ • %.1f ms via prefix (%@)", name, $0, candidates.editorMetricLabel) } ?? name).tag(candidate.id)
+                                let first = position == 1 ? firstScores[candidate.id] : nil
+                                let ms = first ?? candidates.editorScore(node: candidate.id, after: position - 1)
+                                Text(ms.map { String(format: "%@ • %.1f ms via prefix (%@)", name, $0, first != nil ? "TCP" : candidates.editorMetricLabel) } ?? name).tag(candidate.id)
                             }
                             if !node.id.isEmpty && !available.contains(where: { $0.id == node.id }) {
                                 Text("Missing linked node").tag(node.id)
@@ -119,7 +135,7 @@ struct IOSNodeChainEditorView: View {
                         }
                         Text(IOSMultihopNodeSelection.transportName(node.mode))
                             .font(.caption).foregroundStyle(.secondary)
-                        if position > 0, (try? draft.measurementPath(through: position - 1, execution: execution, profiles: available)) != nil {
+                        if position > 0, position == 1 && needsFirstPublicHop || (try? draft.measurementPath(through: position - 1, execution: execution, profiles: available)) != nil {
                             Button("Measure candidates through node \(position)") { request = PrefixRequest(position: position - 1) }
                                 .buttonStyle(.borderless)
                         }
@@ -136,7 +152,13 @@ struct IOSNodeChainEditorView: View {
                     if let added = draft.nodes.firstIndex(where: { $0.id.isEmpty }), added > 0 { schedule(after: added - 1) }
                 }.disabled(!draft.canAppend(execution: execution))
             }.disabled(model.profileMutationBlocked || model.iosSpeedLabOwnership.active)
-            if request != nil || candidates.running {
+            if firstHop.running || !firstHop.progress.isEmpty && needsFirstPublicHop {
+                Section("First hop measurement") {
+                    Text(firstHop.error.isEmpty ? firstHop.progress : firstHop.error).font(.caption)
+                    if firstHop.running { Button("Cancel measurement") { firstHop.cancel(); request = nil } }
+                }
+            }
+            if candidates.running || request != nil && !firstHop.running && !needsFirstPublicHop {
                 Section("Prefix measurement") {
                     if candidates.canPrepare || candidates.preparing || !candidates.proposalDescription.isEmpty {
                         IOSCandidateProfileChoices(probe: candidates, useInDraft: { score in
@@ -188,6 +210,16 @@ struct IOSNodeChainEditorView: View {
             await candidates.finishEditorComparison()
             guard !Task.isCancelled, self.request == request, let owner else { return }
             do {
+                if request.position == 0 && needsFirstPublicHop {
+                    let offered = IOSNodeChainEditorVisible.candidates(available, nodes: draft.nodes, position: 1, execution: execution)
+                        .filter(IOSImportedShadowsocksSource.eligibleLiteral)
+                    let mode = draft.nodes[0].mode
+                    await firstHop.measure(model: model, entryID: owner.controlID, mode: mode, candidates: offered, exactImportedCandidates: true)
+                    guard firstHop.receipt != nil else { detail = firstHop.error; return }
+                    do { try await Task.sleep(for: .seconds(120)) } catch { return }
+                    firstHop.invalidateIfStale(model: model, entryID: owner.controlID, mode: mode)
+                    return
+                }
                 let source = try model.iosNodeChainMeasurementBundle(draft, through: request.position, owner: owner, execution: execution)
                 try candidates.startEditorPrefix(model: model, bundle: source, position: request.position)
             } catch {
@@ -195,8 +227,8 @@ struct IOSNodeChainEditorView: View {
                 detail = error.localizedDescription
             }
         }
-        .onChange(of: execution) { _, _ in candidates.cancel(); request = nil }
-        .onDisappear { candidates.cancel() }
+        .onChange(of: execution) { _, _ in candidates.cancel(); firstHop.cancel(); request = nil }
+        .onDisappear { candidates.cancel(); firstHop.cancel() }
         .navigationTitle("Ordered nodes")
         .onAppear {
             let selected = model.selectedNodeProfile
@@ -208,7 +240,7 @@ struct IOSNodeChainEditorView: View {
     }
 
     private func schedule(after position: Int) {
-        if (try? draft.measurementPath(through: position, execution: execution, profiles: available)) != nil {
+        if position == 0 && needsFirstPublicHop || (try? draft.measurementPath(through: position, execution: execution, profiles: available)) != nil {
             request = PrefixRequest(position: position)
         }
     }
@@ -216,6 +248,7 @@ struct IOSNodeChainEditorView: View {
     private func change(measureAfter position: Int? = nil, _ action: () throws -> Void) {
         do {
             try action()
+            firstHop.cancel()
             candidates.cancel()
             request = nil
             detail = ""

@@ -77,7 +77,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
         AlertDialog.Builder builder=new AlertDialog.Builder(activity);
         LinearLayout header=new LinearLayout(builder.getContext());header.setOrientation(LinearLayout.VERTICAL);
         int pad=Math.round(16*activity.getResources().getDisplayMetrics().density);header.setPadding(pad,pad,pad,pad/2);
-        TextView title=new TextView(builder.getContext());title.setTextSize(18);title.setText(finalNode?"Final Router node":"Add intermediate node");header.addView(title);
+        TextView title=new TextView(builder.getContext());title.setTextSize(18);title.setText(finalNode?"Final node":"Add intermediate node");header.addView(title);
         status=new TextView(builder.getContext());header.addView(status);
         rows=new ArrayAdapter<>(builder.getContext(),android.R.layout.simple_list_item_1);
         renderRows();
@@ -117,16 +117,15 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
                 && (!response || local || finalNode)
                 &&(response||List.of("wg","awg2-fast","awg2-strong").contains(path.get(prefix).mode));
         saved=eligible&&local?draft.matchingSavedPath():null;first=null;
-        if(saved==null&&eligible&&local&&prefix==0&&"wg".equals(path.get(0).mode)&&!paired.isEmpty()
+        // A two-node public-exit draft can measure its next literal SS choices
+        // through its actual WG entry before any intermediate has been selected.
+        boolean singleEntry=paired.size()==choices.size() || path.size()==2&&path.get(1).source.imported;
+        if(saved==null&&eligible&&local&&singleEntry&&prefix==0&&"wg".equals(path.get(0).mode)
                 &&"off".equals(path.get(0).source.profile().optString("start_layer","off"))) {
             for(AndroidNodeStore.Node node:draft.catalog.nodes)if(node.id.equals(path.get(0).source.id))first=node;
         }
-        if(eligible&&local&&saved==null&&first==null&&!response){
-            for(int i=0;i<=prefix;i++){
-                AndroidOrderedPathSelection.Member member=path.get(i);
-                if(member.source.imported||!List.of("wg","awg2-fast","awg2-strong").contains(member.mode))eligible=false;
-            }
-        }
+        if(eligible&&local&&saved==null&&first==null&&!response)
+            eligible=AndroidNodeChainCapture.localPacketPrefix(sources,modes,prefix);
     }
 
     private void start() {
@@ -186,7 +185,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
             if(!granted)throw new IllegalStateException("VPN permission was declined.");
             requireDraft();AndroidConnectionSelection.requireCurrent(activity,nodes,permissionSelection);
             if(!connection.pathCurrent(permissionHome))throw new IllegalStateException("The original idle VPN changed.");
-            single.measure(first,paired,50,new AndroidViaEntryLatencyProbe.Callback(){
+            single.measure(first,choices,50,draft.catalog,new AndroidViaEntryLatencyProbe.Callback(){
                 public void progress(String detail){AndroidOrderedCandidatePicker.this.progress(detail);}
                 public void finished(AndroidViaEntryLatencyProbe.Result value,Throwable error){activity.runOnUiThread(()->{
                     if(!visible()||reviewing)return;

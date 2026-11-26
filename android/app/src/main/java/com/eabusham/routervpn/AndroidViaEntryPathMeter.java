@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Measures candidate node endpoint RTT through one temporary proven WireGuard
@@ -27,7 +28,7 @@ final class AndroidViaEntryPathMeter {
             AndroidNodeStore.Node entry,
             NativeWireGuardController wireGuard,
             List<AndroidNodeStore.Node> candidates,
-            int samples, AndroidPathProbe.Route route) throws Exception {
+            int samples, AndroidPathProbe.Route route, Map<String,InetSocketAddress> imported) throws Exception {
         if (samples != 50) throw new IllegalArgumentException("Via-entry candidate comparison requires 50 samples.");
         if (route == null) throw new IllegalArgumentException("Via-entry measurements require a captured VPN socket owner.");
         route.check();
@@ -50,7 +51,7 @@ final class AndroidViaEntryPathMeter {
                 throw new IllegalStateException("Temporary WireGuard entry stopped while measuring candidate latency; all results discarded.");
             }
             try {
-                out.add(probeNode(node, count, route));
+                out.add(probeNode(node, count, route, imported.get(node.id)));
             } catch (Exception ignored) {
                 route.check();
                 // One unreachable candidate does not invalidate the real routed
@@ -72,13 +73,13 @@ final class AndroidViaEntryPathMeter {
         return out;
     }
 
-    private static AndroidTelemetry.Result probeNode(AndroidNodeStore.Node node, int samples, AndroidPathProbe.Route route) throws Exception {
-        if (node.endpoint == null || node.endpoint.trim().isEmpty()) {
-            throw new IllegalArgumentException("Candidate node has no public endpoint.");
+    private static AndroidTelemetry.Result probeNode(AndroidNodeStore.Node node, int samples, AndroidPathProbe.Route route, InetSocketAddress captured) throws Exception {
+        InetSocketAddress target = captured;
+        if (target == null) {
+            if (node.file == null || node.endpoint == null || node.endpoint.trim().isEmpty())
+                throw new IllegalArgumentException("Candidate has no captured measurement endpoint.");
+            target = discoverPort(route.resolve(endpointHost(node.endpoint)), route);
         }
-        String host = endpointHost(node.endpoint);
-        InetAddress[] addresses = route.resolve(host);
-        InetSocketAddress target = discoverPort(addresses, route);
         List<Double> values = new ArrayList<>();
         int failed = 0;
         for (int i = 0; i < samples; i++) {

@@ -366,6 +366,7 @@ jobs:
         timeout-minutes: 12
         run: |
           set -euo pipefail
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'emulator' 'system-images;android-35;google_apis;x86_64'
           echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n routervpn-ci -k 'system-images;android-35;google_apis;x86_64' --force
           test -e /dev/kvm

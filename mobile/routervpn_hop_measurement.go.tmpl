@@ -92,7 +92,7 @@ func (m *RouterHopMeasurement) StartOrderedResponse(request string) error {
 	}
 	if local := m.localResponse; local != nil {
 		return local.begin(request, func() error {
-			return local.service.StartOrderedResponseContext(context.Background(), request, 3)
+			return local.service.StartOrderedResponseContext(context.Background(), request, hopmeasure.PathResponseSamples)
 		})
 	}
 	service, ok := m.service.(interface{ startOrderedResponse(string) error })

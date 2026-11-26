@@ -47,6 +47,7 @@ struct IOSViaEntryTCPTarget: Sendable {
     let id: String
     let name: String
     let endpoint: String
+    var originalPort: UInt16? = nil
 }
 
 enum IOSViaEntryTCP {
@@ -96,22 +97,25 @@ enum IOSViaEntryTCP {
         guard publicHost(host), !excluded.contains(host), allowIPv6 || IPv6Address(host) == nil else {
             return unavailable("This candidate has no distinct public literal endpoint that can be proved through the entry.")
         }
-        var ports: [UInt16] = []
-        if let parts = URLComponents(string: target.endpoint.contains("://") ? target.endpoint : "tcp://" + target.endpoint),
-           let port = parts.port, (1...65535).contains(port) { ports.append(UInt16(port)) }
-        ports += [443, 8388, 10443, 11443, 12443, 13443, 14443, 15443]
-        var tried = Set<UInt16>(), selected: UInt16?
-        for port in ports where tried.insert(port).inserted {
-            try check()
-            do { _ = try await probe(host: host, port: port, timeoutMS: try budget(300)); try check(); selected = port; break }
-            catch is CancellationError { throw CancellationError() }
-            catch { }
+        var selected = target.originalPort
+        if selected == nil {
+            var ports: [UInt16] = []
+            if let parts = URLComponents(string: target.endpoint.contains("://") ? target.endpoint : "tcp://" + target.endpoint),
+               let port = parts.port, (1...65535).contains(port) { ports.append(UInt16(port)) }
+            ports += [443, 8388, 10443, 11443, 12443, 13443, 14443, 15443]
+            var tried = Set<UInt16>()
+            for port in ports where tried.insert(port).inserted {
+                try check()
+                do { _ = try await probe(host: host, port: port, timeoutMS: try budget(300)); try check(); selected = port; break }
+                catch is CancellationError { throw CancellationError() }
+                catch { }
+            }
         }
         guard let selected else { return unavailable("No TCP response endpoint answered through this entry.") }
         var values: [Double] = [], failed = 0
         for _ in 0..<50 {
             try check()
-            do { values.append(try await probe(host: host, port: selected, timeoutMS: try budget(950))); try check() }
+            do { values.append(try await probe(host: host, port: selected, timeoutMS: try budget(950), physical: nil, requireTunnel: target.originalPort != nil)); try check() }
             catch is CancellationError { throw CancellationError() }
             catch { failed += 1 }
         }
@@ -144,11 +148,11 @@ enum IOSViaEntryTCP {
         return try await probe(host: host, port: port, timeoutMS: timeoutMS, physical: physical)
     }
 
-    private static func probe(host: String, port: UInt16, timeoutMS: Int, physical: NWInterface?) async throws -> Double {
+    private static func probe(host: String, port: UInt16, timeoutMS: Int, physical: NWInterface?, requireTunnel: Bool = false) async throws -> Double {
         let state = Probe()
         let result = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                state.start(host: host, port: port, timeoutMS: timeoutMS, physical: physical, continuation: continuation)
+                state.start(host: host, port: port, timeoutMS: timeoutMS, physical: physical, requireTunnel: requireTunnel, continuation: continuation)
             }
         } onCancel: { state.cancel() }
         try Task.checkCancellation()
@@ -163,19 +167,26 @@ enum IOSViaEntryTCP {
         private var continuation: CheckedContinuation<Double, Error>?
         private var outcome: Result<Double, Error>?
 
-        func start(host: String, port: UInt16, timeoutMS: Int, physical: NWInterface?, continuation: CheckedContinuation<Double, Error>) {
+        func start(host: String, port: UInt16, timeoutMS: Int, physical: NWInterface?, requireTunnel: Bool, continuation: CheckedContinuation<Double, Error>) {
             queue.async {
                 self.continuation = continuation
                 if self.outcome != nil { self.deliver(); return }
                 guard let port = NWEndpoint.Port(rawValue: port) else { self.finish(.failure(URLError(.badURL))); return }
                 let parameters = NWParameters.tcp
                 if let physical { parameters.requiredInterface = physical }
+                else if requireTunnel { parameters.requiredInterfaceType = .other }
                 let connection = NWConnection(host: NWEndpoint.Host(host), port: port, using: parameters)
                 self.connection = connection
                 let started = DispatchTime.now().uptimeNanoseconds
                 connection.stateUpdateHandler = { state in
                     switch state {
                     case .ready:
+                        if requireTunnel {
+                            guard let path = connection.currentPath, path.usesInterfaceType(.other),
+                                  path.availableInterfaces.contains(where: { $0.type == .other && $0.name.hasPrefix("utun") }) else {
+                                self.finish(.failure(URLError(.networkConnectionLost))); return
+                            }
+                        }
                         let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
                         self.finish(elapsed.isFinite && elapsed > 0 ? .success(elapsed) : .failure(URLError(.badServerResponse)))
                     case .failed(let error): self.finish(.failure(error))

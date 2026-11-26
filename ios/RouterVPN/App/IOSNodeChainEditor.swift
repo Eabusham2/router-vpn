@@ -109,7 +109,11 @@ struct IOSNodeChainDraft {
             return selected
         }
         let mixedPackets = IOSMultihopNodeSelection.extendedMixedPacketCount(nodes.map(\.mode), execution: execution)
-        let packet = prefix.allSatisfy { IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }
+        let packet = IOSMultihopNodeSelection.supportsNativePrefix(nodes[position].mode) && prefix.allSatisfy { node in
+            if IOSMultihopNodeSelection.supportsNativePrefix(node.mode) { return true }
+            let matches = linked.filter { $0.id == node.id }
+            return node.mode == "shadowsocks" && matches.count == 1 && IOSImportedShadowsocksSource.eligibleLiteral(matches[0])
+        }
         let extendedImport = (IOSMultihopNodeSelection.extendedLocalModes(nodes.map(\.mode), execution: execution) || mixedPackets > 0) && selected.count == nodes.count
         let packets = prefix.prefix(while: { IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }).count
         let stream = packets > 0 && packets < prefix.count && final.mode == "shadowsocks" &&
