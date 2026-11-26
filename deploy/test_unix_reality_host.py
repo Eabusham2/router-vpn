@@ -56,8 +56,7 @@ COMPONENT_ROOTS = {
 }
 SOURCES = (
     'deploy/unix_reality_cases.py', 'deploy/test_unix_reality_host.py',
-    'deploy/test_unix_reality_host_runner.py', '.github/workflows/unix-reality-host.yml',
-    '.github/workflows/release-candidate.yml',
+    'deploy/test_unix_reality_host_runner.py', '.github/workflows/build-all.yml',
     'internal/mobilemultihop/desktop_node_admission.go',
     'cmd/client/desktop_node_connection_linux.go', 'modes/kill-switch-platform.py', 'modes/kill-switch.py',
     'cmd/client/desktop_node_reality_fixture_native_test.go',

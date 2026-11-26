@@ -87,7 +87,7 @@ func TestWindowsRawWireGuardEnforcesAndProvesSelectedDNS(t *testing.T) {
 		{"cmd/dnsproxy/http3.go", []string{"&http3.Transport{", "MinVersion: tls.VersionTLS13", "tlsConfig.InsecureSkipVerify", "client.quic.Dial(ctx, remote, tlsConfig, config)"}},
 		{"cmd/dnsproxy/server_test.go", []string{"TestDNSProxyCLIKernelProbeThroughActualHTTP3", "common.ProbeDNSUDP", "wrong TLS identity produced a successful kernel DNS proof"}},
 		{"deploy/test_windows_home_dns.py", []string{"raw-h3-downgrade", "raw-h3-launch", "raw-h3-tls"}},
-		{".github/workflows/desktop-native-runtime.yml", []string{"Native DNS proxy H3 exchanges and kernel proof", "'deploy/build-dnsproxy.py', 'test', '--go'", "subprocess.run(command, check=True)"}},
+		{".github/workflows/build-all.yml", []string{"Native DNS proxy H3 exchanges and kernel proof", "'deploy/build-dnsproxy.py', 'test', '--go'", "subprocess.run(command, check=True)"}},
 	} {
 		source := readWindowsDNSContractFile(t, contract.file)
 		for _, marker := range contract.markers {

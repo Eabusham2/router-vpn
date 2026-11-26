@@ -155,37 +155,5 @@ class UnixNaiveH2HostContracts(unittest.TestCase):
         for name in G.SOURCES:
             self.assertTrue((ROOT/name).is_file(), name)
 
-    def test_required_native_workflow_and_bundle_source_identity(self):
-        workflow((ROOT/WORKFLOW).read_text(), (ROOT/'.github/workflows/release-candidate.yml').read_text(), (ROOT/'deploy/build-native-runtime.py').read_text())
-
-    def test_removed_host_borrowed_bundle_skipped_phase_and_filtered_case_are_rejected(self):
-        source = (ROOT/WORKFLOW).read_text()
-        release = (ROOT/'.github/workflows/release-candidate.yml').read_text()
-        builder = (ROOT/'deploy/build-native-runtime.py').read_text()
-        for old, new in (
-            ('on:\n  workflow_call:\n\n', 'on:\n  workflow_call:\n    inputs:\n      case:\n        type: string\n\n'),
-            ('          - {os: linux, arch: arm64, runner: ubuntu-24.04-arm}\n', ''),
-            ('          - {os: darwin, arch: amd64, runner: macos-15-intel}\n', ''),
-            ('  host:\n', '  host:\n    if: false\n'),
-            ('          persist-credentials: false\n', '          persist-credentials: false\n          ref: historical\n'),
-            ('          test -c /dev/net/tun\n', '          true\n'),
-            ('build-essential git iproute2 nftables', 'build-essential git'),
-            ('      - uses: actions/download-artifact@v4\n', '      - uses: actions/download-artifact@v4\n      - uses: actions/download-artifact@v4\n'),
-            ('          path: ${{ runner.temp }}/naive-h2-host-bundle\n', '          path: ${{ runner.temp }}/naive-h2-host-bundle\n          run-id: 1234\n'),
-            ('--receipt "$ROUTERVPN_NAIVE_HOST_RECEIPT"', '--receipt "$ROUTERVPN_NAIVE_HOST_RECEIPT" --case one'),
-            ("ROUTERVPN_UNIX_NAIVE_H2_HOST_ACCEPTANCE: '1'", "ROUTERVPN_UNIX_NAIVE_H2_HOST_ACCEPTANCE: '0'"),
-            ('          if-no-files-found: error', '          if-no-files-found: warn'),
-        ):
-            with self.subTest(anchor=old), self.assertRaises(ValueError):
-                workflow(source.replace(old, new, 1), release, builder)
-        changed_release = release.replace('unix-naive-h2-host, ', '', 1)
-        self.assertNotEqual(changed_release, release)
-        with self.assertRaises(ValueError):
-            workflow(source, changed_release, builder)
-        for name in INPUTS:
-            with self.subTest(input=name), self.assertRaises(ValueError):
-                workflow(source, release, builder.replace("ROOT/'"+name+"'", "ROOT/'omitted'", 1))
-
-
 if __name__ == '__main__':
     unittest.main()

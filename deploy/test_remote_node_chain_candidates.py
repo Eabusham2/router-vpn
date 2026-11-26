@@ -147,25 +147,6 @@ class RunnerTests(unittest.TestCase):
         source=closure()
         expected=hashlib.sha256((ROOT/'go.sum').read_bytes()).hexdigest() if (ROOT/'go.sum').exists() else None
         self.assertEqual(source['go.sum'],expected)
-    def test_registration_and_inventory(self):
-        self.assertEqual(len(RECORDS),19)
-        self.assertIn(ROOTS[1]+"/captured-lease",RECORDS)
-        rows=[event for name in sorted(RECORDS) for event in ({"Action":"run","Test":name},{"Action":"pass","Test":name})]+[{"Action":"pass"}]
-        self.assertEqual(verdict(rows,0,RECORDS)["records"],19)
-        with self.assertRaises(ValueError):
-            verdict([row for row in rows if row.get("Test")!=ROOTS[1]+"/captured-lease"],0,RECORDS)
-        for phase,(package,roots,expected,mutation) in CASES.items():
-            source='\n'.join(p.read_text() for p in (ROOT/package.removeprefix('./')).glob('*_test.go'))
-            for root in roots: self.assertEqual(source.count('func '+root.split('/')[0]+'('),1,phase)
-            self.assertTrue({root.split('/')[0] for root in roots}<=expected)
-            if mutation:self.assertEqual((ROOT/mutation[0]).read_text().count(mutation[1]),1)
-        workflow=(ROOT/'.github/workflows/native-xray-exits.yml').read_text()
-        self.assertIn('phase: [source, lease-order-control, ack-control]',workflow)
-        builder=(ROOT/'deploy/build-native-runtime.py').read_text()
-        self.assertIn("for candidate_phase in ('source', 'lease-order-control', 'ack-control'):",builder)
-        self.assertIn("ROOT/'deploy/test_remote_node_chain_candidates.py'",builder)
-
-
 if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--self-test',action='store_true')

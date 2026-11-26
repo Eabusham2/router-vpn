@@ -117,7 +117,7 @@ class ReleaseSDKReadback(unittest.TestCase):
             VERIFY.verify(SHA, self.output)
 
     def test_release_workflow_requires_build_then_readback_and_separate_evidence(self):
-        text = (ROOT / ".github/workflows/release-candidate.yml").read_text()
+        text = (ROOT / ".github/workflows/build-all.yml").read_text()
         ios = text.split("\n  ios:\n", 1)[1].split("\n  macos:\n", 1)[0]
         self.assertLess(ios.index("xcodebuild -project"), ios.index("verify-ios-generated-sdk.py"))
         self.assertLess(ios.index("mobile-artifact-provenance.py"), ios.index("verify-ios-generated-sdk.py"))

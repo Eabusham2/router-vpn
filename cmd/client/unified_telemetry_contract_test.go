@@ -111,10 +111,7 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 	requireRepoMarkers(t, "ios/RouterVPN/App/NodeManagerSheet.swift",
 		"Pair from home LAN", "Import node bundle", "Select lowest-latency node", "model.removeNode", "Edit", "updateNodeMetadata")
 
-	requireRepoMarkers(t, ".github/workflows/release-candidate-status.yml",
-		"workflow_run", "Router VPN release candidate", "statuses: write", "Router VPN release candidate", "head_sha")
-	requireRepoMarkers(t, ".github/workflows/server-release-status.yml",
-		"Router VPN ARM64 images", "Router VPN ARM64 Portainer preflight", "head_sha")
+
 }
 
 func TestUnifiedDefaultsAndSettingsContract(t *testing.T) {

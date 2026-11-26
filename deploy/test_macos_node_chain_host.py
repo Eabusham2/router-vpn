@@ -77,7 +77,7 @@ SOURCE_FILES = (
     'cmd/client/controller_privilege_darwin_native_test.go',
     'modes/mtu-throughput-tuner.py', 'modes/mtu-throughput-tuner-platform.py',
     'modes/network_context.py', 'modes/private_profile_store.py', 'modes/profile_id.py',
-    '.github/workflows/darwin-node-host-tun.yml', '.github/workflows/darwin-node-host-native.yml',
+    '.github/workflows/build-all.yml',
 )
 
 

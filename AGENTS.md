@@ -45,3 +45,7 @@ The [Build all Router VPN release gates](.github/workflows/build-all.yml) workfl
 Keep the existing source, native, packaging, signing, networking, and deployment gates. A green source audit does not establish physical routing, leak protection, off-LAN interoperability, Apple signing, or live production acceptance. Do not move an existing release tag or use an older green release as evidence for newer source.
 
 Documentation should use adaptable public examples and link to canonical guides. Preserve accurate preview/readiness labels and explain supported subsets. Avoid claims of universal router compatibility, guaranteed censorship bypass, or all-platform release readiness without the relevant evidence. Keep licensing and third-party attribution intact.
+
+## CI and release scope
+
+Maintain exactly two workflows: `.github/workflows/ci.yml` for routine checks and `.github/workflows/build-all.yml` for manual release. Release requires successful CI for the same commit. Do not recreate per-feature workflows, test-of-test scripts or source-score systems. Keep meaningful behavioral, security, platform and artifact verification; do not duplicate routine CI in release.

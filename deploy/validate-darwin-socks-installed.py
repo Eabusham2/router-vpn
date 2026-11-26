@@ -234,7 +234,6 @@ def validate(source,source_sha,output,go="go"):
         receipt["toolchain"]=apply_toolchain(setup,target,env);save()
         run("original-dns-source-contract",[sys.executable,work/"deploy/test_dnsproxy_build.py"],120)
         run("original-dns-native",[sys.executable,work/"deploy/build-dnsproxy.py","test","--go",compiler],1800)
-        run("original-native-concurrency-contract",[sys.executable,work/"deploy/test_linux_native_concurrency.py"],120)
         bundle=workspace.root/"complete-bundle"
         run("original-complete-native-runtime",[sys.executable,work/"deploy/build-native-runtime.py",target,bundle],BUILD_SECONDS)
         for name,script,args in (

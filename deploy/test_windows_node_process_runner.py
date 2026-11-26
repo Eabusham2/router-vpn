@@ -811,28 +811,6 @@ class NodeProcessRunner(unittest.TestCase):
                 self.assertIn("-test.timeout=60s", command)
                 self.assertEqual(timeout, 75)
 
-    def test_required_execution_suites_cover_the_complete_gate_once(self):
-        changes = GATE.mutants()
-        partitions = [GATE.suite_controls(suite, changes) for suite in GATE.EXECUTION_SUITES]
-        self.assertEqual(tuple(item for part in partitions for item in part), changes)
-        self.assertEqual(len({item[1] for part in partitions for item in part}), len(changes))
-        self.assertEqual([len(part) for part in partitions], [0, 13, 13, 13, 12, 0])
-        self.assertEqual(GATE.suite_controls("complete", changes), changes)
-        with self.assertRaisesRegex(ValueError, "Unknown native Node process execution suite"):
-            GATE.suite_controls("ownership-controls-5", changes)
-
-        workflow = (ROOT / ".github/workflows/windows-controller-contract.yml").read_text(encoding="utf-8")
-        wrapper = workflow.split("  node-process:\n", 1)[1].split("  node-all-arm64:\n", 1)[0]
-        self.assertIn("uses: ./.github/workflows/windows-node-process-contract.yml", wrapper)
-        workflow = (ROOT / ".github/workflows/windows-node-process-contract.yml").read_text(encoding="utf-8")
-        node = workflow.split("  controls:\n", 1)[1].split("  required:\n", 1)[0]
-        selected = re.search(r"suite: \[([^\]]+)\]", node).group(1).split(", ")
-        self.assertEqual(("baseline", *selected), GATE.EXECUTION_SUITES)
-        self.assertIn("fail-fast: false", node)
-        self.assertNotIn("continue-on-error", node)
-        self.assertIn("test_windows_node_process.py --suite '${{ matrix.suite }}'", node)
-        self.assertIn("timeout-minutes: 20", node)
-
     def test_each_execution_suite_runs_and_reports_only_its_required_cases(self):
         changes = GATE.mutants()
         controls = {name: (test, witness) for _, name, test, witness, _ in (*changes, *GATE.all_mutants())}

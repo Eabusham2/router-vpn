@@ -321,13 +321,6 @@ func TestProviderKeepsForeignIdentityRefusals(t *testing.T){
             with self.assertRaises(ValueError):G.profile_sources(root)
             p.chmod(0o600);(root/'foreign.json').write_text('{}')
             with self.assertRaises(ValueError):G.profile_sources(root)
-    def test_required_workflow_and_removal_controls(self):
-        source=(G.ROOT/'.github/workflows/server-hysteria-encrypted.yml').read_text();required_workflow(source)
-        for line in source.splitlines(keepends=True):
-            if any(x in line for x in ('test_server_node_chain_hysteria_encrypted','runner: ubuntu','timeout-minutes:',"go-version:",'if-no-files-found:','ROUTERVPN_EXPECTED_SOURCE:',"  workflow_call:")):
-                with self.assertRaises(ValueError):required_workflow(source.replace(line,'',1))
-        for prefix in ('    continue-on-error: true\n','    if: false\n'):
-            with self.assertRaises(ValueError):required_workflow(source+prefix)
     def test_standalone_cannot_substitute_compile_only(self):
         self.assertTrue(G.parse_arguments(['--standalone','--require-commit','a'*40]).standalone)
         import contextlib,io
@@ -344,12 +337,4 @@ func TestProviderKeepsForeignIdentityRefusals(t *testing.T){
         projected=darwin['protocol/routervpnamnezia/routervpn_node_chain_hysteria_server_peer_darwin_test.go']
         self.assertEqual(projected.split(b'\n\n',1)[1],source.encode().split(b'\n\n',1)[1])
         self.assertTrue(projected.startswith(b'//go:build darwin && routervpn_darwin_node_chain && routervpn_darwin_external_host\n'))
-    def test_required_aggregate_and_build_closure(self):
-        caller=(G.ROOT/'.github/workflows/server-node-chain-encrypted.yml').read_text()
-        block='  hysteria-final:\n    name: Require actual Hysteria2 Server final\n    uses: ./.github/workflows/server-hysteria-encrypted.yml\n'
-        self.assertEqual(caller.count(block),1)
-        builder=(G.ROOT/'deploy/build-native-runtime.py').read_text()
-        for name in ('deploy/test_server_node_chain_hysteria_encrypted.py','deploy/test_server_node_chain_hysteria_encrypted_runner.py'):self.assertEqual(builder.count("ROOT/'"+name+"'"),1)
-        self.assertEqual(G.BASE.NODE.PREP.PEER_TEMPLATES[Path(G.PEER_TEMPLATE).name],'protocol/routervpnamnezia/routervpn_hysteria_server_peer_test.go')
-
 if __name__=='__main__':unittest.main()

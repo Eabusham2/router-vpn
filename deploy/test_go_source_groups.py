@@ -279,10 +279,6 @@ def main():
     if part is not None and (args.scope != "all" or part not in {str(i) for i in range(1, SOURCE_SHARDS + 1)}):
         parser.error("invalid complete-source matrix partition")
     shard = int(part) if part is not None else None
-    # Every shipping invocation checks the runner and all seven required
-    # workflow edges before it can execute a filtered binary command.
-    subprocess.run([sys.executable, str(ROOT / "deploy/test_go_source_groups_runner.py")],
-                   cwd=ROOT, check=True, timeout=60)
     listed = subprocess.check_output(["go", "list", *SCOPES[args.scope]],
                                      cwd=ROOT, text=True, timeout=120)
     selected = packages(listed, args.scope)

@@ -52,7 +52,7 @@ GATES = ('deploy/test_connected_imported_ss_candidates.py',
          'deploy/test_linux_node_host_tun.py', 'deploy/build-native-runtime.py',
          'deploy/test_mobile_multihop_groups.py',
          'deploy/test_desktop_node_chain_ss_prefix_contract.py',
-         '.github/workflows/ss-node-chain-prefix.yml', '.github/workflows/release-candidate.yml')
+         '.github/workflows/build-all.yml',)
 REQUIRED = (NATIVE_TEMPLATE, OWNER_TEMPLATE,
             'experimental/libbox/routervpn/mobilemultihop/node_chain_candidates.go',
             'experimental/libbox/routervpn/mobilemultihop/node_chain_candidate_response.go',

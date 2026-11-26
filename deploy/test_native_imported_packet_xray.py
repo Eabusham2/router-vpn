@@ -78,7 +78,7 @@ def inputs():
     return sorted(set(CONNECT.inputs()) | set(CAPTURE.inputs()) | set(NODE.PREP.inputs()) | {
         Path(__file__).resolve(), ROOT/'deploy/test_native_imported_packet_xray_runner.py',
         ROOT/'deploy/test_desktop_node_physical.py',
-        ROOT/'.github/workflows/imported-packet-reality-native.yml'})
+        ROOT/'.github/workflows/build-all.yml'})
 
 
 def source_receipt():

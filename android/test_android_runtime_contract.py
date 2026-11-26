@@ -326,7 +326,7 @@ native_wg=(ROOT.parent / "internal/mobilemultihop/wireguard.go").read_text()
 for marker in ('func CompileWireGuardProfile', 'func WireGuardExitConfig', 'expectedNodeID', 'peers > 1', 'persistent_keepalive_interval', 'base64.StdEncoding.Strict()'):
     assert marker in native_wg, f"shared native WireGuard policy missing: {marker}"
 assert (ROOT / "test_android_multihop_graph.py").is_file()
-assert 'python3 android/test_android_multihop_graph.py' in (ROOT.parent / ".github/workflows/release-candidate.yml").read_text()
+assert 'python3 android/test_android_multihop_graph.py' in (ROOT.parent / ".github/workflows/build-all.yml").read_text()
 for marker in (
     "AndroidPathProbe.prove(prepared.exitBundle",
     "Exit-node private path proof failed",

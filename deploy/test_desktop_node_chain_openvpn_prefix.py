@@ -44,7 +44,7 @@ TEMPLATE = 'node_chain_openvpn_prefix_test.go.tmpl'
 NATIVE_TEMPLATE = 'protocol/routervpnamnezia/routervpn_desktop_node_chain_openvpn_prefix_test.go'
 GATES = ('deploy/test_desktop_node_chain_openvpn_prefix.py',
          'deploy/test_desktop_node_chain_openvpn_prefix_runner.py',
-         '.github/workflows/openvpn-node-chain-prefix.yml', '.github/workflows/release-candidate.yml',
+         '.github/workflows/build-all.yml',
          'deploy/focused_source_identity.py',
          'deploy/test_desktop_node_chain_openvpn_prefix_contract.py',
          'deploy/test_desktop_node_chain_openvpn_prefix_contract_runner.py',

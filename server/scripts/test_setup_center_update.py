@@ -20,8 +20,7 @@ release = text("server/scripts/setup_center_release_status.py")
 compose = text("server/portainer-current.yaml")
 materializer = text("deploy/materialize-production-compose.py")
 verifier = text("server/scripts/verify-production-compose.py")
-publish = text(".github/workflows/publish-arm64-images.yml")
-preflight = text(".github/workflows/arm64-portainer-preflight.yml")
+publish = text(".github/workflows/build-all.yml")
 configure = text("server/scripts/configure-portainer-update.sh")
 reserved = text("cmd/router-agent/reserved_dynamic.go")
 router_example = text("configs/router/router-agent.json.example")
@@ -133,12 +132,6 @@ for marker in (
     'image: router-vpn-updater',
 ):
     assert marker in publish, f"ARM64 image publication missing updater marker {marker!r}"
-for marker in (
-    'Build update controller image',
-    'router-vpn-preflight-updater:arm64',
-    'go test ./cmd/update-controller -count=1',
-):
-    assert marker in preflight, f"ARM64 preflight missing updater marker {marker!r}"
 
 for marker in (
     '127.0.0.1|::1',

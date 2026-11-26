@@ -102,7 +102,7 @@ def inputs():
             ROOT/'deploy/typed_connected_candidates_native.py',
             ROOT/'deploy/test_typed_connected_candidates_native.py',
             ROOT/'deploy/test_typed_connected_candidates_native_runner.py',
-            ROOT/'.github/workflows/typed-connected-candidates.yml',
+            ROOT/'.github/workflows/build-all.yml',
             ROOT/'deploy/test_node_chain_multiple_imported_execution_owner.py',
             ROOT/'deploy/test_node_chain_multiple_imported_execution_owner_runner.py',
             ROOT/'deploy/test_node_chain_openvpn_execution_owner.py',

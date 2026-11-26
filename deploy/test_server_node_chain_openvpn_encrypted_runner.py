@@ -310,19 +310,6 @@ func TestOriginalWrongPasswordConstruction(t *testing.T){
         self.assertEqual(tuple(re.findall(r'"([^"\n]+)"',block)),G.CASES)
         for marker in ('LocalPacketPositions: []int{0}','policy.NativeCarrierRequired()','source.OpenVPNPairing.Local = source.OpenVPNPairing.Server','foreign.Source.Members[0].SourceSHA256','worker.stop(t)','p.original.process.join(t)','time.Now().Add(15 * time.Second)'):
             self.assertIn(marker,source)
-    def test_mandatory_workflow_and_causal_controls(self):
-        raw=(G.ROOT/'.github/workflows/server-openvpn-direct-encrypted.yml').read_text();required_workflow(raw)
-        command=next(x for x in raw.splitlines(keepends=True) if ' --standalone ' in x)
-        for bad in (raw.replace(command,''),raw.replace(command,command*2),raw.replace('--standalone','--compile-only'),raw.replace('        timeout-minutes: 40','        if: false\n        timeout-minutes: 40'),raw.replace('          - arch: arm64\n',''),raw.replace('          if-no-files-found: error','          if-no-files-found: warn'),raw.replace("  workflow_call:\n", "", 1)):
-            with self.assertRaises(ValueError):required_workflow(bad)
-
-    def test_reusable_original_release_workflow_requires_new_gate(self):
-        raw=(G.ROOT/'.github/workflows/server-node-chain-encrypted.yml').read_text()
-        required_reusable_job(raw)
-        builder=(G.ROOT/'deploy/build-native-runtime.py').read_text()
-        for path in ('deploy/test_server_node_chain_openvpn_encrypted.py','deploy/test_server_node_chain_openvpn_encrypted_runner.py',G.TEMPLATE,'.github/workflows/server-openvpn-direct-encrypted.yml'):
-            self.assertEqual(builder.count("ROOT/'"+path+"'"),1)
-
     def test_reusable_job_siblings_and_refusal_controls(self):
         key='  openvpn-direct:\n    name: Require actual zero-prefix OpenVPN Server suffix\n    uses: ./.github/workflows/server-openvpn-direct-encrypted.yml\n'
         sibling='  hysteria-final:\n    name: Require actual Hysteria2 Server final\n    uses: ./.github/workflows/server-hysteria-encrypted.yml\n'

@@ -36,8 +36,8 @@ def inputs():
     return sorted(set(PROXY.inputs()) | {
         Path(__file__).resolve(), ROOT / 'deploy/test_xray_vision_state_runner.py',
         ROOT / 'deploy/test_native_xray_udp443.py', ROOT / 'deploy/test_native_xray_udp443_runner.py',
-        ROOT / '.github/workflows/imported-socks-reality-native.yml',
-        ROOT / '.github/workflows/apple-xray-native.yml', ROOT / 'android/app/build.gradle',
+        ROOT / '.github/workflows/build-all.yml',
+        ROOT / '.github/workflows/build-all.yml', ROOT / 'android/app/build.gradle',
     })
 
 

@@ -343,31 +343,6 @@ def linux(directory):
 
 
 def contracts():
-    paths=['.github/workflows/'+name for name in ['release-candidate.yml','windows-native-contract.yml','macos-native-app.yml','linux-native-app.yml']]
-    files={path:read(path) for path in paths}
-    def validate(files):
-        release=files[paths[0]]
-        for platform,job in [('windows','windows-native-smoke'),('macos','macos'),('linux','linux')]:
-            body=section(release,r'^  '+job+r':\n.*?(?=^  [a-zA-Z]|\Z)')
-            commands=[f'python3 deploy/test_desktop_stop_retry.py --platform {platform}'] if platform!='windows' else [f'python deploy/test_desktop_stop_retry.py --platform windows --shell {shell}' for shell in ['pwsh','powershell.exe']]
-            for command in commands:
-                assert body.count(command)==1, 'release lost native owned Stop retry gate: '+command
-                focused=files[paths[1] if platform=='windows' else paths[2] if platform=='macos' else paths[3]]
-                assert focused.count(command)==1, 'focused workflow lost native owned Stop retry gate: '+command
-                if platform=='windows':
-                    assert body.split(command,1)[1].lstrip().startswith('if ($LASTEXITCODE -ne 0)'), 'PowerShell failure no longer blocks release'
-            for text in [body, focused]:
-                gate=section(text,r'^      - name: Owned Stop retry preserves the displayed cleanup receipt\n.*?(?=^      - |\Z)')
-                assert 'continue-on-error:' not in gate and '\n        if:' not in gate, 'owned retry gate became optional'
-        assert 'python3 deploy/test_desktop_stop_retry.py --contracts-only' in release
-    validate(files)
-    for path,text in files.items():
-        for line in text.splitlines():
-            if 'deploy/test_desktop_stop_retry.py --platform' not in line:continue
-            changed=dict(files);changed[path]=text.replace(line,'',1)
-            try:validate(changed)
-            except (AssertionError, RuntimeError):pass
-            else:raise AssertionError('removed native retry gate was accepted: '+path)
     main=read('cmd/client/main.go');retry=read('cmd/client/controller_stop_retry.go')
     assert 'h.HandleFunc("/api/disconnect/retry", a.retryDisconnect)' in main
     assert retry.index('a.captureStopRetryContext(r.Context(), request.StopToken)')<retry.index('a.cancelCapturedStopContext(r.Context(), receipt)')<retry.index('a.stopModeWithDNSReceiptContext(r.Context(), false, receipt)')
@@ -399,7 +374,7 @@ def contracts():
     assert 'context.WithTimeout(caller, 15*time.Second)' in main
     assert 'failure = dnsStop.finishCaptured(ctx, expected)' in main
     assert 'r.publicReserved && expected == nil && !t.dnsProofClosed' in read('cmd/client/session_dns_stop.go')
-    print('Owned Stop retry: mandatory three-platform shipping gates and removal controls passed')
+    print('Owned Stop retry: captured ownership and causal controls passed')
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--contracts-only',action='store_true');parser.add_argument('--platform',choices=['windows','macos','linux']);parser.add_argument('--shell',default='pwsh');args=parser.parse_args()

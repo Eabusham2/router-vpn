@@ -180,7 +180,6 @@ class NativeNaiveLiteral(unittest.TestCase):
         text = (ROOT/'deploy/native_naive_transport_policy.py').read_text()
         self.assertIn('LITERAL.prepare(vendor)', text)
         self.assertIn('LITERAL.verify(vendor)', text)
-        self.assertIn('python3 deploy/test_native_naive_literal_policy.py', (ROOT/'.github/workflows/release-candidate.yml').read_text())
 
     def test_native_peer_gate_requires_each_original_ipv6_and_refusal_verdict(self):
         node = load('test_desktop_node_physical.py')

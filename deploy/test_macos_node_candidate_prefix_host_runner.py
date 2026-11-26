@@ -181,23 +181,6 @@ class NativePrefixGate(unittest.TestCase):
         self.assertIn('captureOrderedCandidatePreparedViewScope(',negative)
         self.assertIn('unsupported prefix public POST acquired native authority',negative)
         self.assertIn('unsupported prefix public catalog bypassed native gate',negative)
-    def test_same_caller_workflow_and_ordinary_inventory_are_mandatory(self):
-        consumer=(ROOT/'.github/workflows/darwin-node-prefix-host-tun.yml').read_text()
-        wrapper=(ROOT/'.github/workflows/darwin-node-host-native.yml').read_text()
-        workflow_inventory(consumer,wrapper)
-        self.assertEqual(len(G.G.ORIGINAL_CASES),28)
-        self.assertEqual(len(set(G.G.MEASUREMENT_CASES).intersection(G.G.ORIGINAL_CASES)),19)
-        self.assertEqual(G.G.CASES[:28],G.G.ORIGINAL_CASES)
-        self.assertEqual(len(G.G.CASES),37);self.assertEqual(len(G.G.MEASUREMENT_CASES),24)
-        for before,after in (
-            ('runner: macos-15-intel','runner: ubuntu-latest'),('arch: arm64','arch: amd64'),
-            ('${{ github.sha }}','old-source'),('timeout-minutes: 110','timeout-minutes: 200'),
-            ('if-no-files-found: error','if-no-files-found: warn'),('workflow_call:','workflow_dispatch:'),
-            ('      fail-fast: false','      fail-fast: true'),('    runs-on:','    if: always()\n    runs-on:'),
-            ('          path: ${{ runner.temp }}/prefix-host-bundle','          run-id: 123\n          path: ${{ runner.temp }}/prefix-host-bundle'),
-            (' --require-commit "$ROUTERVPN_EXPECTED_SOURCE"',''),
-        ):
-            with self.subTest(before=before),self.assertRaises(ValueError):workflow_inventory(consumer.replace(before,after,1),wrapper)
     def test_explicit_real_host_and_new_receipt_required(self):
         with self.assertRaises(ValueError):G.required_host({})
         with tempfile.TemporaryDirectory() as directory:

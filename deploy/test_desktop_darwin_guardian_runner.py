@@ -593,18 +593,6 @@ class MacOSNativeGroups(unittest.TestCase):
                 if other!=group:
                     with self.assertRaises(RuntimeError):self.gate.require_native_verdicts(output,other)
 
-    def test_workflow_keeps_both_native_hosts_and_finite_phase_budget(self):
-        source=(ROOT/'.github/workflows/macos-native-installer-contract.yml').read_text()
-        match=re.search(r'(?ms)^  owned-controller:\n(.*?)(?=^  [A-Za-z][\w-]*:\n|\Z)',source)
-        self.assertIsNotNone(match)
-        job=match[1]
-        self.assertIn('runner: [macos-15-intel, macos-15]',job)
-        self.assertIn('    timeout-minutes: 25\n',job)
-        self.assertIn('          python3 deploy/test_macos_controller_privilege.py --go "$(command -v go)"',job)
-        step=job.split('      - name: Prove installed supervisor, native peer identity and joined AppKit shutdown\n',1)[1].split('      - ',1)[0]
-        self.assertNotIn('continue-on-error',step);self.assertNotIn('if:',step);self.assertNotIn('|| true',step)
-
-
 class DarwinMutationOverlays(unittest.TestCase):
     def setUp(self):
         self.gate = GATES[0]

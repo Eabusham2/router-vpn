@@ -275,27 +275,6 @@ func TestCapturedAWGReceiptRefusal(t *testing.T){for _,row:=range []struct{name,
                             expected_witness='captured original prefix mode changed' if name=='mode' else 'WG acquired AWG parameters' if name=='wg-receipt' else 'original AWG parameters changed'
                             self.assertTrue(any(row.get('Test')==test+'/'+name and expected_witness in row.get('Output','') for row in rows),text)
 
-    def test_required_workflow_and_exact_omission_controls(self):
-        raw=(P.parents[1]/'.github/workflows/server-node-chain-encrypted.yml').read_text()
-        required_workflow(raw)
-        runner='python3 deploy/test_server_node_chain_connect_encrypted_runner.py'
-        command='python3 deploy/test_server_node_chain_connect_encrypted.py --standalone'
-        mutants=[
-          raw.replace(runner,'true'),
-          raw.replace(command,'true # omitted'),
-          raw.replace(command,command+' --compile-only'),
-          raw.replace('--require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_CONNECT_SERVER_RECEIPT"','--require-commit foreign --receipt "$ROUTERVPN_CONNECT_SERVER_RECEIPT"'),
-          raw.replace('        run: '+runner,'        if: false\n        run: '+runner),
-          raw.replace(command,command+' || true'),
-          raw.replace('          - arch: arm64\n            runner: ubuntu-24.04-arm\n',''),
-          raw.replace('            ${{ runner.temp }}/server-connect-node-chain-${{ matrix.arch }}.json\n',''),
-          raw.replace("  workflow_call:\n","",1),
-          raw.replace('    timeout-minutes: 105','    timeout-minutes: 104'),
-          raw.replace("          CGO_ENABLED: '1'","          CGO_ENABLED: '0'"),
-        ]
-        for index,mutant in enumerate(mutants):
-            with self.subTest(control=index),self.assertRaises(ValueError):required_workflow(mutant)
-
     def test_complete_prefix_receipts_refuse_missing_or_foreign_evidence(self):
         for case in G.CASES:
             if case.split('/')[1] not in G.PREFIX_MODES:continue

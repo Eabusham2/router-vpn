@@ -235,10 +235,6 @@ for name, before, after in dispatch_controls:
         assert before in str(error), f"dispatch control failed for an unrelated reason: {name}: {error}"
     else:
         raise AssertionError(f"ordered profile dispatch contract accepted its deliberate defect: {name}")
-workflow = (ROOT.parent / '.github/workflows/android-multihop-contract.yml').read_text()
-# The native workflow is called deliberately by release qualification; routine
-# pushes use the repository's single CI workflow. Retain the actual compiler.
-assert workflow.count('          python3 android/test_android_node_chain_capture.py') == 1, "actual ordered compiler/capture gate is required"
 
 # Every original call from the complete Java aggregate belongs to one mandatory
 # bounded phase. Both the source dispatch and executed receipt remain required.

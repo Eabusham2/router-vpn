@@ -506,13 +506,4 @@ func TestOriginalCarrierWatcher(t *testing.T){
       self.assertEqual(sum(row.get('Action')=='fail' for row in test),1)
       self.assertEqual(rows[-1].get('Action'),'fail')
 
- def test_actual_shipping_gate_and_original_families_remain(self):
-  docker=(ROOT/'deploy/router-agent.Dockerfile').read_text();workflow=(ROOT/'.github/workflows/native-xray-exits.yml').read_text()
-  self.assertIn("./cmd/sing-box ./routervpn/servertor -run '^TestServerTor' -count=1 -timeout 90s",docker)
-  self.assertIn('python3 /routervpn-source/deploy/test_server_node_chain_native.py --core /core',docker)
-  self.assertIn('--receipt /routervpn-server-node-chain-native.json',docker)
-  self.assertIn('python3 deploy/test_server_node_chain_preparation.py',workflow);self.assertIn('python3 deploy/test_server_node_chain_native_runner.py',workflow)
-  self.assertIn("'deploy/test_server_node_chain_*.py'",workflow)
-  self.assertIn('docker build --progress=plain -f deploy/router-agent.Dockerfile',workflow)
-
 if __name__=='__main__':unittest.main()

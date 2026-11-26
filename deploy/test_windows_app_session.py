@@ -80,8 +80,7 @@ def sources():
                  ROOT / "deploy/windows_update_preparation_gate.py",
                  ROOT / "configs/client/client.json.example", ROOT / "configs/client/routers.json.example",
                  ROOT / "configs/client/modes.json", ROOT / "configs/client/logical-modes.json",
-                 ROOT / ".github/workflows/windows-controller-contract.yml",
-                 ROOT / ".github/workflows/windows-native-contract.yml"])
+                 ROOT / ".github/workflows/build-all.yml"])
     paths.update(regular_files(ROOT / "client"))
     paths.update(regular_files(ROOT / "modes"))
     records = {}

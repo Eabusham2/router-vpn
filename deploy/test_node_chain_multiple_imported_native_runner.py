@@ -106,30 +106,6 @@ def required_wiring(source):
 
 
 class MultipleImportedNativeRunner(unittest.TestCase):
-    def test_private_stream_release_proof_is_required_and_cannot_skip(self):
-        path = ROOT/'deploy/native-artifact-workflow-parity-audit.py'
-        tree = ast.parse(path.read_text())
-        names = {'check_release_aggregate_gates', 'check_private_stream_release_workflow'}
-        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
-        self.assertEqual(len(functions), 2)
-        scope = {}
-        exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), 'exec'), scope)
-        release = (ROOT/'.github/workflows/release-candidate.yml').read_text()
-        proof = (ROOT/'.github/workflows/diagnostic-selected-private-depth.yml').read_text()
-        scope['check_release_aggregate_gates'](release)
-        scope['check_private_stream_release_workflow'](proof)
-        for changed in (release.replace('selected-private-stream-native, ', ''),
-                        release.replace('  selected-private-stream-native:\n', '  selected-private-stream-native:\n    if: false\n')):
-            with self.assertRaises(AssertionError):
-                scope['check_release_aggregate_gates'](changed)
-        for changed in (proof.replace('  workflow_call:\n', ''),
-                        proof.replace('  native:\n', '  native:\n    if: false\n'),
-                        proof.replace('encrypted "$RUNNER_TEMP" --depth', 'encrypted "$RUNNER_TEMP"'),
-                        proof.replace('encrypted "$RUNNER_TEMP" --depth', 'encrypted "$RUNNER_TEMP" --depth || true'),
-                        proof.replace('selected-private-depth.json', 'selected-private-stream.json')):
-            with self.assertRaises(AssertionError):
-                scope['check_private_stream_release_workflow'](changed)
-
     def test_private_stream_requires_the_compiled_worker_joined_proofs_and_original_route(self):
         image = 'c'*64
         owner = 'pid=7321 source='+'b'*64+' capture='+'1'*64+' image='+image
@@ -748,14 +724,6 @@ class MultipleImportedNativeRunner(unittest.TestCase):
                         'if False:\n                    '+CALL):
             with self.subTest(changed=changed), self.assertRaises(ValueError):
                 required_wiring(source.replace(CALL, changed, 1))
-
-    def test_required_workflow_keeps_actual_builder_and_validator(self):
-        workflow = (ROOT/'.github/workflows/desktop-native-runtime.yml').read_text()
-        self.assertEqual(workflow.count('python3 deploy/test_node_chain_multiple_imported_native_runner.py'), 1)
-        self.assertEqual(workflow.count('python3 deploy/build-native-runtime.py "${runtime_args[@]}"'), 1)
-        self.assertIn("timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 360 || startsWith(matrix.target, 'linux/') && 310 || 220 }}", workflow)
-        for architecture in ('amd64', 'arm64'):
-            self.assertIn("('linux', '"+architecture+"',", workflow)
 
     def test_original_bounds_and_receipt_scope_are_explicit(self):
         source = (ROOT/'deploy/test_node_chain_multiple_imported_native.py').read_text()

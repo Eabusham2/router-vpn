@@ -127,24 +127,9 @@ def test_template_and_output_identity_guards() -> None:
         assert not list(root.glob(".production.yaml.compose-*"))
 
 
-def test_release_workflow_contract() -> None:
-    workflow = (ROOT / ".github/workflows/production-release-compose.yml").read_text(encoding="utf-8")
-    for marker in (
-        "materialize-production-compose.py --sha \"$GITHUB_SHA\"",
-        "verify-production-compose.py",
-        "RouterVPN-production-compose-${{ github.sha }}",
-        "ghcr.io/eabusham2/router-vpn-updater:${GITHUB_SHA}",
-        "ROUTER_VPN_GITHUB_SHA",
-    ):
-        assert marker in workflow, marker
-    assert "--no-build" not in workflow, "production release workflow must materialize an image-only artifact, not deploy/build"
-    assert "/var/run/docker.sock" in workflow, "workflow must explicitly prove Docker socket absence"
-
-
 def main() -> int:
     test_exact_sha_materialization()
     test_template_and_output_identity_guards()
-    test_release_workflow_contract()
     source = SCRIPT.read_text(encoding="utf-8")
     for marker in (
         "GENERATED exact-SHA Router VPN production compose",

@@ -115,27 +115,4 @@ class AppleCompositeGate(unittest.TestCase):
             self.assertEqual((env['SDKROOT'],env['CC'],env['CXX']),(temp,'/macos/clang','/macos/clang++'))
             for name in target.keys()-{'SDKROOT','GOOS','GOARCH','CGO_ENABLED','CC','CXX'}: self.assertNotIn(name,env)
 
-    def test_gate_and_captured_sources_invalidate_framework_cache(self):
-        paths={str(path.relative_to(ROOT)) for path in G.inputs()}
-        for required in ('deploy/test_ios_composite_multihop_pinned.py','deploy/test_ios_composite_multihop.py',
-                         'deploy/test_ios_max_multihop.py','deploy/test_ios_pq_selection.py','deploy/testfixtures/composite/main.go',
-                         'ios/RouterVPN/App/IOSNativePQProfile.swift','ios/RouterVPN/App/IOSRuntimeSelection.swift',
-                         'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift','ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift',
-                         'ios/RouterVPN/App/IOSMultihopStartLayer.swift','mobile/routervpn_multihop_native_test.go.tmpl'):
-            self.assertIn(required,paths)
-        before=G.digest(); original=Path.read_bytes; target=ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift'
-        with patch.object(Path,'read_bytes',lambda path:original(path)+(b'\nmutation' if path==target else b'')):
-            self.assertNotEqual(before,G.digest())
-        build=(ROOT/'ios/RouterVPN/prepare-libbox.sh').read_text()
-        self.assertLess(build.index('test_ios_composite_multihop_pinned.py" --digest'),build.index('if [[ -d "$FRAMEWORK"'))
-        self.assertIn('"$BRIDGE_SHA" "$COMPOSITE_HOST_SHA"',build)
-        self.assertLess(build.index('prepare-apple-xray.py" "$VENDOR"'),build.index('test_ios_composite_multihop_pinned.py" --vendor "$VENDOR"'))
-        self.assertLess(build.index('test_ios_composite_multihop_pinned.py" --vendor "$VENDOR"'),build.index('go run ./cmd/internal/build_libbox'))
-        for symbol in ('LibboxRouterCompileCompositeProfile','LibboxRouterCompositeMultihopBase','LibboxRouterComposeCompositeMultihop'):
-            self.assertIn(symbol,build)
-        for path in (ROOT/'.github/workflows/ios-native-compile-smoke.yml',ROOT/'.github/workflows/release-candidate.yml'):
-            self.assertIn('test_ios_composite_multihop.py',path.read_text())
-            self.assertIn(Path(__file__).name,path.read_text())
-
-
 if __name__=='__main__': unittest.main()

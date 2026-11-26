@@ -213,44 +213,5 @@ class UnixREALITYHostContracts(unittest.TestCase):
                     with self.subTest(root=root, leaf=leaf), self.assertRaises(ValueError):
                         G.LINUX.NODE.require_native_verdicts(changed, wanted, 'REALITY synthetic source contracts')
 
-    def test_required_native_workflow_and_bundle_source_identity(self):
-        workflow((ROOT/WORKFLOW).read_text(), (ROOT/'.github/workflows/release-candidate.yml').read_text(), (ROOT/'deploy/build-native-runtime.py').read_text())
-
-    def test_removed_host_borrowed_bundle_skipped_phase_and_filtered_case_are_rejected(self):
-        source = (ROOT/WORKFLOW).read_text()
-        release = (ROOT/'.github/workflows/release-candidate.yml').read_text()
-        builder = (ROOT/'deploy/build-native-runtime.py').read_text()
-        for old, new in (
-            ('on:\n  workflow_call:\n\n', 'on:\n  workflow_call:\n    inputs:\n      case:\n        type: string\n\n'),
-            ('          - {os: linux, arch: arm64, runner: ubuntu-24.04-arm}\n', ''),
-            ('          - {os: darwin, arch: amd64, runner: macos-15-intel}\n', ''),
-            ('  host:\n', '  host:\n    if: false\n'),
-            ('        include:\n', '        exclude:\n          - {os: linux, mode: reality-vision}\n        include:\n'),
-            ('  host:\n', '  host:\n    \"if\": false\n'),
-            ('        mode: [reality-vision, reality-pq-vision, reality-xhttp]\n', '        mode: [reality-vision, reality-pq-vision]\n'),
-            ("env:\n  PYTHONDONTWRITEBYTECODE: '1'\n\n", ''),
-            ('          persist-credentials: false\n', '          persist-credentials: false\n          ref: historical\n'),
-            ('          test -c /dev/net/tun\n', '          true\n'),
-            ('build-essential git iproute2 nftables', 'build-essential git'),
-            ('      - uses: actions/download-artifact@v4\n', '      - uses: actions/download-artifact@v4\n      - uses: actions/download-artifact@v4\n'),
-            ('          path: ${{ runner.temp }}/reality-host-bundle\n', '          path: ${{ runner.temp }}/reality-host-bundle\n          run-id: 1234\n'),
-            ('--receipt "$ROUTERVPN_REALITY_HOST_RECEIPT"', '--receipt "$ROUTERVPN_REALITY_HOST_RECEIPT" --case one'),
-            ("ROUTERVPN_UNIX_REALITY_HOST_ACCEPTANCE: '1'", "ROUTERVPN_UNIX_REALITY_HOST_ACCEPTANCE: '0'"),
-            ('          if-no-files-found: error', '          if-no-files-found: warn'),
-        ):
-            with self.subTest(anchor=old), self.assertRaises(ValueError):
-                workflow(source.replace(old, new, 1), release, builder)
-        changed_release = release.replace('unix-reality-host, ', '', 1)
-        self.assertNotEqual(changed_release, release)
-        with self.assertRaises(ValueError):
-            workflow(source, changed_release, builder)
-        for key in ('if: false', '"if": false', 'continue-on-error: true'):
-            with self.subTest(caller=key), self.assertRaises(ValueError):
-                workflow(source, release.replace('  unix-reality-host:\n', '  unix-reality-host:\n    '+key+'\n'), builder)
-        for name in INPUTS:
-            with self.subTest(input=name), self.assertRaises(ValueError):
-                workflow(source, release, builder.replace("ROOT/'"+name+"'", "ROOT/'omitted'", 1))
-
-
 if __name__ == '__main__':
     unittest.main()

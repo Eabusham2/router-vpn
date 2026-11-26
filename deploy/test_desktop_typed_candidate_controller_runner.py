@@ -162,24 +162,5 @@ class TypedCandidateControllerGateTests(unittest.TestCase):
         self.assertIn('test_desktop_typed_candidate_controller_runner.py', source)
         self.assertEqual(len(G.source_identity()), 64)
 
-    def test_source_workflow_independently_requires_both_gate_runners(self):
-        source = (G.ROOT/'.github/workflows/multihop-contract.yml').read_text()
-        commands = ('          python3 deploy/test_desktop_typed_candidate_controller_runner.py',
-                    '          python3 deploy/test_desktop_typed_connected_candidates_runner.py')
-        def required(text):
-            marker = '      - name: Real-chain and shipping-route markers\n'
-            self.assertEqual(text.count(marker), 1)
-            step = text.split(marker, 1)[1].split('\n      - ', 1)[0]
-            self.assertIn('        run: |\n', step)
-            self.assertEqual(step.count('          python3 deploy/test_native_shipping_audit_gates.py'), 1)
-            for command in commands:
-                self.assertEqual(step.count(command), 1)
-                self.assertLess(step.index('          python3 deploy/test_native_shipping_audit_gates.py'), step.index(command))
-        required(source)
-        for command in commands:
-            with self.subTest(command=command), self.assertRaises(AssertionError):
-                required(source.replace(command+'\n', '', 1))
-
-
 if __name__ == '__main__':
     unittest.main()

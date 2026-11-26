@@ -84,7 +84,7 @@ GENERATION_CASES = (
 def inputs():
     return sorted(set(PROXY.inputs()) | set(VISION.inputs()) | {ROOT / name for name in GENERATION} | {
         Path(__file__).resolve(), ROOT / 'deploy/test_native_xray_udp443_runner.py',
-        ROOT / '.github/workflows/imported-socks-reality-native.yml',
+        ROOT / '.github/workflows/build-all.yml',
     })
 
 

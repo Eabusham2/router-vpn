@@ -48,28 +48,6 @@ class NativePQScope(unittest.TestCase):
         result.mkdir()
         return result
 
-    def test_required_shipping_workflow_and_builder_do_not_overlay_pq_admission(self):
-        predicate = (ROOT / 'internal/mobilemultihop/desktop_node_admission.go').read_text()
-        closed = GATE.closed_predicate(predicate)
-        self.assertEqual(predicate, GATE.prospective_predicate(closed))
-        workflow = (ROOT / '.github/workflows/windows-node-pq-contract.yml').read_text()
-        commands = [line.strip() for line in workflow.splitlines()
-                    if line.strip().startswith('python deploy/test_windows_node_pq.py ')]
-        self.assertEqual(len(commands), 1)
-        self.assertIn('--standalone --receipt', commands[0])
-        self.assertNotIn('--prospective', commands[0])
-        self.assertIn('runner: windows-latest', workflow)
-        self.assertIn('runner: windows-11-arm', workflow)
-        self.assertIn('if-no-files-found: error', workflow)
-        build = ast.parse((ROOT / 'deploy/build-native-runtime.py').read_text())
-        calls = [node for node in ast.walk(build)
-                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'run'
-                 and node.args and isinstance(node.args[0], ast.List)
-                 and any(isinstance(item, ast.Constant) and item.value == 'deploy/test_windows_node_pq.py'
-                         for item in ast.walk(node.args[0]))]
-        self.assertEqual(len(calls), 1)
-        self.assertNotIn('--prospective', [node.value for node in ast.walk(calls[0].args[0]) if isinstance(node, ast.Constant)])
-
     def test_pq_and_max_reopen_independent_controls_in_exact_shipping_order(self):
         maximum = GATE.load('pq_max_roundtrip_control', 'test_windows_node_max.py')
         shipping = (ROOT / 'internal/mobilemultihop/desktop_node_admission.go').read_text()

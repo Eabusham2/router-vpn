@@ -215,7 +215,6 @@ class NativeNaiveTransport(unittest.TestCase):
         self.assertIn('naive_policy = PREP.RELAY.NAIVE', node)
         self.assertIn('records.update(naive_policy.verify(source))', node)
         self.assertIn('"naive-transport-policy", "./protocol/naive", "^TestRouterVPNNaiveTransport"', node)
-        self.assertIn('python3 deploy/test_native_naive_transport_policy.py', (ROOT/'.github/workflows/release-candidate.yml').read_text())
 
     def test_native_runner_requires_each_original_transport_verdict(self):
         node = load('test_desktop_node_physical.py')

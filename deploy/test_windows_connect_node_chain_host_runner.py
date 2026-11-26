@@ -159,23 +159,6 @@ def require_validator_go_order(workflow):
 
 
 class FullPathGate(unittest.TestCase):
-    def test_pinned_compiler_precedes_actual_validator_controls(self):
-        workflow = (ROOT / ".github/workflows/focused-source-validation.yml").read_text()
-        require_validator_go_order(workflow)
-        start = workflow.index("      - name: Install the pinned Go toolchain\n")
-        end = workflow.index("      - name: Verify source identity and required validator controls\n", start)
-        setup = workflow[start:end]
-        old = workflow[:start] + workflow[end:]
-        old = old.replace("      - name: Install the Java fixture toolchain\n", setup + "      - name: Install the Java fixture toolchain\n", 1)
-        for label, changed in (
-                ("old post-validator setup", old),
-                ("missing compiler", workflow.replace(setup, "", 1)),
-                ("duplicate compiler", workflow.replace(setup, setup + setup, 1)),
-                ("ambient old compiler", workflow.replace("go-version: '1.26.3'", "go-version: '1.24.13'", 1)),
-                ("excluded actual suite", workflow.replace("if: inputs.suite != 'macos-profiles'", "if: inputs.suite != 'desktop-connect-child' && inputs.suite != 'macos-profiles'", 1))):
-            with self.subTest(label=label), self.assertRaises(ValueError):
-                require_validator_go_order(changed)
-
     def test_actual_original_peer_tuple_guards(self):
         execute_owned_tuple_guards()
 

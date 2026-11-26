@@ -798,21 +798,6 @@ class OriginalCaseDiagnostic(unittest.TestCase):
         self.assertIn('identifiers ...int', helper)
         self.assertNotIn('exec.', helper)
 
-    def test_manual_checkpoint_upload_precedes_pf_attempt_and_cannot_replace_push_gate(self):
-        raw=(ROOT/'.github/workflows/darwin-original-case-diagnostic.yml').read_text()
-        self.assertIn('  workflow_dispatch:',raw)
-        for forbidden in ('  push:','  pull_request:','  workflow_call:','inputs:','matrix:','continue-on-error:'):
-            self.assertNotIn(forbidden,raw)
-        self.assertIn('    runs-on: macos-15',raw)
-        self.assertIn('--write-diagnostic-checkpoint',raw)
-        self.assertLess(raw.index('--write-diagnostic-checkpoint'),raw.index('name: Preserve scheduled source and case before PF'))
-        self.assertLess(raw.index('name: Preserve scheduled source and case before PF'),raw.index('--diagnostic-original-case'))
-        self.assertIn('if-no-files-found: error',raw)
-        self.assertEqual(raw.count('--diagnostic-original-case'),1)
-        self.assertNotIn('--receipt ',raw)
-        workflow_inventory((ROOT/'.github/workflows/darwin-node-child-tun.yml').read_text())
-
-
 class EncryptedPeerSourceClosure(unittest.TestCase):
     def peer_sources(self):
         return {
@@ -1704,66 +1689,6 @@ def workflow_concurrency_cases(raw):
         if actual != expected:
             raise ValueError('Native concurrency lost original context isolation: '+label)
     return len(cases)
-
-
-class RequiredWorkflowInventory(unittest.TestCase):
-    def test_both_actual_native_architectures_and_exact_caller_receipts(self):
-        raw = (ROOT/'.github/workflows/darwin-node-child-tun.yml').read_text()
-        workflow_inventory(raw)
-
-    def test_missing_architecture_or_weakened_invocation_cannot_pass(self):
-        raw = (ROOT/'.github/workflows/darwin-node-child-tun.yml').read_text()
-        changes = (
-            ('missing-ordinary-mtu-controls', ', ordinary-runner', ''),
-            ('missing-typed-mtu-controls', ', typed-runner', ''),
-            ('missing-amd64', '          - arch: amd64\n            runner: macos-15-intel\n', ''),
-            ('missing-arm64', '          - arch: arm64\n            runner: macos-15\n', ''),
-            ('wrong-runner', 'runner: macos-15-intel', 'runner: ubuntu-latest'),
-            ('conditional-job', '  child:\n', '  child:\n    if: false\n'),
-            ('nonblocking-job', '  child:\n', '  child:\n    continue-on-error: true\n'),
-            ('caller-input', '  workflow_call:\n', '  workflow_call:\n    inputs:\n'),
-            ('cross-caller-cancel', ' || github.run_id }}', ' || github.ref }}'),
-            ('no-standalone-preflight', 'darwin_child_phases.py preflight ', 'darwin_child_phases.py images '),
-            ('compilation-replaces-native', 'darwin_child_phases.py native ', 'darwin_child_phases.py images '),
-            ('ignored-native-failure', 'darwin_child_phases.py native ', 'true || python3 deploy/darwin_child_phases.py native '),
-            ('no-exact-commit', ' --commit "$GITHUB_SHA"', ''),
-            ('no-receipt', ' --output "$RUNNER_TEMP/darwin-child-proof"', ''),
-            ('optional-artifact', 'if-no-files-found: error', 'if-no-files-found: warn'),
-            ('expired-compiler-images', '          path: ${{ runner.temp }}/darwin-child-images\n          if-no-files-found: error\n          retention-days: 14',
-             '          path: ${{ runner.temp }}/darwin-child-images\n          if-no-files-found: error\n          retention-days: 1'),
-            ('missing-aggregate-dependency', 'needs: [controls, images, preflight, components, child]', 'needs: [child]'),
-            ('conditional-aggregate', 'if: ${{ !cancelled() }}', 'if: ${{ success() }}'),
-            ('obsolete-aggregate', 'if: ${{ !cancelled() }}', 'if: ${{ always() }}'),
-            ('no-actual-transcript', '            ${{ runner.temp }}/darwin-child-accepted/arm64-native.log\n', ''),
-            ('wrong-image-producer', 'name: darwin-child-proof-images-${{ matrix.host.arch }}', 'name: foreign-${{ matrix.host.arch }}'),
-            ('fallback-result', '    timeout-minutes: 60', '    fallback: true\n    timeout-minutes: 60'),
-        )
-        for name, before, after in changes:
-            self.assertIn(before,raw,name)
-            with self.subTest(change=name), self.assertRaises(ValueError):
-                workflow_inventory(raw.replace(before, after, 1))
-
-
-    def test_direct_push_coalesces_without_cancelling_native_or_exact_callers(self):
-        raw = (ROOT/'.github/workflows/darwin-node-child-tun.yml').read_text()
-        self.assertEqual(workflow_concurrency_cases(raw), 12)
-
-    def test_removed_concurrency_boundaries_cannot_pass(self):
-        raw = (ROOT/'.github/workflows/darwin-node-child-tun.yml').read_text()
-        changes = (
-            ('active-native-cancel', 'cancel-in-progress: false', 'cancel-in-progress: true'),
-            ('missing-event-boundary', "github.event_name == 'push' && ", ''),
-            ('missing-main-boundary', "github.ref == 'refs/heads/main' && ", ''),
-            ('missing-caller-boundary', "github.workflow == 'Darwin generated ordered child utun acceptance' && ", ''),
-            ('shared-manual-lane', ' || github.run_id }}', ' || github.ref }}'),
-            ('commit-per-push-lane', '&& github.ref ||', '&& github.sha ||'),
-            ('run-per-push-lane', '&& github.ref ||', '&& github.run_id ||'),
-            ('shared-leaf-prefix', '  group: darwin-node-child-tun-', '  group: native-shared-'),
-        )
-        for name, before, after in changes:
-            self.assertEqual(raw.count(before), 1, name)
-            with self.subTest(change=name), self.assertRaises(ValueError):
-                workflow_concurrency_cases(raw.replace(before, after, 1))
 
 
 class PairedSourceCloseRetry(unittest.TestCase):

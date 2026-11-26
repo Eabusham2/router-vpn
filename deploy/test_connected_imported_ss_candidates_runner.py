@@ -142,15 +142,6 @@ class ConnectedImportedCandidateRunner(unittest.TestCase):
         for field in ('"prefix"', '"middle"', '"final"', '"resolver"', '"stale-owner"'):
             self.assertIn(field, owner)
 
-    def test_original_box_ownership_inventory_stays_required(self):
-        contract = G.load('connected_imported_existing_box_contract', 'test_desktop_node_chain_ss_prefix_contract.py')
-        self.assertEqual(len(G.OWNER_CASES), 17)
-        self.assertEqual({name for name in contract.BOX_CASES if name.split('/')[0] == G.OWNER_ROOT}, set(G.OWNER_CASES))
-        workflow = (ROOT/'.github/workflows/ss-node-chain-prefix.yml').read_text()
-        self.assertIn('test_desktop_node_chain_ss_prefix_contract.py', workflow)
-        release = (ROOT/'.github/workflows/release-candidate.yml').read_text()
-        self.assertIn('uses: ./.github/workflows/ss-node-chain-prefix.yml', release)
-
     def test_required_installed_host_and_builder_inputs(self):
         host = (ROOT/'deploy/test_linux_node_host_tun.py').read_text()
         self.assertIn("load('linux_connected_imported_candidates', 'test_connected_imported_ss_candidates.py')", host)

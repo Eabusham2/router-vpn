@@ -100,9 +100,7 @@ def portable_checks(source: str, work: Path) -> dict:
         wrong = section.replace(GENERATED_PLIST, "$(SRCROOT)/Info.plist", 1)
         expect_dependency_failure(source.replace(section, wrong, 1), target)
     check("GENERATE_INFOPLIST_FILE: YES" in source, "Shipping targets must generate their plists")
-    for workflow, job in (("client-apps-ci.yml", "ios-native"),
-                          ("release-candidate.yml", "ios"),
-                          ("ios-native-compile-smoke.yml", "ios-native-compile")):
+    for workflow, job in (("build-all.yml", "ios"),):
         shipping = target_section((ROOT / ".github/workflows" / workflow).read_text(), job)
         install = shipping.index("brew install xcodegen")
         native = shipping.index("python3 deploy/test_ios_provenance_order.py --native")

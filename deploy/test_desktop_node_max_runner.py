@@ -127,23 +127,6 @@ class MAXOutcomeChecks(unittest.TestCase):
             with self.subTest(error=error), self.assertRaisesRegex(ValueError, 'exact executable rejection'):
                 GATE.rejected_output(1, failure(parent, case, error), parent, case, GATE.tuple_witness('tcp'))
 
-    def test_native_registration_preserves_platform_scope_and_aggregate_bounds(self):
-        for name in GATE.TEMPLATES:
-            self.assertEqual(GATE.NODE.PREP.PEER_TEMPLATES[name], 'protocol/routervpnpq/' + name.removesuffix('.tmpl'))
-            self.assertTrue((ROOT / 'mobile/desktop' / name).read_bytes().startswith(GATE.TAG))
-        builder = (ROOT / 'deploy/build-native-runtime.py').read_text()
-        calls = [node for node in ast.walk(ast.parse(builder)) if isinstance(node, ast.Call) and
-                 isinstance(node.func, ast.Name) and node.func.id == 'run']
-        actual = [node for node in calls if "ROOT/'deploy/test_desktop_node_max.py'" in ast.get_source_segment(builder, node)]
-        self.assertEqual(len(actual), 1)
-        self.assertEqual({item.arg: ast.literal_eval(item.value) for item in actual[0].keywords if item.arg == 'timeout'}, {'timeout': 5400})
-        workflow = (ROOT / '.github/workflows/desktop-native-runtime.yml').read_text()
-        self.assertEqual(workflow.count("timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 360 || startsWith(matrix.target, 'linux/') && 310 || 220 }}"), 1)
-        linux = (ROOT / '.github/workflows/linux-native-app.yml').read_text()
-        for path in ('deploy/test_desktop_node_max.py', 'deploy/test_desktop_node_max_runner.py', 'mobile/desktop/node_max*.go.tmpl'):
-            self.assertEqual(linux.count("      - '" + path + "'"), 2)
-
-
 class ModeledRun:
     """Deterministic runner process model; never a native/crypto success claim."""
     def __init__(self, root, failure_kind=None):

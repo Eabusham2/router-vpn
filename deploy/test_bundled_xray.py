@@ -160,8 +160,6 @@ class ImageRuntime(unittest.TestCase):
         self.assertIn(check,dockerfile)
         self.assertGreater(dockerfile.index(copy),dockerfile.index('COPY . /src',dockerfile.index('FROM debian:')))
         self.assertGreater(dockerfile.index(check),dockerfile.index(copy))
-        workflow=(ROOT/'.github/workflows/release-candidate.yml').read_text()
-        self.assertIn('python3 deploy/test_bundled_xray.py',workflow)
 
     @unittest.skipUnless(os.name=='posix' and shutil.which('bash'), 'POSIX shell resolver')
     def test_resolver_uses_image_receipt_not_path_or_private_bundle(self):

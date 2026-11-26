@@ -42,7 +42,7 @@ REQUIRED = (ROOT_TEST, *(ROOT_TEST + "/" + case for case in CASES))
 PREFIX = "Native Windows typed SOCKS full-path acceptance: "
 OWNED = ("client/Private-RouterVPN-Protection.ps1", "cmd/client/windows_protection_utility_windows.go",
          "cmd/client/windows_prepared_protection_utility.go", "deploy/test_windows_node_max.py", "deploy/windows_build_owner.py",
-         "deploy/test_windows_build_owner.py", "deploy/test_windows_node_max_runner.py","cmd/client/desktop_node_chain_socks_windows_native_test.go",
+         "deploy/test_windows_build_owner.py", "cmd/client/desktop_node_chain_socks_windows_native_test.go",
          "cmd/client/desktop_node_chain_socks_windows_peer_native_test.go",
          "cmd/client/desktop_node_chain_socks_windows_controller_native_test.go",
          "deploy/test_windows_socks_node_chain_host.py", "deploy/test_windows_socks_node_chain_host_runner.py",

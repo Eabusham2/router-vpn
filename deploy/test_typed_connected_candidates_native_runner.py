@@ -58,14 +58,6 @@ class ConnectedEncryptedRunner(unittest.TestCase):
                 if fault:
                     with self.assertRaises(ValueError):V.projection(source,core,table)
                 else:V.projection(source,core,table)
-    def test_required_release_matrix_is_separate(self):
-        source=(ROOT/'.github/workflows/typed-connected-candidates.yml').read_text();release=(ROOT/'.github/workflows/release-candidate.yml').read_text();V.workflow_contract(source,release)
-        for old,new in (("  workflow_call:\n",""),("        family: [SOCKS, CONNECT]","        family: [SOCKS]"),("    timeout-minutes: 75","    timeout-minutes: 90"),("      fail-fast: false","      fail-fast: true"),("  encrypted:\n","  encrypted:\n    if: false\n"),("--require-commit \"$GITHUB_SHA\"","--require-commit main")):
-            self.assertEqual(source.count(old),1)
-            with self.subTest(old=old),self.assertRaises(ValueError):V.workflow_contract(source.replace(old,new,1),release)
-        for old,new in (("needs: [typed-connected-candidates, ","needs: ["),("    uses: ./.github/workflows/typed-connected-candidates.yml","    uses: ./.github/workflows/focused-source-validation.yml"),("  typed-connected-candidates:\n","  typed-connected-candidates:\n    if: false\n")):
-            self.assertEqual(release.count(old),1)
-            with self.subTest(old=old),self.assertRaises(ValueError):V.workflow_contract(source,release.replace(old,new,1))
     def test_accounting_and_payload_control_are_mandatory(self):
         for fault in (None,'missing','duplicate','skip','baseline-exit','control-exit','control-witness','changed-peer'):
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as directory:

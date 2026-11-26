@@ -458,7 +458,6 @@ def main():
     required = {MAC / ('RouterVPNMacDNS' + name + '.swift') for name in ['Transport', 'Controller', 'Panel']}
     assert required <= closure.compiled_inputs(builder), 'native DNS source is absent from the actual shipping compiler'
     assert 'test_macos_dns_measurement.py' in builder and 'RouterVPNMacDNSPanel?' in product
-    assert 'run: python3 deploy/test_macos_dns_measurement.py\n' in (ROOT / '.github/workflows/macos-native-app.yml').read_text(), 'full DNS defect gate must run in native CI'
     mutations = {
         'foreign-source': ('value.profile_token == capture.profile_token,', 'true,', 'Foreign DNS receipt adopted: token'),
         'pending-start': ('fromPoll && tasks["start"] == nil && tasks["cancel"] == nil && value.completed', 'fromPoll && tasks["cancel"] == nil && value.completed', 'Start completion retained stale terminal receipt'),

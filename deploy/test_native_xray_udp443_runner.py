@@ -64,36 +64,6 @@ class NativeUDP443Contracts(unittest.TestCase):
             self.assertEqual(gate.generation({'CAPTURED_ENV':'1'}),expected)
             run.assert_called_once_with([sys.executable,ROOT/'deploy/test_xray_udp443_generation.py','-v'],ROOT,{'CAPTURED_ENV':'1'},300)
 
-    def test_generation_and_preparation_are_in_the_source_receipt(self):
-        sources = set(gate.inputs())
-        for name in ('server/scripts/create-bundle-json.py', 'server/scripts/ensure-node-proof.py',
-                     'server/scripts/atomic-private-batch.py', 'server/scripts/atomic-private-write.py',
-                     'server/scripts/private-directory.py', 'server/scripts/verified-regular-read.py',
-                     'server/scripts/ss_service_capability.py', 'configs/client/modes.json',
-                     'configs/client/logical-modes.json'):
-            self.assertIn(ROOT / name, sources)
-        for name in (*gate.GENERATION, *gate.COPIES, 'deploy/prepare-apple-xray.py',
-                     'deploy/build-native-runtime.py', 'deploy/test_native_xray_udp443_runner.py',
-                     '.github/workflows/imported-socks-reality-native.yml'):
-            self.assertIn(ROOT / name, sources)
-        preparer = ast.parse((ROOT / 'deploy/prepare-apple-xray.py').read_text())
-        tuples = [tuple(item.value for item in node.elts) for node in ast.walk(preparer)
-                  if isinstance(node, ast.Tuple) and all(isinstance(item, ast.Constant) for item in node.elts)]
-        self.assertIn(('udp443_traffic_test.go.tmpl', 'udp443_traffic_test.go'), tuples)
-        self.assertEqual((ROOT / 'mobile/applexray/udp443_traffic_test.go.tmpl').read_text().splitlines()[0],
-                         '//go:build routervpn_udp443_integration')
-
-    def test_every_generation_input_schedules_the_mandatory_reference_workflow(self):
-        workflow = (ROOT / '.github/workflows/imported-socks-reality-native.yml').read_text()
-        paths = workflow.split('    paths:\n', 1)[1].split('\npermissions:', 1)[0]
-        patterns = [ast.literal_eval(line.strip()[2:]) for line in paths.splitlines()
-                    if line.strip().startswith('- ')]
-        self.assertTrue(patterns)
-        for source in gate.GENERATION:
-            with self.subTest(source=source):
-                self.assertTrue(any(fnmatch.fnmatchcase(source, pattern) for pattern in patterns),
-                                'Original generation dependency does not schedule the required native gate: ' + source)
-
     def test_native_compile_uses_the_explicit_reference_tag_and_race_gate(self):
         calls = []
         with tempfile.TemporaryDirectory() as temporary:

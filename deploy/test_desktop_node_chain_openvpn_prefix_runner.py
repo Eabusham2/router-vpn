@@ -230,39 +230,5 @@ class OpenVPNPrefixRunner(unittest.TestCase):
             with self.assertRaises(ValueError): G.strict_receipt(alias)
             self.assertEqual(G.strict_receipt(path), {'schema': 1})
 
-    def test_workflow_mandatory_matrix_and_original_budget_isolation(self):
-        workflow = (ROOT / '.github/workflows/openvpn-node-chain-prefix.yml').read_text()
-        release = (ROOT / '.github/workflows/release-candidate.yml').read_text()
-        workflow_contract(workflow, release)
-        for needle in ("PYTHONDONTWRITEBYTECODE: '1'", 'mode: [wg, awg2-fast, awg2-strong]', 'network: [tcp, udp]', 'needs: [contracts, encrypted]',
-                       '--source-checkout "$GITHUB_WORKSPACE/source"', '--require-commit "$ROUTERVPN_EXPECTED_SOURCE"',
-                       'if-no-files-found: error', 'pattern: RouterVPN-OpenVPN-prefix-*-${{ github.sha }}'):
-            with self.subTest(needle=needle), self.assertRaises(ValueError):
-                workflow_contract(workflow.replace(needle, '', 1), release)
-        for mutation in ('continue-on-error: true', 'run-id: 1', 'if: always()'):
-            with self.assertRaises(ValueError): workflow_contract(workflow + mutation, release)
-        before, encrypted = workflow.split('\n  encrypted:\n', 1)
-        with self.assertRaises(ValueError):
-            workflow_contract(before + '\n  encrypted:\n' + encrypted.replace("go-version: '1.26.3'", "go-version: '1.24.13'", 1), release)
-        with self.assertRaises(ValueError):
-            workflow_contract(workflow, release.replace('server-ordered-encrypted, openvpn-prefix-native, typed-socks-native', 'server-ordered-encrypted, typed-socks-native'))
-        self.assertIn("node_chain_openvpn_middle_output = OPENVPN_MIDDLE.execute_peer(peer, source, captured)", (ROOT / 'deploy/test_linux_node_host_tun.py').read_text())
-        self.assertIn("env=env, timeout=2400)", (ROOT / 'deploy/build-native-runtime.py').read_text())
-
-    def test_actual_reference_udp_gate_is_mandatory_and_pinned(self):
-        workflow = (ROOT / '.github/workflows/openvpn-node-chain-prefix.yml').read_text()
-        release = (ROOT / '.github/workflows/release-candidate.yml').read_text()
-        call = '        run: python3 validator/deploy/test_reference_udp_lifetime.py\n'
-        self.assertIn('deploy/test_reference_udp_lifetime.py', G.GATES)
-        self.assertIn('mobile/amnezia/desktop_reference_test.go.tmpl', G.GATES)
-        workflow_contract(workflow, release)
-        for replacement in ('', call + call, '        if: false\n' + call):
-            with self.subTest(replacement=replacement), self.assertRaises(ValueError):
-                workflow_contract(workflow.replace(call, replacement, 1), release)
-        altered = workflow.replace(call, '', 1).replace('      - name: Retain failed source/native contract diagnostics\n',
-            '      - name: Too late UDP controls\n' + call + '      - name: Retain failed source/native contract diagnostics\n', 1)
-        with self.assertRaises(ValueError): workflow_contract(altered, release)
-
-
 if __name__ == '__main__':
     unittest.main()

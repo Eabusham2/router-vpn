@@ -42,8 +42,7 @@ COMPONENT_ROOTS = {
 }
 SOURCES = (
     'deploy/unix_naive_h2_cases.py', 'deploy/test_unix_naive_h2_host.py',
-    'deploy/test_unix_naive_h2_host_runner.py', '.github/workflows/unix-naive-h2-host.yml',
-    '.github/workflows/release-candidate.yml',
+    'deploy/test_unix_naive_h2_host_runner.py', '.github/workflows/build-all.yml',
     'internal/mobilemultihop/desktop_node_admission.go',
     'cmd/client/desktop_node_connection_linux.go', 'modes/kill-switch-platform.py', 'modes/kill-switch.py',
     'cmd/client/desktop_node_naive_h2_fixture_native_test.go',

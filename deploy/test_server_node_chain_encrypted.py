@@ -163,7 +163,7 @@ def checked_sources(core):
         raise ValueError('Encrypted Server native fixture is not the original source')
     if (core/IMPORTED_TARGET).is_symlink() or (core/IMPORTED_TARGET).read_bytes() != (ROOT/IMPORTED_TEMPLATE).read_bytes():
         raise ValueError('Imported Server native fixture is not the original source')
-    for name in (TEMPLATE, IMPORTED_TEMPLATE, 'deploy/server_dns_failure_diagnostic.py', DNS_DIAGNOSTIC.HELPER, 'deploy/test_server_node_chain_encrypted.py', 'deploy/test_server_node_chain_encrypted_runner.py', '.github/workflows/server-node-chain-encrypted.yml'):
+    for name in (TEMPLATE, IMPORTED_TEMPLATE, 'deploy/server_dns_failure_diagnostic.py', DNS_DIAGNOSTIC.HELPER, 'deploy/test_server_node_chain_encrypted.py', 'deploy/test_server_node_chain_encrypted_runner.py', '.github/workflows/build-all.yml'):
         path = ROOT/name
         if path.is_symlink() or not path.is_file():
             raise ValueError('Encrypted Server lost required gate input')

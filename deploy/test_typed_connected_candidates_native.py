@@ -22,7 +22,6 @@ PARTITIONS=module('connected_native_partitions',ROOT/'deploy/typed_connected_can
 
 def validate(source,source_sha,output,family,go='go'):
     if family not in PARTITIONS.CASES or not BASE.HEX40.fullmatch(source_sha):raise ValueError('exact connected family/source required')
-    PARTITIONS.workflow_contract((ROOT/'.github/workflows/typed-connected-candidates.yml').read_text(),(ROOT/'.github/workflows/release-candidate.yml').read_text())
     source=Path(source).resolve(strict=True);output=Path(output).absolute()
     if output.exists() or output.is_symlink() or source==output or source in output.parents:raise ValueError('fresh external output required')
     if BASE.COMMON.git(source,'rev-parse','HEAD')!=source_sha or BASE.COMMON.git(source,'status','--porcelain','--untracked-files=all'):raise ValueError('connected source is not the exact clean commit')

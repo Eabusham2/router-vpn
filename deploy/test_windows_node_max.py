@@ -83,8 +83,7 @@ def checked_sources(source):
     # Key generation executes this exact private-root helper before exposing
     # any KEM material. Bind it and its executable acceptance/preparation
     # tests to the native evidence, not only the Python invocation wrapper.
-    for relative in (PEER_TEMPLATE, 'deploy/test_windows_node_max.py', 'deploy/test_windows_node_max_runner.py',
-                     'deploy/fixtures/windows-node-physical/max_retirement_timing.go',
+    for relative in (PEER_TEMPLATE, 'deploy/test_windows_node_max.py', 'deploy/fixtures/windows-node-physical/max_retirement_timing.go',
                      'deploy/fixtures/windows-max-control/udp_observation.go',
                      'deploy/fixtures/windows-max-control/udp_observation_test.go',
                      'client/Protect-RouterVPN-Windows-PrivateRoot.ps1', 'client/test-windows-private-acl.ps1',

@@ -64,7 +64,7 @@ def source_identity():
     # Retain the existing native builder's complete shipping inputs, including
     # embedded app assets and every original helper used by these controllers.
     rows = []
-    sources = set(BUILDER.inputs()) | {ROOT/'deploy/native_multihop_audit.py', ROOT/'deploy/test_native_shipping_audit_gates.py'}
+    sources = set(BUILDER.inputs()) | {ROOT/'deploy/native_multihop_audit.py'}
     for path in sorted(sources):
         if path.is_symlink() or not path.is_file():
             raise ValueError('imported controller lost original regular source')
@@ -90,7 +90,6 @@ def source_identity():
                 'cmd/client/desktop_node_chain_imported_execution_product_test.go',
                 'cmd/client/desktop_node_chain_imported_execution_profile_test.go',
                 'deploy/native_multihop_audit.py',
-                'deploy/test_native_shipping_audit_gates.py',
                 'deploy/test_desktop_imported_trio_controller.py',
                 'deploy/test_desktop_imported_trio_controller_runner.py'}
     if not required.issubset({name for name, _ in rows}):

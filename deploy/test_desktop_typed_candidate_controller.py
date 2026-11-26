@@ -51,7 +51,7 @@ def source_identity():
     required = {ROOT/name for name in (
         'deploy/test_desktop_typed_candidate_controller.py',
         'deploy/test_desktop_typed_candidate_controller_runner.py',
-        '.github/workflows/multihop-contract.yml',
+        '.github/workflows/build-all.yml',
         'cmd/client/desktop_node_chain_typed_candidate_catalog.go',
         'cmd/client/desktop_node_chain_typed_candidates.go',
         'cmd/client/desktop_node_chain_typed_candidates_test.go',

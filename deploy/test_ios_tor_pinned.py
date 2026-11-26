@@ -69,7 +69,6 @@ def inputs() -> list[Path]:
              TUN/'RouterVPNTorPaddingReceipt.swift', TUN/'RouterVPNLibboxEngine.swift',
              TUN/'RouterVPNNodeCandidatePrefixHost.swift', ROOT/'deploy/ios_node_candidate_prefix_host_boundary.py',
              ROOT/'deploy/test_ios_libbox_delivery.py', ROOT/'ios/RouterVPN/prepare-libbox.sh',
-             ROOT/'ios/RouterVPN/test_libbox_build_contract.py',
              ROOT/'deploy/test_ios_pq_selection.py', ROOT/'deploy/test_ios_wireguard_parser.py',
              ROOT/'deploy/test_ios_native_base_selection.py', ROOT/'android/test_android_multihop_graph.py',
              ROOT/'deploy/testfixtures/composite/main.go', ROOT/'go.mod']

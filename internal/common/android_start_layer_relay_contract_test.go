@@ -352,8 +352,4 @@ func TestAndroidMAXDispatchRetainsOwnedCompilationAndFailureBoundaries(t *testin
 			t.Fatal("unvalidated MAX compiler accepted", marker)
 		}
 	}
-	release := repoFile(t, ".github/workflows/release-candidate.yml")
-	if strings.Count(release, "python3 android/test_android_max_selection.py") != 2 {
-		t.Fatal("both source and Android package gates must execute MAX host tests")
-	}
 }

@@ -77,7 +77,7 @@ func TestBuildInputsAndSourceSnapshotAreRepositoryConsistent(t *testing.T) {
 		}
 	}
 
-	workflowPath := filepath.Join(root, ".github", "workflows", "source-snapshot.yml")
+	workflowPath := filepath.Join(root, ".github", "workflows", "build-all.yml")
 	workflowBody, err := os.ReadFile(workflowPath)
 	if err != nil {
 		t.Fatal(err)

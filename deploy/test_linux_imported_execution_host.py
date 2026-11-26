@@ -45,7 +45,7 @@ PEER_TEMPLATE = 'mobile/desktop/node_chain_imported_execution_native_linux_test.
 PEER_TARGET = 'protocol/routervpnamnezia/routervpn_imported_execution_native_linux_test.go'
 DRIVER = 'cmd/client/desktop_imported_execution_linux_tun_native_test.go'
 SOURCES = ('deploy/test_linux_imported_execution_host.py', 'deploy/test_linux_imported_execution_host_runner.py',
-           '.github/workflows/linux-imported-execution-host.yml',
+           '.github/workflows/build-all.yml',
            DRIVER, 'cmd/client/desktop_node_host_linux_tun_native_test.go',
            'deploy/test_desktop_linux_guardian.py', 'deploy/prepare-desktop-external.py', PEER_TEMPLATE,
            'mobile/desktop/node_chain_peer_linux_test.go.tmpl')

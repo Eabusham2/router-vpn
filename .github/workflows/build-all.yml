@@ -1,4 +1,4 @@
-name: Build all Router VPN release gates
+name: Router VPN Release
 
 on:
   workflow_dispatch:
@@ -7,93 +7,867 @@ permissions:
   contents: write
   packages: write
   statuses: write
+  actions: read
 
 concurrency:
   group: build-all-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  release-delivery-contracts:
-    name: Unified app and exact-SHA download delivery contracts
+  source-snapshot:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Verify every shipping app and Release-first delivery
+        with:
+          fetch-depth: 0
+      - name: Require successful CI for this exact source (do not rerun CI)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          python3 -m py_compile \
-            server/scripts/exact_sha_release_download.py \
-            server/scripts/native_artifact_policy.py \
-            deploy/source_provenance.py \
-            deploy/materialize-production-compose.py \
-            deploy/materialize-exact-sha-release.py \
-            deploy/exact-sha-release-pipeline-audit.py \
-            deploy/setup-center-download-retention-audit.py \
-            deploy/unified-map-shipping-audit.py
-          (cd client && python3 test_unified_control_center_contract.py)
-          python3 deploy/unified-map-control-center-audit.py
-          python3 deploy/unified-map-control-center-audit-test.py
-          python3 deploy/unified-map-shipping-audit.py
-          python3 deploy/linux-session-mutation-audit.py
-          python3 server/scripts/test_exact_sha_release_download.py
-          python3 server/scripts/test_download_jobs.py
-          python3 server/scripts/test_setup_center_ux_patch.py
-          python3 deploy/setup-center-download-retention-audit.py
-          python3 server/scripts/test_download_safety.py
-          python3 deploy/test_source_provenance.py
-          python3 deploy/test_source_provenance_adoption_identity.py
-          python3 deploy/test-production-release-compose.py
-          python3 deploy/test_exact_sha_release_materialization.py
-          python3 deploy/exact-sha-release-pipeline-audit.py
+          test "$GITHUB_REF" = refs/heads/main
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&branch=main&per_page=100" > "$RUNNER_TEMP/ci.json"
+          python3 - "$RUNNER_TEMP/ci.json" <<'PY'
+          import json, sys
+          runs = json.load(open(sys.argv[1]))["workflow_runs"]
+          assert any(r["status"] == "completed" and r["conclusion"] == "success" for r in runs), "Run CI successfully on this commit before releasing"
+          PY
+      - name: Archive exact checked-out source
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/router-vpn-source-${GITHUB_SHA}.tar.gz"
+          members="$RUNNER_TEMP/router-vpn-source-${GITHUB_SHA}.members.txt"
+          manifest="$RUNNER_TEMP/router-vpn-source-${GITHUB_SHA}.json"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse --is-shallow-repository)" = false
+          git archive --format=tar.gz --prefix="router-vpn-${GITHUB_SHA}/" -o "$archive" HEAD
+          tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          [[ "$tree_sha" =~ ^[0-9a-f]{40}$ ]]
+          android_version_code="$(( $(git rev-list --count HEAD) + 1 ))"
+          python3 - "$manifest" "$GITHUB_SHA" "$tree_sha" "$GITHUB_REPOSITORY" "$android_version_code" <<'PY'
+          import json, pathlib, re, sys
+          path, commit, tree, repo, android_code = sys.argv[1:]
+          if not re.fullmatch(r"[0-9a-f]{40}", commit) or not re.fullmatch(r"[0-9a-f]{40}", tree):
+              raise SystemExit("invalid exact source snapshot identity")
+          if not 2 <= int(android_code) <= 2100000000:
+              raise SystemExit("Android version code exceeds its supported range")
+          pathlib.Path(path).write_text(json.dumps({
+              "schema_version": 1,
+              "repository": repo,
+              "source_sha": commit,
+              "tree_sha": tree,
+              "artifact_family": "exact-source-snapshot",
+              "android_version_code": int(android_code),
+          }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+          (cd "$RUNNER_TEMP" && sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256")
+          (cd "$RUNNER_TEMP" && sha256sum -c "$(basename "$archive").sha256")
+          tar -tzf "$archive" > "$members"
+          test -s "$members"
+          grep -Fxq "router-vpn-${GITHUB_SHA}/" "$members"
+          head -n 5 "$members"
+      - name: Upload exact source snapshot
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: router-vpn-source-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/router-vpn-source-${{ github.sha }}.tar.gz
+            ${{ runner.temp }}/router-vpn-source-${{ github.sha }}.tar.gz.sha256
+            ${{ runner.temp }}/router-vpn-source-${{ github.sha }}.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish artifact pointer on exact commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          python3 - <<'PY' > "$RUNNER_TEMP/source-snapshot-status.json"
+          import json, os
+          print(json.dumps({
+              "state": "success",
+              "context": "router-vpn/source-snapshot",
+              "description": "artifact:" + os.environ["ARTIFACT_ID"],
+              "target_url": os.environ["ARTIFACT_URL"],
+          }))
+          PY
+          curl -fsS --retry 3 \
+            -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary @"$RUNNER_TEMP/source-snapshot-status.json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" >/dev/null
 
-  requirements-closure:
-    name: Recovered requirements and complete source
-    permissions:
-      contents: read
-    uses: ./.github/workflows/requirements-closure.yml
+  tor-windows:
+    name: Pinned Windows Tor compile prerequisite
+    needs: source-snapshot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install source build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends autoconf automake libtool make perl pkg-config
+      - name: Compile the exact user-mode Tor helper and native C tests
+        run: |
+          python3 deploy/build-desktop-tor.py compile windows/amd64 dist/tor-compiled/windows-amd64 --work "$RUNNER_TEMP/tor-source-build" --cache "$RUNNER_TEMP/tor-source-cache" --compiler "$RUNNER_TEMP/tor-llvm-mingw" --jobs 2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Tor-Windows-compile-${{ github.sha }}
+          path: dist/tor-compiled/windows-amd64
+          if-no-files-found: error
+          retention-days: 3
 
-  source-snapshot:
-    name: Exact-SHA source snapshot
-    uses: ./.github/workflows/source-snapshot.yml
-    secrets: inherit
+  native-runtimes:
+    name: Complete native engine ${{ matrix.target }}
+    needs: tor-windows
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {target: linux/amd64, slug: linux-amd64, runner: ubuntu-24.04}
+          - {target: linux/arm64, slug: linux-arm64, runner: ubuntu-24.04-arm}
+          - {target: darwin/amd64, slug: darwin-amd64, runner: macos-15-intel}
+          - {target: darwin/arm64, slug: darwin-arm64, runner: macos-15}
+          - {target: windows/amd64, slug: windows-amd64, runner: windows-latest}
+          - {target: windows/arm64, slug: windows-arm64, runner: windows-11-arm}
+    runs-on: ${{ matrix.runner }}
+    # Linux retains its separate SOCKS/REALITY allowance. Windows adds the
+    # bounded CONNECT14 stage after original prefix6/SOCKS8; inner limits remain.
+    # Added schema6 native ceilings total 6,225s (103.75min); retain the prior
+    # 200min Linux allocation plus 110min for these exact cases and validation.
+    # Job 139481669110 exhausted the old hour in the shared controller checks,
+    # before final protocol, package and host acceptance. Give both native Mac
+    # builds the six-hour hosted job ceiling. Each child keeps its own deadline.
+    timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 360 || startsWith(matrix.target, 'linux/') && 310 || 220 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: ./.github/actions/go-windows-sockets
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Require actual build-job descendant ownership before native preparation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python deploy/test_windows_build_owner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Native build job ownership failed' }
+      - name: Install native Linux build libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends clang libclang-dev cmake ninja-build pkg-config libssl-dev autoconf automake libtool make perl nftables iproute2 passwd util-linux
+      - name: Install native macOS build libraries
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja pkg-config openssl@3 autoconf automake libtool
+      - name: Prepare exact Rust and native C toolchains
+        shell: bash
+        run: python3 deploy/setup-desktop-native-toolchain.py '${{ matrix.target }}' "$RUNNER_TEMP/native-toolchain"
+      - uses: actions/download-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: RouterVPN-Tor-Windows-compile-${{ github.sha }}
+          path: dist/tor-compiled/windows-amd64
+      - name: Native DNS proxy H3 exchanges and kernel proof
+        shell: bash
+        env:
+          ROUTER_VPN_DNS_TARGET: '${{ matrix.target }}'
+        run: |
+          set -euo pipefail
+          python3 deploy/test_dnsproxy_build.py
+          python3 - <<'PY'
+          import os, subprocess, sys
+          from pathlib import Path
+          target = os.environ['ROUTER_VPN_DNS_TARGET']
+          if target not in {'linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64', 'windows/amd64', 'windows/arm64'}:
+              raise RuntimeError('Unknown native DNS test target')
+          selector = os.environ.copy()
+          selector['GOTOOLCHAIN'] = 'go1.26.3'
+          identity = subprocess.check_output(['go', 'env', 'GOROOT', 'GOHOSTOS', 'GOHOSTARCH'], env=selector, text=True).splitlines()
+          if len(identity) != 3 or '/'.join(identity[1:]) != target:
+              raise RuntimeError('DNS tests must execute on the actual target architecture')
+          go = Path(identity[0])/'bin'/('go.exe' if target.startswith('windows/') else 'go')
+          command = [sys.executable, 'deploy/build-dnsproxy.py', 'test', '--go', str(go)]
+          if target == 'windows/arm64':
+              command.append('--without-race')
+          subprocess.run(command, check=True)
+          PY
+      - name: Compute complete source identity
+        id: policy
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import importlib.util, os
+          spec = importlib.util.spec_from_file_location('native_build', 'deploy/build-native-runtime.py')
+          build = importlib.util.module_from_spec(spec); spec.loader.exec_module(build)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('sha256='+build.digest()+'\n')
+          PY
+      - uses: actions/cache/restore@v4
+        id: engine-cache
+        with:
+          key: complete-native-v1-${{ runner.os }}-${{ matrix.slug }}-${{ steps.policy.outputs.sha256 }}-${{ hashFiles('deploy/setup-desktop-native-toolchain.py', 'deploy/install-desktop-windows-toolchain.py') }}
+          path: dist/native-runtime/${{ matrix.slug }}
+      - uses: actions/cache@v4
+        if: startsWith(matrix.target, 'linux/')
+        with:
+          key: pinned-dnssec-v1-${{ matrix.slug }}-${{ hashFiles('native/dnssec/sources.json', 'native/dnssec/validator.c', 'native/dnssec/validator.h', 'deploy/build-dnssec-validator.py', 'deploy/verify-dnssec-validator.py') }}
+          path: dist/.dnssec-cache
+      - name: Build and validate the complete native engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          # macOS Bash 3.2 treats an empty array as unset under nounset.
+          runtime_args=('${{ matrix.target }}' 'dist/native-runtime/${{ matrix.slug }}')
+          if [[ '${{ matrix.target }}' == windows/* ]]; then
+            runtime_args+=(--tor-compiled dist/tor-compiled/windows-amd64)
+          fi
+          # Native PF/system-keychain acceptance is explicit on disposable CI only.
+          if [[ '${{ matrix.target }}' == darwin/* ]]; then
+            export ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE=1
+          fi
+          python3 deploy/build-native-runtime.py "${runtime_args[@]}"
+          if [[ '${{ matrix.target }}' == linux/* ]]; then
+            python3 deploy/test_desktop_dnssec_bundle.py --bundle 'dist/native-runtime/${{ matrix.slug }}' --target '${{ matrix.target }}'
+          fi
+          python3 deploy/test_desktop_tor_package.py --package 'dist/native-runtime/${{ matrix.slug }}' --target '${{ matrix.target }}' --within-native
+          python3 deploy/test_desktop_native_bundle.py 'dist/native-runtime/${{ matrix.slug }}' '${{ matrix.target }}'
+          python3 deploy/test_native_runtime_delivery.py --bundle 'dist/native-runtime/${{ matrix.slug }}' --target '${{ matrix.target }}'
+          python3 deploy/native-runtime-bundle.py archive '${{ matrix.target }}' 'dist/native-runtime/${{ matrix.slug }}' 'dist/native-artifact/native-${{ matrix.slug }}.tar.gz'
+      - uses: actions/cache/save@v4
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        with:
+          key: ${{ steps.engine-cache.outputs.cache-primary-key }}
+          path: dist/native-runtime/${{ matrix.slug }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-native-runtime-${{ matrix.slug }}-${{ github.sha }}
+          path: dist/native-artifact/native-${{ matrix.slug }}.tar.gz
+          if-no-files-found: error
+          retention-days: 3
 
-  release-candidate:
-    name: Authoritative one-SHA native release matrix
-    uses: ./.github/workflows/release-candidate.yml
-    secrets: inherit
+  generic-builds:
+    needs: native-runtimes
+    name: Generic desktop and Windows packages
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - uses: ./.github/actions/go-windows-sockets
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: RouterVPN-native-runtime-*-${{ github.sha }}
+          path: ${{ runner.temp }}/native-runtime-artifacts
+          merge-multiple: true
+      - name: Build and package generic clients
+        run: |
+          chmod +x deploy/build-client.sh deploy/package-builds.sh
+          ./deploy/build-client.sh
+          python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
+          ./deploy/package-builds.sh
+          (cd dist/packages && sha256sum -c SHA256SUMS)
+          bash deploy/scope-windows-release-candidate.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-generic-release-candidate
+          path: |
+            dist/packages/*
+          if-no-files-found: error
+          retention-days: 1
 
-  portainer-preflight:
-    needs: release-candidate
-    name: Authoritative ARM64 Portainer preflight
-    uses: ./.github/workflows/arm64-portainer-preflight.yml
-    with:
-      native_runtimes_ready: true
-    secrets: inherit
+  windows-native-smoke:
+    name: Windows native + Portable ${{ matrix.arch }}
+    needs: generic-builds
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, runner: windows-latest}
+          - {arch: arm64, runner: windows-11-arm}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - uses: ./.github/actions/go-windows-sockets
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Owned Stop retry preserves the displayed cleanup receipt
+        shell: pwsh
+        run: |
+          python deploy/test_desktop_stop_retry.py --platform windows --shell pwsh
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 7 owned Stop retry failed' }
+          python deploy/test_desktop_stop_retry.py --platform windows --shell powershell.exe
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 5.1 owned Stop retry failed' }
+      - name: Verify native Windows Tor host compatibility API
+        shell: pwsh
+        env: {ROUTER_VPN_REQUIRE_TOR_HELPERS: '1'}
+        run: go test -v -run '^TestWindowsTor(ArchitecturePolicy|HostCompatibilityNative)$' ./cmd/client
+      - uses: actions/download-artifact@v4
+        with: {name: RouterVPN-generic-release-candidate, path: artifacts}
+      - name: Execute Portable native WPF self-test and relocation
+        shell: pwsh
+        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
+        run: |
+          $ErrorActionPreference='Stop'; $arch=$env:ROUTER_VPN_ARCH
+          $archive=(Get-ChildItem artifacts -Recurse -Filter "RouterVPN-Portable-Windows-$arch.zip"|Select-Object -First 1).FullName
+          if(-not $archive){throw "Missing Portable $arch package"}
+          $extract=Join-Path $env:RUNNER_TEMP "portable-$arch"; Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue; Expand-Archive $archive $extract -Force
+          $roots=@(Get-ChildItem -LiteralPath $extract -Directory)
+          if($roots.Count -ne 1){throw 'Portable archive did not contain exactly one owned package root'}
+          $root=$roots[0]
+          $test=Join-Path $root.FullName 'App/RouterVPN/client/test-windows-package-session.ps1'
+          if(-not(Test-Path -LiteralPath $test -PathType Leaf)){throw 'Portable package lacks its actual owned Session test'}
+          $movedParent=Join-Path $env:RUNNER_TEMP "portable-moved-$arch"
+          $moved=Join-Path $movedParent $root.Name
+          & $test -Root $root.FullName -Portable -RelocateTo $moved
+      - name: Verify installed package native entrypoint
+        shell: pwsh
+        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
+        run: |
+          $ErrorActionPreference='Stop'
+          $arch=$env:ROUTER_VPN_ARCH; $archive=(Get-ChildItem artifacts -Recurse -Filter "RouterVPN-Windows-$arch.zip"|Select-Object -First 1).FullName
+          $extract=Join-Path $env:RUNNER_TEMP "installed-$arch"; Expand-Archive $archive $extract -Force; $root=Get-ChildItem $extract -Directory|Select-Object -First 1; $start=Get-Content (Join-Path $root.FullName 'Start-RouterVPN.ps1') -Raw
+          if($start-notmatch'RouterVPN-Windows-App\.ps1'){throw 'installed package not native WPF'}; if($start-match'msedge\.exe|chrome\.exe|--app='){throw 'browser shell regression'}
+          $killTest=Join-Path $root.FullName 'client\test-windows-kill-switch.ps1'; if(-not(Test-Path $killTest)){throw 'shipped Windows package missing kill-switch contract test'}; & $killTest; $privateStateTest=Join-Path $root.FullName 'client\test-private-router-vpn-state.ps1'; if(-not(Test-Path $privateStateTest)){throw 'shipped Windows package missing private profile-store contract test'}; & $privateStateTest
+          $asyncTest=Join-Path $root.FullName 'client\test-windows-async-actions.ps1'
+          if(-not(Test-Path -LiteralPath $asyncTest)){throw 'shipped Windows package missing async lifecycle regression tests'}
+          & $asyncTest -Root $root.FullName
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $asyncTest -Root $root.FullName
+          if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 packaged async lifecycle tests failed'}
+          $performanceTest=Join-Path $root.FullName 'client\test-windows-performance.ps1'
+          if(-not(Test-Path -LiteralPath $performanceTest)){throw 'shipped Windows package missing Performance ownership regression tests'}
+          & $performanceTest -Root $root.FullName
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $performanceTest -Root $root.FullName
+          if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 packaged Performance ownership tests failed'}
+          $candidateTest=Join-Path $root.FullName 'client\test-windows-ordered-candidates.ps1'
+          if(-not(Test-Path -LiteralPath $candidateTest)){throw 'shipped Windows package missing ordered candidate callback tests'}
+          & $candidateTest -Root $root.FullName
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $candidateTest -Root $root.FullName
+          if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 packaged ordered candidate callbacks failed'}
+          $runtimeTest=Join-Path $root.FullName 'client\test-windows-runtime-install.ps1'
+          & $runtimeTest -SourceRoot $root.FullName
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runtimeTest -SourceRoot $root.FullName
+          if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 runtime installation fixture failed'}
+          & (Join-Path $root.FullName 'client\test-windows-installed-runtimes.ps1') -PackageRoot $root.FullName -ExpectedArchitecture $arch
+      - name: Execute packaged device and DNS ownership gates
+        shell: pwsh
+        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
+        run: |
+          $ErrorActionPreference='Stop'; $arch=$env:ROUTER_VPN_ARCH
+          $installed=Join-Path $env:RUNNER_TEMP "installed-$arch"
+          $roots=@(Get-ChildItem -LiteralPath $installed -Directory)
+          if($roots.Count -ne 1){throw 'Expected exactly one extracted Windows release package'}
+          foreach($shell in @('pwsh','powershell.exe')){
+            python deploy/test_windows_release_gates.py --package-root $roots[0].FullName --shell $shell
+            if($LASTEXITCODE -ne 0){throw "Packaged Windows $arch device/DNS gates failed in $shell"}
+          }
+      - name: Execute packaged suspended-process Job ownership
+        shell: pwsh
+        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
+        run: |
+          $ErrorActionPreference='Stop'; $arch=$env:ROUTER_VPN_ARCH
+          $installed=Join-Path $env:RUNNER_TEMP "installed-$arch"
+          $roots=@(Get-ChildItem -LiteralPath $installed -Directory)
+          if($roots.Count -ne 1){throw 'Expected exactly one extracted Windows release package'}
+          $test=Join-Path $roots[0].FullName 'client/test-windows-private-job.ps1'
+          if(-not(Test-Path -LiteralPath $test -PathType Leaf)){throw 'Shipped Windows package lacks its suspended-process Job test'}
+          foreach($shell in @('pwsh','powershell.exe')){
+            & $shell -NoProfile -ExecutionPolicy Bypass -File $test -SourceRoot $roots[0].FullName
+            if($LASTEXITCODE -ne 0){throw "Packaged Windows $arch suspended-process Job tests failed in $shell"}
+          }
+      - name: Execute packaged Windows WFP enforcement
+        shell: pwsh
+        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
+        run: |
+          $ErrorActionPreference='Stop'; $arch=$env:ROUTER_VPN_ARCH
+          $installed=Join-Path $env:RUNNER_TEMP "installed-$arch"
+          $roots=@(Get-ChildItem -LiteralPath $installed -Directory)
+          if($roots.Count -ne 1){throw 'Expected exactly one extracted Windows release package'}
+          $test=Join-Path $roots[0].FullName 'client/test-windows-wfp.ps1'
+          if(-not(Test-Path -LiteralPath $test -PathType Leaf)){throw 'Shipped Windows package lacks its WFP enforcement test'}
+          foreach($shell in @('pwsh','powershell.exe')){
+            & $shell -NoProfile -ExecutionPolicy Bypass -File $test -SourceRoot $roots[0].FullName
+            if($LASTEXITCODE -ne 0){throw "Packaged Windows $arch WFP kernel enforcement failed in $shell"}
+          }
+      - name: Execute packaged owned Windows protection adapter
+        shell: pwsh
+        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
+        run: |
+          $ErrorActionPreference='Stop'; $arch=$env:ROUTER_VPN_ARCH
+          $installed=Join-Path $env:RUNNER_TEMP "installed-$arch"
+          $roots=@(Get-ChildItem -LiteralPath $installed -Directory)
+          if($roots.Count -ne 1){throw 'Expected exactly one extracted Windows release package'}
+          $relocated=@(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP "portable-moved-$arch") -Directory)
+          if($relocated.Count -ne 1){throw 'Expected exactly one relocated Portable release package'}
+          $packages=@($roots[0].FullName,(Join-Path $relocated[0].FullName 'App/RouterVPN'))
+          foreach($package in $packages){
+            foreach($name in @('test-windows-owned-protection.ps1','test-windows-protection-dispatch.ps1','test-windows-legacy-protection-recovery.ps1')){
+              $test=Join-Path $package ('client/'+$name)
+              if(-not(Test-Path -LiteralPath $test -PathType Leaf)){throw "Shipped Windows package lacks its owned protection fixture: $name"}
+              foreach($shell in @('pwsh','powershell.exe')){
+                & $shell -NoProfile -ExecutionPolicy Bypass -File $test
+                if($LASTEXITCODE -ne 0){throw "Packaged Windows $arch $name failed in $shell at $package"}
+              }
+            }
+          }
+      - name: Execute packaged Tor wrapper lifecycle
+        shell: pwsh
+        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
+        run: |
+          $ErrorActionPreference='Stop'; $arch=$env:ROUTER_VPN_ARCH
+          $installed=Join-Path $env:RUNNER_TEMP "installed-$arch"
+          $roots=@(Get-ChildItem -LiteralPath $installed -Directory)
+          if($roots.Count -ne 1){throw 'Expected exactly one extracted Windows release package'}
+          $test=Join-Path $roots[0].FullName 'client/test-windows-tor-wrapper-lifecycle.ps1'
+          if(-not(Test-Path -LiteralPath $test -PathType Leaf)){throw 'Shipped Windows package lacks its Tor wrapper lifecycle test'}
+          foreach($shell in @('pwsh','powershell.exe')){
+            & $shell -NoProfile -ExecutionPolicy Bypass -File $test -SourceRoot $roots[0].FullName
+            if($LASTEXITCODE -ne 0){throw "Packaged Windows $arch Tor wrapper lifecycle tests failed in $shell"}
+          }
+      - name: Execute shipped Tor helpers on the actual Windows architecture
+        shell: pwsh
+        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
+        run: |
+          $ErrorActionPreference='Stop'; $arch=$env:ROUTER_VPN_ARCH
+          $installed=Join-Path $env:RUNNER_TEMP "installed-$arch"
+          $root=Get-ChildItem -LiteralPath $installed -Directory|Select-Object -First 1
+          $test=Join-Path $root.FullName 'client\test-windows-tor-compatibility.ps1'
+          if(-not(Test-Path -LiteralPath $test)){throw 'Shipped Windows package lacks Tor compatibility test'}
+          & $test -SourceRoot $root.FullName -ExpectedArchitecture $arch
 
-  publish-arm64-images:
-    name: Publish exact-SHA ARM64 server images
-    needs: [source-snapshot, release-candidate, portainer-preflight]
-    uses: ./.github/workflows/publish-arm64-images.yml
-    with:
-      native_runtimes_ready: true
-    secrets: inherit
+  android:
+    needs: source-snapshot
+    name: Android native APK
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v5
+        with: {distribution: temurin, java-version: '17'}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - uses: ./.github/actions/go-windows-sockets
+      - uses: gradle/actions/setup-gradle@v4
+        with: {gradle-version: '9.5.0'}
+      - name: Install Android SDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Android graph integration dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libandroid-json-java
+      - name: Android native routing smoke tests
+        run: |
+          sudo apt-get install -y --no-install-recommends build-essential autoconf automake libtool pkg-config perl patch
+          python3 android/test_android_home_dns.py
+          python3 android/test_android_multihop_graph.py
+          python3 android/test_android_mtu_session.py
+      - name: Build and verify the configured Android delivery
+        env:
+          ROUTERVPN_ANDROID_KEYSTORE_BASE64: ${{ github.ref == 'refs/heads/main' && secrets.ROUTERVPN_ANDROID_KEYSTORE_BASE64 || '' }}
+          ROUTERVPN_ANDROID_STORE_PASSWORD: ${{ github.ref == 'refs/heads/main' && secrets.ROUTERVPN_ANDROID_STORE_PASSWORD || '' }}
+          ROUTERVPN_ANDROID_KEY_ALIAS: ${{ github.ref == 'refs/heads/main' && secrets.ROUTERVPN_ANDROID_KEY_ALIAS || '' }}
+          ROUTERVPN_ANDROID_KEY_PASSWORD: ${{ github.ref == 'refs/heads/main' && secrets.ROUTERVPN_ANDROID_KEY_PASSWORD || '' }}
+          ROUTERVPN_ANDROID_CERT_SHA256: ${{ github.ref == 'refs/heads/main' && vars.ROUTERVPN_ANDROID_CERT_SHA256 || '' }}
+          ROUTERVPN_ANDROID_REQUIRE_PRODUCTION: ${{ github.ref == 'refs/heads/main' && vars.ROUTERVPN_ANDROID_REQUIRE_PRODUCTION || '' }}
+        run: python3 android/build-delivery.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Android-release-candidate
+          path: |
+            android/app/build/outputs/routervpn/app-debug.apk
+            android/app/build/outputs/routervpn/android-delivery.json
+          if-no-files-found: error
+          retention-days: 1
+
+  ios:
+    needs: source-snapshot
+    name: iOS/iPadOS real WireGuard + Libbox PacketTunnel
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - uses: ./.github/actions/go-windows-sockets
+      - name: iOS native routing smoke tests
+        run: |
+          python3 deploy/test_ios_home_dns.py
+          python3 deploy/test_ios_physical_path.py
+          python3 deploy/test_ios_mtu_client.py
+      - name: Install XcodeGen
+        run: |
+          brew install xcodegen autoconf automake libtool pkg-config
+      - name: Prepare exact pinned WireGuardKit
+        working-directory: ios/RouterVPN
+        run: |
+          sh prepare-wireguard-kit.sh
+          python3 ../../deploy/test_apple_amnezia_timer_preparation.py --kit "$PWD/.deps/wireguard-apple"
+      - name: Prepare exact pinned Libbox before Xcode resolves the framework
+        working-directory: ios/RouterVPN
+        run: ./prepare-libbox.sh
+      - name: Generate and build unsigned native app
+        working-directory: ios/RouterVPN
+        run: |
+          xcodegen generate
+          xcodebuild -project RouterVPN.xcodeproj -scheme RouterVPN -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath "$PWD/build/DerivedData" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM='' ROUTER_VPN_SOURCE_SHA="$GITHUB_SHA" INFOPLIST_KEY_RouterVPNSourceSHA="$GITHUB_SHA" build
+      - name: Verify pinned engines and package IPA
+        working-directory: ios/RouterVPN
+        run: |
+          APP="$PWD/build/DerivedData/Build/Products/Release-iphoneos/RouterVPN.app"; EXT="$APP/PlugIns/RouterVPNPacketTunnel.appex"; WG="$PWD/.deps/wireguard-apple"; IPA="$PWD/build/RouterVPN-native-unsigned-resignable.ipa"
+          test -d "$EXT" || { echo "::error::PacketTunnel extension is missing"; exit 1; }
+          test "$(git -C "$WG" rev-parse HEAD)" = '9d5ee60edefa95b933a738dd7cda671dd18021fc' || { echo "::error::WireGuardKit commit pin mismatch"; exit 1; }
+          test "$(sed -n '1p' "$WG/Package.swift")" = '// swift-tools-version:5.5' || { echo "::error::WireGuardKit Package.swift toolchain contract changed"; exit 1; }
+          test "$(cat .deps/wireguard-apple.pin)" = '9d5ee60edefa95b933a738dd7cda671dd18021fc' || { echo "::error::WireGuardKit recorded pin mismatch"; exit 1; }
+          python3 ../../deploy/prepare-apple-amnezia-timers.py "$WG" --verify
+          test -s "$PWD/build/DerivedData/Build/Products/Release-iphoneos/libwg-go.a" || { echo "::error::libwg-go.a is missing"; exit 1; }
+          test "$(plutil -extract RouterVPNSourceSHA raw -o - "$APP/Info.plist")" = "$GITHUB_SHA" || { echo "::error::iOS app source SHA mismatch"; exit 1; }
+          test "$(plutil -extract RouterVPNSourceRepository raw -o - "$APP/Info.plist")" = 'Eabusham2/router-vpn' || { echo "::error::iOS app source repository mismatch"; exit 1; }
+          test "$(plutil -extract RouterVPNArtifactFamily raw -o - "$APP/Info.plist")" = 'ios-app' || { echo "::error::iOS app artifact family mismatch"; exit 1; }
+          test "$(plutil -extract RouterVPNSourceSHA raw -o - "$EXT/Info.plist")" = "$GITHUB_SHA" || { echo "::error::iOS PacketTunnel source SHA mismatch"; exit 1; }
+          test "$(plutil -extract RouterVPNSourceRepository raw -o - "$EXT/Info.plist")" = 'Eabusham2/router-vpn' || { echo "::error::iOS PacketTunnel source repository mismatch"; exit 1; }
+          test "$(plutil -extract RouterVPNArtifactFamily raw -o - "$EXT/Info.plist")" = 'ios-packet-tunnel' || { echo "::error::iOS PacketTunnel artifact family mismatch"; exit 1; }
+          test -d .deps/Libbox.xcframework || { echo "::error::Libbox.xcframework is missing"; exit 1; }
+          test -s .deps/libbox-LICENSE.txt || { echo "::error::Libbox license is missing"; exit 1; }
+          grep -Fq '1.14.1+1ac1a339cb1223e9c70eae14c44411c75033c02d+go1.26.3+0.1.12+ios,iossimulator' .deps/Libbox.xcframework.pin || { echo "::error::Libbox exact pin mismatch"; exit 1; }
+          for marker in 'WireGuardAdapter(with: self)' 'startLibbox' 'RouterVPNLibboxEngine' 'body["node_id"] as? String == expectedNodeID' 'body["proof"] as? String == Self.proofKind'; do grep -Fq "$marker" PacketTunnel/PacketTunnelProvider.swift || { echo "::error::PacketTunnel source contract missing: $marker"; exit 1; }; done
+          rm -rf build/unsigned; mkdir -p build/unsigned/Payload; ditto "$APP" build/unsigned/Payload/RouterVPN.app; (cd build/unsigned && zip -qry ../RouterVPN-native-unsigned-resignable.ipa Payload); unzip -tq "$IPA" >/dev/null
+          python3 ../../server/scripts/mobile-artifact-provenance.py --name router-vpn-ios.ipa --path "$IPA" --sha "$GITHUB_SHA" --repo Eabusham2/router-vpn
+      - name: Read back generated SDK APIs from the release Xcode build
+        run: python3 deploy/verify-ios-generated-sdk.py --source-sha "$GITHUB_SHA" --output ios/RouterVPN/build/generated-sdk-receipt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-iOS-generated-sdk-${{ github.sha }}
+          path: ios/RouterVPN/build/generated-sdk-receipt
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with: {name: RouterVPN-iOS-release-candidate, path: ios/RouterVPN/build/RouterVPN-native-unsigned-resignable.ipa, if-no-files-found: error, retention-days: 1}
+
+  macos:
+    needs: native-runtimes
+    name: macOS native AppKit amd64 + arm64
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - uses: ./.github/actions/go-windows-sockets
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: RouterVPN-native-runtime-darwin-*-${{ github.sha }}
+          path: ${{ runner.temp }}/native-runtime-artifacts
+          merge-multiple: true
+      - name: Verify and stage exact native runtime payloads
+        shell: bash
+        run: python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime darwin/amd64 darwin/arm64
+      - name: Owned Stop retry preserves the displayed cleanup receipt
+        run: python3 deploy/test_desktop_stop_retry.py --platform macos
+      - name: Build native macOS packages
+        run: |
+          chmod +x client/macos/build-native-app.sh deploy/package-macos-native.sh
+          ./deploy/package-macos-native.sh
+          (cd dist/macos-native && shasum -a 256 -c SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-macOS-release-candidate
+          path: |
+            dist/macos-native/RouterVPN-darwin-amd64.tar.gz
+            dist/macos-native/RouterVPN-darwin-arm64.tar.gz
+            dist/macos-native/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
+
+  linux:
+    needs: native-runtimes
+    name: Linux native GTK ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, runner: ubuntu-24.04}
+          - {arch: arm64, runner: ubuntu-24.04-arm}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
+      - uses: ./.github/actions/go-windows-sockets
+      - name: Install GTK native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-3-dev libcurl4-openssl-dev libjson-glib-dev pkg-config file xvfb xauth binutils
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: RouterVPN-native-runtime-linux-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/native-runtime-artifacts
+          merge-multiple: true
+      - name: Verify and stage exact native runtime payloads
+        shell: bash
+        run: python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime linux/${{ matrix.arch }}
+      - name: Owned Stop retry preserves the displayed cleanup receipt
+        run: python3 deploy/test_desktop_stop_retry.py --platform linux
+      - name: Build native Linux package
+        run: |
+          chmod +x client/linux/build-native-app.sh deploy/package-linux-native.sh
+          ./deploy/package-linux-native.sh '${{ matrix.arch }}'
+          (cd dist/linux-native && sha256sum -c "RouterVPN-linux-${{ matrix.arch }}.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Linux-${{ matrix.arch }}-release-candidate
+          path: |
+            dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.tar.gz
+            dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  aggregate:
+    name: Aggregate one-SHA native release candidate
+    needs: [generic-builds, windows-native-smoke, android, ios, macos, linux]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: {pattern: '*-release-candidate', path: dist/release-candidate, merge-multiple: false}
+      - name: Manifest and verify artifact tree
+        run: |
+          python3 deploy/verify-release-candidate-provenance.py dist/release-candidate --sha "$GITHUB_SHA"
+          (cd dist && find release-candidate -type f -print | sort)
+          (cd dist && find release-candidate -type f -print0 | sort -z | xargs -0 sha256sum > RELEASE-CANDIDATE-SHA256SUMS)
+          test -s dist/RELEASE-CANDIDATE-SHA256SUMS
+          (cd dist && sha256sum -c RELEASE-CANDIDATE-SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-release-candidate-${{ github.sha }}
+          path: |
+            dist/release-candidate/**
+            dist/RELEASE-CANDIDATE-SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
+
+  server-images:
+    needs: [source-snapshot, aggregate]
+    name: Build and publish ARM64 images
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: init
+            dockerfile: server/init/Dockerfile
+            image: router-vpn-init
+          - name: agent
+            dockerfile: deploy/router-agent.Dockerfile
+            image: router-vpn-agent
+          - name: updater
+            dockerfile: deploy/update-controller.Dockerfile
+            image: router-vpn-updater
+          - name: wireguard
+            dockerfile: server/wireguard/Dockerfile
+            image: router-vpn-wireguard
+          - name: awg2
+            dockerfile: server/awg2/Dockerfile
+            image: router-vpn-awg2
+          - name: rosenpass
+            dockerfile: server/rosenpass/Dockerfile
+            image: router-vpn-rosenpass
+          - name: naive
+            dockerfile: server/naive/Dockerfile
+            image: router-vpn-naive
+          - name: ss-v2ray
+            dockerfile: server/ss-v2ray/Dockerfile
+            image: router-vpn-ss-v2ray
+          - name: aux
+            dockerfile: server/aux-proxies/Dockerfile
+            image: router-vpn-aux
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        if: matrix.name == 'init'
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: actions/download-artifact@v4
+        if: matrix.name == 'init'
+        with:
+          pattern: RouterVPN-native-runtime-windows-*-${{ github.sha }}
+          path: ${{ runner.temp }}/native-runtime-artifacts
+          merge-multiple: true
+      - name: Verify complete Windows runtimes for same-image fallback
+        if: matrix.name == 'init'
+        run: python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime windows/amd64 windows/arm64
+      - name: Record exact source tree identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree_sha="$(git rev-parse 'HEAD^{tree}')"
+          [[ "$tree_sha" =~ ^[0-9a-f]{40}$ ]]
+          printf 'SOURCE_TREE_SHA=%s\n' "$tree_sha" >> "$GITHUB_ENV"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        id: publish
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/arm64
+          load: true
+          push: false
+          tags: |
+            ghcr.io/eabusham2/${{ matrix.image }}:arm64-main
+            ghcr.io/eabusham2/${{ matrix.image }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/Eabusham2/router-vpn
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source-tree=${{ env.SOURCE_TREE_SHA }}
+      - name: Run ARM64 init end to end
+        if: matrix.name == 'init'
+        run: |
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-preflight"
+          rm -rf "$TEST_ROOT"
+          mkdir -p "$TEST_ROOT"
+          docker run --rm --privileged --platform linux/arm64 \
+            -e WAN_INTERFACE=eth0 -e LAN_CIDR=192.168.50.0/24 \
+            -e ADGUARD4=192.168.50.133 -e ENDPOINT=1.1.1.1 \
+            -v "$TEST_ROOT:/opt/router-vpn" ghcr.io/eabusham2/router-vpn-init:${GITHUB_SHA}
+          docker run --rm --platform linux/arm64 -v "$TEST_ROOT:/opt/router-vpn:ro" alpine:3.22 sh -c '
+            test -e /opt/router-vpn/.initialized &&
+            test -s /opt/router-vpn/config/router-agent.json &&
+            test -s /opt/router-vpn/config/transports/server.json &&
+            test -s /opt/router-vpn/config/xray/server.json &&
+            test -s /opt/router-vpn/client-bundle/router-vpn-bundle.json
+          '
+      - name: Run ARM64 finalizer end to end
+        if: matrix.name == 'init'
+        run: |
+          TEST_ROOT="$RUNNER_TEMP/router-vpn-preflight"
+          docker run --rm --privileged --platform linux/arm64 \
+            -e WAN_INTERFACE=eth0 -e LAN_CIDR=192.168.50.0/24 \
+            -e ADGUARD4=192.168.50.133 -e ENDPOINT=1.1.1.1 \
+            -e OVERTLS_PORT=14443 -e OVERTLS_INTERNAL_PORT=14444 -e SSR_PORT=15443 \
+            -v "$TEST_ROOT:/opt/router-vpn" --entrypoint /bin/bash \
+            ghcr.io/eabusham2/router-vpn-init:${GITHUB_SHA} /src/server/finalize/current-entrypoint.sh
+          docker run --rm --platform linux/arm64 -v "$TEST_ROOT:/opt/router-vpn:ro" alpine:3.22 sh -c '
+            test -e /opt/router-vpn/.finalized &&
+            test ! -e /opt/router-vpn/router-vpn-client-bundle.zip &&
+            test ! -e /opt/router-vpn/downloads/router-vpn-client-bundle.zip &&
+            test -s /opt/router-vpn/config/rosenpass/server.toml &&
+            test -s /opt/router-vpn/client-bundle/routers.json &&
+            test -s /opt/router-vpn/client-bundle/router-vpn-bundle.json &&
+            test -s /opt/router-vpn/client-bundle/logical-modes.json &&
+            test -s /opt/router-vpn/client-bundle/setup-assets.json &&
+            test -s /opt/router-vpn/downloads/router-vpn-device-setup.html &&
+            test -s /opt/router-vpn/downloads/download-policy.json &&
+            test -s /opt/router-vpn/config/aux/overtls-server.json &&
+            test -s /opt/router-vpn/config/aux/ssr-server.json &&
+            test -z "$(find /opt/router-vpn/downloads -maxdepth 1 -type f -name "*.zip" -print -quit)"
+          '
+      - name: Verify installed standalone Tor control without network access
+        if: matrix.name == 'agent'
+        run: |
+          docker run --rm --network none --platform linux/arm64 \
+            --entrypoint python3 ghcr.io/eabusham2/router-vpn-agent:${GITHUB_SHA} \
+            /usr/local/share/router-vpn/tor/verify.py --prefix /usr/local \
+            --platform linux/arm64 --offline-self-test
+      - name: Verify installed private Tor provisioning without network access
+        if: matrix.name == 'agent'
+        run: |
+          docker run --rm --network none --platform linux/arm64 \
+            --mount "type=bind,src=${PWD},dst=/routervpn-source,readonly" \
+            --entrypoint python3 ghcr.io/eabusham2/router-vpn-agent:${GITHUB_SHA} \
+            /routervpn-source/deploy/test_server_tor_pairing.py --installed -v
+      - name: Prove benchmark and Emergency Stop tooling in ARM64 agent
+        if: matrix.name == 'agent'
+        run: |
+          set -euo pipefail
+          cid="$(docker create --platform linux/arm64 ghcr.io/eabusham2/router-vpn-agent:${GITHUB_SHA})"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          docker cp "$cid:/usr/local/bin/router-vpn-agent" "$RUNNER_TEMP/router-vpn-agent-arm64"
+          test -s "$RUNNER_TEMP/router-vpn-agent-arm64"
+          grep -aF '/api/benchmark/download' "$RUNNER_TEMP/router-vpn-agent-arm64" >/dev/null
+          grep -aF '/api/benchmark/upload' "$RUNNER_TEMP/router-vpn-agent-arm64" >/dev/null
+          grep -aF 'authenticated tunnel-peer private throughput sink' "$RUNNER_TEMP/router-vpn-agent-arm64" >/dev/null
+          docker run --rm --platform linux/arm64 --entrypoint /bin/sh ghcr.io/eabusham2/router-vpn-agent:${GITHUB_SHA} -c 'command -v wg >/dev/null && command -v awg >/dev/null'
+      - name: Push the already built and verified image
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/eabusham2/${{ matrix.image }}:${GITHUB_SHA}"
+          test "$(docker image inspect "$ref" --format '{{.Architecture}}')" = arm64
+          test "$(docker image inspect "$ref" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$GITHUB_SHA"
+          docker push "$ref"
+          docker push "ghcr.io/eabusham2/${{ matrix.image }}:arm64-main"
+      - name: Verify published exact-SHA ARM64 image provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref="ghcr.io/eabusham2/${{ matrix.image }}:${GITHUB_SHA}"
+          docker pull --platform linux/arm64 "$ref" >/dev/null
+          test "$(docker image inspect "$ref" --format '{{.Architecture}}')" = 'arm64'
+          test "$(docker image inspect "$ref" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$GITHUB_SHA"
+          test "$(docker image inspect "$ref" --format '{{ index .Config.Labels "org.opencontainers.image.source" }}')" = 'https://github.com/Eabusham2/router-vpn'
+          test "$(docker image inspect "$ref" --format '{{ index .Config.Labels "org.opencontainers.image.source-tree" }}')" = "$SOURCE_TREE_SHA"
+          printf '%s %s\n' "$ref" "$SOURCE_TREE_SHA"
 
   production-compose:
-    name: Materialize verified exact-SHA production compose
-    needs: [publish-arm64-images]
-    uses: ./.github/workflows/production-release-compose.yml
-    secrets: inherit
+    needs: server-images
+    name: Materialize exact-head production compose
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Materialize and verify exact-head compose
+        run: |
+          set -euo pipefail
+          mkdir -p dist/production-release
+          out="dist/production-release/RouterVPN-Portainer-${GITHUB_SHA}.yaml"
+          python3 deploy/materialize-production-compose.py --sha "$GITHUB_SHA" --output "$out"
+          test "$(python3 server/scripts/verify-production-compose.py "$out")" = "$GITHUB_SHA"
+          grep -Fq "GENERATED exact-SHA Router VPN production compose: ${GITHUB_SHA}" "$out"
+          test "$(grep -Eo 'ghcr\.io/eabusham2/router-vpn-(init|agent|wireguard|awg2|rosenpass|naive|ss-v2ray|aux|updater):[0-9a-f]{40}' "$out" | sed 's/.*://' | sort -u)" = "$GITHUB_SHA"
+          grep -Fq "ghcr.io/eabusham2/router-vpn-updater:${GITHUB_SHA}" "$out"
+          ! grep -Fq '/var/run/docker.sock' "$out"
+          test "$(sed -n 's/^[[:space:]]*ROUTER_VPN_GITHUB_SHA:[[:space:]]*\([0-9a-f]\{40\}\)[[:space:]]*$/\1/p' "$out")" = "$GITHUB_SHA"
+          (cd dist/production-release && sha256sum "$(basename "$out")" > "$(basename "$out").sha256")
+          (cd dist/production-release && sha256sum -c "$(basename "$out").sha256")
+      - name: Upload exact-head Portainer compose
+        uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-production-compose-${{ github.sha }}
+          path: dist/production-release/*
+          if-no-files-found: error
+          retention-days: 1
 
   publish-exact-sha-release:
     name: Publish immutable exact-SHA native download release
-    needs:
-      - release-delivery-contracts
-      - requirements-closure
-      - source-snapshot
-      - release-candidate
-      - portainer-preflight
-      - publish-arm64-images
-      - production-compose
+    needs: [source-snapshot, aggregate, production-compose]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     env:

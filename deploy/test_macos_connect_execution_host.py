@@ -44,7 +44,7 @@ SOURCES = ('deploy/test_macos_connect_execution_host.py', 'deploy/test_macos_con
            'cmd/client/desktop_macos_connect_execution_process_arguments_test.go',
            'cmd/client/desktop_node_chain_execution_product.go', 'cmd/client/profile_public_view.go',
            'cmd/client/multihop_native_routes.go', 'client/macos/RouterVPNConnectionProfiles.swift',
-           'deploy/native_multihop_audit.py', 'deploy/test_native_shipping_audit_gates.py',
+           'deploy/native_multihop_audit.py',
            'cmd/client/controller_privilege_darwin_native_test.go',
            'cmd/client/desktop_imported_execution_darwin_native_test.go',
            'mobile/desktop/node_chain_imported_execution_peer_test.go.tmpl',

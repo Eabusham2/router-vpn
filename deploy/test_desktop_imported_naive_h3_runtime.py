@@ -278,7 +278,7 @@ class ImportedNaiveH3RuntimeGate(unittest.TestCase):
 
     def test_gate_contract_is_part_of_source_identity_and_executed_release_audit(self):
         self.assertIn(ROOT/'deploy/test_desktop_imported_naive_h3_runtime.py', N.inputs())
-        source = (ROOT/'.github/workflows/release-candidate.yml').read_text()
+        source = (ROOT/'.github/workflows/build-all.yml').read_text()
         command = next(line.strip() for line in source.splitlines() if line.strip().startswith('python3 -m unittest deploy.test_desktop_imported_runtime'))
         self.assertEqual(command.split(), ['python3', '-m', 'unittest', 'deploy.test_desktop_imported_runtime',
             'deploy.test_desktop_imported_packet_runtime', 'deploy.test_desktop_imported_openvpn_runtime', 'deploy.test_desktop_imported_pq_runtime', 'deploy.test_desktop_imported_xhttp_runtime', 'deploy.test_desktop_imported_naive_h2_runtime', 'deploy.test_desktop_imported_naive_h3_runtime'])

@@ -562,7 +562,7 @@ ALLOWLISTS = {
         "android/test_android_node_chain_execution_runtime.py",
         "android/test_android_node_chain_runtime.py",
         "android/test_android_node_chain_socks_runtime.py",
-        ".github/workflows/android-multihop-contract.yml",
+        ".github/workflows/build-all.yml",
         "android/app/src/main/java/com/eabusham/routervpn/AndroidNodeChainSOCKSCapture.java",
         "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
         "android/test_android_node_candidate_prefix_host.py",

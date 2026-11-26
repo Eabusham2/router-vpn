@@ -151,14 +151,5 @@ class WindowsCONNECTReleaseReceipt(unittest.TestCase):
                         'test_windows_connect_node_chain_host.py'])
                     self.assertEqual(run.call_args_list[-1].kwargs['timeout'], 3000 + 4200 + 4200)
 
-    def test_expanded_outer_budget_preserves_existing_inner_limits_and_other_platforms(self):
-        self.assertEqual(BUILD.WINDOWS_INSTALLED_NATIVE_GATE_TIMEOUT, 3000 + 4200 + 4200)
-        workflow = (ROOT / '.github/workflows/desktop-native-runtime.yml').read_text()
-        self.assertEqual(workflow.count("timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 360 || startsWith(matrix.target, 'linux/') && 310 || 220 }}"), 1)
-        source = (ROOT / 'deploy/test_windows_connect_node_chain_host.py').read_text()
-        for limit in ('timeout=600', '"-test.timeout=1800s"', 'timeout=1820'):
-            self.assertIn(limit, source)
-
-
 if __name__ == '__main__':
     unittest.main()

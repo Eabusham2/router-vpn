@@ -91,46 +91,11 @@ def generate(package, bash):
 
 
 
-def audit_contracts():
-    audit = ROOT/'deploy/full-audit-v4.py'
-    tree = ast.parse(audit.read_text(encoding='utf-8'), filename=str(audit))
-    nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'windows_controller_lifecycle']
-    require(len(nodes) == 1, 'Actual checked-launcher audit function is missing')
-    code = compile(ast.Module(body=nodes, type_ignores=[]), str(audit), 'exec')
-    paths = ('cmd/portable-launcher/main_windows.go', 'cmd/portable-bootstrap/main.go',
-             'cmd/windows-app-launcher/main.go', 'internal/windowsapp/entry_windows.go',
-             'internal/windowsapp/session_windows.go', 'internal/windowsapp/public_entry_test.go',
-             'internal/controllertransport/client.go', 'deploy/package-builds.sh')
-    sources = {name: (ROOT/name).read_text(encoding='utf-8') for name in paths}
-    def verify(changes=None):
-        content = {**sources, **(changes or {})}; errors = []
-        def need(path, *parts):
-            errors.extend(path+': missing '+part for part in parts if part not in content[path])
-        def no(path, *parts):
-            errors.extend(path+': forbidden '+part for part in parts if part in content[path])
-        scope = {'need':need, 'no':no}; exec(code, scope); scope['windows_controller_lifecycle']()
-        return errors
-    require(not verify(), 'Current checked-launcher audit failed')
-    package = 'deploy/package-builds.sh'; owner = 'internal/controllertransport/client.go'
-    mutations = (
-        (package, '$process=Start-Process @start', '$process=$null'),
-        (package, '$process.Refresh()', 'Stop-Process -InputObject $controller -Force'),
-        (owner, 'subtle.ConstantTimeCompare([]byte(receipt.Token), []byte(client.shutdown)) != 1', 'false'),
-        ('internal/windowsapp/session_windows.go', 's.controller.Wait(ctx)', 's.self.Wait(ctx)'),
-        ('internal/windowsapp/entry_windows.go', 'session.Close(retirement)', 'error(nil)'),
-        ('cmd/portable-launcher/main_windows.go', 'windowsapp.Main(true)', 'windowsapp.Main(false)'),
-    )
-    for path, before, after in mutations:
-        require(before in sources[path], 'Lifecycle audit mutation drifted')
-        require(verify({path:sources[path].replace(before,after)}), 'Broken checked-launcher invariant passed its actual audit: '+before)
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--shell', default='pwsh')
     args = parser.parse_args()
     bash_resolution_contracts()
-    audit_contracts()
     shell = shutil.which(args.shell)
     require(shell is not None, 'Required PowerShell executable is unavailable: '+args.shell)
     from test_windows_package_session import check as check_package_session, shell_environment

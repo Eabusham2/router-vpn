@@ -456,38 +456,6 @@ func TestHostnameTCPProbeCounters(t *testing.T){
                     with self.assertRaisesRegex(ValueError, 'required function|case inventory'):
                         GATE.namespace_program(hashlib.sha256(changed).hexdigest())
 
-    def test_required_workflow_and_native_architectures(self):
-        value=(ROOT/'.github/workflows/server-node-chain-encrypted.yml').read_text();workflow(value)
-        for before,after in (('          - arch: arm64\n            runner: ubuntu-24.04-arm\n',''),
-                            ('  workflow_call:\n','  workflow_call:\n    inputs: {}\n'),
-                            ('  encrypted:\n','  encrypted:\n    if: false\n'),
-                            ('    timeout-minutes: 105','    continue-on-error: true\n    timeout-minutes: 105'),
-                            (' || github.run_id }}',' || github.ref }}'), ('--standalone --require-commit','--compile-only --require-commit')):
-            with self.subTest(before=before), self.assertRaises(ValueError): workflow(value.replace(before,after,1))
-
-
-    def test_direct_push_coalesces_without_cancelling_native_or_exact_callers(self):
-        raw = (ROOT/'.github/workflows/server-node-chain-encrypted.yml').read_text()
-        self.assertEqual(workflow_concurrency_cases(raw), 12)
-
-    def test_removed_concurrency_boundaries_cannot_pass(self):
-        raw = (ROOT/'.github/workflows/server-node-chain-encrypted.yml').read_text()
-        changes = (
-            ('active-native-cancel', 'cancel-in-progress: false', 'cancel-in-progress: true'),
-            ('missing-event-boundary', "github.event_name == 'push' && ", ''),
-            ('missing-main-boundary', "github.ref == 'refs/heads/main' && ", ''),
-            ('missing-caller-boundary', "github.workflow == 'Ordered Server encrypted suffix acceptance' && ", ''),
-            ('shared-manual-lane', ' || github.run_id }}', ' || github.ref }}'),
-            ('commit-per-push-lane', '&& github.ref ||', '&& github.sha ||'),
-            ('run-per-push-lane', '&& github.ref ||', '&& github.run_id ||'),
-            ('shared-leaf-prefix', '  group: server-node-chain-encrypted-', '  group: native-shared-'),
-        )
-        for name, before, after in changes:
-            self.assertEqual(raw.count(before), 1, name)
-            with self.subTest(change=name), self.assertRaises(ValueError):
-                workflow_concurrency_cases(raw.replace(before, after, 1))
-
-
 class ImportedServerBoundaries(unittest.TestCase):
     def sample(self, case='original'):
         original=case.removeprefix('prefix-').removeprefix('hostname-')

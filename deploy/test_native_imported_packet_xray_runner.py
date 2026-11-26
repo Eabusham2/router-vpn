@@ -36,26 +36,6 @@ class PacketReferenceInventory(unittest.TestCase):
             self.assertTrue(any(fnmatch.fnmatchcase(relative, pattern) for pattern in patterns),
                             'Original packet source no longer schedules its native reference: '+relative)
 
-    def test_every_original_input_schedules_its_recorded_reference_workflow(self):
-        self.check_original_input_triggers((ROOT/'.github/workflows/imported-packet-reality-native.yml').read_text())
-
-    def test_each_captured_router_owner_trigger_is_required(self):
-        text = (ROOT/'.github/workflows/imported-packet-reality-native.yml').read_text()
-        owners = sorted(path.relative_to(ROOT).as_posix() for path in gate.inputs()
-                        if path.parent == ROOT/'cmd/router-agent')
-        self.assertEqual(set(owners), {
-            'cmd/router-agent/multihop_tor_process.go',
-            'cmd/router-agent/multihop_node_chain_lease.go',
-            'cmd/router-agent/multihop_node_chain_process.go',
-            'cmd/router-agent/multihop_node_chain_candidate_process.go',
-            'cmd/router-agent/relay_root.go',
-        })
-        for owner in owners:
-            line = "      - '"+owner+"'\n"
-            self.assertEqual(text.count(line), 1)
-            with self.subTest(owner=owner), self.assertRaisesRegex(AssertionError, owner):
-                self.check_original_input_triggers(text.replace(line, '', 1))
-
     def test_exact_original_capture_and_native_inventory(self):
         self.assertEqual(len(gate.CAPTURE.FILES),36)
         self.assertEqual(len(gate.CAPTURE.IMPORTED.names(gate.CAPTURE.CORE)),298)

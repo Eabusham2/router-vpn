@@ -242,16 +242,6 @@ class NativeHostVerdicts(unittest.TestCase):
                         G.BUILD.verify_installed_darwin_host(None, bundle, 'darwin/arm64',
                             {G.FLAG:'1','GOOS':'darwin','GOARCH':'arm64'})
 
-    def test_workflow_explicitly_selects_gate_before_build_and_archive(self):
-        text = (ROOT/'.github/workflows/desktop-native-runtime.yml').read_text()
-        opt = text.index('export ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE=1')
-        build = text.index('python3 deploy/build-native-runtime.py "${runtime_args[@]}"')
-        archive = text.index('python3 deploy/native-runtime-bundle.py archive')
-        self.assertLess(opt, build)
-        self.assertLess(build, archive)
-        self.assertIn("if [[ '${{ matrix.target }}' == darwin/* ]]; then", text[:opt])
-
-
 class ActualBaselineIdentity(unittest.TestCase):
     def test_original_policy_identity_reaches_actual_saved_profile_validator(self):
         spec = importlib.util.spec_from_file_location('macos_baseline_identity', ROOT/'deploy/test_macos_external_baseline_identity.py')

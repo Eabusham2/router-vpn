@@ -28,27 +28,6 @@ def events(package, case):
 
 
 class ImportedSSContracts(unittest.TestCase):
-    def test_shared_partition_matches_required_source_contract_and_xray_shards(self):
-        spec = importlib.util.spec_from_file_location('shared_multihop_partition', ROOT / 'deploy/test_mobile_multihop_groups.py')
-        shared = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(shared)
-        actual = shared.prefix_inventory()
-        dedicated = [(package, case) for package, case in G.source_cases() if case.name.startswith('shared-prefix-')]
-        self.assertEqual(len(dedicated), 6)
-        self.assertEqual([(selection, expected) for _, _, selection, expected in actual],
-                         [(case.selection, case.expected) for _, case in dedicated])
-        self.assertEqual({package for package, _ in dedicated}, {G.MOBILE})
-        # The original required SS workflow owns these same actual source cases;
-        # no duplicated release job or reduction of its strict provenance.
-        workflow_spec = importlib.util.spec_from_file_location('ss_prefix_workflow_required', ROOT / 'deploy/test_desktop_node_chain_ss_prefix_runner.py')
-        workflow = importlib.util.module_from_spec(workflow_spec)
-        workflow_spec.loader.exec_module(workflow)
-        source = (ROOT / '.github/workflows/ss-node-chain-prefix.yml').read_text()
-        release = (ROOT / '.github/workflows/release-candidate.yml').read_text()
-        workflow.workflow_contract(source, release)
-        with self.assertRaises(ValueError):
-            workflow.workflow_contract(source, release.replace('desktop-connect-child, ss-prefix-native]', 'desktop-connect-child]'))
-
     def test_preserved_and_additive_exact_inventories(self):
         phases = G.source_cases()
         self.assertEqual(len(phases), 17)

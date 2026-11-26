@@ -375,7 +375,7 @@ def sources():
              ROOT/"client/linux/routervpn-controller-auth-v1.h", ROOT/"client/linux/routervpn-performance-v17.inc",
              ROOT/"client/linux/routervpn-telemetry-v9.inc", ROOT/"client/linux/routervpn-globe-v10.inc",
              ROOT/"client/linux/routervpn-ordered-nodes-v1.inc", ROOT/"client/linux/test-extended-throughput.c", ROOT/"client/linux/build-native-app.sh",
-             ROOT/".github/workflows/linux-native-app.yml"]
+             ROOT/".github/workflows/build-all.yml"]
     for path in paths:
         if path.is_symlink() or not path.is_file(): raise AssertionError("Lost original GTK source: "+str(path))
     return {str(path.relative_to(ROOT)):hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
@@ -385,7 +385,6 @@ def check_sources():
     before = sources(); source = SOURCE.read_text(); build = (ROOT/"client/linux/build-native-app.sh").read_text()
     performance = (ROOT/"client/linux/routervpn-performance-v17.inc").read_text()
     telemetry = (ROOT/"client/linux/routervpn-telemetry-v9.inc").read_text()
-    workflow = (ROOT/".github/workflows/linux-native-app.yml").read_text()
     assert '#include "routervpn-ordered-latency-v1.inc"' in performance
     assert '"50 responses per hop"' in performance and 'linux_ordered_latency_open_v1(p->app)' in performance
     assert '*actions[10]' in performance and 'id<10' in performance and 'i<10' in performance
@@ -393,8 +392,6 @@ def check_sources():
     assert build.count('"$ORDERED_LATENCY_INC"') == 2
     assert build.index('G_CALLBACK(linux_ordered_latency_parent_delete_v1)') < build.index('G_CALLBACK(on_delete)', build.index('install_new ='))
     assert 'g_object_get_data(G_OBJECT(w),"ordered-latency-state")!=NULL' in telemetry
-    assert 'python3 deploy/test_linux_ordered_latency.py --self-test' in workflow
-    assert workflow.count("'deploy/test_linux_ordered_latency.py'") == 2
     for required in ('s->job_generation[kind] == s->generation', '!(s->complete && s->drained)',
                      'linux_ol_same_capture_v1(capture,', 'linux_ol_receipt_v1(json_node_get_object(record), capture, node, (int)json_array_get_length(json_node_get_array(s->nodes)), TRUE, json_node_get_array(s->nodes))',
                      's->jobs[i] != NULL', 'gtk_window_close(GTK_WINDOW(parent))',

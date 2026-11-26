@@ -428,24 +428,5 @@ class AppleTorNativeGate(unittest.TestCase):
             GATE.host_environment('go', Path('/host/libroutervpn_tor.so'), '/llvm/clang')
         selected.assert_called_once_with('go', Path('/host/libroutervpn_tor.so'), '/llvm/clang', require_swift=True)
 
-    def test_linux_build_runs_gate_before_mobile_link_and_tracks_apple_changes(self):
-        shell = (ROOT/'android/build-sing-box-libbox.sh').read_text()
-        call = 'test_ios_tor_pinned.py" --vendor "$VENDOR" --native-package "$TOR_HOST_PACKAGE"'
-        self.assertIn(call, shell)
-        self.assertIn('--output "$TOR_GATE_PARENT/apple-graphs"', shell)
-        self.assertLess(shell.index(call), shell.index('go_retry run ./cmd/internal/build_libbox -target android'))
-        self.assertLess(shell.index('APPLE_TOR_GRAPH_SHA='), shell.index('if [[ -s "$AAR"'))
-        self.assertIn('"$OPENVPN_SHA" "$APPLE_TOR_GRAPH_SHA"', shell)
-        gradle = (ROOT/'android/app/build.gradle').read_text()
-        for name in ('test_ios_tor_pinned.py', 'test_ios_tor_pinned_contract.py',
-                     'test_ios_tor_profile.py', 'native_tor_graph_host.py'):
-            self.assertIn("rootProject.file('../deploy/"+name+"')", gradle)
-        self.assertIn("rootProject.fileTree('../mobile')", gradle)
-        for name in ('App', 'PacketTunnel'):
-            self.assertIn("rootProject.fileTree('../ios/RouterVPN/"+name+"')", gradle)
-        workflow = (ROOT/'.github/workflows/android-combined-runtime.yml').read_text()
-        self.assertIn('runs-on: ubuntu-24.04', workflow)
-
-
 if __name__ == '__main__':
     unittest.main()

@@ -51,9 +51,6 @@ def shipping(model=None, settings=None, build=None):
     assert 'Last recorded interface MTU:' in settings
     assert 'capturedDevice?.note ??' in settings, "Device capability note is not shown by the shipping form"
     assert '("Auto — default","auto")' in settings, "Auto label invents a path measurement"
-    workflow = (ROOT / ".github/workflows/macos-native-app.yml").read_text()
-    assert workflow.count("- 'deploy/test_macos_device_settings.py'") == 2, "Fixture-only edits do not trigger both native workflow events"
-    assert 'run: python3 deploy/test_macos_device_settings.py\n' in workflow, "macOS workflow omitted executable device defects"
     for key in ('"dns_mode":', '"effective_mtu":', '"start_layer":', '"external":'):
         assert key not in model, "Narrow common policy copied unrelated field " + key
 

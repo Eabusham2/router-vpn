@@ -74,7 +74,7 @@ PHASES = {'connected': CASES, 'draft': DRAFT_CASES, 'typed-entry': TYPED_ENTRY_C
 REQUIRED_INPUTS = (
     'deploy/build-native-runtime.py', 'deploy/test_desktop_socks_execution_controller.py',
     'deploy/test_desktop_selected_candidate_controller.py', 'deploy/test_desktop_selected_candidate_controller_runner.py',
-    '.github/workflows/multihop-contract.yml', 'go.mod',
+    '.github/workflows/build-all.yml', 'go.mod',
     'cmd/client/connection_profile_node_chain.go', 'cmd/client/desktop_node_chain_execution_host.go',
     'cmd/client/desktop_node_chain_execution_launch.go', 'cmd/client/desktop_node_chain_execution_session.go',
     'cmd/client/desktop_node_chain_policy_dispatch.go', 'cmd/client/desktop_node_chain_execution_restore.go', 'cmd/client/desktop_node_chain_execution_owned_test.go',
