@@ -65,7 +65,9 @@ func newDesktopLinuxNodeJournal(ctx context.Context, parent *desktopLinuxNodePar
 	if ctx == nil || ctx.Err() != nil || parent == nil || parent.parent == nil || parent.Current(ctx) != nil {
 		return nil, errors.New("Linux journal requires its original authenticated installed parent")
 	}
-	lifetime, cancel := context.WithCancel(parent.lifetime)
+	// Ordinary journal operations still require parent.Current. Keep its exact
+	// captured files live for the already-joined terminal transaction after EOF.
+	lifetime, cancel := context.WithCancel(parent.parent.retirement)
 	j := &desktopLinuxNodeJournal{parent: parent, ctx: lifetime, cancel: cancel, gate: make(chan struct{}, 1)}
 	p := parent.parent
 	select {
@@ -75,6 +77,9 @@ func newDesktopLinuxNodeJournal(ctx context.Context, parent *desktopLinuxNodePar
 	case <-lifetime.Done():
 		cancel()
 		return nil, lifetime.Err()
+	case <-parent.lifetime.Done():
+		cancel()
+		return nil, parent.lifetime.Err()
 	case <-p.gate:
 	}
 	if err := p.currentLocked(true); err != nil {
@@ -275,8 +280,14 @@ func (j *desktopLinuxNodeJournal) checkParent(ctx context.Context) error {
 
 func (j *desktopLinuxNodeJournal) operation(parent context.Context) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(parent)
-	stop := context.AfterFunc(j.ctx, cancel)
-	return ctx, func() { stop(); cancel() }
+	// Both constructors remain ordinary admission, even though the captured
+	// journal files must survive owner EOF for checked terminal retirement.
+	stopJournal := context.AfterFunc(j.ctx, cancel)
+	stopAdmission := context.AfterFunc(j.parent.lifetime, cancel)
+	if j.ctx.Err() != nil || j.parent.lifetime.Err() != nil {
+		cancel()
+	}
+	return ctx, func() { stopAdmission(); stopJournal(); cancel() }
 }
 
 func (j *desktopLinuxNodeJournal) openRoot() error {

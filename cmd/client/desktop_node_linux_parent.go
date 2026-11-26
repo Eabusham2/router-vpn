@@ -23,13 +23,16 @@ import (
 type desktopLinuxNodeObject = linuxprotection.NativeObject
 type desktopLinuxNodeParentRecord = linuxprotection.ParentRecord
 
+var errDesktopLinuxNodeOwnerClosed = errors.New("Linux Node parent lost its original desktop lifetime")
+
 type desktopLinuxNodeParent struct {
 	controller                            *ownedDesktopController
 	input, installLock, processLock       *os.File // Borrowed original owners; never closed here.
 	ownerDone                             <-chan struct{}
 	credentials                           [32]byte
-	ctx                                   context.Context
-	cancel                                context.CancelFunc
+	ctx                                   context.Context    // Admission ends immediately with the original desktop.
+	retirement                            context.Context    // Original witnesses survive only for checked terminal cleanup.
+	cancel                                context.CancelFunc // Revokes both lifetimes after identity loss or joined retirement.
 	joined                                chan struct{}
 	gate                                  chan struct{}
 	installationAnchor, root              *os.Root
@@ -92,9 +95,10 @@ func newDesktopLinuxNodeParent(owner *ownedDesktopController) (*desktopLinuxNode
 		owner.input == nil || owner.installLock == nil || owner.processLock == nil || owner.ownerDone == nil {
 		return nil, errors.New("Linux Node parent requires its original authenticated installed controller")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	retirement, finishRetirement := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(retirement)
 	p := &desktopLinuxNodeParent{controller: owner, input: owner.input, installLock: owner.installLock, processLock: owner.processLock,
-		ownerDone: owner.ownerDone, credentials: desktopLinuxNodeCredentials(owner), ctx: ctx, cancel: cancel,
+		ownerDone: owner.ownerDone, credentials: desktopLinuxNodeCredentials(owner), ctx: ctx, retirement: retirement, cancel: finishRetirement,
 		joined: make(chan struct{}), gate: make(chan struct{}, 1)}
 	p.gate <- struct{}{}
 	go func() {
@@ -329,10 +333,23 @@ func (p *desktopLinuxNodeParent) currentRetainedLocked(published bool) error {
 	return nil
 }
 
-func (p *desktopLinuxNodeParent) currentRetainedLockedContext(ctx context.Context, published bool) error {
-	if p == nil || p.closed || !p.complete || p.ctx == nil || p.ctx.Err() != nil || p.installationAnchor == nil || p.root == nil || p.image == nil || p.imageInfo == nil || p.processWitness == nil ||
+func (p *desktopLinuxNodeParent) currentRetainedLockedContext(ctx context.Context, published, retiring bool) error {
+	if p == nil {
+		return errors.New("Linux Node parent has no live complete native capture")
+	}
+	lifetime := p.ctx
+	if retiring {
+		lifetime = p.retirement
+	}
+	if p.closed || !p.complete || p.ctx == nil || p.retirement == nil || lifetime == nil || p.installationAnchor == nil || p.root == nil || p.image == nil || p.imageInfo == nil || p.processWitness == nil ||
 		p.controller == nil || os.Getuid() != 0 || os.Geteuid() != 0 || os.Getpid() != p.record.ProcessID {
 		return errors.New("Linux Node parent has no live complete native capture")
+	}
+	if err := lifetime.Err(); err != nil {
+		if !retiring && p.retirement.Err() == nil {
+			return errDesktopLinuxNodeOwnerClosed
+		}
+		return err
 	}
 	owner := p.controller
 	if owner.processID != p.record.ProcessID || owner.callerUID != p.record.CallerUID || owner.nativeOwner != nil ||
@@ -342,7 +359,11 @@ func (p *desktopLinuxNodeParent) currentRetainedLockedContext(ctx context.Contex
 	}
 	select {
 	case <-p.ownerDone:
-		return errors.New("Linux Node parent lost its original desktop lifetime")
+		// EOF revokes admission, not the exact original terminal cleanup.
+		// Only the permanent parent stop latch permits this retained readback.
+		if !retiring || !p.stopping {
+			return errDesktopLinuxNodeOwnerClosed
+		}
 	default:
 	}
 	anchor, err := p.installationAnchor.Stat(".")
@@ -412,8 +433,14 @@ func (p *desktopLinuxNodeParent) currentRetainedLockedContext(ctx context.Contex
 	}
 	procPID, start, err := readDesktopLinuxNodeProcessStart()
 	boot, bootErr := readDesktopLinuxNodeBootID()
-	if err != nil || bootErr != nil || procPID != p.record.ProcProcessID || start != p.record.StartTicks || boot != p.record.BootID || p.ctx.Err() != nil {
+	if err != nil || bootErr != nil || procPID != p.record.ProcProcessID || start != p.record.StartTicks || boot != p.record.BootID {
 		return errors.Join(err, bootErr, errors.New("Linux Node parent lost its original native process start or boot"))
+	}
+	if err := lifetime.Err(); err != nil {
+		if !retiring && p.retirement.Err() == nil {
+			return errDesktopLinuxNodeOwnerClosed
+		}
+		return err
 	}
 	process, err := p.processWitness.Current(ctx)
 	if err != nil {
@@ -433,8 +460,12 @@ func (p *desktopLinuxNodeParent) Current(ctx context.Context) error {
 }
 
 func (p *desktopLinuxNodeParent) observeCurrent(ctx context.Context, retirement bool) error {
-	if p == nil || ctx == nil || p.ctx == nil || p.ctx.Err() != nil || p.gate == nil {
+	if p == nil || ctx == nil || p.ctx == nil || p.retirement == nil || p.gate == nil {
 		return errors.New("Linux Node parent readback has no live captured caller")
+	}
+	lifetime := p.ctx
+	if retirement {
+		lifetime = p.retirement
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -442,19 +473,19 @@ func (p *desktopLinuxNodeParent) observeCurrent(ctx context.Context, retirement 
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-p.ctx.Done():
-		return p.ctx.Err()
+	case <-lifetime.Done():
+		return lifetime.Err()
 	case <-p.gate:
 	}
 	defer func() { p.gate <- struct{}{} }()
 	if p.stopping && !retirement {
 		return errors.New("Linux Node parent has permanently stopped native admission")
 	}
-	if err := p.currentRetainedLockedContext(ctx, true); err != nil {
+	if err := p.currentRetainedLockedContext(ctx, true, retirement); err != nil {
 		// A later path restoration cannot revive a parent whose native
 		// identity was observed missing or replaced. Keep its old descriptors
 		// solely for joined teardown; a new bootstrap captures a new parent.
-		if !common.ObservationContextExpired(ctx, err) {
+		if !common.ObservationContextExpired(ctx, err) && !errors.Is(err, errDesktopLinuxNodeOwnerClosed) {
 			p.cancel()
 		}
 		return err
@@ -608,7 +639,7 @@ func (c *desktopLinuxNodeParentCapture) currentApp() error {
 }
 
 func (c *desktopLinuxNodeParentCapture) currentAppMode(retirement bool) error {
-	if c == nil || c.app == nil || c.parent == nil || c.controller == nil || c.lifetime == nil || c.lifetime.Err() != nil {
+	if c == nil || c.app == nil {
 		return errors.New("Linux Node parent lost its captured application")
 	}
 	c.app.mu.Lock()
@@ -617,8 +648,16 @@ func (c *desktopLinuxNodeParentCapture) currentAppMode(retirement bool) error {
 }
 
 func (c *desktopLinuxNodeParentCapture) currentAppLocked(retirement bool) error {
-	if c == nil || c.app == nil || c.parent == nil || c.controller == nil || c.lifetime == nil || c.lifetime.Err() != nil {
+	if c == nil || c.app == nil || c.parent == nil || c.controller == nil || c.lifetime == nil ||
+		c.lifetime != c.parent.ctx || c.parent.retirement == nil || c.parent.retirement.Err() != nil {
 		return errors.New("Linux Node parent lost its captured application")
+	}
+	// Ordinary operations still observe EOF at admission, even before the
+	// watcher cancels ctx. Only the latched original terminal drain may use
+	// the separately retained descriptor lifetime; native checks still bind
+	// every original pipe, credential, namespace, image and installation.
+	if (!retirement || !c.app.closing) && (c.lifetime.Err() != nil || c.controller.retired()) {
+		return errDesktopLinuxNodeOwnerClosed
 	}
 	if c.app.closing && !retirement || c.app.localController != c.controller || c.controller.nodeParent != c.parent || c.record != c.parent.record ||
 		c.app.cfg.ProfilesFile != filepath.Join(linuxOwnedControllerRoot, "routers.json") ||

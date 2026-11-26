@@ -985,7 +985,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
             }
             _ = control.scrollToVisible(control.bounds)
             content.layoutSubtreeIfNeeded()
-            let visible = control.visibleRect
+            let visible = control.bounds.intersection(control.visibleRect)
             guard control.bounds.width >= 20, control.bounds.height >= 16,
                   visible.width >= control.bounds.width - 1,
                   visible.height >= control.bounds.height - 1 else {
@@ -994,7 +994,9 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
             let shown = control.convert(visible, to: content)
             for otherID in primary where otherID != id {
                 guard let other = owner.findUnifiedView(otherID), !other.isHidden else { continue }
-                let overlap = shown.intersection(other.convert(other.visibleRect, to: content))
+                let otherVisible = other.bounds.intersection(other.visibleRect)
+                guard !otherVisible.isNull, !otherVisible.isEmpty else { continue }
+                let overlap = shown.intersection(other.convert(otherVisible, to: content))
                 guard overlap.isNull || overlap.width <= 1 || overlap.height <= 1 else {
                     return fail("macOS layout self-test: overlapping \(id) / \(otherID) at \(Int(size.width))×\(Int(size.height))", size: size, views: [control, other])
                 }

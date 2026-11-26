@@ -55,6 +55,11 @@ func (a *app) retireNativeNodeForShutdownContext(ctx context.Context) error {
 	if !closing {
 		return errors.New("Linux terminal retirement requires the application's permanent shutdown latch")
 	}
+	// Close ordinary admission before resuming any already accepted cleanup.
+	// This captures original transactions but does not yet retire or release them.
+	if err := parent.stopTransactionAdmission(ctx); err != nil {
+		return err
+	}
 	// Finish only an already accepted Off on this retained session. Shutdown
 	// cannot invent a removal intent or adopt protection from a saved record.
 	select {

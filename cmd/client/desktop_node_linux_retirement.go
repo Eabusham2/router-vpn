@@ -179,12 +179,13 @@ func (j *desktopLinuxNodeJournal) checkRetirementAppend(ctx context.Context, t *
 // parent's native witnesses for their source/engine/journal retirement. Only
 // after every transaction has settled may the parent join remaining dependents,
 // clean its original empty checkpoint and cancel the retained parent lifetime.
-func (p *desktopLinuxNodeParent) prepareTransactionShutdown(ctx context.Context) error {
+func (p *desktopLinuxNodeParent) stopTransactionAdmission(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-p.gate:
 	}
+	defer func() { p.gate <- struct{}{} }()
 	if !p.stopping {
 		p.stopping = true
 		for dependent := range p.dependents {
@@ -192,6 +193,18 @@ func (p *desktopLinuxNodeParent) prepareTransactionShutdown(ctx context.Context)
 				p.shutdownTransactions = append(p.shutdownTransactions, transaction)
 			}
 		}
+	}
+	return nil
+}
+
+func (p *desktopLinuxNodeParent) prepareTransactionShutdown(ctx context.Context) error {
+	if err := p.stopTransactionAdmission(ctx); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-p.gate:
 	}
 	var bootstraps []*linuxStandardBootBootstrapClient
 	for dependent := range p.dependents {

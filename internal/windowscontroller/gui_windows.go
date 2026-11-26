@@ -7,11 +7,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -165,7 +167,22 @@ func launchGUIChildWithOutput(ctx context.Context, image *Image, build func(uint
 	}
 	defer syscall.CloseHandle(nul)
 	if capture {
-		child.output = &guiSelfTestOutput{}
+		child.output = &guiSelfTestOutput{redactions: []string{directory}}
+		for i, argument := range arguments[:len(arguments)-1] {
+			switch strings.ToLower(argument) {
+			case "-controllerpipe":
+				child.output.redactions = append(child.output.redactions, arguments[i+1])
+			case "-file":
+				child.output.redactions = append(child.output.redactions, filepath.Dir(arguments[i+1]))
+			}
+		}
+		for _, entry := range environment {
+			name, value, _ := strings.Cut(entry, "=")
+			switch strings.ToUpper(name) {
+			case "HOMEVPN_ROOT", "HOMEVPN_CLIENT_CONFIG", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP":
+				child.output.redactions = append(child.output.redactions, value)
+			}
+		}
 		err = withDescriptor(identity.SID, func(attributes *syscall.SecurityAttributes) error {
 			attributes.InheritHandle = 1
 			return syscall.CreatePipe(&child.output.read, &child.output.write, attributes, 4096)
@@ -543,6 +560,7 @@ type guiSelfTestOutput struct {
 	bytes       uint64
 	digest      string
 	readFailed  bool
+	redactions  []string
 }
 
 func (output *guiSelfTestOutput) closeWriter() error {
@@ -601,9 +619,114 @@ func (output *guiSelfTestOutput) close(ctx context.Context) error {
 	return nil
 }
 
-// SelfTestOutput returns only fixed markers, bounded source coordinates and
-// digests after checked retirement. Raw interpreter text may contain private
-// values and is never printed, persisted or returned to the application.
+// guiSelfTestText decodes only the already bounded prefix. PowerShell can
+// write UTF-16 or CLIXML before the App script reaches its own error handler.
+func guiSelfTestText(sample []byte) string {
+	little, big := false, false
+	if len(sample) >= 2 {
+		little, big = sample[0] == 0xff && sample[1] == 0xfe, sample[0] == 0xfe && sample[1] == 0xff
+		if little || big {
+			sample = sample[2:]
+		} else {
+			even, odd := 0, 0
+			for i, value := range sample {
+				if value == 0 {
+					if i%2 == 0 {
+						even++
+					} else {
+						odd++
+					}
+				}
+			}
+			little, big = odd > len(sample)/8 && even == 0, even > len(sample)/8 && odd == 0
+		}
+	}
+	var text string
+	if little || big {
+		units := make([]uint16, len(sample)/2)
+		for i := range units {
+			if little {
+				units[i] = uint16(sample[2*i]) | uint16(sample[2*i+1])<<8
+			} else {
+				units[i] = uint16(sample[2*i])<<8 | uint16(sample[2*i+1])
+			}
+		}
+		text = string(utf16.Decode(units))
+	} else {
+		text = strings.TrimPrefix(strings.ToValidUTF8(string(sample), "\uFFFD"), "\uFEFF")
+	}
+	if start := strings.Index(text, "<Objs"); start >= 0 {
+		decoder := xml.NewDecoder(strings.NewReader(text[start:]))
+		var parts []string
+		for {
+			token, err := decoder.Token()
+			if err != nil {
+				break
+			}
+			if value, ok := token.(xml.CharData); ok && strings.TrimSpace(string(value)) != "" {
+				parts = append(parts, string(value))
+			}
+		}
+		if len(parts) > 0 {
+			text = text[:start] + strings.Join(parts, "\n")
+		}
+		text = regexp.MustCompile(`_x[0-9A-Fa-f]{4}_`).ReplaceAllStringFunc(text, func(value string) string {
+			code, _ := strconv.ParseUint(value[2:6], 16, 16)
+			return string(rune(code))
+		})
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
+}
+
+// guiSelfTestExcerpt retains interpreter wording after removing exact private
+// launch values and credential-shaped material. It has no independent reader
+// or output path: the original SelfTest-only pipe must already have joined.
+func guiSelfTestExcerpt(text string, private []string) (string, bool) {
+	text = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`).ReplaceAllString(text, "")
+	values := append([]string(nil), private...)
+	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
+	for _, value := range values {
+		if len(value) >= 4 {
+			text = regexp.MustCompile("(?i)"+regexp.QuoteMeta(value)).ReplaceAllString(text, "[private-launch-value]")
+		}
+	}
+	for _, rule := range [][2]string{
+		{`(?s)-----BEGIN [^-]*PRIVATE KEY-----.*?(?:-----END [^-]*PRIVATE KEY-----|$)`, "[private-key]"},
+		{`(?i)(-ControllerParentHandle[ \t]+)[0-9]+`, "${1}[private-handle]"},
+		{`(?i)(\b(?:password|passwd|pwd|secret|private[_-]?key|preshared[_-]?key|api[_-]?key|(?:(?:access|refresh|auth|api|owner)[_-]?)?token)\b["']?[ \t]*[:=][ \t]*)(?:"[^"]*"|'[^']*'|[^\s,;]+)`, "${1}[credential]"},
+		{`(?i)(\b(?:bearer|basic)[ \t]+)[A-Za-z0-9_+/=.-]+`, "${1}[credential]"},
+		{`(?i)([a-z][a-z0-9+.-]*://)[^/\s@]+@`, "${1}[credential]@"},
+		{`\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`, "[credential]"},
+	} {
+		text = regexp.MustCompile(rule[0]).ReplaceAllString(text, rule[1])
+	}
+	text = regexp.MustCompile(`\b[A-Za-z0-9_+/=-]{32,}\b`).ReplaceAllStringFunc(text, func(value string) string {
+		switch strings.ToLower(value) {
+		case "routervpn-windows-controllertransport", "routervpn-windows-telemetry", "routervpn-windows-product-v2":
+			return value
+		default:
+			return "[opaque-value]"
+		}
+	})
+	text = strings.Map(func(value rune) rune {
+		if value < 32 && value != '\n' && value != '\t' || value == 127 {
+			return ' '
+		}
+		return value
+	}, text)
+	text = strings.TrimSpace(text)
+	truncated := len(text) > 4096
+	if truncated {
+		text = text[:4096]
+		for !utf8.ValidString(text) {
+			text = text[:len(text)-1]
+		}
+	}
+	return text, truncated
+}
+
+// SelfTestOutput returns a bounded sanitized interpreter excerpt, fixed
+// classifications and digests only after the original child and reader retire.
 func (child *GUIChild) SelfTestOutput() string {
 	if child == nil {
 		return ""
@@ -614,7 +737,9 @@ func (child *GUIChild) SelfTestOutput() string {
 		return ""
 	}
 	output := child.output
-	text := strings.ToLower(strings.ReplaceAll(string(output.sample), "\x00", ""))
+	decoded := guiSelfTestText(output.sample)
+	excerpt, excerptTruncated := guiSelfTestExcerpt(decoded, output.redactions)
+	text := strings.ToLower(decoded)
 	markers := []string{}
 	for _, marker := range []string{
 		"parameterbinding", "argumenttransformation", "parsererror", "commandnotfound",
@@ -640,17 +765,19 @@ func (child *GUIChild) SelfTestOutput() string {
 	compilerCodes := regexp.MustCompile(`\bcs[0-9]{4}\b`).FindAllString(text, 8)
 	sampleDigest := sha256.Sum256(output.sample)
 	report, err := json.Marshal(struct {
-		Bytes         uint64   `json:"bytes"`
-		SHA256        string   `json:"sha256"`
-		SampleBytes   int      `json:"sample_bytes"`
-		SampleSHA256  string   `json:"sample_sha256"`
-		Truncated     bool     `json:"truncated"`
-		ReadFailed    bool     `json:"read_failed"`
-		ReaderJoined  bool     `json:"reader_joined"`
-		Markers       []string `json:"markers"`
-		Locations     []string `json:"locations"`
-		CompilerCodes []string `json:"compiler_codes"`
-	}{output.bytes, output.digest, len(output.sample), hex.EncodeToString(sampleDigest[:]), output.bytes > uint64(len(output.sample)), output.readFailed, true, markers, locations, compilerCodes})
+		Bytes            uint64   `json:"bytes"`
+		SHA256           string   `json:"sha256"`
+		SampleBytes      int      `json:"sample_bytes"`
+		SampleSHA256     string   `json:"sample_sha256"`
+		Truncated        bool     `json:"truncated"`
+		ReadFailed       bool     `json:"read_failed"`
+		ReaderJoined     bool     `json:"reader_joined"`
+		Markers          []string `json:"markers"`
+		Locations        []string `json:"locations"`
+		CompilerCodes    []string `json:"compiler_codes"`
+		Excerpt          string   `json:"excerpt"`
+		ExcerptTruncated bool     `json:"excerpt_truncated"`
+	}{output.bytes, output.digest, len(output.sample), hex.EncodeToString(sampleDigest[:]), output.bytes > uint64(len(output.sample)), output.readFailed, true, markers, locations, compilerCodes, excerpt, excerptTruncated})
 	if err != nil {
 		return `{"classification_failed":true,"reader_joined":true}`
 	}
