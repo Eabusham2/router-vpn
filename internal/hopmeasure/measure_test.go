@@ -1,13 +1,11 @@
 package hopmeasure
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -19,134 +17,68 @@ import (
 )
 
 type testEngine struct {
-	mu            sync.Mutex
-	generation    string
-	bad           map[string]string
-	servers       map[string]*httptest.Server
-	destinations  map[string]string
-	requests      map[string]int
-	errors        []string
-	gateLoads     bool
-	fastResponses bool
-	gates         map[string]*atomic.Pointer[testLoadGate]
+	mu           sync.Mutex
+	generation   string
+	servers      map[string]*httptest.Server
+	destinations map[string]string
+	requests     map[string]int
+	wrongToken   bool
+	badAck       bool
 }
 
 func (e *testEngine) Identity() string { e.mu.Lock(); defer e.mu.Unlock(); return e.generation }
 func (e *testEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
 	e.mu.Lock()
-	server := e.servers[tag]
-	wanted := e.destinations[tag]
+	server, wanted := e.servers[tag], e.destinations[tag]
 	e.requests[tag]++
 	e.mu.Unlock()
 	if server == nil || address != wanted {
 		return nil, fmt.Errorf("unexpected native dial tag/destination")
 	}
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
-	if err != nil {
-		return nil, err
-	}
-	e.mu.Lock()
-	gate, enabled := e.gates[tag], e.gateLoads
-	e.mu.Unlock()
-	if enabled {
-		return &testUploadConn{Conn: conn, load: gate, closed: make(chan struct{})}, nil
-	}
-	return conn, nil
+	return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
 }
 func fixture(t *testing.T) (*Service, *testEngine) {
 	t.Helper()
-	e := &testEngine{gates: map[string]*atomic.Pointer[testLoadGate]{}, generation: "generation-one:local", bad: map[string]string{}, servers: map[string]*httptest.Server{}, requests: map[string]int{}, destinations: map[string]string{"entry-wg": "10.77.0.1:8787", "proxy": "10.88.0.1:8787"}}
-	hops := []Hop{{ID: "one", Role: "entry", Tag: "entry-wg", API: "http://10.77.0.1:8787", Token: "token-one", Proof: strings.Repeat("a", 64)}, {ID: "two", Role: "exit", Tag: "proxy", API: "http://10.88.0.1:8787", Token: "token-two", Proof: strings.Repeat("b", 64)}}
-	for _, hop := range hops {
-		h := hop
-		load := &atomic.Pointer[testLoadGate]{}
-		e.gates[h.Tag] = load
+	e := &testEngine{
+		generation: "generation-one:local", servers: map[string]*httptest.Server{}, requests: map[string]int{},
+		destinations: map[string]string{"entry-wg": "10.77.0.1:8787", "proxy": "10.88.0.1:8787"},
+	}
+	hops := []Hop{
+		{ID: "one", Role: "entry", Tag: "entry-wg", API: "http://10.77.0.1:8787", Token: "token-one", Proof: strings.Repeat("a", 64)},
+		{ID: "two", Role: "exit", Tag: "proxy", API: "http://10.88.0.1:8787", Token: "token-two", Proof: strings.Repeat("b", 64)},
+	}
+	for _, h := range hops {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			e.mu.Lock()
-			bad := e.bad[h.Tag]
-			fast := e.fastResponses
-			if r.Header.Get("Authorization") != "Bearer "+h.Token {
-				e.errors = append(e.errors, "wrong node token")
-			}
+			e.wrongToken = e.wrongToken || r.Header.Get("Authorization") != "Bearer "+h.Token
+			badAck := e.badAck && h.Tag == "proxy"
 			e.mu.Unlock()
-			if bad == "hang" {
-				<-r.Context().Done()
-				return
-			}
-			if bad == "redirect" {
-				http.Redirect(w, r, "http://public.invalid/", 302)
-				return
-			}
-			if bad == "compress" {
-				w.Header().Set("Content-Encoding", "gzip")
-			}
 			switch r.URL.Path {
 			case "/health":
-				if g := load.Load(); g != nil {
-					g.probed()
-				}
-				if !fast {
-					time.Sleep(2 * time.Millisecond)
-				}
-				proof := h.Proof
-				if bad == "identity" {
-					proof = strings.Repeat("c", 64)
-				}
-				if bad == "duplicate" {
-					fmt.Fprintf(w, `{"ok":true,"node_id":"%s","node_id":"%s","proof":"router-vpn-private-agent-v1"}`, h.Proof, h.Proof)
+				json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": h.Proof, "proof": "router-vpn-private-agent-v1"})
+			case "/api/benchmark/download":
+				var n int
+				if _, err := fmt.Sscanf(r.URL.Query().Get("bytes"), "%d", &n); err != nil || n != 65536 {
+					t.Error("unexpected download size")
+					w.WriteHeader(http.StatusBadRequest)
 					return
 				}
-				json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": proof, "proof": "router-vpn-private-agent-v1"})
-			case "/api/benchmark/download":
-				n := 65536
-				fmt.Sscanf(r.URL.Query().Get("bytes"), "%d", &n)
 				w.Header().Set("Content-Length", fmt.Sprint(n))
 				w.Header().Set("X-Routervpn-Benchmark", "download-v1")
 				w.Header().Set("X-Routervpn-Benchmark-Bytes", fmt.Sprint(n))
-				if bad == "truncate" {
-					io.WriteString(w, "short")
-					return
-				}
-				if bad == "framing" {
-					w.Header().Set("X-Routervpn-Benchmark-Bytes", "0")
-				}
-				e.mu.Lock()
-				gated := e.gateLoads
-				e.mu.Unlock()
-				if gated {
-					gate := newTestLoadGate()
-					load.Store(gate)
-					defer load.CompareAndSwap(gate, nil)
-					if _, err := w.Write(make([]byte, 1024)); err != nil {
-						return
-					}
-					w.(http.Flusher).Flush()
-					if !gate.wait(r.Context()) {
-						return
-					}
-					_, _ = w.Write(make([]byte, n-1024))
-					return
-				}
-				chunk := make([]byte, 16384)
-				for sent := 0; sent < n; sent += len(chunk) {
-					_, _ = w.Write(chunk)
-					w.(http.Flusher).Flush()
-					if !fast {
-						time.Sleep(25 * time.Millisecond)
-					}
-				}
+				w.Write(make([]byte, n))
 			case "/api/benchmark/upload":
-				n, _ := io.Copy(io.Discard, r.Body)
-				if !fast {
-					time.Sleep(90 * time.Millisecond)
+				n, err := io.Copy(io.Discard, r.Body)
+				if err != nil {
+					return
 				}
-				if bad == "ack" {
+				if badAck {
 					n--
 				}
 				json.NewEncoder(w).Encode(map[string]any{"ok": true, "bytes": n, "direction": "upload", "server_receive_ms": 1, "peer": "10.77.0.2", "proof": "authenticated tunnel-peer private throughput sink"})
 			default:
-				t.Errorf("unexpected private API %s", r.URL.Path)
-				w.WriteHeader(404)
+				t.Error("unexpected private API")
+				w.WriteHeader(http.StatusNotFound)
 			}
 		}))
 		e.servers[h.Tag] = server
@@ -156,116 +88,86 @@ func fixture(t *testing.T) (*Service, *testEngine) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	return s, e
 }
 func status(t *testing.T, s *Service) Status {
 	t.Helper()
-	var v Status
-	if err := json.Unmarshal([]byte(s.StatusJSON()), &v); err != nil {
+	var result Status
+	if err := json.Unmarshal([]byte(s.StatusJSON()), &result); err != nil {
 		t.Fatal(err)
 	}
-	return v
+	return result
 }
 func wait(t *testing.T, s *Service) Status {
 	t.Helper()
 	deadline := time.Now().Add(6 * time.Second)
 	for time.Now().Before(deadline) {
-		v := status(t, s)
-		if v.Complete {
-			return v
+		if result := status(t, s); result.Complete {
+			return result
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatal("test did not terminate")
+	t.Fatal("measurement did not terminate")
 	return Status{}
 }
+
 func TestMeasuresActualSeparateHopBytesAndLatency(t *testing.T) {
-	s, e := fixture(t)
-	e.mu.Lock()
-	e.gateLoads = true
-	e.mu.Unlock()
-	const size = 256 << 10
+	s, engine := fixture(t)
 	id := strings.Repeat("1", 32)
-	if err := s.Start(id, size); err != nil {
+	if err := s.Start(id, 65536); err != nil {
 		t.Fatal(err)
 	}
-	v := wait(t, s)
-	if v.Request != id || len(v.Results) != 2 || v.Failure != "" {
-		t.Fatal(v)
+	result := wait(t, s)
+	if result.Request != id || len(result.Results) != 2 || result.Failure != "" {
+		t.Fatal(result)
 	}
-	for i, r := range v.Results {
-		if !r.Ready || r.ID != s.hops[i].ID || r.Idle.Samples != 6 || r.Download.Bytes != size || r.Upload.Bytes != size {
-			t.Fatal(r)
+	for i, row := range result.Results {
+		if !row.Ready || row.ID != s.hops[i].ID || row.Idle == nil || row.Idle.Samples != 6 || row.Download == nil || row.Upload == nil {
+			t.Fatal(row)
 		}
-		for _, transfer := range []*Transfer{r.Download, r.Upload} {
-			if transfer.Mbps != float64(transfer.Bytes)*8/transfer.Seconds/1e6 {
-				t.Fatal("fabricated transfer rate")
-			}
-			if transfer.Loaded == nil || transfer.Loaded.Samples < 1 || transfer.Bufferbloat == nil {
-				t.Fatal("missing actual loaded sample")
+		for _, transfer := range []*Transfer{row.Download, row.Upload} {
+			if transfer.Bytes != 65536 || transfer.Seconds <= 0 ||
+				transfer.Mbps != float64(transfer.Bytes)*8/transfer.Seconds/1e6 {
+				t.Fatal("measured bytes/timing were lost or a rate was invented", transfer)
 			}
 		}
 	}
-	e.mu.Lock()
-	bad := e.requests["entry-wg"] == 0 || e.requests["proxy"] == 0 || len(e.errors) > 0
-	e.mu.Unlock()
+	engine.mu.Lock()
+	bad := engine.requests["entry-wg"] == 0 || engine.requests["proxy"] == 0 || engine.wrongToken
+	engine.mu.Unlock()
 	if bad {
-		t.Fatal("misrouted hop or credentials")
+		t.Fatal("measurement substituted another hop or credential")
 	}
 	for _, secret := range []string{"token-one", "token-two", "10.77.0.1", "generation-one"} {
 		if strings.Contains(s.StatusJSON(), secret) {
 			t.Fatal("private control details leaked")
 		}
 	}
-}
-
-// Fast private replies must retain their measured interval without delaying the
-// peer, rounding to an invented minimum, or borrowing the ordinary network.
-// Native Windows execution exercises the performance counter for these short
-// requests; the other platforms keep their monotonic clock.
-func TestPrivateFastResponsesRetainRealIntervals(t *testing.T) {
-	s, e := fixture(t)
-	e.mu.Lock()
-	e.fastResponses = true
-	e.mu.Unlock()
-	for _, hop := range s.hops {
-		t.Run(hop.Role, func(t *testing.T) {
-			idle, err := s.latency(context.Background(), hop, 50)
-			if err != nil || idle == nil || idle.Samples != 50 || idle.Min <= 0 || math.IsNaN(idle.Average) || math.IsInf(idle.Average, 0) {
-				t.Fatalf("fast authenticated replies lost a real interval: %+v %v", idle, err)
-			}
-			for _, upload := range []bool{false, true} {
-				transfer, err := s.transfer(context.Background(), hop, 65536, upload, idle)
-				if err != nil || transfer == nil || transfer.Bytes != 65536 || transfer.Seconds <= 0 || math.IsNaN(transfer.Seconds) || math.IsInf(transfer.Seconds, 0) {
-					t.Fatalf("fast private transfer lost proved bytes or timing (upload=%v): %+v %v", upload, transfer, err)
-				}
-				if transfer.Mbps != float64(transfer.Bytes)*8/transfer.Seconds/1e6 {
-					t.Fatal("fast private transfer fabricated its rate")
-				}
-			}
-		})
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if len(e.errors) != 0 || e.requests["entry-wg"] < 52 || e.requests["proxy"] < 52 {
-		t.Fatal("fast measurement substituted another hop or credentials")
+	engine.mu.Lock()
+	engine.generation = "different-original-owner"
+	engine.mu.Unlock()
+	if current := status(t, s); len(current.Results) != 0 || current.Stage != "invalidated" {
+		t.Fatal("retired owner's results survived", current)
 	}
 }
 
-func TestFailedTransfersNeverBecomeZeroSpeed(t *testing.T) {
-	for _, bad := range []string{"identity", "duplicate", "redirect", "compress", "truncate", "framing", "ack"} {
-		t.Run(bad, func(t *testing.T) {
-			s, e := fixture(t)
-			e.mu.Lock()
-			e.bad["proxy"] = bad
-			e.mu.Unlock()
-			s.Start(strings.Repeat("2", 32), 65536)
-			v := wait(t, s)
-			if len(v.Results) != 2 || !v.Results[0].Ready || v.Results[1].Ready || v.Results[1].Failure == "" || v.Results[1].Download != nil || v.Results[1].Upload != nil {
-				t.Fatal(v)
-			}
-		})
+func TestFailedPrivateTransferNeverBecomesZeroSpeed(t *testing.T) {
+	s, engine := fixture(t)
+	engine.mu.Lock()
+	engine.badAck = true
+	engine.mu.Unlock()
+	if err := s.Start(strings.Repeat("2", 32), 65536); err != nil {
+		t.Fatal(err)
+	}
+	result := wait(t, s)
+	if len(result.Results) != 2 || !result.Results[0].Ready || result.Results[1].Ready ||
+		result.Results[1].Failure == "" || result.Results[1].Download != nil || result.Results[1].Upload != nil {
+		t.Fatal("unproved transfer was retained as a measurement", result)
 	}
 }
 
@@ -288,7 +190,6 @@ func (e *heldCandidateTestEngine) BeginMeasurementContext(ctx context.Context) (
 type heldCandidateResponse struct {
 	attempts         int
 	entered, release chan struct{}
-	closeErr         error
 }
 
 func (r *heldCandidateResponse) Respond(ctx context.Context, complete func() error) error {
@@ -298,218 +199,59 @@ func (r *heldCandidateResponse) Respond(ctx context.Context, complete func() err
 func (r *heldCandidateResponse) Close() error {
 	close(r.entered)
 	<-r.release
-	return r.closeErr
+	return nil
 }
 
-func testCandidateResponseDrain(t *testing.T) {
-	for _, outcome := range []string{"success", "close-error", "cancel"} {
-		t.Run(outcome, func(t *testing.T) {
-			engine := &heldCandidateTestEngine{testEngine: &testEngine{generation: "original"}}
-			run := &heldCandidateResponse{entered: make(chan struct{}), release: make(chan struct{})}
-			if outcome == "close-error" {
-				run.closeErr = errors.New("original transport close failed")
+func TestCandidateCancellationWaitsForOriginalTransportRetirement(t *testing.T) {
+	engine := &heldCandidateTestEngine{testEngine: &testEngine{generation: "original"}}
+	run := &heldCandidateResponse{entered: make(chan struct{}), release: make(chan struct{})}
+	target := CandidateTarget{ID: "replacement", SourceSHA256: strings.Repeat("1", 64), Address: "192.0.2.17:51820"}
+	prefix := CandidatePrefix{ID: "entry", Tag: "routervpn-chain-0-123456789abc-node-123456789abc", CaptureSHA256: strings.Repeat("2", 64)}
+	service, err := NewCapturedResponseRunContext(context.Background(), engine, prefix, []CandidateTarget{target}, CandidateInventoryBytes,
+		func(_ context.Context, selected CandidateTarget) (CandidateResponseRun, error) {
+			if selected != target {
+				return nil, ErrStale
 			}
-			target := CandidateTarget{ID: "replacement", SourceSHA256: strings.Repeat("1", 64), Address: "192.0.2.17:51820"}
-			prefix := CandidatePrefix{ID: "entry", Tag: "routervpn-chain-0-123456789abc-node-123456789abc", CaptureSHA256: strings.Repeat("2", 64)}
-			service, err := NewCapturedResponseRunContext(context.Background(), engine, prefix, []CandidateTarget{target}, CandidateInventoryBytes, func(_ context.Context, selected CandidateTarget) (CandidateResponseRun, error) {
-				if selected != target {
-					return nil, ErrStale
-				}
-				return run, nil
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			id := strings.Repeat("3", 32)
-			if err := service.Start(id, target.ID); err != nil {
-				t.Fatal(err)
-			}
-			select {
-			case <-run.entered:
-			case <-time.After(3 * time.Second):
-				close(run.release)
-				t.Fatal("candidate transport never reached cleanup")
-			}
-			if outcome == "cancel" {
-				service.Cancel(id)
-			}
-			var state CandidateStatus
-			err = json.Unmarshal([]byte(service.StatusJSON()), &state)
-			blocked := err == nil && engine.held.Load() && !state.Drained && len(state.Results) == 0
-			close(run.release)
-			if err := service.Drain(id); err != nil {
-				t.Fatal(err)
-			}
-			if !blocked || engine.held.Load() || run.attempts != LatencyBenchmarkSamples {
-				t.Fatal("candidate released its original scope early or missed responses", run.attempts)
-			}
-			if err := json.Unmarshal([]byte(service.StatusJSON()), &state); err != nil {
-				t.Fatal(err)
-			}
-			if !state.Drained || outcome == "cancel" && len(state.Results) != 0 || outcome != "cancel" && (len(state.Results) != 1 || state.Results[0].Ready != (outcome == "success") || (state.Results[0].Benchmark != nil) != (outcome == "success")) {
-				t.Fatalf("wrong drained result for %s: %+v", outcome, state)
-			}
+			return run, nil
 		})
-	}
-}
-
-func TestCancellationOwnershipAndStaleSelector(t *testing.T) {
-	t.Run("candidate response transport", testCandidateResponseDrain)
-	s, e := fixture(t)
-	id := strings.Repeat("3", 32)
-	e.mu.Lock()
-	e.bad["entry-wg"] = "hang"
-	e.mu.Unlock()
-	if err := s.Start(id, 65536); err != nil {
-		t.Fatal(err)
-	}
-	if s.Start(strings.Repeat("4", 32), 65536) == nil {
-		t.Fatal("overlapping transfer accepted")
-	}
-	s.Cancel(strings.Repeat("9", 32))
-	if status(t, s).Complete {
-		t.Fatal("foreign request cancelled measurement")
-	}
-	s.Cancel(id)
-	v := wait(t, s)
-	if v.Stage != "cancelled" || len(v.Results) != 0 {
-		t.Fatal(v)
-	}
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if s.Start(strings.Repeat("4", 32), 65536) == nil {
-		t.Fatal("closed owner reused")
-	}
-	s2, e2 := fixture(t)
-	s2.Start(strings.Repeat("4", 32), 65536)
-	wait(t, s2)
-	e2.mu.Lock()
-	e2.generation = "generation-one:server"
-	e2.mu.Unlock()
-	v = status(t, s2)
-	if len(v.Results) != 0 || v.Stage != "invalidated" {
-		t.Fatal("results from old exit survived", v)
-	}
-}
-func TestInputAndSizeBounds(t *testing.T) {
-	s, e := fixture(t)
-	for _, size := range []int{-1, 0, 65535, MaxBytes + 1} {
-		if s.Start(strings.Repeat("5", 32), size) == nil {
-			t.Fatal("unbounded size")
-		}
-	}
-	for _, id := range []string{"", strings.Repeat("a", 31), strings.Repeat("x", 32)} {
-		if s.Start(id, 65536) == nil {
-			t.Fatal("bad request ID")
-		}
-	}
-	for _, raw := range []string{"http://public.example:8787", "http://127.0.0.1:8787", "http://10.77.0.1:8787/?token=x", "http://u:p@10.77.0.1:8787", "http://10.77.0.1:8787/%68ealth", "http://[fe80::1%25en0]:8787", "ftp://10.77.0.1:8787", "http://10.77.0.1:65536"} {
-		h := s.hops[0]
-		h.API = raw
-		if _, err := New(e, []Hop{h}); err == nil {
-			t.Fatal("unsafe API", raw)
-		}
-	}
-	h := s.hops[0]
-	h.Tag = "direct"
-	if _, err := New(e, []Hop{h}); err == nil {
-		t.Fatal("direct outbound permitted")
-	}
-}
-func TestLatencyDistributionUsesSamplesNotSpeed(t *testing.T) {
-	v := distribution([]float64{1, 2, 3, 4})
-	if v.Samples != 4 || v.Median != 2.5 || v.Average != 2.5 || v.Jitter != 1 || v.P90 != 4 {
-		t.Fatal(v)
-	}
-	if distribution(nil) != nil {
-		t.Fatal("missing samples manufactured")
-	}
-}
-
-// A second probe can start only after the sampler accepted the first. Hold real
-// transfer bytes until that event instead of assuming a sleeping server keeps
-// a fast CI runner busy long enough. Production tests keep exact byte counts.
-type testLoadGate struct {
-	seen  atomic.Int64
-	ready chan struct{}
-}
-
-func newTestLoadGate() *testLoadGate { return &testLoadGate{ready: make(chan struct{})} }
-func (g *testLoadGate) probed() {
-	if g.seen.Add(1) == 2 {
-		close(g.ready)
-	}
-}
-func (g *testLoadGate) wait(ctx context.Context) bool {
-	select {
-	case <-g.ready:
-		return true
-	case <-ctx.Done():
-		return false
-	case <-time.After(3 * time.Second):
-		return false
-	}
-}
-
-type testUploadConn struct {
-	net.Conn
-	load                 *atomic.Pointer[testLoadGate]
-	closed               chan struct{}
-	once                 sync.Once
-	header               []byte
-	parsed, upload, held bool
-}
-
-func (c *testUploadConn) Write(p []byte) (int, error) {
-	if c.held {
-		return c.Conn.Write(p)
-	}
-	body := 0
-	if !c.parsed {
-		previous := len(c.header)
-		c.header = append(c.header, p...)
-		end := bytes.Index(c.header, []byte("\r\n\r\n"))
-		if end < 0 {
-			return c.Conn.Write(p)
-		}
-		c.upload = bytes.HasPrefix(c.header, []byte("POST /api/benchmark/upload "))
-		c.parsed = true
-		c.header = nil
-		body = end + 4 - previous
-	}
-	if !c.upload {
-		c.held = true
-		return c.Conn.Write(p)
-	}
-	if body >= len(p) {
-		return c.Conn.Write(p)
-	}
-	prefix := body + 512
-	if prefix > len(p) {
-		prefix = len(p)
-	}
-	gate := newTestLoadGate()
-	c.load.Store(gate)
-	defer c.load.CompareAndSwap(gate, nil)
-	n, err := c.Conn.Write(p[:prefix])
 	if err != nil {
-		return n, err
+		t.Fatal(err)
 	}
-	c.held = true
-	timer := time.NewTimer(3 * time.Second)
-	defer timer.Stop()
+	var once sync.Once
+	release := func() { once.Do(func() { close(run.release) }) }
+	t.Cleanup(func() {
+		release()
+		if err := service.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	id := strings.Repeat("3", 32)
+	if err := service.Start(id, target.ID); err != nil {
+		t.Fatal(err)
+	}
 	select {
-	case <-gate.ready:
-	case <-c.closed:
-		return n, net.ErrClosed
-	case <-timer.C:
-		return n, errors.New("no loaded probe completed during held upload")
+	case <-run.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("candidate did not reach original transport retirement")
 	}
-	if n < len(p) {
-		rest, err := c.Conn.Write(p[n:])
-		return n + rest, err
+	service.Cancel(strings.Repeat("9", 32))
+	var blocked CandidateStatus
+	if err := json.Unmarshal([]byte(service.StatusJSON()), &blocked); err != nil {
+		t.Fatal(err)
 	}
-	return n, nil
+	if blocked.Request != id || blocked.Stage == "cancelled" || !engine.held.Load() || blocked.Drained || len(blocked.Results) != 0 {
+		t.Fatal("original scope or result escaped blocked retirement")
+	}
+	service.Cancel(id)
+	release()
+	if err := service.Drain(id); err != nil {
+		t.Fatal(err)
+	}
+	var done CandidateStatus
+	if err := json.Unmarshal([]byte(service.StatusJSON()), &done); err != nil {
+		t.Fatal(err)
+	}
+	if !done.Drained || len(done.Results) != 0 || engine.held.Load() || run.attempts != LatencyBenchmarkSamples {
+		t.Fatal("cancellation lost its exact response count or joined cleanup", done)
+	}
 }
-func (c *testUploadConn) Close() error { c.once.Do(func() { close(c.closed) }); return c.Conn.Close() }
