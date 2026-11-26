@@ -169,6 +169,8 @@ class SpeedLabImportedCurrentAuditTests(unittest.TestCase):
                         "cmd/client/desktop_node_chain_execution_graph.go",
                         "cmd/client/desktop_node_chain_socks_execution.go",
                         "cmd/client/desktop_node_chain_multiple_imported_execution.go",
+                        "internal/mobilemultihop/node_chain.go",
+                        "internal/mobilemultihop/node_chain_external_final.go",
                         "internal/mobilemultihop/node_chain_execution_desktop.go",
                         "internal/mobilemultihop/desktop_node_chain_policy.go",
                         "internal/mobilemultihop/node_chain_openvpn_execution_desktop.go",
