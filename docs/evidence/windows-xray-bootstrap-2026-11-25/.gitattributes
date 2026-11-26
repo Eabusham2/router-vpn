@@ -1,0 +1,2 @@
+# Preserve each original Windows runner receipt, including its terminal CRLF.
+windows-startup-*-bootstrap-baselines.json -text !eol whitespace=cr-at-eol
