@@ -47,6 +47,10 @@ func (r *NodeChainExecutionRuntime) NewRemotePublicResponseCandidatePlanContext(
 }
 
 func (r *NodeChainExecutionRuntime) remoteCandidatePlanContext(ctx context.Context, position int, inventory, measurement string) (*NodeChainExecutionRemoteCandidatePlan, error) {
+	mode, modeErr := candidateInventoryResponseMode(inventory)
+	if modeErr != nil || mode != "" {
+		return nil, nodeChainExecutionError
+	}
 	if ctx == nil || r == nil || position < 1 || r.engine == nil || !reflect.TypeOf(r.engine).Comparable() {
 		return nil, nodeChainExecutionError
 	}

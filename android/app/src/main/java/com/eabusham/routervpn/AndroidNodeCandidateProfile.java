@@ -55,7 +55,7 @@ final class AndroidNodeCandidateProfile {
         for(AndroidNodeCandidateCatalog.Row row:catalog.rows)if(row.id.equals(result.id)&&!row.input.isEmpty()){if(selected!=null)throw new IllegalStateException("Duplicate candidate identity");selected=row;}
         if(selected==null)throw new IllegalStateException("The measured original source is missing.");
         AndroidNodeStore.ChainSource candidate=catalog.source(selected.localID);
-        String candidateMode=AndroidNodeCandidateCatalog.candidateMode(candidate);
+        String candidateMode=catalog.measuredMode(candidate);
         String actual=AndroidNodeChainCapture.memberInput(candidate,candidateMode,candidate.profile());
         if(!selected.input.equals(actual))throw new IllegalStateException("The measured source changed before proposal.");
         AndroidNodeStore.ChainCapture original=catalog.originalSource;
@@ -64,11 +64,14 @@ final class AndroidNodeCandidateProfile {
             throw new IllegalStateException("The measured prefix has no original next-hop position.");
         execution=original.execution;
         boolean finalResponse=authority==null&&catalog.connectedFinalResponse();
+        boolean hysteria2="hysteria2".equals(catalog.responseMode);
+        if(hysteria2&&(!finalResponse||!"local".equals(execution)||!Libbox.routerNodeChainHysteria2CandidateInputSupported(actual)))
+            throw new IllegalStateException("The Hysteria2 response requires the original connected final replacement.");
         if(finalResponse&&(retainFinal||replacement!=original.members.size()-1))
-            throw new IllegalStateException("The captured imported prefix must remain immediately before the replacement final node.");
+            throw new IllegalStateException("The captured prefix must remain immediately before the replacement final node.");
         boolean insert=response&&(publicResponse || retainFinal || replacement<original.members.size()-1);
         if(response){
-            if(candidate.imported!=publicResponse || original.members.get(original.members.size()-1).imported!=publicResponse || !"shadowsocks".equals(candidateMode)
+            if(candidate.imported!=publicResponse || original.members.get(original.members.size()-1).imported!=publicResponse || !(hysteria2?"hysteria2":"shadowsocks").equals(candidateMode)
                     ||!(finalResponse||AndroidNodeChainCapture.responsePrefix(original.members,original.modes,catalog.prefix,execution)))
                 throw new IllegalStateException("The authenticated response lost its original stream or paired candidate.");
             if(publicResponse) AndroidNodeChainCapture.requireLiteralImportedSS(candidate);

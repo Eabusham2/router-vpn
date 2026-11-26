@@ -649,7 +649,7 @@ struct IOSNodeCandidatesCard: View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Candidate measurements", systemImage: "point.3.connected.trianglepath.dotted").font(.headline)
             Text(model.connected && !model.iosCandidateTesting ?
-                 "WireGuard and AWG prefixes measure TCP connection time. Shadowsocks 2022 prefixes measure private-agent responses for paired candidates or verified HTTPS exit responses for imported candidates. Server measurements require a registered candidate. Each score is the 10% trimmed mean of 50 samples." :
+                 "WireGuard and AWG prefixes measure TCP connection time, or authenticated Hysteria2 responses when replacing a connected Hysteria2 final node. Shadowsocks 2022 prefixes measure private-agent responses for paired candidates or verified HTTPS exit responses for imported candidates. Server measurements require a registered candidate. Each score is the 10% trimmed mean of 50 samples." :
                  "Choose a selected-prefix test or a complete saved Local path test. Each measures 50 TCP connections, private-agent responses or verified public HTTPS responses, according to the captured prefix. The VPN returns to Disconnected before you choose a future profile.")
                 .font(.caption).foregroundStyle(.secondary)
             Picker("Retained prefix", selection: $probe.selectedPrefix) {

@@ -340,6 +340,14 @@ func RouterNodeChainCandidateInputSupported(input string) bool {
 	return mobilemultihop.NodeChainCandidateInputSupported(input)
 }
 
+func RouterNodeChainHysteria2CandidateInputSupported(input string) bool {
+	return mobilemultihop.NodeChainHysteria2CandidateInputSupported(input)
+}
+
+func RouterNodeChainSupportsConnectedHysteria2FinalCandidate(plan *RouterNodeChain, position int32) bool {
+	return plan != nil && plan.self == plan && plan.chain != nil && plan.chain.SupportsConnectedHysteria2FinalCandidate(int(position))
+}
+
 func RouterNodeChainCandidatePrefixMeasurement(plan *RouterNodeChain, position int32) string {
 	if plan == nil || plan.self != plan || plan.chain == nil {
 		return ""

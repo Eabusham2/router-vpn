@@ -184,7 +184,11 @@ func (a *app) saveOrderedCandidateProfile(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), 409)
 		return
 	}
-	control, nodes, err := orderedCandidateProposalForExecution(job.view.identity.Ordered.launch.chain.selection.Nodes, job.view.position, candidate, profiles, requested)
+	if job.view.candidateMode != "" && !desktopConnectedHysteria2Candidate(job.catalog.launch, job.view.position) {
+		http.Error(w, "original Hysteria2 candidate owner changed", 409)
+		return
+	}
+	control, nodes, err := orderedCandidateProposalForExecutionWithMode(job.view.identity.Ordered.launch.chain.selection.Nodes, job.view.position, candidate, profiles, requested, job.view.candidateMode)
 	if err != nil || !reflect.DeepEqual(nodes, q.ProposedPath) {
 		http.Error(w, "proposed path differs from the exact supported replacement or insertion", 409)
 		return
@@ -254,6 +258,11 @@ func (a *app) saveOrderedCandidateProfile(w http.ResponseWriter, r *http.Request
 	job.accepted = false // one explicit save per receipt, no duplicate retries
 	response := map[string]any{"ok": true, "profile_id": record.ID, "profile_name": record.Name, "proposed_path": nodes, "active_path_changed": false, "note": "Saved for the next connection. Disconnect before loading this complete profile."}
 	job.view.addResponseSource(response)
+	if job.view.candidateMode == "hysteria2" {
+		response["request_id"], response["candidate_id"], response["view_token"] = q.RequestID, q.CandidateID, job.view.token
+		response["prefix_position"], response["measurement"] = job.view.position, hopmeasure.CandidatePrivateResponseMeasurement
+		response["proposal_action"] = "save-final-profile"
+	}
 	if candidateViewMetric(job.view.prefixes, job.view.position) == hopmeasure.CandidatePublicResponseMeasurement {
 		response["request_id"], response["candidate_id"], response["view_token"] = q.RequestID, q.CandidateID, job.view.token
 		response["prefix_position"], response["measurement"] = job.view.position, hopmeasure.CandidatePublicResponseMeasurement
@@ -311,10 +320,10 @@ func (a *app) orderedCandidateProfileRecordLocked(control common.RouterProfile, 
 		return record, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	record = connectionProfileRecord{ID: newID(), Name: name, NodeID: control.ID, NodeProofID: control.NodeProofID, Mode: "shadowsocks", Prefs: prefs, NodeChain: captures, CreatedAt: now, UpdatedAt: now}
 	if len(captures) == 0 {
 		return record, errors.New("next-connection profile lost its complete ordered path")
 	}
+	record = connectionProfileRecord{ID: newID(), Name: name, NodeID: control.ID, NodeProofID: control.NodeProofID, Mode: captures[len(captures)-1].Mode, Prefs: prefs, NodeChain: captures, CreatedAt: now, UpdatedAt: now}
 	return record, validateSavedNodeChain(record)
 }
 

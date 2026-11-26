@@ -17,9 +17,27 @@ import (
 // back generation. Inputs are exact validated private launch captures, not a
 // host-supplied list of addresses or outbound tags.
 type NodeChainCandidateInventory struct {
-	Schema   int      `json:"schema"`
-	Revision string   `json:"revision"`
-	Inputs   []string `json:"inputs"`
+	Schema       int      `json:"schema"`
+	Revision     string   `json:"revision"`
+	Inputs       []string `json:"inputs"`
+	ResponseMode string   `json:"response_mode,omitempty"`
+}
+
+func candidateInventoryResponseMode(inventory string) (string, error) {
+	var header struct {
+		ResponseMode json.RawMessage `json:"response_mode"`
+	}
+	if len(inventory) == 0 || len(inventory) > NodeChainInputLimit || json.Unmarshal([]byte(inventory), &header) != nil {
+		return "", nodeChainCandidatePreparationError
+	}
+	if len(header.ResponseMode) == 0 {
+		return "", nil
+	}
+	var mode string
+	if json.Unmarshal(header.ResponseMode, &mode) != nil || mode != "hysteria2" {
+		return "", nodeChainCandidatePreparationError
+	}
+	return mode, nil
 }
 
 // The host must observe both its live connection and the complete original
@@ -41,6 +59,7 @@ type NodeChainCandidatePlan struct {
 	targets                []hopmeasure.CandidateTarget
 	measurement            string
 	connectedFinalResponse bool
+	responseMode           string
 	responses              []candidateResponseSource
 	publicResponses        []candidatePublicResponseSource
 	capture                string
@@ -67,8 +86,18 @@ func (c *NodeChain) newPacketCandidatePlanOwned(position int, inventory string, 
 // graph. A supplied parse result is reused only if its exact source bytes
 // occur at the same ordinal in the complete inventory.
 func (c *NodeChain) NewCandidatePlanFromInputs(position int, inventory string, inputs []*NodeChainCandidateInput) (*NodeChainCandidatePlan, error) {
+	// The optional discriminator is revalidated with the complete inventory
+	// below. Only this connected Local factory can request the native UDP
+	// carrier; dormant and selected factories retain their existing admission.
+	requested, err := candidateInventoryResponseMode(inventory)
+	if err != nil {
+		return nil, err
+	}
+	if requested != "" {
+		return c.newCandidatePlanInputs(position, inventory, nil, inputs, false, requested)
+	}
 	if c != nil && c.validateCapture() == nil && c.connectedFinalResponsePrefix(position) {
-		return c.newCandidatePlanInputs(position, inventory, nil, inputs, true)
+		return c.newCandidatePlanInputs(position, inventory, nil, inputs, true, "")
 	}
 	var multiple *nodeChainCandidateMultipleOriginal
 	if c != nil && c.importedNodes != nil {
@@ -81,11 +110,21 @@ func (c *NodeChain) NewCandidatePlanFromInputs(position int, inventory string, i
 	return c.newPacketCandidatePlanInputs(position, inventory, multiple, inputs)
 }
 func (c *NodeChain) newPacketCandidatePlanInputs(position int, inventory string, multiple *nodeChainCandidateMultipleOriginal, inputs []*NodeChainCandidateInput) (*NodeChainCandidatePlan, error) {
-	return c.newCandidatePlanInputs(position, inventory, multiple, inputs, false)
+	return c.newCandidatePlanInputs(position, inventory, multiple, inputs, false, "")
 }
 
-func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multiple *nodeChainCandidateMultipleOriginal, inputs []*NodeChainCandidateInput, connectedFinalResponse bool) (*NodeChainCandidatePlan, error) {
+func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multiple *nodeChainCandidateMultipleOriginal, inputs []*NodeChainCandidateInput, connectedFinalResponse bool, responseMode string) (*NodeChainCandidatePlan, error) {
+	requested, err := candidateInventoryResponseMode(inventory)
+	if err != nil || requested != responseMode {
+		return nil, nodeChainCandidatePreparationError
+	}
 	measurement := c.CandidatePrefixMeasurement(position)
+	if responseMode != "" {
+		if responseMode != "hysteria2" || multiple != nil || connectedFinalResponse || !c.SupportsConnectedHysteria2FinalCandidate(position) {
+			return nil, nodeChainCandidatePreparationError
+		}
+		measurement = hopmeasure.CandidatePrivateResponseMeasurement
+	}
 	if connectedFinalResponse {
 		if multiple != nil || measurement != "" || c.ConnectedCandidatePrefixMeasurement(position) != hopmeasure.CandidatePrivateResponseMeasurement {
 			return nil, nodeChainCandidatePreparationError
@@ -105,11 +144,12 @@ func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multi
 	// target or grants a dormant preparation its native owner.
 	var record NodeChainCandidateInventory
 	if exactJSON([]byte(inventory), &record, NodeChainInputLimit) != nil || record.Schema != 1 ||
-		!nodeChainIdentityText(record.Revision) || len(record.Inputs) == 0 {
+		!nodeChainIdentityText(record.Revision) || len(record.Inputs) == 0 || record.ResponseMode != responseMode {
 		return nil, errors.New("candidate timing requires the complete original source inventory")
 	}
 	plan := &NodeChainCandidatePlan{metadataPages: &nodeChainCandidateMetadataCache{}, chain: c, multiple: multiple, inventory: inventory, revision: record.Revision, prefix: c.proofs[position]}
 	plan.connectedFinalResponse = connectedFinalResponse
+	plan.responseMode = responseMode
 	if measurement != hopmeasure.CandidateTCPMeasurement {
 		plan.measurement = measurement
 	}
@@ -127,14 +167,22 @@ func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multi
 		var target hopmeasure.CandidateTarget
 		var proof string
 		var err error
+		var response candidateResponseSource
 		if inputs == nil {
-			target, proof, err = nodeChainCandidateTarget(input)
+			if responseMode == "hysteria2" {
+				response, err = parseCandidateHysteria2ResponseSource(input)
+				target, proof = response.Target, response.NodeID
+			} else {
+				target, proof, err = nodeChainCandidateTarget(input)
+			}
 		} else {
 			original := inputs[i]
-			if original == nil || original.self != original || original.input != input || original.input != original.originalInput || original.proof != original.originalProof || original.target != original.originalTarget {
+			if original == nil || original.self != original || original.input != input || original.input != original.originalInput || original.proof != original.originalProof || original.target != original.originalTarget ||
+				original.responseMode != responseMode || original.responseMode != original.originalResponseMode || original.response != original.originalResponse {
 				return nil, errors.New("candidate source changed after compilation")
 			}
 			target, proof = original.target, original.proof
+			response = original.response
 		}
 		if err != nil || ids[target.ID] || proof != "" && proofs[proof] {
 			return nil, errors.Join(err, errors.New("candidate source duplicates or changes the captured prefix inventory"))
@@ -150,7 +198,10 @@ func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multi
 			}
 			plan.publicResponses = append(plan.publicResponses, source)
 		} else if plan.measurement == hopmeasure.CandidatePrivateResponseMeasurement {
-			source, err := parseCandidateResponseSource(input)
+			source := response
+			if responseMode == "" {
+				source, err = parseCandidateResponseSource(input)
+			}
 			if err != nil || source.Target != target || source.NodeID != proof {
 				return nil, errors.Join(err, errors.New("invalid private candidate response source"))
 			}
@@ -167,6 +218,9 @@ func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multi
 	if connectedFinalResponse {
 		domain += "/connected-original-final-response"
 	}
+	if responseMode != "" {
+		domain += "/connected-original-" + responseMode + "-final-response"
+	}
 	if plan.measurement != "" {
 		domain += "/" + plan.measurement
 	}
@@ -181,11 +235,13 @@ func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multi
 // NodeChainCandidateInput is an opaque socket-free result of the original
 // compiler. Its private endpoint cannot be supplied or read by its caller.
 type NodeChainCandidateInput struct {
-	self                         *NodeChainCandidateInput
-	input, proof                 string
-	target                       hopmeasure.CandidateTarget
-	originalInput, originalProof string
-	originalTarget               hopmeasure.CandidateTarget
+	self                               *NodeChainCandidateInput
+	input, proof                       string
+	target                             hopmeasure.CandidateTarget
+	originalInput, originalProof       string
+	originalTarget                     hopmeasure.CandidateTarget
+	responseMode, originalResponseMode string
+	response, originalResponse         candidateResponseSource
 }
 
 func ParseNodeChainCandidateInput(input string) (*NodeChainCandidateInput, error) {
@@ -199,6 +255,28 @@ func ParseNodeChainCandidateInput(input string) (*NodeChainCandidateInput, error
 	captured := &NodeChainCandidateInput{input: input, proof: proof, target: target, originalInput: input, originalProof: proof, originalTarget: target}
 	captured.self = captured
 	return captured, nil
+}
+
+// ParseNodeChainHysteria2CandidateInput retains only the validated original
+// HY2 source. It grants neither TCP eligibility nor a native prefix owner.
+func ParseNodeChainHysteria2CandidateInput(input string) (*NodeChainCandidateInput, error) {
+	if len(input) == 0 || len(input) > NodeChainInputLimit {
+		return nil, nodeChainError
+	}
+	response, err := parseCandidateHysteria2ResponseSource(input)
+	if err != nil {
+		return nil, err
+	}
+	captured := &NodeChainCandidateInput{input: input, proof: response.NodeID, target: response.Target,
+		originalInput: input, originalProof: response.NodeID, originalTarget: response.Target,
+		responseMode: "hysteria2", originalResponseMode: "hysteria2", response: response, originalResponse: response}
+	captured.self = captured
+	return captured, nil
+}
+
+func NodeChainHysteria2CandidateInputSupported(input string) bool {
+	_, err := ParseNodeChainHysteria2CandidateInput(input)
+	return err == nil
 }
 
 // Build the same private source envelope as NodeChainImportedMemberInput.
@@ -348,6 +426,13 @@ func (p *NodeChainCandidatePlan) CaptureSHA256() string {
 	return p.capture
 }
 
+func (p *NodeChainCandidatePlan) CandidateMode() string {
+	if p.validate() != nil {
+		return ""
+	}
+	return p.responseMode
+}
+
 // Metadata is safe for the chooser. It contains no private endpoint, source
 // input, API token, PSK or reusable native dialing capability.
 func (p *NodeChainCandidatePlan) Metadata() string {
@@ -379,7 +464,8 @@ func (p *NodeChainCandidatePlan) Metadata() string {
 		Config         string   `json:"config_sha256"`
 		Targets        []member `json:"targets"`
 		Measurement    string   `json:"measurement,omitempty"`
-	}{1, p.capture, p.prefix.Position, p.prefix.ProfileID, p.chain.SourceSHA256(), p.chain.ConfigSHA256(), targets, p.measurement})
+		CandidateMode  string   `json:"candidate_mode,omitempty"`
+	}{1, p.capture, p.prefix.Position, p.prefix.ProfileID, p.chain.SourceSHA256(), p.chain.ConfigSHA256(), targets, p.measurement, p.responseMode})
 	p.metadataPages.full = string(raw)
 	return p.metadataPages.full
 }
@@ -401,6 +487,9 @@ func (p *NodeChainCandidatePlan) digest() string {
 	if p.connectedFinalResponse {
 		fields = append(fields, true)
 	}
+	if p.responseMode != "" {
+		fields = append(fields, p.responseMode)
+	}
 	if p.multiple != nil {
 		fields = append(fields, p.multiple.digest())
 	}
@@ -415,6 +504,9 @@ func (p *NodeChainCandidatePlan) validate() error {
 		return errors.New("candidate plan changed its sealed original capture")
 	}
 	if p.connectedFinalResponse && (p.multiple != nil || p.measurement != hopmeasure.CandidatePrivateResponseMeasurement || !p.chain.connectedFinalResponsePrefix(p.prefix.Position)) {
+		return nodeChainCandidatePreparationError
+	}
+	if p.responseMode != "" && (p.responseMode != "hysteria2" || p.connectedFinalResponse || p.multiple != nil || p.measurement != hopmeasure.CandidatePrivateResponseMeasurement || !p.chain.SupportsConnectedHysteria2FinalCandidate(p.prefix.Position)) {
 		return nodeChainCandidatePreparationError
 	}
 	if p.multiple == nil && p.chain.importedNodes != nil && !p.connectedFinalResponse || p.multiple != nil && !p.multiple.currentValidated(p.chain) {
@@ -435,7 +527,7 @@ func (p *NodeChainCandidatePlan) NewMeasurementContext(ctx context.Context, owne
 	}
 	active, err := owner.MeasurementChainContext(ctx)
 	if err != nil || active == nil || active.SourceSHA256() != p.chain.SourceSHA256() || active.ConfigSHA256() != p.chain.ConfigSHA256() ||
-		(p.multiple != nil || p.connectedFinalResponse) && active != p.chain {
+		(p.multiple != nil || p.connectedFinalResponse || p.responseMode != "") && active != p.chain {
 		return nil, errors.Join(err, hopmeasure.ErrStale)
 	}
 	if err := active.HealthyContext(ctx); err != nil {
@@ -446,6 +538,11 @@ func (p *NodeChainCandidatePlan) NewMeasurementContext(ctx context.Context, owne
 	}
 	identity, reader := active.runtime.identity, active.runtime.engine
 	active.runtime.mu.Unlock()
+	if p.responseMode != "" {
+		if _, ok := reader.(NodeChainCandidatePacketEngine); !ok {
+			return nil, errors.New("candidate response has no original Local packet carrier")
+		}
+	}
 	engine := &nodeChainCandidateEngine{plan: p, owner: owner, active: active, identity: identity, reader: reader}
 	return p.newService(ctx, engine, p.capture)
 }

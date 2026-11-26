@@ -54,6 +54,27 @@ func desktopTypedFinalResponseMembers(members []desktopNodeChainMember, executio
 	return true
 }
 
+// This describes a next-connection proposal, not a connected measurement
+// grant. Only the retained Local catalog can choose this response protocol.
+func desktopHysteria2FinalResponseMembers(members []desktopNodeChainMember, execution string, position int, candidate common.RouterProfile) bool {
+	if execution != "local" || len(members) < 2 || len(members) > mobilemultihop.NodeChainMaximumNodes || position != len(members)-2 ||
+		candidate.External != nil || candidate.NodeKind != "" && candidate.NodeKind != "router-vpn" ||
+		candidate.StartLayer != "" && candidate.StartLayer != "off" {
+		return false
+	}
+	for i, member := range members {
+		if member.Profile.External != nil || member.Profile.NodeKind != "" && member.Profile.NodeKind != "router-vpn" ||
+			member.Profile.StartLayer != "" && member.Profile.StartLayer != "off" || member.Profile.ID == candidate.ID ||
+			candidate.NodeProofID != "" && member.Profile.NodeProofID == candidate.NodeProofID {
+			return false
+		}
+		if i < len(members)-1 && !mobilemultihop.NodeChainPrefixMode(member.Mode) || i == len(members)-1 && member.Mode != "hysteria2" {
+			return false
+		}
+	}
+	return true
+}
+
 // Adoption requires a fresh native receipt from the originally selected trial.
 func desktopSelectedResponseProposal(members []desktopNodeChainMember, execution string, position int, candidate common.RouterProfile) bool {
 	if (execution != "auto" && execution != "server") || len(members) < 3 || candidate.External != nil {
@@ -91,13 +112,21 @@ func desktopSelectedResponseProposal(members []desktopNodeChainMember, execution
 // An earlier response can add a private SS relay to a separately named path
 // only when the complete original suffix and all of its sources still compile.
 func orderedResponseProfile(ctx context.Context, root, execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile) (common.RouterProfile, []common.MultihopNodeSelection, string, error) {
+	return orderedResponseProfileWithMode(ctx, root, execution, members, position, candidate, profiles, "")
+}
+
+func orderedResponseProfileWithMode(ctx context.Context, root, execution string, members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile, candidateMode string) (common.RouterProfile, []common.MultihopNodeSelection, string, error) {
 	var empty common.RouterProfile
 	publicResponse := desktopPublicCandidateMembers(members, execution, position) && desktopNodeChainImportedExecutionMiddle(candidate)
 	typedFinal := desktopTypedFinalResponseMembers(members, execution, position)
-	if !publicResponse && (execution != "local" && !desktopSelectedResponseProposal(members, execution, position, candidate) || position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" && !typedFinal) {
+	if candidateMode != "" {
+		if candidateMode != "hysteria2" || !desktopHysteria2FinalResponseMembers(members, execution, position, candidate) {
+			return empty, nil, "", errors.New("this response cannot replace the original Hysteria2 final")
+		}
+	} else if !publicResponse && (execution != "local" && !desktopSelectedResponseProposal(members, execution, position, candidate) || position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" && !typedFinal) {
 		return empty, nil, "", errors.New("this measurement has no complete supported stream path")
 	}
-	p, rows, err := orderedCandidateProposalForExecution(members, position, candidate, profiles, execution)
+	p, rows, err := orderedCandidateProposalForExecutionWithMode(members, position, candidate, profiles, execution, candidateMode)
 	if err != nil {
 		return empty, nil, "", err
 	}

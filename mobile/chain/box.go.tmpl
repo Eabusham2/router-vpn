@@ -338,6 +338,39 @@ func (e *RouterVPNNodeChainEngine) ObserveChainContext(ctx context.Context) (mob
 	}
 	return e.observation.ObserveChainContext(ctx)
 }
+
+// Only the ordinary Local observation owns this packet capability. Selected
+// execution and temporary-prefix adapters deliberately do not implement it.
+// The sealed core request binds the complete original source and exact target;
+// it cannot supply a different prefix, native object or physical fallback.
+func (e *RouterVPNNodeChainEngine) DialCandidatePacketContext(ctx context.Context, request *mobilemultihop.NodeChainCandidatePacketRequest) (net.Conn, error) {
+	if e == nil || e.observation == nil || e.public == nil || e.public.self != e.public ||
+		e.public.observation != e.observation || e.public.source != e.public.originalSource || e.observation.instance == nil ||
+		e.observation.instance.routerVPNNodeChainExecutionOptions != "" {
+		return nil, errors.New("candidate packet response lost its original Local source")
+	}
+	identity, tag, address, err := request.Read(ctx, e, e.public.source)
+	if err != nil || identity != e.observation.identity {
+		return nil, errors.Join(err, errors.New("candidate packet response changed its native identity"))
+	}
+	outbound := e.observation.prefixes[tag]
+	destination := M.ParseSocksaddr(address)
+	if outbound == nil || !destination.IsValid() || !destination.IsIP() || destination.Port == 0 {
+		return nil, errors.New("candidate packet response has no captured literal prefix destination")
+	}
+	connection, dialErr := outbound.DialContext(ctx, "udp", destination)
+	observed, actualTag, actualAddress, observeErr := request.Read(ctx, e, e.public.source)
+	if observed != identity || actualTag != tag || actualAddress != address {
+		observeErr = errors.Join(observeErr, errors.New("candidate packet response changed during its original dial"))
+	}
+	if connection == nil {
+		dialErr = errors.Join(dialErr, errors.New("candidate packet response returned no original socket"))
+	}
+	// The candidate carrier retains every late nonnil result, including errors,
+	// and joins that exact socket's Close before releasing the measurement hold.
+	return connection, errors.Join(dialErr, observeErr, ctx.Err())
+}
+
 func (e *RouterVPNNodeChainEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
 	if e == nil {
 		return nil, errors.New("ordered native engine lost its original observation")

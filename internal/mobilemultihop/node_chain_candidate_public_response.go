@@ -130,6 +130,10 @@ func (c *NodeChain) validatePublicCandidateInventory(candidates []candidatePubli
 // Preserve exact original bytes and revision for the independent rows, so one
 // incompatible catalog record cannot suppress the other measured choices.
 func (c *NodeChain) FilterPublicCandidateInventory(position int, inventory string) (string, error) {
+	mode, err := candidateInventoryResponseMode(inventory)
+	if err != nil || mode != "" {
+		return "", nodeChainError
+	}
 	if c == nil || c.validateCapture() != nil || c.candidatePrefixMeasurementValidated(position) != hopmeasure.CandidatePublicResponseMeasurement {
 		return "", nodeChainError
 	}

@@ -2,9 +2,20 @@ package mobilemultihop
 
 import (
 	"context"
-	ssclient "github.com/sagernet/sing-shadowsocks2"
-	M "github.com/sagernet/sing/common/metadata"
+	"encoding/json"
+	"errors"
 	"net"
+	"sync"
+	"time"
+
+	boxtls "github.com/sagernet/sing-box/common/tls"
+	"github.com/sagernet/sing-box/option"
+	qtls "github.com/sagernet/sing-quic"
+	"github.com/sagernet/sing-quic/hysteria"
+	hy2 "github.com/sagernet/sing-quic/hysteria2"
+	ssclient "github.com/sagernet/sing-shadowsocks2"
+	"github.com/sagernet/sing/common/logger"
+	M "github.com/sagernet/sing/common/metadata"
 )
 
 func init() {
@@ -15,4 +26,263 @@ func init() {
 		}
 		return method.DialConn(raw, M.ParseSocksaddr(destination))
 	}
+	openCandidateHysteria2 = openNativeCandidateHysteria2
+}
+
+var errCandidateHysteria2 = errors.New("candidate Hysteria2 requires its original authenticated packet carrier")
+
+// Every sample gets its own actual QUIC authentication and fresh challenge.
+// The returned connection owns that whole client, including a late shared
+// offer. Closing its stream cannot leave a reusable candidate carrier behind.
+func openNativeCandidateHysteria2(ctx context.Context, request *NodeChainCandidatePacketRequest, destination string) (net.Conn, error) {
+	if ctx == nil || request == nil || request.engine == nil || request.response.Hysteria2Options == "" {
+		return nil, errCandidateHysteria2
+	}
+	_, _, endpoint, err := request.Read(ctx, request.engine.reader, request.engine.active)
+	api, apiErr := privateAPI(request.response.API)
+	if err != nil || apiErr != nil || api.Host != destination {
+		return nil, errCandidateHysteria2
+	}
+	var captured struct {
+		Type string `json:"type"`
+		Tag  string `json:"tag"`
+		option.Hysteria2OutboundOptions
+	}
+	if json.Unmarshal([]byte(request.response.Hysteria2Options), &captured) != nil {
+		return nil, errCandidateHysteria2
+	}
+	options := captured.Hysteria2OutboundOptions
+	if captured.Type != "hysteria2" || options.ServerOptions.Build().String() != endpoint || options.Password == "" ||
+		options.TLS == nil || !options.TLS.Enabled || options.TLS.Insecure || options.Detour != "" ||
+		options.DomainResolver != nil || options.Realm != nil || len(options.ServerPorts) != 0 {
+		return nil, errCandidateHysteria2
+	}
+	owned, cancel := context.WithCancel(ctx)
+	dialer := &candidateHysteria2Dialer{request: request, endpoint: endpoint, ctx: owned}
+	tlsConfig, err := boxtls.NewClient(owned, logger.NOP(), options.Server, *options.TLS)
+	if err != nil {
+		cancel()
+		return nil, errCandidateHysteria2
+	}
+	var salamander, gecko string
+	var geckoMin, geckoMax int
+	if options.Obfs != nil {
+		if options.Obfs.Password == "" {
+			cancel()
+			return nil, errCandidateHysteria2
+		}
+		switch options.Obfs.Type {
+		case hy2.ObfsTypeSalamander:
+			salamander = options.Obfs.Password
+		case hy2.ObfsTypeGecko:
+			gecko = options.Obfs.Password
+			geckoMin, geckoMax = options.Obfs.GeckoOptions.MinPacketSize, options.Obfs.GeckoOptions.MaxPacketSize
+		default:
+			cancel()
+			return nil, errCandidateHysteria2
+		}
+	}
+	client, err := hy2.NewClient(hy2.ClientOptions{
+		Context: owned, Dialer: dialer, Logger: logger.NOP(), BrutalDebug: options.BrutalDebug,
+		ServerAddress: options.ServerOptions.Build(), SendBPS: uint64(options.UpMbps * hysteria.MbpsToBps),
+		ReceiveBPS: uint64(options.DownMbps * hysteria.MbpsToBps), Password: options.Password,
+		SalamanderPassword: salamander, GeckoPassword: gecko, GeckoMinPacketSize: geckoMin, GeckoMaxPacketSize: geckoMax,
+		TLSConfig: tlsConfig, BBRProfile: options.BBRProfile, ChromeParrot: !options.DisableChromeParrot,
+		// The private challenge needs a stream; this ephemeral owner cannot open
+		// application UDP sessions or their separate message-delivery workers.
+		UDPDisabled: true,
+		QUICOptions: qtls.QUICOptions{IdleTimeout: options.IdleTimeout.Build(), KeepAlivePeriod: options.KeepAlivePeriod.Build(),
+			StreamReceiveWindow: options.StreamReceiveWindow.Value(), ConnectionReceiveWindow: options.ConnectionReceiveWindow.Value(),
+			MaxConcurrentStreams: options.MaxConcurrentStreams, InitialPacketSize: options.InitialPacketSize,
+			DisablePathMTUDiscovery: options.DisablePathMTUDiscovery},
+	})
+	if err != nil {
+		cancel()
+		return nil, errCandidateHysteria2
+	}
+	var closeOnce sync.Once
+	var closeErr error
+	closeAll := func() error {
+		closeOnce.Do(func() {
+			cancel()
+			// Mark the socket scope closed before retiring QUIC. An already
+			// admitted late dial must close its exact result before it can join.
+			dialer.beginClose()
+			closeErr = client.RouterVPNCloseResponseCandidate(net.ErrClosed)
+			closeErr = errors.Join(closeErr, dialer.join())
+		})
+		return closeErr
+	}
+	stop := context.AfterFunc(ctx, func() { _ = closeAll() })
+	stream, err := client.DialConn(ctx, M.ParseSocksaddr(destination))
+	if err != nil || stream == nil || ctx.Err() != nil {
+		stop()
+		if stream != nil {
+			_ = stream.Close()
+		}
+		_ = closeAll()
+		return nil, errors.Join(ctx.Err(), errCandidateHysteria2)
+	}
+	_, _, _, err = request.Read(ctx, request.engine.reader, request.engine.active)
+	if err != nil {
+		stop()
+		_ = stream.Close()
+		_ = closeAll()
+		return nil, errCandidateHysteria2
+	}
+	return &candidateHysteria2Connection{Conn: stream, stop: stop, closeAll: closeAll}, nil
+}
+
+type candidateHysteria2Connection struct {
+	net.Conn
+	stop     func() bool
+	closeAll func() error
+	once     sync.Once
+	err      error
+}
+
+func (c *candidateHysteria2Connection) Close() error {
+	c.once.Do(func() {
+		c.stop()
+		streamErr := c.Conn.Close()
+		if errors.Is(streamErr, net.ErrClosed) {
+			streamErr = nil
+		}
+		c.err = errors.Join(streamErr, c.closeAll())
+	})
+	return c.err
+}
+
+type candidateHysteria2Dialer struct {
+	request  *NodeChainCandidatePacketRequest
+	endpoint string
+	ctx      context.Context
+	mu       sync.Mutex
+	closing  bool
+	opening  sync.WaitGroup
+	sockets  []*candidateHysteria2Socket
+}
+
+func (d *candidateHysteria2Dialer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if ctx == nil || ctx.Err() != nil || d.ctx.Err() != nil || network != "udp" || destination.String() != d.endpoint {
+		return nil, errCandidateHysteria2
+	}
+	d.mu.Lock()
+	if d.closing {
+		d.mu.Unlock()
+		return nil, net.ErrClosed
+	}
+	d.opening.Add(1)
+	d.mu.Unlock()
+	defer d.opening.Done()
+	raw, err := d.request.dial(ctx)
+	if raw == nil {
+		return nil, errors.Join(err, errCandidateHysteria2)
+	}
+	socket := &candidateHysteria2Socket{Conn: raw, ctx: d.ctx}
+	d.mu.Lock()
+	d.sockets = append(d.sockets, socket)
+	closing := d.closing
+	d.mu.Unlock()
+	if err != nil || closing || ctx.Err() != nil || d.ctx.Err() != nil {
+		_ = socket.Close()
+		return nil, errCandidateHysteria2
+	}
+	return socket, nil
+}
+
+func (*candidateHysteria2Dialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errCandidateHysteria2
+}
+
+func (d *candidateHysteria2Dialer) beginClose() {
+	d.mu.Lock()
+	d.closing = true
+	d.mu.Unlock()
+}
+
+func (d *candidateHysteria2Dialer) join() error {
+	d.beginClose()
+	// The client join precedes this call, so no additional offer can enter.
+	// Already admitted original native opens still own their late sockets.
+	d.opening.Wait()
+	d.mu.Lock()
+	sockets := append([]*candidateHysteria2Socket(nil), d.sockets...)
+	d.mu.Unlock()
+	var failure error
+	for _, socket := range sockets {
+		failure = errors.Join(failure, socket.Close())
+	}
+	return failure
+}
+
+// The private client sees no unwrap/syscall escape around this socket owner.
+// Close prevents new work, closes the original native socket, and joins every
+// entered read, write and deadline call before the measurement hold can end.
+type candidateHysteria2Socket struct {
+	net.Conn
+	ctx     context.Context
+	mu      sync.Mutex
+	closing bool
+	io      sync.WaitGroup
+	once    sync.Once
+	err     error
+}
+
+func (s *candidateHysteria2Socket) begin() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closing || s.ctx.Err() != nil {
+		return net.ErrClosed
+	}
+	s.io.Add(1)
+	return nil
+}
+func (s *candidateHysteria2Socket) Read(p []byte) (int, error) {
+	if err := s.begin(); err != nil {
+		return 0, err
+	}
+	defer s.io.Done()
+	return s.Conn.Read(p)
+}
+func (s *candidateHysteria2Socket) Write(p []byte) (int, error) {
+	if err := s.begin(); err != nil {
+		return 0, err
+	}
+	defer s.io.Done()
+	return s.Conn.Write(p)
+}
+func (s *candidateHysteria2Socket) SetDeadline(t time.Time) error {
+	if err := s.begin(); err != nil {
+		return err
+	}
+	defer s.io.Done()
+	return s.Conn.SetDeadline(t)
+}
+func (s *candidateHysteria2Socket) SetReadDeadline(t time.Time) error {
+	if err := s.begin(); err != nil {
+		return err
+	}
+	defer s.io.Done()
+	return s.Conn.SetReadDeadline(t)
+}
+func (s *candidateHysteria2Socket) SetWriteDeadline(t time.Time) error {
+	if err := s.begin(); err != nil {
+		return err
+	}
+	defer s.io.Done()
+	return s.Conn.SetWriteDeadline(t)
+}
+func (s *candidateHysteria2Socket) Close() error {
+	s.once.Do(func() {
+		s.mu.Lock()
+		s.closing = true
+		s.mu.Unlock()
+		s.err = s.Conn.Close()
+		s.io.Wait()
+		if errors.Is(s.err, net.ErrClosed) {
+			s.err = nil
+		}
+	})
+	return s.err
 }

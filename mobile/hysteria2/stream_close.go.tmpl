@@ -37,3 +37,21 @@ func routerVPNHysteriaCloseResult(stream *quic.Stream, err error) error {
 	}
 	return err
 }
+
+// RouterVPNCloseResponseCandidate retires a private stream-only candidate's
+// whole QUIC client. Its shared offer can otherwise return after a foreground
+// request has been canceled. The worker count includes offer completion and
+// its actual discarded-connection close, plus the connection-close watcher.
+// UDP application sessions are not part of this narrow capability. Their
+// ordinary multiplexed client and CloseWithError behavior remain unchanged.
+func (c *Client) RouterVPNCloseResponseCandidate(cause error) error {
+	if c == nil || !c.udpDisabled {
+		return errors.New("joined candidate close requires its private stream-only client")
+	}
+	c.connAccess.Lock()
+	c.routerVPNRetiring = true
+	c.connAccess.Unlock()
+	err := c.CloseWithError(cause)
+	c.routerVPNWorkers.Wait()
+	return err
+}

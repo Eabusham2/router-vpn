@@ -55,6 +55,17 @@ HY2 = {
         ('func (c *udpPacketConn) SetWriteDeadline(t time.Time) error {\n\treturn os.ErrInvalid\n}',
          'func (c *udpPacketConn) SetWriteDeadline(t time.Time) error {\n\treturn c.routerVPNSetPacketDeadlines(t, false, true)\n}'),
     ), 'hysteria2/client.go': (
+        ('\tconnAccess sync.Mutex\n',
+         '\tconnAccess sync.Mutex\n\trouterVPNWorkers sync.WaitGroup\n\trouterVPNRetiring bool\n'),
+        ('func (c *Client) offer(ctx context.Context) (*clientQUICConnection, error) {\n\tc.connAccess.Lock()\n',
+         'func (c *Client) offer(ctx context.Context) (*clientQUICConnection, error) {\n\tc.connAccess.Lock()\n'
+         '\tif c.routerVPNRetiring {\n\t\tc.connAccess.Unlock()\n\t\treturn nil, net.ErrClosed\n\t}\n'),
+        ('\tc.pending = pending\n\tc.connAccess.Unlock()\n\n\tgo c.completeOffer(pending, offerCtx)\n',
+         '\tc.pending = pending\n\tc.routerVPNWorkers.Add(1)\n\tc.connAccess.Unlock()\n\n'
+         '\tgo func() {\n\t\tdefer c.routerVPNWorkers.Done()\n\t\tc.completeOffer(pending, offerCtx)\n\t}()\n'),
+        ('\tgo func() {\n\t\t<-quicConn.Context().Done()\n\t\tconn.closeWithError(context.Cause(quicConn.Context()))\n\t}()\n',
+         '\tc.routerVPNWorkers.Add(1)\n\tgo func() {\n\t\tdefer c.routerVPNWorkers.Done()\n'
+         '\t\t<-quicConn.Context().Done()\n\t\tconn.closeWithError(context.Cause(quicConn.Context()))\n\t}()\n'),
         ('\t\tn, err = c.Stream.Read(p)\n\t\treturn n, qtls.WrapError(err)\n',
          '\t\tn, err = c.Stream.Read(p)\n\t\treturn n, routerVPNHysteriaReadError(err)\n'),
         ('\tn, err = c.Stream.Read(p)\n\treturn n, qtls.WrapError(err)\n}',

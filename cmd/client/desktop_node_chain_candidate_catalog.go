@@ -66,6 +66,7 @@ type desktopNodeChainCandidateCatalog struct {
 	launch                            *desktopNodeLaunch
 	identity                          speedLabPathIdentity
 	revision, inventory, inventorySHA string
+	candidateMode                     string
 	plan                              *mobilemultihop.NodeChainCandidatePlan
 	typedPlan                         *desktopTypedCandidateDescriptor
 	typedEntryPreview                 *mobilemultihop.DesktopTypedEntryCandidateDescription
@@ -166,11 +167,17 @@ func captureDesktopCandidateSourceProfiles(ctx context.Context, a *app, launch *
 		seen[profile.ID] = true
 	}
 	result := &desktopNodeChainCandidateCatalog{serverResponse: candidateServerRequested(ctx), app: a, launch: launch, revision: revision, profiles: map[string]string{}}
+	if scope == orderedCandidateSavedCompleteScope && desktopConnectedHysteria2Candidate(launch, position) {
+		result.candidateMode = "hysteria2"
+	}
 	capture := &desktopNodeChainCapture{root: launch.root}
 	// Pin each original asset directory before and after compilation, including
 	// inodes and modification times. Replacing then restoring a source cannot
 	// revive a previously measured catalog through an unchanged content hash.
 	for _, p := range profiles {
+		if result.candidateMode != "" && (p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || p.StartLayer != "" && p.StartLayer != "off") {
+			return nil, errors.New("Hysteria2 candidate response requires an original paired node with Start Layer off")
+		}
 		switch p.StartLayer {
 		case "", "off":
 		case "aes-256-gcm", "aes-256-gcm+xor-whitening":
@@ -181,7 +188,11 @@ func captureDesktopCandidateSourceProfiles(ctx context.Context, a *app, launch *
 			return nil, errors.New("candidate TCP timing requires an exact supported Start Layer")
 		}
 		if p.NodeKind != "external" {
-			for _, mode := range []string{"wg", "shadowsocks"} {
+			candidateMode := "shadowsocks"
+			if result.candidateMode != "" {
+				candidateMode = result.candidateMode
+			}
+			for _, mode := range []string{"wg", candidateMode} {
 				dir, err := nativeGeneratedDir(launch.root, p.ID, mode)
 				if err != nil {
 					return nil, err
@@ -206,13 +217,18 @@ func captureDesktopCandidateSourceProfiles(ctx context.Context, a *app, launch *
 		}
 		result.profiles[p.ID] = publicProfileToken(p)
 	}
-	inventory := mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: revision}
+	inventory := mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: revision, ResponseMode: result.candidateMode}
 	total := 0
 	for _, p := range profiles {
 		var input string
 		var parsed *mobilemultihop.NodeChainCandidateInput
 		var err error
-		if p.NodeKind == "external" && desktopNodeChainImported(p, "shadowsocks") {
+		if result.candidateMode == "hysteria2" {
+			input, _, _, err = capture.compileMember(ctx, desktopNodeChainMember{Profile: p, Mode: "hysteria2"}, &total, nil)
+			if err == nil {
+				parsed, err = mobilemultihop.ParseNodeChainHysteria2CandidateInput(input)
+			}
+		} else if p.NodeKind == "external" && desktopNodeChainImported(p, "shadowsocks") {
 			input, parsed, err = compileDesktopOriginalImportedCandidate(ctx, p)
 			total += len(input)
 			if total > mobilemultihop.NodeChainInputLimit {
@@ -272,6 +288,9 @@ func (result *desktopNodeChainCandidateCatalog) sealSourcePlan(ctx context.Conte
 	} else {
 		result.plan, err = launch.chain.policy.NodeChain().NewCandidatePlanFromInputs(position, result.inventory, result.parsedInputs)
 	}
+	if err == nil && (result.plan != nil && result.plan.CandidateMode() != result.candidateMode || result.candidateMode != "" && result.plan == nil) {
+		return errors.New("candidate source plan changed its authenticated protocol")
+	}
 	return err
 }
 
@@ -291,7 +310,7 @@ func captureDesktopCandidateViewSource(ctx context.Context, a *app, launch *desk
 	}
 	if slices.ContainsFunc(members[position+1:], sameNode) {
 		execution := desktopNodeChainLaunchExecution(launch)
-		if catalogMetric(position) == hopmeasure.CandidatePublicResponseMeasurement || execution != nil && (execution.preparation.SupportsCompareLocalResponseCandidate(position) || candidateServerRequested(ctx) && execution.preparation.SupportsServerResponseCandidate(position)) {
+		if desktopConnectedHysteria2Candidate(launch, position) || catalogMetric(position) == hopmeasure.CandidatePublicResponseMeasurement || execution != nil && (execution.preparation.SupportsCompareLocalResponseCandidate(position) || candidateServerRequested(ctx) && execution.preparation.SupportsServerResponseCandidate(position)) {
 			return nil, errors.New("candidate duplicates a retained route member")
 		}
 	}
@@ -300,11 +319,15 @@ func captureDesktopCandidateViewSource(ctx context.Context, a *app, launch *desk
 		return nil, err
 	}
 	var inventory mobilemultihop.NodeChainCandidateInventory
-	if json.Unmarshal([]byte(part.inventory), &inventory) != nil || len(inventory.Inputs) != 1 || len(part.parsedInputs) != 1 || part.parsedInputs[0] == nil {
-		return nil, errors.New("candidate has no original supported TCP source")
+	if json.Unmarshal([]byte(part.inventory), &inventory) != nil || inventory.ResponseMode != part.candidateMode || len(inventory.Inputs) != 1 || len(part.parsedInputs) != 1 || part.parsedInputs[0] == nil {
+		return nil, errors.New("candidate has no original supported measurement source")
 	}
 	metric := catalogMetric(position)
-	if metric == "" || desktopCandidateResponseMetric(metric) && !mobilemultihop.NodeChainCandidateInputSupportedForMeasurement(inventory.Inputs[0], metric) {
+	if part.candidateMode == "hysteria2" {
+		if metric != hopmeasure.CandidatePrivateResponseMeasurement || !mobilemultihop.NodeChainHysteria2CandidateInputSupported(inventory.Inputs[0]) {
+			return nil, errors.New("candidate has no original authenticated Hysteria2 response source")
+		}
+	} else if metric == "" || desktopCandidateResponseMetric(metric) && !mobilemultihop.NodeChainCandidateInputSupportedForMeasurement(inventory.Inputs[0], metric) {
 		return nil, errors.New("candidate has no attributable response through the selected prefix")
 	}
 	return part, nil
@@ -315,11 +338,11 @@ func combineDesktopCandidateViewSources(ctx context.Context, parts []*desktopNod
 		return nil, errors.New("candidate view has no complete source inventory")
 	}
 	first := parts[0]
-	result := &desktopNodeChainCandidateCatalog{serverResponse: first.serverResponse, app: first.app, launch: first.launch, revision: first.revision, profiles: map[string]string{}}
-	inventory := mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: first.revision}
+	result := &desktopNodeChainCandidateCatalog{serverResponse: first.serverResponse, app: first.app, launch: first.launch, revision: first.revision, candidateMode: first.candidateMode, profiles: map[string]string{}}
+	inventory := mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: first.revision, ResponseMode: first.candidateMode}
 	total := 0
 	for _, part := range parts {
-		if ctx.Err() != nil || part == nil || part.app != first.app || part.launch != first.launch || part.serverResponse != first.serverResponse || part.revision != first.revision {
+		if ctx.Err() != nil || part == nil || part.app != first.app || part.launch != first.launch || part.serverResponse != first.serverResponse || part.revision != first.revision || part.candidateMode != first.candidateMode {
 			return nil, errors.New("candidate view mixed source generations")
 		}
 		captured := sha256.Sum256([]byte(part.inventory))
@@ -327,7 +350,7 @@ func combineDesktopCandidateViewSources(ctx context.Context, parts []*desktopNod
 			return nil, errors.New("candidate view changed an original captured inventory")
 		}
 		var source mobilemultihop.NodeChainCandidateInventory
-		if json.Unmarshal([]byte(part.inventory), &source) != nil || source.Schema != 1 || source.Revision != first.revision || len(source.Inputs) != 1 {
+		if json.Unmarshal([]byte(part.inventory), &source) != nil || source.Schema != 1 || source.Revision != first.revision || source.ResponseMode != first.candidateMode || len(source.Inputs) != 1 {
 			return nil, errors.New("candidate view changed a captured source")
 		}
 		for id, token := range part.profiles {

@@ -332,6 +332,11 @@ struct IOSCandidateMetadataPages {
                         Self.integer(body["prefix_position"]) == selectedResponse?.position && body["prefix_id"] as? String == selectedResponse?.id) else { throw Self.issue() }
             fields.insert("measurement")
         }
+        if let mode = body["candidate_mode"] {
+            guard family == .ordinary, mode as? String == "hysteria2",
+                  body["measurement"] as? String == "routed-candidate-response" else { throw Self.issue() }
+            fields.insert("candidate_mode")
+        }
         if paged { fields.formUnion(["target_total","target_offset","targets_sha256"]) }
         if family == .selected {
             fields.formUnion(["preparation_source_sha256","preparation_config_sha256","requested_execution","execution","selection_epoch"])

@@ -32,6 +32,7 @@ type orderedCandidateView struct {
 	responseOwners                      []string
 	responseRequested, responseSelected string
 	responseEpoch                       uint64
+	candidateMode                       string
 }
 type orderedCandidateChoice struct {
 	ID             string                         `json:"id"`
@@ -71,6 +72,9 @@ func desktopCandidateMetricForIntent(launch *desktopNodeLaunch, position int, se
 	if position > 7 && !privateSelected && !publicSelected && (launch.chain.execution != nil || launch.chain.policy == nil || launch.chain.policy.OriginalChain().ExtendedLocalNodeCount() <= position+1) {
 		return ""
 	}
+	if desktopConnectedHysteria2Candidate(launch, position) {
+		return hopmeasure.CandidatePrivateResponseMeasurement
+	}
 	if mobilemultihop.NodeChainPrefixMode(launch.chain.selection.Nodes[position].Mode) {
 		return hopmeasure.CandidateTCPMeasurement
 	}
@@ -103,6 +107,14 @@ func desktopCandidateMetricForIntent(launch *desktopNodeLaunch, position int, se
 		return launch.chain.policy.OriginalChain().ConnectedCandidatePrefixMeasurement(position)
 	}
 	return launch.chain.policy.OriginalChain().CandidatePrefixMeasurement(position)
+}
+
+// Source classification selects the candidate protocol. The live catalog and
+// native operation separately retain and verify the original connected owner.
+func desktopConnectedHysteria2Candidate(launch *desktopNodeLaunch, position int) bool {
+	return launch != nil && launch.command != nil && launch.chain != nil &&
+		launch.chain.preparation == nil && launch.chain.execution == nil && launch.chain.policy != nil &&
+		launch.chain.policy.OriginalChain().SupportsConnectedHysteria2FinalCandidate(position)
 }
 
 func orderedPrefixChoice(position int, n desktopNodeChainMember, metric string) orderedCandidatePrefix {
@@ -188,6 +200,9 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view := &orderedCandidateView{token: hex.EncodeToString(nonce), capture: capture, expires: time.Now().Add(120 * time.Second), position: position, identity: identity}
+	if desktopConnectedHysteria2Candidate(identity.Ordered.launch, position) {
+		view.candidateMode = "hysteria2"
+	}
 	members := identity.Ordered.launch.chain.selection.Nodes
 	requested, err := orderedCandidateRequestedExecution(identity.Ordered.launch)
 	if err != nil {
@@ -201,7 +216,7 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 	if e := identity.Ordered.launch.chain.execution; e != nil && len(owners) == 0 && requested == "auto" && e.preparation.SupportsSelectedFinalResponseCandidate(position) {
 		owners = []string{"local"}
 	}
-	privateResponse := len(owners) > 0 || desktopCompareLocalPrivateResponseMembers(members, requested, position)
+	privateResponse := view.candidateMode != "" || len(owners) > 0 || desktopCompareLocalPrivateResponseMembers(members, requested, position)
 	catalogMetric := desktopCandidateCatalogMetric(identity.Ordered.launch, serverResponse)
 	for i, n := range members {
 		if metric := catalogMetric(i); metric != "" {
@@ -227,7 +242,7 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		var proposal []common.MultihopNodeSelection
 		if desktopCandidateResponseMetric(candidateViewMetric(view.prefixes, position)) {
 			var action string
-			_, proposal, action, err = orderedResponseProfile(ctx, identity.Ordered.launch.root, requested, members, position, p, profiles)
+			_, proposal, action, err = orderedResponseProfileWithMode(ctx, identity.Ordered.launch.root, requested, members, position, p, profiles, view.candidateMode)
 			if privateResponse || candidateViewMetric(view.prefixes, position) == hopmeasure.CandidatePublicResponseMeasurement {
 				choice.ProposalAction = action
 			}
@@ -260,6 +275,10 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view.catalog.identity = identity
+	if view.catalog.candidateMode != view.candidateMode {
+		http.Error(w, "candidate catalog changed its original response protocol", 409)
+		return
+	}
 	if err = view.catalog.pulseCurrent(ctx); err != nil {
 		http.Error(w, err.Error(), 409)
 		return
@@ -268,6 +287,9 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 	note := "50 TCP connection handshakes through the retained connected prefix. This does not authenticate candidate credentials. Saving creates a next-connection profile; it does not change the active path."
 	if metric == hopmeasure.CandidatePrivateResponseMeasurement {
 		note = "50 authenticated private agent responses through the selected prefix and paired candidate. Saving creates a profile for the next connection."
+		if view.candidateMode == "hysteria2" {
+			note = "50 authenticated Hysteria2 responses through the original connected prefix. Saving replaces only the final node in a profile for the next connection."
+		}
 	} else if metric == hopmeasure.CandidatePublicResponseMeasurement {
 		note = "50 HTTPS responses after TLS through the selected prefix and the imported candidate. Every response verifies the candidate's recorded public exit IP. Save retains the original suffix and public final in a separate next-connection profile."
 	}
@@ -295,9 +317,9 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(view.responseNodes) != 0 {
 			view.responseEpoch = ready.SelectionEpoch
-			view.addResponseSource(reply)
 		}
 	}
+	view.addResponseSource(reply)
 	// Publish the complete immutable view only after its original winner and
 	// public source map have been captured.
 	c := viaEntryControlFor(a)
@@ -374,7 +396,14 @@ func orderedCandidateRequestedExecution(launch *desktopNodeLaunch) (string, erro
 }
 
 func orderedCandidateProposalForExecution(members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile, requested string) (common.RouterProfile, []common.MultihopNodeSelection, error) {
+	return orderedCandidateProposalForExecutionWithMode(members, position, candidate, profiles, requested, "")
+}
+
+func orderedCandidateProposalForExecutionWithMode(members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile, requested, candidateMode string) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var control common.RouterProfile
+	if candidateMode != "" && (candidateMode != "hysteria2" || !desktopHysteria2FinalResponseMembers(members, requested, position, candidate)) {
+		return control, nil, errors.New("candidate response changed its original final protocol or path")
+	}
 	publicResponse := desktopPublicCandidateMembers(members, requested, position) && desktopNodeChainImportedExecutionMiddle(candidate)
 	typedFinal := desktopTypedFinalResponseMembers(members, requested, position)
 	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !common.ExtendedAWGSelectedMultihopSelection(nodeChainSelectedReferences(members)) && !(requested == "local" && (common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)) || common.ExtendedMixedLocalPacketCount(nodeChainSelectedReferences(members)) > 0))) || position < 0 || position >= len(members)-1 || !(mobilemultihop.NodeChainPrefixMode(members[position].Mode) || publicResponse || (requested == "local" || desktopSelectedResponseProposal(members, requested, position, candidate)) && (members[position].Mode == "shadowsocks" || typedFinal) && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
@@ -385,6 +414,9 @@ func orderedCandidateProposalForExecution(members []desktopNodeChainMember, posi
 	}
 	nodes := nodeChainSelectedReferences(members)
 	mode := "shadowsocks"
+	if candidateMode != "" {
+		mode = candidateMode
+	}
 	if candidate.External != nil {
 		switch candidate.External.Protocol {
 		case "socks5", "http-connect", "https-connect", "openvpn":
@@ -538,7 +570,7 @@ func (a *app) runOrderedCandidates(ctx context.Context, c *viaEntryControl, owne
 	if err != nil {
 		return err
 	}
-	if job.catalog.serverResponse != view.catalog.serverResponse || job.catalog.revision != view.catalog.revision {
+	if job.catalog.serverResponse != view.catalog.serverResponse || job.catalog.revision != view.catalog.revision || job.catalog.candidateMode != view.candidateMode {
 		return errors.New("saved candidate catalog changed")
 	}
 	job.finish, err = beginDesktopNodeChainMeasurementHold(ctx, a, identity.Ordered.launch)
@@ -575,7 +607,7 @@ func (a *app) runOrderedCandidates(ctx context.Context, c *viaEntryControl, owne
 				return e
 			}
 			c.mu.Lock()
-			job.failures = append(job.failures, viaEntryCandidateError{ID: id, Error: "no complete valid 50-sample TCP receipt"})
+			job.failures = append(job.failures, viaEntryCandidateError{ID: id, Error: "no complete valid 50-sample measurement"})
 			c.mu.Unlock()
 			continue
 		}

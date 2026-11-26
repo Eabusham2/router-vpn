@@ -70,6 +70,8 @@ import Libbox
         let finalResponse = selectedExecution && selectedResponse && selectedFinalResponse ||
             connectedLocal && !selectedExecution && original.selectionExecution == "local" &&
             prefixes.indices.contains(position) && prefixes[position].connectedFinalResponse(in: prefixes)
+        let hysteria2Response = prefixes.indices.contains(position) && prefixes[position].hysteria2Response
+        guard !hysteria2Response || connectedLocal && !selectedExecution && finalResponse else { throw IOSNodeCandidateCapture.issue() }
         guard !selectedExecution || ["server", "auto"].contains(original.selectionExecution),
               selectedExecution || !original.requiresIndependentPrefix || original.selectionExecution == "local",
               original.members.indices.contains(position),
@@ -89,7 +91,8 @@ import Libbox
             guard let found else { throw IOSNodeCandidateCapture.issue() }; return found
         }
         let candidate = try source(candidateID)
-        guard try IOSNodeCandidateCapture.member(profile: candidate.profile, files: candidate.files) == measuredInput else { throw IOSNodeCandidateCapture.issue() }
+        let pairedMode = hysteria2Response ? "hysteria2" : "shadowsocks"
+        guard try IOSNodeCandidateCapture.member(profile: candidate.profile, files: candidate.files, mode: pairedMode) == measuredInput else { throw IOSNodeCandidateCapture.issue() }
         let publicResponse = selectedPublic || !selectedExecution && prefixes[position].metric == "routed-public-candidate-response"
         if publicResponse {
             guard original.members.count < IOSMultihopNodeSelection.physicalTraversalDepth else {
@@ -106,7 +109,9 @@ import Libbox
                   !original.members.contains(where: { $0.id == candidateID || $0.profile["node_proof_id"] as? String == proof }) else { throw IOSNodeCandidateCapture.issue() }
         }
         if !publicResponse && (selectedResponse || !selectedExecution && prefixes[position].metric == "routed-candidate-response") {
-            guard LibboxRouterNodeChainCandidateInputSupportedForMeasurement(measuredInput, "routed-candidate-response") else {
+            let supported = hysteria2Response ? LibboxRouterNodeChainHysteria2CandidateInputSupported(measuredInput) :
+                LibboxRouterNodeChainCandidateInputSupportedForMeasurement(measuredInput, "routed-candidate-response")
+            guard supported else {
                 throw IOSNodeCandidateCapture.issue()
             }
         }
@@ -115,7 +120,7 @@ import Libbox
             let typed = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: candidate.profile))
             guard let mode = typed.external?.protocolName, ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode) else { throw IOSNodeCandidateCapture.issue() }
             candidateMode = mode
-        } else { candidateMode = "shadowsocks" }
+        } else { candidateMode = pairedMode }
         let replacement = position + 1
         let execution = original.selectionExecution
         guard original.members.indices.contains(replacement), ["local", "server", "auto"].contains(execution) else {
@@ -174,7 +179,7 @@ import Libbox
             }
         }
         catch {
-            if candidate.profile["node_kind"] as? String == "router-vpn",
+            if candidateMode == "shadowsocks", candidate.profile["node_kind"] as? String == "router-vpn",
                let encoded = candidate.files["shadowsocks"]?["sing-box.json"], let data = Data(base64Encoded: encoded),
                let graph = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let outbounds = graph["outbounds"] as? [[String: Any]] {

@@ -3,8 +3,10 @@ package mobilemultihop
 import (
 	"context"
 	"crypto/hmac"
+	"encoding/json"
 	"errors"
 	"net"
+	"reflect"
 	"strings"
 
 	"router-vpn/internal/hopmeasure"
@@ -14,9 +16,14 @@ import (
 // standalone source compiler can describe, but cannot execute, this capability.
 var wrapCandidateSS2022 func(context.Context, net.Conn, string, string, string) (net.Conn, error)
 
+// The pinned native build supplies the actual QUIC client. Its packet request
+// retains the original Local reader; no general-purpose dialer is accepted.
+var openCandidateHysteria2 func(context.Context, *NodeChainCandidatePacketRequest, string) (net.Conn, error)
+
 type candidateResponseSource struct {
 	Target                               hopmeasure.CandidateTarget
 	NodeID, API, Token, Method, Password string
+	Hysteria2Options                     string `json:",omitempty"`
 }
 
 func parseCandidateResponseSource(input string) (candidateResponseSource, error) {
@@ -42,7 +49,117 @@ func parseCandidateResponseSource(input string) (candidateResponseSource, error)
 	if err != nil || closure == nil {
 		return candidateResponseSource{}, bad
 	}
-	return candidateResponseSource{target, nodeID, strings.TrimRight(api.String(), "/"), token, predecessorText(closure.final, "method"), predecessorText(closure.final, "password")}, nil
+	return candidateResponseSource{Target: target, NodeID: nodeID, API: strings.TrimRight(api.String(), "/"), Token: token,
+		Method: predecessorText(closure.final, "method"), Password: predecessorText(closure.final, "password")}, nil
+}
+
+func parseCandidateHysteria2ResponseSource(input string) (candidateResponseSource, error) {
+	bad := errors.New("candidate response requires its original paired Hysteria2 node with Start Layer off and a private proof endpoint")
+	node, err := ParseNodeLaunchInput(input)
+	if err != nil || node == nil || node.mode != "hysteria2" {
+		return candidateResponseSource{}, bad
+	}
+	layer := predecessorText(node.profile, "start_layer")
+	if layer != "" && layer != "off" {
+		return candidateResponseSource{}, bad
+	}
+	api, err := privateAPI(predecessorText(node.profile, "router_api"))
+	token, nodeID := predecessorText(node.profile, "api_token"), predecessorText(node.profile, "node_proof_id")
+	if err != nil || token == "" || !proofID.MatchString(nodeID) {
+		return candidateResponseSource{}, bad
+	}
+	closure, err := nodeMultihopPredecessor(node)
+	if err != nil || !nodeChainFinalClosure(node, closure) || closure.final["type"] != "hysteria2" ||
+		closure.final["detour"] != nil || closure.final["domain_resolver"] != nil || closure.final["realm"] != nil ||
+		closure.final["server_ports"] != nil {
+		return candidateResponseSource{}, bad
+	}
+	target, err := nodeChainCandidateLiteralTarget(predecessorText(node.profile, "id"), node.SourceSHA256(), closure.final)
+	if err != nil {
+		return candidateResponseSource{}, bad
+	}
+	options, err := json.Marshal(closure.final)
+	if err != nil || len(options) > 4<<20 {
+		return candidateResponseSource{}, bad
+	}
+	return candidateResponseSource{Target: target, NodeID: nodeID, API: strings.TrimRight(api.String(), "/"), Token: token,
+		Hysteria2Options: string(options)}, nil
+}
+
+// SupportsConnectedHysteria2FinalCandidate is descriptive source metadata.
+// The packet carrier is acquired separately from the live ordinary Local
+// owner. No imported, dormant, selected Server/Compare or layered source
+// receives this admission; the original complete packet prefix stays intact.
+func (c *NodeChain) SupportsConnectedHysteria2FinalCandidate(position int) bool {
+	if c == nil || c.validateCapture() != nil || len(c.nodes) < 2 || len(c.nodes) > NodeChainMaximumNodes ||
+		position != len(c.nodes)-2 || c.importedNodes != nil || c.importedMiddle != nil || c.openVPNMiddle != nil ||
+		c.socksSource != nil || c.connectSource != nil {
+		return false
+	}
+	for i, node := range c.nodes {
+		proof := c.proofs[i]
+		if node == nil || proof.NodeKind != "" || proof.Kind != "" || proof.StartLayer != "off" || !proofID.MatchString(proof.NodeID) ||
+			proof.SourceSHA256 != node.SourceSHA256() {
+			return false
+		}
+		if i <= position {
+			if !NodeChainPrefixMode(proof.Mode) {
+				return false
+			}
+		} else if proof.Mode != "hysteria2" || proof.StartLayer != "off" {
+			return false
+		}
+	}
+	return true
+}
+
+// NodeChainCandidatePacketEngine is implemented only by the ordinary Local
+// native adapter. The sealed request supplies one original UDP endpoint and
+// prefix; the caller cannot supply a tag, address or replacement native owner.
+type NodeChainCandidatePacketEngine interface {
+	DialCandidatePacketContext(context.Context, *NodeChainCandidatePacketRequest) (net.Conn, error)
+}
+
+type NodeChainCandidatePacketRequest struct {
+	self     *NodeChainCandidatePacketRequest
+	engine   *nodeChainCandidateEngine
+	response candidateResponseSource
+}
+
+func (r *NodeChainCandidatePacketRequest) Read(ctx context.Context, reader NodeChainEngine, original *NodeChain) (NodeChainIdentity, string, string, error) {
+	empty := NodeChainIdentity{}
+	if r == nil || r.self != r || r.engine == nil || reader == nil || !reflect.TypeOf(reader).Comparable() || reader != r.engine.reader ||
+		original == nil || original != r.engine.active || r.engine.plan == nil || original != r.engine.plan.chain ||
+		r.engine.plan.responseMode != "hysteria2" || r.response.Hysteria2Options == "" {
+		return empty, "", "", hopmeasure.ErrStale
+	}
+	if _, err := r.engine.current(ctx); err != nil {
+		return empty, "", "", err
+	}
+	for _, source := range r.engine.plan.responses {
+		if source == r.response {
+			return r.engine.identity, r.engine.plan.prefix.Tag, source.Target.Address, nil
+		}
+	}
+	return empty, "", "", hopmeasure.ErrStale
+}
+
+func (r *NodeChainCandidatePacketRequest) dial(ctx context.Context) (net.Conn, error) {
+	if r == nil || r.engine == nil {
+		return nil, hopmeasure.ErrStale
+	}
+	reader, ok := r.engine.reader.(NodeChainCandidatePacketEngine)
+	if !ok {
+		return nil, hopmeasure.ErrStale
+	}
+	if _, _, _, err := r.Read(ctx, r.engine.reader, r.engine.active); err != nil {
+		return nil, err
+	}
+	connection, err := reader.DialCandidatePacketContext(ctx, r)
+	_, _, _, observed := r.Read(ctx, r.engine.reader, r.engine.active)
+	// The native carrier retains even a late nonnil connection with an error
+	// and joins its Close before the sample or measurement can release.
+	return connection, errors.Join(err, observed, ctx.Err())
 }
 
 func NodeChainCandidateInputSupportedForMeasurement(input, measurement string) bool {
@@ -242,6 +359,32 @@ func (p *NodeChainCandidatePlan) newService(ctx context.Context, engine hopmeasu
 	if p.measurement == hopmeasure.CandidatePublicResponseMeasurement {
 		return p.newPublicResponseService(ctx, engine, prefix)
 	}
+	if p.responseMode == "hysteria2" {
+		original, ok := engine.(*nodeChainCandidateEngine)
+		if !ok || original.plan != p || openCandidateHysteria2 == nil {
+			return nil, errors.New("authenticated Hysteria2 candidate requires its original Local packet carrier")
+		}
+		respond := func(ctx context.Context, target hopmeasure.CandidateTarget, complete func() error) error {
+			for _, source := range p.responses {
+				if source.Target == target {
+					request := &NodeChainCandidatePacketRequest{engine: original, response: source}
+					request.self = request
+					nonce, err := randomHex(16)
+					if err != nil {
+						return err
+					}
+					return source.exchangeChallenge(ctx, func(call context.Context, tag, destination string) (net.Conn, error) {
+						if tag != p.prefix.Tag {
+							return nil, hopmeasure.ErrStale
+						}
+						return openCandidateHysteria2(call, request, destination)
+					}, p.prefix.Tag, nonce, func(string) error { return complete() })
+				}
+			}
+			return hopmeasure.ErrStale
+		}
+		return hopmeasure.NewCapturedResponseCandidatesContext(ctx, engine, prefix, p.targets, NodeChainInputLimit, respond)
+	}
 	if p.measurement != hopmeasure.CandidatePrivateResponseMeasurement || wrapCandidateSS2022 == nil {
 		return nil, errors.New("authenticated candidate response requires its native Shadowsocks2022 transport")
 	}
@@ -268,6 +411,12 @@ func (s candidateResponseSource) exchange(ctx context.Context, engine hopmeasure
 }
 
 func (s candidateResponseSource) exchangeNonce(ctx context.Context, dial func(context.Context, string, string) (net.Conn, error), wrap func(context.Context, net.Conn, string, string, string) (net.Conn, error), tag, nonce string, accept func(string) error) error {
+	return s.exchangeChallenge(ctx, func(call context.Context, tag, destination string) (net.Conn, error) {
+		return dialCandidateStream(call, dial, wrap, tag, s.Target.Address, s.Method, s.Password, destination)
+	}, tag, nonce, accept)
+}
+
+func (s candidateResponseSource) exchangeChallenge(ctx context.Context, dial func(context.Context, string, string) (net.Conn, error), tag, nonce string, accept func(string) error) error {
 	request := hopmeasure.CandidateChallengeMAC(s.Token, s.NodeID, nonce, false)
 	api, err := privateAPI(s.API)
 	if err != nil {
@@ -277,7 +426,7 @@ func (s candidateResponseSource) exchangeNonce(ctx context.Context, dial func(co
 		if routedTag != tag || privateAddress != api.Host {
 			return nil, hopmeasure.ErrStale
 		}
-		return dialCandidateStream(call, dial, wrap, tag, s.Target.Address, s.Method, s.Password, privateAddress)
+		return dial(call, tag, privateAddress)
 	}, tag, s.API+hopmeasure.CandidateChallengePath+"?nonce="+nonce, request, "", nil, func(data []byte) error {
 		var result struct {
 			Node     string `json:"node_id"`

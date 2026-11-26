@@ -45,6 +45,56 @@ static JsonObject*linux_oc_root(JsonNode*n){return n&&JSON_NODE_HOLDS_OBJECT(n)?
 static gboolean linux_oc_response_id(const char *id) {
     return id && *id && strlen(id) <= 64 && strspn(id,"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_") == strlen(id);
 }
+static gboolean linux_oc_hysteria_envelope(JsonObject *view, int position) {
+    if (strcmp(linux_ec_string(view,"candidate_mode"),"hysteria2") ||
+        strcmp(linux_ec_string(view,"measurement"),"routed-candidate-response") ||
+        linux_ec_number(view,"prefix_position")!=position || position<0 || position>6) return FALSE;
+    if (linux_ec_member(view,"requested_execution") && strcmp(linux_ec_string(view,"requested_execution"),"local")) return FALSE;
+    const char *forbidden[]={"scope","origin","selected_execution","selection_epoch","required_selected_execution","response_executions","response_source_nodes","public_response_source_nodes","external_final"};
+    for (guint i=0;i<G_N_ELEMENTS(forbidden);i++) if (linux_ec_member(view,forbidden[i])) return FALSE;
+    return TRUE;
+}
+static gboolean linux_oc_hysteria_path(JsonObject *view, JsonObject *choice, JsonArray *path, int position) {
+    JsonArray *prefixes=linux_ec_array(view,"prefixes");
+    const char *id=linux_ec_string(choice,"id");
+    if (position<0 || position>6 || !prefixes || json_array_get_length(prefixes)!=(guint)position+1 ||
+        !path || json_array_get_length(path)!=(guint)position+2 || strcmp(linux_ec_string(choice,"kind"),"router-vpn") ||
+        !linux_oc_response_id(id) || linux_ec_member(choice,"draft_action") || linux_ec_member(choice,"draft_path") ||
+        (linux_ec_member(choice,"proposal_action") && strcmp(linux_ec_string(choice,"proposal_action"),"save-final-profile"))) return FALSE;
+    g_autoptr(GHashTable) ids=g_hash_table_new(g_str_hash,g_str_equal);
+    for (guint i=0;i<json_array_get_length(path);i++) {
+        JsonObject *node=linux_oc_root(json_array_get_element(path,i));
+        const char *node_id=linux_ec_string(node,"id"), *mode=linux_ec_string(node,"mode");
+        if (!node || json_object_get_size(node)!=2 || !linux_oc_response_id(node_id) || !g_hash_table_add(ids,(gpointer)node_id)) return FALSE;
+        if (i==(guint)position+1) {
+            if (strcmp(node_id,id) || strcmp(mode,"hysteria2")) return FALSE;
+            continue;
+        }
+        JsonObject *prefix=linux_oc_root(json_array_get_element(prefixes,i));
+        if (linux_ec_number(prefix,"position")!=i || !linux_oc_packet_mode(linux_ec_string(prefix,"mode")) ||
+            strcmp(node_id,linux_ec_string(prefix,"id")) || strcmp(mode,linux_ec_string(prefix,"mode"))) return FALSE;
+    }
+    return TRUE;
+}
+static gboolean linux_oc_hysteria_catalog(JsonObject *view, int position) {
+    JsonArray *choices=linux_ec_array(view,"candidates");
+    if (!linux_oc_hysteria_envelope(view,position) || linux_ec_number(view,"schema")!=1 || linux_ec_number(view,"samples")!=50 ||
+        !choices || !json_array_get_length(choices)) return FALSE;
+    g_autoptr(GHashTable) ids=g_hash_table_new(g_str_hash,g_str_equal);
+    for (guint i=0;i<json_array_get_length(choices);i++) {
+        JsonObject *choice=linux_oc_root(json_array_get_element(choices,i));
+        if (!linux_oc_hysteria_path(view,choice,linux_ec_array(choice,"proposed_path"),position) ||
+            !g_hash_table_add(ids,(gpointer)linux_ec_string(choice,"id"))) return FALSE;
+    }
+    JsonArray *prefixes=linux_ec_array(view,"prefixes");
+    for (int i=0;i<=position;i++) {
+        JsonObject *prefix=linux_oc_root(json_array_get_element(prefixes,(guint)i));
+        const char *measurement=linux_ec_string(prefix,"measurement");
+        if (i==position ? strcmp(measurement,"routed-candidate-response")!=0 :
+            linux_ec_member(prefix,"measurement") && strcmp(measurement,"routed-tcp-connect")) return FALSE;
+    }
+    return TRUE;
+}
 static gboolean linux_oc_response_source(JsonObject *view, JsonObject *draft, int position) {
     JsonArray *rows = linux_ec_array(view,"response_source_nodes");
     guint count = rows ? json_array_get_length(rows) : 0;
@@ -224,6 +274,7 @@ static gboolean linux_oc_response_draft(JsonObject*draft,int position,JsonObject
 static gboolean linux_oc_catalog_measurement(JsonObject*catalog,int position){
     const char*measurement=linux_ec_string(catalog,"measurement");
     if(position<0||position>=96||!linux_oc_measurement_kind(measurement)[0]||linux_ec_number(catalog,"samples")!=50)return FALSE;
+    if(linux_ec_member(catalog,"candidate_mode"))return linux_oc_hysteria_catalog(catalog,position);
     if(!strcmp(measurement,"routed-public-candidate-response")){
         if(!linux_oc_public_source(catalog,NULL,position))return FALSE;
         JsonArray *source=linux_ec_array(catalog,"public_response_source_nodes"), *choices=linux_ec_array(catalog,"candidates");
@@ -522,6 +573,29 @@ static void linux_oc_rows(LinuxOrderedCandidates*s,gboolean measured){
 }
 static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase){
     JsonObject *prior = linux_oc_root(s->view), *draft_source = linux_oc_root(s->draft_source);
+    JsonNode *mode=linux_ec_member(o,"candidate_mode"), *prior_mode=linux_ec_member(prior,"candidate_mode");
+    if (mode || (phase!=1 && prior_mode)) {
+        if (s->saved_path || s->draft) return FALSE;
+        if (phase==1) {
+            if (!linux_oc_hysteria_catalog(o,s->position)) return FALSE;
+        } else if (phase!=3 || mode) {
+            if (strcmp(linux_ec_string(prior,"candidate_mode"),"hysteria2") || !linux_oc_hysteria_envelope(o,s->position) ||
+                strcmp(linux_ec_string(o,"view_token"),linux_ec_string(prior,"view_token")) || strcmp(linux_ec_string(o,"request_id"),s->request)) return FALSE;
+            if (phase==4) {
+                JsonArray *choices=linux_ec_array(prior,"candidates");guint matches=0;
+                for (guint i=0;choices && i<json_array_get_length(choices);i++) {
+                    JsonObject *choice=linux_oc_root(json_array_get_element(choices,i));
+                    if (g_strcmp0(linux_ec_string(choice,"id"),s->chosen_id)) continue;
+                    if (!linux_oc_hysteria_path(prior,choice,linux_ec_array(o,"proposed_path"),s->position)) return FALSE;
+                    matches++;
+                }
+                JsonNode *changed=linux_ec_member(o,"active_path_changed");
+                if (matches!=1 || g_strcmp0(linux_ec_string(o,"candidate_id"),s->chosen_id) ||
+                    strcmp(linux_ec_string(o,"proposal_action"),"save-final-profile") || !changed || !JSON_NODE_HOLDS_VALUE(changed) ||
+                    json_node_get_value_type(changed)!=G_TYPE_BOOLEAN || json_node_get_boolean(changed)) return FALSE;
+            }
+        }
+    }
     JsonNode *source = linux_ec_member(o,"response_source_nodes"), *expected = linux_ec_member(prior,"response_source_nodes");
     JsonNode *owners = linux_ec_member(o,"response_executions"), *original_owners = linux_ec_member(prior,"response_executions");
     JsonNode *public_source=linux_ec_member(o,"public_response_source_nodes");
@@ -644,11 +718,22 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
         if(!linux_ec_token(token,64)||linux_ec_number(o,"prefix_position")!=s->position||!isfinite(expires)||expires<=g_get_real_time()/1000||!choices||json_array_get_length(choices)<1)return FALSE;
         gtk_list_store_clear(s->store);if(s->view)json_node_free(s->view);s->view=json_node_new(JSON_NODE_OBJECT);json_node_set_object(s->view,o);
         if(s->receipt){json_node_free(s->receipt);s->receipt=NULL;}gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(s->prefix));JsonArray*prefixes=linux_ec_array(o,"prefixes");
-        for(guint i=0;prefixes&&i<json_array_get_length(prefixes);i++){JsonObject*p=linux_oc_root(json_array_get_element(prefixes,i));double value=linux_ec_number(p,"position");if(!isfinite(value)||value<0||value>=96||floor(value)!=value||!linux_oc_prefix_measurement(p)[0])continue;char*id=g_strdup_printf("%d",(int)value),*name=g_strdup_printf("After node %d · %s · %s",(int)value+1,linux_ec_string(p,"name"),linux_ec_string(p,"mode"));gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(s->prefix),id,name);if((int)value==s->position)gtk_combo_box_set_active_id(GTK_COMBO_BOX(s->prefix),id);g_free(id);g_free(name);}
+        for(guint i=0;prefixes&&i<json_array_get_length(prefixes);i++){
+            JsonObject*p=linux_oc_root(json_array_get_element(prefixes,i));double value=linux_ec_number(p,"position");
+            /* This offers a fresh capture, not permission to use the old catalog
+             * for this prefix. The returned HY2 marker and path must validate. */
+            gboolean packet_response=!s->saved_path&&!s->draft&&linux_oc_packet_mode(linux_ec_string(p,"mode"))&&
+                !strcmp(linux_ec_string(p,"measurement"),"routed-candidate-response");
+            if(!isfinite(value)||value<0||value>=96||floor(value)!=value||(!linux_oc_prefix_measurement(p)[0]&&!packet_response))continue;
+            char*id=g_strdup_printf("%d",(int)value),*name=g_strdup_printf("After node %d · %s · %s",(int)value+1,linux_ec_string(p,"name"),linux_ec_string(p,"mode"));
+            gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(s->prefix),id,name);if((int)value==s->position)gtk_combo_box_set_active_id(GTK_COMBO_BOX(s->prefix),id);g_free(id);g_free(name);
+        }
         const char*note=!strcmp(linux_ec_string(o,"measurement"),"routed-public-candidate-response")?
             "Measure 50 HTTPS responses after TLS through the captured prefix and each imported candidate. Every response verifies its recorded public exit IP. Save and Use retain the original suffix and public final.":
+            !strcmp(linux_ec_string(o,"candidate_mode"),"hysteria2")?
+            "Measure 50 authenticated Hysteria2 responses through the connected Local prefix. Saving replaces only the final node and preserves Hysteria2 for the next connection.":
             !strcmp(linux_ec_string(o,"measurement"),"routed-candidate-response")?
-            "Measure 50 authenticated replies from each paired candidate through the selected Shadowsocks prefix, including connection time. Results use the same response measurement. Save a named profile to use the measured path on a future connection.":
+            "Measure 50 authenticated replies from each paired candidate through the captured prefix, including connection time. Results use the same response measurement. Save a named profile to use the measured path on a future connection.":
             "Measure 50 TCP connection handshakes per candidate through the selected WireGuard/AWG prefix. These timings measure connection establishment and do not authenticate candidate credentials. A temporary route must close before a measured hop can be adopted.";
         gtk_label_set_text(GTK_LABEL(s->note),note);
         s->saved_profile[0]=0;s->final_save=FALSE;linux_oc_rows(s,FALSE);

@@ -14,6 +14,8 @@ The selected-route Speed Lab retains the original winner, complete node inventor
 
 Recursive Local candidate timing retains the complete captured registry when a packet hop appears before or after an imported Shadowsocks member. Android and iOS can also measure eligible literal-address Shadowsocks candidates through the selected first paired entry while a public-exit draft is still incomplete. Those candidates use their original saved TCP port; changed sources, sessions or network decisions invalidate the result. The mobile Performance action opens the original routed per-hop and final-path speed measurements.
 
+Connected Local paths of two to eight paired nodes can measure a Hysteria2 final replacement through their original WG/AWG prefix when every Start Layer is Off. The fifty private-agent responses use the candidate's actual authenticated Hysteria2 connection and original TLS trust. Cancellation must finish retiring that connection and its packet I/O before releasing the measurement owner. Save preserves the complete prefix in a separately named next-connection profile. WG/AWG candidate endpoints and Hysteria2 candidates in dormant, Server or Compare paths remain unfinished.
+
 ## SMART startup and restoration
 
 Installed Linux clients can trial lighter transports from the bundled WG-PQ or Naive H3 wrapper with Kill Switch Off, after capturing the original graph and live tunnel MTU. A failed candidate must finish cleanup before the captured path can restart and earn a fresh proof. A firewall guard that appears during rollback is preserved. The single-node PQ startup and restoration budgets include the existing first-key window and remain bounded by the original connection operation.

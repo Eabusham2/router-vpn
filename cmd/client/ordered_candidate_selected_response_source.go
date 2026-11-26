@@ -130,7 +130,13 @@ func publishSelectedResponseSource(response map[string]any, metric string, nodes
 }
 
 func (view *orderedCandidateView) addResponseSource(response map[string]any) {
-	if view == nil || len(view.responseNodes) == 0 {
+	if view == nil {
+		return
+	}
+	if view.candidateMode != "" {
+		response["candidate_mode"] = view.candidateMode
+	}
+	if len(view.responseNodes) == 0 {
 		return
 	}
 	publishSelectedResponseSource(response, candidateViewMetric(view.prefixes, view.position), view.responseNodes)

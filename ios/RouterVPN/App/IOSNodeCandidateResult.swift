@@ -10,6 +10,7 @@ struct IOSNodeCandidateMetadata: Decodable {
     let config_sha256: String
     let targets: [Target]
     var measurement: String? = nil
+    var candidate_mode: String? = nil
     var metric: String { measurement ?? "routed-tcp-connect" }
     static func label(_ metric: String) -> String {
         switch metric {
@@ -26,6 +27,8 @@ struct IOSNodeCandidateMetadata: Decodable {
     func validate(prefix: IOSNodeCandidatePrefix, source: String, config: String, ids: Set<String>,
                   requestedExecution: String? = nil, selectedExecution: String? = nil, selectedPositions: [Int] = [0],
                   selectedResponse: IOSNodeCandidatePrefix? = nil) throws {
+        guard candidate_mode == prefix.candidate_mode,
+              candidate_mode == nil || candidate_mode == "hysteria2" && prefix.hysteria2Response && requestedExecution == nil && selectedExecution == nil else { throw IOSNodeCandidateResult.issue() }
         if let requestedExecution, let selectedExecution {
             guard ["server", "auto"].contains(requestedExecution), ["local", "server"].contains(selectedExecution),
                   requestedExecution == "auto" || requestedExecution == selectedExecution,

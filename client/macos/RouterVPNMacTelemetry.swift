@@ -1359,7 +1359,50 @@ private enum RouterVPNOrderedCandidateDisplay {
     static func sampleLabel(_ measurement: String) -> String {
         measurement == "routed-candidate-response" ? "private-agent responses" : measurement == "routed-public-candidate-response" ? "HTTPS exit responses after TLS" : "TCP connections"
     }
+    static func hysteriaEnvelope(_ value: [String:Any], position: Int) -> Bool {
+        guard value["candidate_mode"] as? String == "hysteria2", value["measurement"] as? String == "routed-candidate-response",
+              (0...6).contains(position), number(value,"prefix_position") == Double(position),
+              value["requested_execution"] == nil || value["requested_execution"] as? String == "local" else { return false }
+        return ["scope","origin","selected_execution","selection_epoch","required_selected_execution","response_executions","response_source_nodes","public_response_source_nodes","external_final"].allSatisfy { !value.keys.contains($0) }
+    }
+    static func hysteriaPath(_ choice: [String:Any], path: [[String:String]]?, view: [String:Any], position: Int) -> Bool {
+        guard (0...6).contains(position), let prefixes=view["prefixes"] as? [[String:Any]], prefixes.count == position+1,
+              let path, path.count == position+2, choice["kind"] as? String == "router-vpn", let id=choice["id"] as? String,
+              id.range(of:#"\A[A-Za-z0-9_-]{1,64}\z"#,options:.regularExpression) != nil,
+              !choice.keys.contains("draft_action"), !choice.keys.contains("draft_path"),
+              choice["proposal_action"] == nil || choice["proposal_action"] as? String == "save-final-profile" else { return false }
+        var ids=Set<String>()
+        for (i,node) in path.enumerated() {
+            guard node.count == 2, let nodeID=node["id"], nodeID.range(of:#"\A[A-Za-z0-9_-]{1,64}\z"#,options:.regularExpression) != nil,
+                  ids.insert(nodeID).inserted else { return false }
+            if i == position+1 {
+                guard nodeID == id, node["mode"] == "hysteria2" else { return false }
+            } else {
+                let prefix=prefixes[i]
+                guard number(prefix,"position") == Double(i), let mode=prefix["mode"] as? String,
+                      ["wg","awg2-fast","awg2-strong"].contains(mode), node["mode"] == mode, nodeID == prefix["id"] as? String else { return false }
+            }
+        }
+        return true
+    }
+    static func hysteriaCatalog(_ value: [String:Any], position: Int) -> Bool {
+        guard hysteriaEnvelope(value,position:position), number(value,"schema") == 1, number(value,"samples") == 50,
+              let choices=value["candidates"] as? [[String:Any]], !choices.isEmpty,
+              let prefixes=value["prefixes"] as? [[String:Any]] else { return false }
+        var ids=Set<String>()
+        guard choices.allSatisfy({ choice in
+            guard let id=choice["id"] as? String else { return false }
+            return hysteriaPath(choice,path:choice["proposed_path"] as? [[String:String]],view:value,position:position) && ids.insert(id).inserted
+        }) else { return false }
+        return prefixes.enumerated().allSatisfy { i,prefix in
+            if i == position { return prefix["measurement"] as? String == "routed-candidate-response" }
+            return prefix["measurement"] == nil || prefix["measurement"] as? String == "routed-tcp-connect"
+        }
+    }
     static func metric(_ value: [String: Any], position: Int, draft: [String: Any]? = nil) -> String? {
+        if value.keys.contains("candidate_mode") {
+            return draft == nil && hysteriaCatalog(value,position:position) ? "routed-candidate-response":nil
+        }
         guard let measurement = value["measurement"] as? String,
               let prefixes = value["prefixes"] as? [[String: Any]] else { return nil }
         let selected = prefixes.filter { number($0, "position") == Double(position) }
@@ -1472,7 +1515,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 820, height: 570), styleMask: [.titled,.closable,.resizable], backing: .buffered, defer: false)
         super.init(window: panel); panel.title = draft != nil ? "Measure the next hop" : savedPrefix ? "Test saved prefix" : self.savedPath ? "Test saved Local path" : "Candidates through connected prefix"; panel.delegate = self; panel.isReleasedWhenClosed = false
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12; stack.edgeInsets = NSEdgeInsets(top: 18,left: 18,bottom: 18,right: 18)
-        stack.addArrangedSubview(NSTextField(wrappingLabelWithString: "WireGuard and AWG prefixes measure TCP connection time. Shadowsocks 2022 prefixes time private-agent responses from paired candidates or HTTPS responses through imported candidates. HTTPS timing starts after TLS and verifies the expected exit IP. A Server trial requires a separately provisioned candidate. Each score uses 50 samples of the metric shown in the table."))
+        stack.addArrangedSubview(NSTextField(wrappingLabelWithString: "Candidate timings measure TCP connections, authenticated private-agent responses, or HTTPS exit responses. A connected Local Hysteria2 final supports authenticated responses through its WireGuard/AWG prefix. HTTPS timing starts after TLS and verifies the expected exit IP. A Server trial requires a separately provisioned candidate. Each score uses 50 samples of the metric shown in the table."))
         let top = NSStackView(views: [prefix,refresh]); top.orientation = .horizontal; stack.addArrangedSubview(top)
         for (id,title,width) in [("name","Saved candidate",360.0),("timing","Measured time",300.0)] {let column = NSTableColumn(identifier:NSUserInterfaceItemIdentifier(id));column.title=title;column.width=width;table.addTableColumn(column)}
         table.dataSource=self;table.delegate=self;table.allowsMultipleSelection=true;table.usesAlternatingRowBackgroundColors=true
@@ -1618,6 +1661,28 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         controls()
     }
     private func receive(_ value:[String:Any],action:String)throws {
+        if value.keys.contains("candidate_mode") || action != "catalog" && view?.keys.contains("candidate_mode") == true {
+            guard !savedPath, draft == nil else { throw Self.issue("Hysteria2 candidate responses require the original connected Local path.") }
+            if action == "catalog" {
+                guard RouterVPNOrderedCandidateDisplay.hysteriaCatalog(value,position:position) else {
+                    throw Self.issue("The Hysteria2 candidate catalog changed its original packet prefix or final mode.")
+                }
+            } else if action != "cancel" || value.keys.contains("candidate_mode") {
+                guard let view, view["candidate_mode"] as? String == "hysteria2",
+                      RouterVPNOrderedCandidateDisplay.hysteriaEnvelope(value,position:position),
+                      value["view_token"] as? String == view["view_token"] as? String, value["request_id"] as? String == requestID else {
+                    throw Self.issue("The Hysteria2 response belongs to another captured path.")
+                }
+                if action == "save" {
+                    let offered=choices.filter { $0["id"] as? String == chosenID }
+                    guard offered.count == 1, value["candidate_id"] as? String == chosenID,
+                          value["proposal_action"] as? String == "save-final-profile", RouterVPNOrderedCandidateDisplay.falseFlag(value,"active_path_changed"),
+                          RouterVPNOrderedCandidateDisplay.hysteriaPath(offered[0],path:value["proposed_path"] as? [[String:String]],view:view,position:position) else {
+                        throw Self.issue("The saved Hysteria2 final changed the measured prefix or candidate mode.")
+                    }
+                }
+            }
+        }
         if value["measurement"] as? String == "routed-public-candidate-response" || measurement == "routed-public-candidate-response" {
             let selectedPublic=value.keys.contains("response_executions") || view?.keys.contains("response_executions") == true
             if selectedPublic {
@@ -1706,7 +1771,10 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
                     throw Self.issue("The original route is missing from this candidate catalog.")
                 }
             }
-            view=value;choices=candidates;rows=candidates;receipts=[:];prefix.removeAllItems();for item in value["prefixes"] as? [[String:Any]] ?? [] {guard let p=RouterVPNOrderedCandidateDisplay.number(item,"position") else{continue};prefix.addItem(withTitle:"After node \(Int(p)+1) · \(item["name"] as? String ?? "") · \(item["mode"] as? String ?? "")");prefix.lastItem?.representedObject=Int(p);if Int(p)==position{prefix.select(prefix.lastItem)}};table.reloadData();status.stringValue="Select saved candidates and test through this captured prefix."
+            view=value;choices=candidates;rows=candidates;receipts=[:];prefix.removeAllItems();for item in value["prefixes"] as? [[String:Any]] ?? [] {guard let p=RouterVPNOrderedCandidateDisplay.number(item,"position") else{continue};prefix.addItem(withTitle:"After node \(Int(p)+1) · \(item["name"] as? String ?? "") · \(item["mode"] as? String ?? "")");prefix.lastItem?.representedObject=Int(p);if Int(p)==position{prefix.select(prefix.lastItem)}};table.reloadData()
+            status.stringValue=value["candidate_mode"] as? String == "hysteria2" ?
+                "Measure 50 authenticated Hysteria2 responses through the connected Local prefix. Saving replaces only the final node and preserves Hysteria2 for the next connection.":
+                "Select saved candidates and test through this captured prefix."
             if draft != nil, !closeWanted, !cancelWanted {
                 let eligible = IndexSet(rows.indices.filter { ["routed-candidate-response","routed-public-candidate-response"].contains(measurement) || ((rows[$0]["proposed_path"] as? [[String: Any]])?.count ?? 0) >= 3 })
                 if !eligible.isEmpty { table.selectRowIndexes(eligible, byExtendingSelection: false); measure() }

@@ -51,6 +51,10 @@ func (d *DesktopTypedEntryCandidateDescription) CaptureSHA256() string {
 // typed policy's packet entry or authenticated final replacement. The native
 // child separately binds its selected trial and proof before issuing a grant.
 func (p *NodeChainExecutionPreparation) DescribeDesktopTypedEntryCandidate(socks *DesktopNodeChainSOCKSPolicy, connect *DesktopNodeChainCONNECTPolicy, position int, inventory string) (*DesktopTypedEntryCandidateDescription, error) {
+	mode, modeErr := candidateInventoryResponseMode(inventory)
+	if modeErr != nil || mode != "" {
+		return nil, nodeChainExecutionError
+	}
 	if p == nil || (socks == nil) == (connect == nil) || p.validateCapture() != nil ||
 		position != 0 && !p.selectedFinalResponsePrefix(position) ||
 		socks != nil && (p.socks == nil || p.socks.desktop == nil || p.socks.desktop.original != socks || p.socks.local != p.local) ||
@@ -175,6 +179,10 @@ func (r *NodeChainExecutionRuntime) NewLocalCandidatePlanContext(ctx context.Con
 }
 
 func (r *NodeChainExecutionRuntime) newExecutionCandidatePlanContext(ctx context.Context, position int, inventory string, localInterior bool) (*NodeChainExecutionCandidatePlan, error) {
+	mode, modeErr := candidateInventoryResponseMode(inventory)
+	if modeErr != nil || mode != "" {
+		return nil, nodeChainExecutionError
+	}
 	if ctx == nil || ctx.Err() != nil || r == nil || (!localInterior && position != 0) || (localInterior && position <= 0) || r.projection == nil || r.projection.validateCapture() != nil {
 		return nil, nodeChainExecutionError
 	}

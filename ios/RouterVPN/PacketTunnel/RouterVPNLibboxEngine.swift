@@ -1,5 +1,6 @@
 import Foundation
 import CoreFoundation
+@preconcurrency import NetworkExtension
 import Libbox
 #if canImport(CryptoKit)
 import CryptoKit
@@ -39,6 +40,7 @@ final class RouterVPNLibboxEngine {
     let settingsEpoch: String
     private let startupDeviceMTU: IOSDeviceMTUPreference
     private let strategyOwned: Bool
+    private let temporaryMeasurement: Bool
     private var nativeCloseFailure: Error?
     private var measurementLease = ""
     private var permanentlyStopped = false
@@ -63,6 +65,7 @@ final class RouterVPNLibboxEngine {
         let capturedEpoch = strategyEpoch ?? UUID().uuidString
         self.settingsEpoch = capturedEpoch
         self.strategyOwned = strategyEpoch != nil
+        self.temporaryMeasurement = (tunnel.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?[RouterVPNNodeChainExecutionRegistry.temporaryOwnerKey] != nil
         self.platform = RouterVPNLibboxPlatform(tunnel: tunnel, settingsEpoch: capturedEpoch)
         if strategyEpoch == nil { tunnel.beginLibboxSettings(epoch: capturedEpoch) }
         platform.onLog = { [weak tunnel] message in tunnel?.writeLibboxLog(message) }
@@ -2121,6 +2124,13 @@ final class RouterVPNLibboxEngine {
                 else { return nil }
                 members = source.members; sourceSHA256 = source.sourceSHA256; configSHA256 = source.configSHA256
                 localPrefixes = source.connectedCandidatePrefixes
+                if temporaryMeasurement {
+                    localPrefixes = localPrefixes.map { original in
+                        var prefix = original
+                        if prefix.hysteria2Response { prefix.measurement = nil; prefix.candidate_mode = nil }
+                        return prefix
+                    }
+                }
             }
             let safe: [[String: Any]] = members.enumerated().map { position, member in
                 var prefix: [String: Any] = ["position": position, "profile_id": member.id,
@@ -2129,6 +2139,7 @@ final class RouterVPNLibboxEngine {
                     prefix["measurement"] = selectedResponseMetric
                 } else if execution == nil, localPrefixes.indices.contains(position), let metric = localPrefixes[position].measurement {
                     prefix["measurement"] = metric
+                    if let mode = localPrefixes[position].candidate_mode { prefix["candidate_mode"] = mode }
                 }
                 return prefix
             }
@@ -2158,6 +2169,9 @@ final class RouterVPNLibboxEngine {
                 guard ["routed-tcp-connect", "routed-candidate-response"].contains(connect.capture.plan.candidatePrefixMeasurement(position)) else { return nil }
             }
             let originalSource = try? IOSCandidateCatalogPublication.shared.reopen(request: ownerRequest)
+            if temporaryMeasurement, let source = originalSource,
+               let inventory = try? JSONSerialization.jsonObject(with: source.inventory.data) as? [String: Any],
+               inventory["response_mode"] != nil { return nil }
             ownershipLock.lock()
             var captured = nodeCandidate
             if captured == nil, currentLocked(),

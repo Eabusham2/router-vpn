@@ -7,11 +7,17 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
     let node_id: String
     let mode: String
     var measurement: String? = nil
+    var candidate_mode: String? = nil
     var metric: String { measurement ?? "routed-tcp-connect" }
+    var hysteria2Response: Bool {
+        candidate_mode == "hysteria2" && metric == "routed-candidate-response" &&
+            IOSMultihopNodeSelection.supportsNativePrefix(mode) && !node_id.isEmpty
+    }
     var typedImportedResponse: Bool {
-        metric == "routed-candidate-response" && ["socks5", "http-connect", "https-connect", "openvpn"].contains(mode)
+        candidate_mode == nil && metric == "routed-candidate-response" && ["socks5", "http-connect", "https-connect", "openvpn"].contains(mode)
     }
     var supported: Bool {
+        if candidate_mode != nil { return hysteria2Response && (0..<(IOSMultihopNodeSelection.maximumNodes - 1)).contains(position) }
         switch metric {
         case "routed-tcp-connect": return ["wg", "awg2-fast", "awg2-strong"].contains(mode)
         case "routed-candidate-response": return (mode == "shadowsocks" || typedImportedResponse && node_id.isEmpty) && (1..<(IOSMultihopNodeSelection.physicalTraversalDepth - 1)).contains(position)
@@ -20,6 +26,7 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
         }
     }
     func selectedResponse(in proofs: [Self]) -> Bool {
+        guard candidate_mode == nil, proofs.allSatisfy({ $0.candidate_mode == nil }) else { return false }
         if metric == "routed-public-candidate-response" || typedImportedResponse { return supported(in: proofs) }
         guard (3...IOSMultihopNodeSelection.physicalTraversalDepth).contains(proofs.count), position > 0, position < proofs.count - 1,
               proofs[position] == self, metric == "routed-candidate-response",
@@ -39,6 +46,18 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
     }
     func supported(in proofs: [Self]) -> Bool {
         guard supported else { return false }
+        if hysteria2Response {
+            guard (2...IOSMultihopNodeSelection.maximumNodes).contains(proofs.count), position == proofs.count - 2,
+                  proofs[position] == self, Set(proofs.map(\.profile_id)).count == proofs.count,
+                  Set(proofs.map(\.node_id)).count == proofs.count else { return false }
+            return proofs.enumerated().allSatisfy { index, row in
+                guard row.position == index, !row.profile_id.isEmpty, !row.node_id.isEmpty else { return false }
+                if index == position { return row.hysteria2Response }
+                guard row.measurement == nil, row.candidate_mode == nil else { return false }
+                return index == proofs.count - 1 ? row.mode == "hysteria2" : IOSMultihopNodeSelection.supportsNativePrefix(row.mode)
+            }
+        }
+        guard proofs.allSatisfy({ $0.candidate_mode == nil || $0.hysteria2Response }) else { return false }
         if metric == "routed-candidate-response", mode == "shadowsocks", proofs.first?.mode == "shadowsocks" {
             return importedEntryFinalResponse(in: proofs)
         }
@@ -84,7 +103,7 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
     }
 
     func connectedFinalResponse(in proofs: [Self]) -> Bool {
-        typedImportedResponse ? supported(in: proofs) : importedEntryFinalResponse(in: proofs)
+        typedImportedResponse || hysteria2Response ? supported(in: proofs) : importedEntryFinalResponse(in: proofs)
     }
 
     private func importedEntryFinalResponse(in proofs: [Self]) -> Bool {
@@ -142,8 +161,8 @@ enum IOSNodeCandidateOriginalCapture {
         }
     }
 
-    // A dormant preparation does not gain these imported routes. Only the
-    // connected provider may describe a response through that retained hop.
+    // Dormant preparations retain their original metrics. Only the connected
+    // provider can describe an additional authenticated response carrier.
     var candidatePrefixes: [IOSNodeCandidatePrefix] { makeCandidatePrefixes(connected: false) }
     var connectedCandidatePrefixes: [IOSNodeCandidatePrefix] { makeCandidatePrefixes(connected: true) }
 
@@ -165,6 +184,11 @@ enum IOSNodeCandidateOriginalCapture {
                 case .connect(let capture): metric = capture.plan.candidatePrefixMeasurement(Int32(position))
                 }
                 if metric == "routed-candidate-response" { prefix.measurement = metric }
+                if case .ordinary(let capture) = self,
+                   LibboxRouterNodeChainSupportsConnectedHysteria2FinalCandidate(capture.plan, Int32(position)) {
+                    prefix.measurement = "routed-candidate-response"
+                    prefix.candidate_mode = "hysteria2"
+                }
             }
             return prefix
         }
@@ -207,7 +231,11 @@ enum IOSNodeCandidateOriginalCapture {
                                            sourceSHA256: sourceSHA256, configSHA256: configSHA256)
         defer { try? original.close() }
         if case .ordinary(let source) = original {
-            if source.sourceSchema == 5 || source.sourceSchema == 7 {
+            if proofs.contains(where: { $0.hysteria2Response }) {
+                guard source.sourceSchema == 1, let response = proofs.first(where: { $0.hysteria2Response }),
+                      response.supported(in: proofs),
+                      LibboxRouterNodeChainSupportsConnectedHysteria2FinalCandidate(source.plan, Int32(response.position)) else { throw issue() }
+            } else if source.sourceSchema == 5 || source.sourceSchema == 7 {
                 guard proofs.contains(where: { $0.connectedFinalResponse(in: proofs) }),
                       source.sourceSchema == 5 ? proofs[proofs.count - 2].mode == "openvpn" : proofs.count == 3 && proofs[0].mode == "shadowsocks" else { throw issue() }
             } else {

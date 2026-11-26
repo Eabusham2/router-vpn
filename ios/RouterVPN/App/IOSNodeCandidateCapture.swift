@@ -35,7 +35,10 @@ import Libbox
               proofs.indices.contains(prefixPosition), selectedResponse ? proofs[prefixPosition].selectedResponse(in: proofs) : proofs[prefixPosition].supported(in: proofs),
               proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }), (2...8).contains(proofs.count) || IOSMultihopNodeSelection.extendedOriginalModes(proofs.map(\.mode), execution: "local") else { throw issue() }
         let publicResponse = proofs[prefixPosition].metric == "routed-public-candidate-response"
-        let completeSource = publicResponse || selectedResponse
+        let hysteria2Response = proofs[prefixPosition].hysteria2Response
+        guard !hysteria2Response || !selectedResponse else { throw issue() }
+        let candidateMode = hysteria2Response ? "hysteria2" : "shadowsocks"
+        let completeSource = publicResponse || selectedResponse || hysteria2Response
         let excludedMembers = proofs.prefix(completeSource ? proofs.count : prefixPosition + 1)
         let excluded = Set(excludedMembers.map(\.profile_id))
         let paired = Set(excludedMembers.map(\.node_id).filter { !$0.isEmpty })
@@ -74,9 +77,13 @@ import Libbox
                 let name = profile["name"] as? String ?? id
                 var input = "", reason = "This saved transport or Start Layer cannot supply this measurement"
                 do {
-                    input = try member(profile: profile, files: files)
-                    guard LibboxRouterNodeChainCandidateInputSupported(input) else { throw issue() }
-                    if publicResponse || proofs[prefixPosition].metric == "routed-candidate-response" {
+                    input = try member(profile: profile, files: files, mode: candidateMode)
+                    if hysteria2Response {
+                        guard LibboxRouterNodeChainHysteria2CandidateInputSupported(input) else { throw issue() }
+                    } else {
+                        guard LibboxRouterNodeChainCandidateInputSupported(input) else { throw issue() }
+                    }
+                    if !hysteria2Response && (publicResponse || proofs[prefixPosition].metric == "routed-candidate-response") {
                         guard LibboxRouterNodeChainCandidateInputSupportedForMeasurement(input, proofs[prefixPosition].metric) else { throw issue() }
                     }
                     reason = ""; inputs.append(input)
@@ -85,7 +92,9 @@ import Libbox
             }
         }
         guard originals.isEmpty, !inputs.isEmpty else { throw issue() }
-        let inventory = try JSONSerialization.data(withJSONObject: ["schema": 1, "revision": stamp.revision, "inputs": inputs], options: [.sortedKeys])
+        var offered: [String: Any] = ["schema": 1, "revision": stamp.revision, "inputs": inputs]
+        if hysteria2Response { offered["response_mode"] = "hysteria2" }
+        let inventory = try JSONSerialization.data(withJSONObject: offered, options: [.sortedKeys])
         guard inventory.count <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw issue() }
         guard publicResponse else { return (inventory, rows) }
         guard let launch = originalLaunch, launch.count <= IOSNodeChainCapture.maximumInputBytes,
@@ -110,11 +119,13 @@ import Libbox
             return Row(id: row.id, name: row.name, input: "", reason: "This source shares an endpoint or credentials with another route member or candidate")
         })
     }
-    static func member(profile: [String: Any], files: [String: [String: String]]) throws -> String {
+    static func member(profile: [String: Any], files: [String: [String: String]], mode: String = "shadowsocks") throws -> String {
+        guard ["shadowsocks", "hysteria2"].contains(mode) else { throw issue() }
         guard profile["start_layer"] == nil || profile["start_layer"] is String else { throw issue() }
         let layer = profile["start_layer"] as? String ?? "off"
         guard ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(layer),
               profile["node_kind"] as? String != "external" || layer.isEmpty || layer == "off" else { throw issue() }
+        guard mode != "hysteria2" || profile["node_kind"] as? String == "router-vpn" && (layer.isEmpty || layer == "off") else { throw issue() }
         var failure: NSError?
         let result: String?
         if profile["node_kind"] as? String == "external" {
@@ -134,10 +145,10 @@ import Libbox
             }
         } else {
             guard profile["node_kind"] as? String == "router-vpn", profile["external"] == nil,
-                  let original = files["shadowsocks"], !original.isEmpty else { throw issue() }
+                  let original = files[mode], !original.isEmpty else { throw issue() }
             func json(_ value: Any) throws -> String { String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), as: UTF8.self) }
             let bootstrap = try profile["dns_bootstrap"].map { try json($0) } ?? ""
-            result = LibboxRouterNodeChainMemberInput("shadowsocks", try json(original), try json(profile), "", bootstrap, &failure)
+            result = LibboxRouterNodeChainMemberInput(mode, try json(original), try json(profile), "", bootstrap, &failure)
         }
         guard let result, !result.isEmpty, failure == nil else { throw failure ?? issue() }; return result
     }

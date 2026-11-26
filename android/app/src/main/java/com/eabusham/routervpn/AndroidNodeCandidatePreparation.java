@@ -143,7 +143,7 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
         try {
             requireCurrent();AndroidNodeChainSession session=temporary.session();
             network.requireProved(LayeredVpnService.prepareNodeCandidates(session,lease));requireCurrent();
-            if(capturedPrefix==null)catalog=new AndroidNodeCandidateCatalog(context,session,prefix);
+            if(capturedPrefix==null)catalog=new AndroidNodeCandidateCatalog(context,session,prefix,false);
             else if(session.candidatePrefix!=capturedPrefix||session.candidateCatalog!=catalog)throw new IllegalStateException("The original prepared packet prefix was replaced.");
             requireCurrent();
             measurement=AndroidNodeCandidateMeasurement.startBorrowed(catalog,lease,new AndroidNodeCandidateMeasurement.Callback(){

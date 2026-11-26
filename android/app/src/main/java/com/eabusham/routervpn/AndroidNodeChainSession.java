@@ -387,6 +387,7 @@ final class AndroidNodeChainSession {
             throw new IllegalStateException("The original temporary cleanup gate cannot be replaced.");
         temporaryDrain=drain;
     }
+    boolean temporaryMeasurement() { return temporaryDrain != null; }
     void requireTemporaryDrain() {
         TemporaryDrain retained=temporaryDrain;
         if(retained!=null&&!retained.drain())throw new IllegalStateException("The original temporary candidate work has not joined.");
