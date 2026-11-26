@@ -48,6 +48,7 @@ if($SelfTest){
      if($null-eq$Item-or-not$Item.IsVisible){throw "Windows layout missing visible $Name"}
      $Item.BringIntoView();$Window.UpdateLayout()
      $Window.Dispatcher.Invoke([Action]{},[Windows.Threading.DispatcherPriority]::Render)
+     if($Name-ceq'UnifiedKillSwitch'){Write-Host "Windows native kill-switch layout: $($Size[0])x$($Size[1]); width=$($Item.ActualWidth); height=$($Item.ActualHeight); visible=$($Item.IsVisible)"}
      if($Item.ActualWidth-lt20-or$Item.ActualHeight-lt16){throw "Windows layout has an unusable $Name"}
      $Ancestor=[Windows.Media.VisualTreeHelper]::GetParent($Item)
      while($null-ne$Ancestor-and$Ancestor-isnot[Windows.Controls.ScrollContentPresenter]){$Ancestor=[Windows.Media.VisualTreeHelper]::GetParent($Ancestor)}

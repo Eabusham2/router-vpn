@@ -33,14 +33,23 @@ extension ProductWindowController {
         // document's spacing also separates the complete clickable controls.
         func containButtonFrames(_ row: NSStackView) {
             var padding = row.edgeInsets
+            var leadingFrameInset: CGFloat = 0
+            var trailingFrameInset: CGFloat = 0
             for view in row.arrangedSubviews {
                 let insets = view.alignmentRectInsets
                 padding.top = max(padding.top, max(0, insets.top))
                 padding.left = max(padding.left, max(0, insets.left))
                 padding.bottom = max(padding.bottom, max(0, insets.bottom))
                 padding.right = max(padding.right, max(0, insets.right))
+                leadingFrameInset = max(leadingFrameInset, max(0, insets.left))
+                trailingFrameInset = max(trailingFrameInset, max(0, insets.right))
             }
             row.edgeInsets = padding
+            // Spacing is also measured between alignment rectangles. Reserve
+            // both outer insets even when a hidden neighbor rejoins the row.
+            if row.orientation == .horizontal {
+                row.spacing += leadingFrameInset + trailingFrameInset
+            }
             row.setContentCompressionResistancePriority(.required, for: .vertical)
         }
         let profileRow = NSStackView(views: [profiles])
