@@ -161,6 +161,7 @@ func relayValidationLease(exit multihoprelay.Exit, host string, port int, entryN
 	lease := multihoprelay.Lease{
 		Request: multihoprelay.Request{ExitID: exit.ID, ExitMode: exit.Mode, ExitStartLayer: multihoprelay.ExitLayerMode(exit)},
 		Host:    host, Port: port, Username: strings.Repeat("a", 48), Password: strings.Repeat("b", 48),
+		OpenVPNRemote: multihoprelay.OpenVPNRemoteRequired(exit),
 	}
 	if exit.External != nil {
 		// Offline validation proves the same private credential binding as a live

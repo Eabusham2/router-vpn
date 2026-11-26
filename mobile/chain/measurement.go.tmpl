@@ -2,11 +2,13 @@ package libbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 )
 
@@ -36,7 +38,88 @@ func (m *RouterNodeChain) newHopMeasurementContext(ctx context.Context, server *
 		service.Invalidate()
 		return nil, err
 	}
-	return &RouterHopMeasurement{service: service}, nil
+	probe := &RouterHopMeasurement{service: service}
+	if m.chain.HasExternalFinal() {
+		probe.localResponse = &routerNodeChainLocalResponse{service: service, owner: m}
+	}
+	return probe, nil
+}
+
+// Keep the actual Service on RouterHopMeasurement for the original per-hop
+// benchmark. Only this Local public-final factory installs the live-response reader.
+type routerNodeChainLocalResponse struct {
+	mu          sync.Mutex
+	service     *hopmeasure.Service
+	request     string
+	owner       *RouterNodeChain
+	state       *routerNodeChainProofState
+	invalidated bool
+}
+
+func (l *routerNodeChainLocalResponse) current(state *routerNodeChainProofState) bool {
+	return state != nil && !state.revoked.Load() && !l.owner.retired.Load() &&
+		l.owner.state.Load() == state && l.owner.measurement.Load() == l.service
+}
+
+func (l *routerNodeChainLocalResponse) begin(request string, start func() error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), hopmeasure.ObservationTimeout)
+	defer cancel()
+	if err := adapter.RouterVPNLockContext(ctx, &l.mu); err != nil {
+		return err
+	}
+	defer l.mu.Unlock()
+	// A new request may observe a completed MTU reader change on the original
+	// plan. An admitted request keeps the exact proof state it began with.
+	state := l.owner.state.Load()
+	if request != "" && !l.current(state) {
+		return errors.New("original Local public-final response owner changed")
+	}
+	if err := start(); err != nil {
+		return err
+	}
+	l.request, l.state, l.invalidated = request, state, false
+	if request != "" && !l.current(state) {
+		l.invalidated = true
+		l.service.Cancel(request)
+	}
+	return nil
+}
+
+func (l *routerNodeChainLocalResponse) statusJSON() string {
+	ctx, cancel := context.WithTimeout(context.Background(), hopmeasure.ObservationTimeout)
+	defer cancel()
+	if adapter.RouterVPNLockContext(ctx, &l.mu) != nil {
+		return "{}"
+	}
+	defer l.mu.Unlock()
+	raw := l.service.StatusContextJSON(ctx)
+	if l.request == "" {
+		return raw
+	}
+	var status hopmeasure.Status
+	if json.Unmarshal([]byte(raw), &status) != nil || status.Request == "" {
+		return "{}"
+	}
+	if status.Request != l.request {
+		// The ordered Fifty facade can admit its own request on this same raw
+		// service. Its byte-for-byte status remains available through retirement.
+		l.request, l.invalidated = "", false
+		return raw
+	}
+	status.Results = []hopmeasure.Result{}
+	if status.Complete && status.Drained && status.Stage == "complete" && status.Failure == "" {
+		if !l.invalidated && l.current(l.state) {
+			verified, err := l.service.CompletedOrderedResponseContext(ctx, l.request, 3)
+			if err == nil && l.current(l.state) {
+				encoded, _ := json.Marshal(verified)
+				return string(encoded)
+			}
+		}
+		l.invalidated = true
+		status.Stage, status.Failure = "invalidated", "The original Local public-final response changed."
+	}
+	encoded, _ := json.Marshal(status)
+	return string(encoded)
 }
 
 // The complete source and native identity stay fixed across an authorized MTU

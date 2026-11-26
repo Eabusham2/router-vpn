@@ -6,7 +6,11 @@ Router VPN has a native map-first daily client and a private Setup Center. See [
 
 The current source repairs full-route ownership, private-final history restoration, and desktop candidate timing validation. Windows, macOS, Linux, Android, and iOS retain the complete selected route and its original Local or Server winner when reopening measurements. Compare Local preserves its own response authority; a Server response cannot be substituted under that catalog.
 
-The desktop ordered public-final Server/Compare implementation is present behind its capability gate; Android and iOS already offer these execution preferences through their distinct native owner. Its current supported source shape has a paired packet entry and independently registered literal-address Shadowsocks 2022 suffixes with the final Start Layer Off. Hostname public finals, other final protocol families, custom entries and additional mixed or layered compositions are separate unfinished capabilities. The desktop capability must remain disabled until its original native operation and cleanup checks pass.
+Desktop clients with the installed native engine now expose Local, Server and Compare for the registered ordered public-final family. Android and iOS retain their distinct native owner for the same execution preferences. This family has a paired packet entry and independently registered literal-address Shadowsocks 2022 suffixes with the final Start Layer Off. Hostname public finals, other final protocol families, custom entries and additional mixed or layered compositions remain separate unfinished capabilities.
+
+Android and iOS live public-final responses use three fresh HTTPS responses, bound to the original Local owner or selected Local/Server execution. A changed or retired owner invalidates its result. These live responses remain separate from the saved 50-response node statistics and retain the same original measurement service.
+
+The selected-route Speed Lab retains the original winner, complete node inventory and public-final identity through status, download/upload measurement, result display and cleanup. It uses the original 8 MiB transfer in each direction. Native network checks and controller/UI capacity checks have distinct scopes: the longest native latency paths exercised 96 members, and the native throughput checks exercised three members with independently counted bytes at every peer.
 
 ## Verification and release
 

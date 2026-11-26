@@ -388,7 +388,7 @@ func (e *RouterVPNNodeChainExecutionEngine) ObserveChainContext(ctx context.Cont
 		return mobilemultihop.NodeChainIdentity{}, errRouterVPNExecutionOwner
 	}
 	var witness *routerVPNObservedGate
-	if e.prep.RequiresExternalFinalExecutionObserver() {
+	if e.prep.RequiresExternalFinalExecutionObserver() || e.prep.RequiresRegisteredPrivateFinalObservation() {
 		witness = &routerVPNObservedGate{engine: e, state: state}
 		ctx = context.WithValue(ctx, routerVPNObservedGateKey{}, witness)
 	} else if e.nativeCurrent(ctx, state) != nil {
@@ -812,7 +812,7 @@ func (e *RouterVPNNodeChainExecutionEngine) ApplicationOpenContext(ctx context.C
 		return false, errRouterVPNExecutionOwner
 	}
 	var witness *routerVPNObservedGate
-	if e.prep.RequiresExternalFinalExecutionObserver() {
+	if e.prep.RequiresExternalFinalExecutionObserver() || e.prep.RequiresRegisteredPrivateFinalObservation() {
 		witness = &routerVPNObservedGate{engine: e, state: state}
 		ctx = context.WithValue(ctx, routerVPNObservedGateKey{}, witness)
 	} else if e.nativeCurrent(ctx, state) != nil {

@@ -1250,13 +1250,14 @@ function GetUnifiedPerformanceLocalSource($Value,$Count,$Token,$Entry,$Exit){
  $externalExit=''
  if('external_final_node_id' -cin $keys){
   $externalExit=$record.external_final_node_id
-  if($null-ne$selected-or$externalExit-isnot[string]-or$externalExit-cne$Exit-or$externalExit-ceq$Entry-or$Value.execution-cne'local'){return $null}
+  if($externalExit-isnot[string]-or$externalExit-cne$Exit-or$externalExit-ceq$Entry-or($null-eq$selected-and$Value.execution-cne'local')){return $null}
  }elseif($Count-lt9){return $null}
  $expected=3;$winner='';$generation='';$paired=$false;$packets=1;$roles=$null;$rolesJSON=''
  if($null-ne$selected){
   $expected=5
   if('selected_execution'-cnotin$keys-or'generation_sha256'-cnotin$keys-or$record.selected_execution-cnotin@('local','server')-or$record.selected_execution-cne$Value.execution-or$record.generation_sha256-isnot[string]-or$record.generation_sha256.Length-ne64-or$record.generation_sha256-cnotmatch'^[0-9a-f]{64}$'){return $null}
-  if('selected_roles_json' -cin $keys){
+  if($externalExit){$expected=6
+  }elseif('selected_roles_json' -cin $keys){
    $roles=Get-RouterVPNOrderedLocalRoles $record.selected_roles_json $Count -Selected
    if($null -eq $roles){return $null}
    $rolesJSON=$record.selected_roles_json;$expected=6
@@ -1317,11 +1318,11 @@ function StartUnifiedPerformanceRequest($State,[string]$Label,[string]$Path,$Bod
    $source=$R.PSObject.Properties['ordered_local_source'];$selectedSource=$R.PSObject.Properties['ordered_original_source'];$original=$null
    if($null-ne$capture-or$null-ne$count-or$null-ne$source-or$null-ne$selectedSource){
     if($null-eq$capture-or$capture.Value-isnot[string]-or$capture.Value.Length-ne64-or$capture.Value-cnotmatch'^[a-f0-9]{64}$'-or$null-eq$count-or($count.Value-isnot[int]-and$count.Value-isnot[long])-or$count.Value-lt2-or$count.Value-gt96){throw 'The ordered native route has no complete measurement capture.'}
-    if($count.Value-gt8-or$null-ne$source){
+    if($count.Value-gt8-or$null-ne$source-or$null-ne$selectedSource){
      $execution=$R.PSObject.Properties['execution']
      $original=GetUnifiedPerformanceLocalSource $R $count.Value $capture.Value $entry.Value $exit.Value
      if($null-eq$execution-or$null-eq$original-or(-not$original.Winner-and$execution.Value-cne'local')){throw 'The ordered native route has no complete measurement capture.'}
-    }elseif($null-ne$source-or$null-ne$selectedSource){throw 'The ordered native route has no complete measurement capture.'}
+    }
     $Body.ordered_capture=[string]$capture.Value;$Body.bytes=8388608
    }
    $State.Pending=$Body;$State.PendingThroughput=$original

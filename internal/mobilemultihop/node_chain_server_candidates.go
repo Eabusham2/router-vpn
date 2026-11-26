@@ -6,13 +6,13 @@ import "router-vpn/internal/multihoprelay"
 // original private server policy. It is not a proof exception or a front route.
 // Native admission still needs the original worker, operation and live endpoint.
 type NodeChainServerCandidateTarget struct {
-	publicResponder *NodeChainServerPublicCandidateResponder
-	self            *NodeChainServerCandidateTarget
-	policy          *NodeChainServerPolicy
-	node            *NodeProfile
-	stream          *nodeChainImportedMember
-	capture         multihoprelay.NodeChainCandidateCapture
-	tag             string
+	publicOriginal *nodeChainServerPublicCandidateTarget
+	self           *NodeChainServerCandidateTarget
+	policy         *NodeChainServerPolicy
+	node           *NodeProfile
+	stream         *nodeChainImportedMember
+	capture        multihoprelay.NodeChainCandidateCapture
+	tag            string
 }
 
 func (p *NodeChainServerPolicy) CandidateTarget(c multihoprelay.NodeChainCandidateCapture) (*NodeChainServerCandidateTarget, error) {
@@ -84,17 +84,15 @@ func (t *NodeChainServerCandidateTarget) Read(p *NodeChainServerPolicy, c multih
 	if t == nil || t.self != t || p == nil || p != t.policy {
 		return "", "", nodeChainServerError
 	}
+	if t.publicOriginal != nil || c.Request.Schema == 3 {
+		return t.readPublicCandidate(p, c)
+	}
 	want, err := t.capture.Digest()
 	got, other := c.Digest()
 	if err != nil || other != nil || want != got {
 		return "", "", nodeChainServerError
 	}
-	var fresh *NodeChainServerCandidateTarget
-	if c.Request.Schema == 3 {
-		fresh, err = p.PublicResponseCandidateTarget(c, t.publicResponder)
-	} else {
-		fresh, err = p.originalCandidateTarget(c)
-	}
+	fresh, err := p.originalCandidateTarget(c)
 	if err != nil || fresh.node != t.node || fresh.stream != t.stream || fresh.tag != t.tag || t.tag == "" {
 		return "", "", nodeChainServerError
 	}

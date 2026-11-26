@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -303,6 +304,12 @@ func (s *Session) launchUI(tray, selfTest bool, uiPID uint32, uiTicks int64) (*g
 	}
 	g := &gui{pipe: pipe, done: make(chan error, 1), ready: make(chan struct{})}
 	s.guis = append(s.guis, g)
+	environment := s.environment
+	if selfTest && !tray && os.Getenv("ROUTERVPN_CAPTURE_SELF_TEST_LAYOUT") == "1" {
+		// The original-user App writes fixed, new PNGs in its captured data
+		// working directory. Never forward a caller-controlled destination.
+		environment = append(slices.Clone(environment), "ROUTERVPN_CAPTURE_SELF_TEST_LAYOUT=1")
+	}
 	g.child, err = windowscontroller.LaunchGUIChild(s.ctx, s.powershell, func(parent uint64) ([]string, error) {
 		arguments := []string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", filepath.Join(s.packageRoot, "client", name),
 			"-ControllerPipe", pipe.Name(), "-ControllerParentHandle", strconv.FormatUint(parent, 10)}
@@ -313,7 +320,7 @@ func (s *Session) launchUI(tray, selfTest bool, uiPID uint32, uiTicks int64) (*g
 			arguments = append(arguments, "-SelfTest")
 		}
 		return arguments, nil
-	}, s.environment, s.dataRoot)
+	}, environment, s.dataRoot)
 	if err != nil {
 		close(g.done)
 		return g, err

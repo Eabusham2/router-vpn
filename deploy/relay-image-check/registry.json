@@ -1,0 +1,598 @@
+{
+  "listen_ip": "10.77.0.1",
+  "first_port": 26240,
+  "last_port": 26255,
+  "ttl_seconds": 90,
+  "exits": [
+    {
+      "id": "exit",
+      "mode": "awg2-strong",
+      "node_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dns_server": "10.88.0.1",
+      "transport": {
+        "address": [
+          "10.88.0.2/32",
+          "fd88::2/128"
+        ],
+        "amnezia": {
+          "h1": "10-19",
+          "h2": "20-29",
+          "h3": "30-39",
+          "h4": "40-49",
+          "jc": "3",
+          "jmax": "900",
+          "jmin": "40",
+          "s1": "56",
+          "s2": "48",
+          "s3": "24",
+          "s4": "32"
+        },
+        "mtu": 1280,
+        "peers": [
+          {
+            "address": "192.0.2.2",
+            "allowed_ips": [
+              "0.0.0.0/0",
+              "::/0"
+            ],
+            "persistent_keepalive_interval": 25,
+            "port": 51820,
+            "public_key": "Sk+MzeGY1m6ZtMAUQYoyI84lbJiQCuSmgR/RD364TCw="
+          }
+        ],
+        "private_key": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+        "type": "routervpn-amneziawg"
+      }
+    },
+    {
+      "id": "exit",
+      "mode": "https-connect",
+      "node_id": "",
+      "dns_server": "",
+      "external": {
+        "expected_public_ip": "203.0.113.88",
+        "response_probe": {
+          "url": "https://203.0.113.20/response",
+          "server_name": "exit.example"
+        }
+      },
+      "transport": {
+        "password": "private-inner-credential",
+        "server": "203.0.113.20",
+        "server_port": 443,
+        "tag": "exit",
+        "tls": {
+          "enabled": true,
+          "server_name": "exit.example"
+        },
+        "type": "http",
+        "username": "private-proxy-user"
+      }
+    },
+    {
+      "id": "image-check",
+      "mode": "hysteria2",
+      "node_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dns_server": "10.88.0.1",
+      "transport": {
+        "password": "offline-image-sample",
+        "server": "192.0.2.2",
+        "server_port": 443,
+        "tls": {
+          "enabled": true,
+          "server_name": "vpn.invalid"
+        },
+        "type": "hysteria2"
+      }
+    },
+    {
+      "id": "paired-max",
+      "mode": "max-quic-awg",
+      "node_id": "21f74540ccc29036558cde2217d4ad0ec5f7f11f2cf07e8ffd1efd0bef5b93f5",
+      "dns_server": "10.88.0.1",
+      "transport": {
+        "endpoint": {
+          "address": [
+            "10.77.0.2/24",
+            "fd77:77::2/64"
+          ],
+          "amnezia": {
+            "h1": "10000000-19999999",
+            "h2": "20000000-29999999",
+            "h3": "30000000-39999999",
+            "h4": "40000000-49999999",
+            "jc": "3",
+            "jmax": "900",
+            "jmin": "40",
+            "s1": "56",
+            "s2": "48",
+            "s3": "24",
+            "s4": "32"
+          },
+          "detour": "routervpn-relay-max-ss",
+          "mode": "awg2-pq",
+          "mtu": 1420,
+          "node_id": "21f74540ccc29036558cde2217d4ad0ec5f7f11f2cf07e8ffd1efd0bef5b93f5",
+          "peers": [
+            {
+              "address": "10.77.0.1",
+              "allowed_ips": [
+                "0.0.0.0/0",
+                "::/0"
+              ],
+              "persistent_keepalive_interval": 25,
+              "port": 585,
+              "pre_shared_key": "Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2M=",
+              "public_key": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI="
+            }
+          ],
+          "pq": {
+            "endpoint": "10.77.0.1:51822",
+            "peer": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
+            "public": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+            "secret": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ==",
+            "version": 2
+          },
+          "private_key": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+          "system": false,
+          "tag": "exit",
+          "type": "routervpn-pq"
+        },
+        "outbounds": [
+          {
+            "detour": "routervpn-relay-max-outer",
+            "method": "2022-blake3-aes-256-gcm",
+            "password": "c3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3M=",
+            "server": "10.77.0.1",
+            "server_port": 8388,
+            "tag": "routervpn-relay-max-ss",
+            "type": "shadowsocks"
+          },
+          {
+            "password": "exact-quic-credential",
+            "server": "192.0.2.44",
+            "server_port": 8443,
+            "tag": "routervpn-relay-max-outer",
+            "tls": {
+              "certificate": [
+                "-----BEGIN CERTIFICATE-----\nMIIBPDCB76ADAgECAgEBMAUGAytlcDAYMRYwFAYDVQQDEw1lbnRyeS5leGFtcGxl\nMCAXDTI2MTEyNjA0MDAxMFoYDzIwNzYxMTI2MDUwMDEwWjAYMRYwFAYDVQQDEw1l\nbnRyeS5leGFtcGxlMCowBQYDK2VwAyEA+M/s1Kd55AIcbSQFF0Tw2JQiJN6BIYCe\nah1QF539LAmjXDBaMA4GA1UdDwEB/wQEAwIChDAPBgNVHRMBAf8EBTADAQH/MB0G\nA1UdDgQWBBRaZr3mbejhK+/yPllVhjXeniwt3DAYBgNVHREEETAPgg1lbnRyeS5l\neGFtcGxlMAUGAytlcANBAEwPeOWumZd6eEyuyt+r+PCFmQf69DGOPsgo0/zou9Xk\n35USs9yDA5swc3yj8sUPPfNHF/LAXxSunfOJpMkxows=\n-----END CERTIFICATE-----\n"
+              ],
+              "enabled": true,
+              "server_name": "entry.example"
+            },
+            "type": "hysteria2"
+          }
+        ]
+      }
+    },
+    {
+      "id": "paired-max",
+      "mode": "max-tls-wg",
+      "node_id": "21f74540ccc29036558cde2217d4ad0ec5f7f11f2cf07e8ffd1efd0bef5b93f5",
+      "dns_server": "10.88.0.1",
+      "transport": {
+        "endpoint": {
+          "address": [
+            "10.77.0.2/24",
+            "fd77:77::2/64"
+          ],
+          "amnezia": null,
+          "detour": "routervpn-relay-max-ss",
+          "mode": "wg-pq",
+          "mtu": 1420,
+          "node_id": "21f74540ccc29036558cde2217d4ad0ec5f7f11f2cf07e8ffd1efd0bef5b93f5",
+          "peers": [
+            {
+              "address": "10.77.0.1",
+              "allowed_ips": [
+                "0.0.0.0/0",
+                "::/0"
+              ],
+              "persistent_keepalive_interval": 25,
+              "port": 51820,
+              "pre_shared_key": "Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2M=",
+              "public_key": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI="
+            }
+          ],
+          "pq": {
+            "endpoint": "10.77.0.1:51822",
+            "peer": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM=",
+            "public": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
+            "secret": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ==",
+            "version": 2
+          },
+          "private_key": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+          "system": false,
+          "tag": "exit",
+          "type": "routervpn-pq"
+        },
+        "outbounds": [
+          {
+            "detour": "routervpn-relay-max-outer",
+            "method": "2022-blake3-aes-256-gcm",
+            "password": "c3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3M=",
+            "server": "10.77.0.1",
+            "server_port": 8388,
+            "tag": "routervpn-relay-max-ss",
+            "type": "shadowsocks"
+          },
+          {
+            "config_json": "{\"inbounds\":[{\"listen\":\"127.0.0.1\",\"port\":1090,\"protocol\":\"socks\",\"settings\":{\"auth\":\"noauth\",\"udp\":true}}],\"log\":{\"loglevel\":\"warning\"},\"outbounds\":[{\"protocol\":\"vless\",\"settings\":{\"vnext\":[{\"address\":\"192.0.2.44\",\"port\":443,\"users\":[{\"encryption\":\"mlkem768x25519plus.native.0rtt.JUp5eIXGOxRAqjicZTQO8zUgzAOaqNdJrnCVuoSFokRPgHAHQTJ8NjpFe4U4sTtu1vE8KbIyUYxwThKGp0hn06q2ByldGnSDh2WT3OgDsfpCZWy7U1Ux07dtGPkw89Gd9KAtTGiI1VlrP7OCJXpB4-JS60hl2RBeh9eIj2Q0hfWzAL11XicF6dNmxzeG7acdELFRZGHI0cuRz5chSYZyEoyTXgRRLgciN3K4BocRI7CMQFmnp1QVxLqF_QdgPThhPgG5hnIDw6EqGfhO-5uOaXs1gUVYM8xIQ5UzUgytE7uwEXGGNkGzLiIx-IcOUGVbnCWMtUetp9eHIqzOWonLu9sWJzx3bHakU6p6HpOhA1CU6ftfeQl1VnE4QUHPwmgPT3dR-aHB37e55WNYHrl1JVWxqxhlp2kBI2ZKblYPhAe--GvE2hjACMaGSkdYvKYtpaGLqjMciXtJ_LAsK0cVIWMvWfHPAxZoYrEkoaw1gfO_ijUex5yHQoRjNksLO9FdNZdg2auPq7F76QeHQaGimvxapHh3Lss-M-CwgRlcEuXBWUNNKbwpqxINbRhOEWhG2oeba_ipuWcCYSYTqaohTkuit7G6f7QI0VQdiYO1Cgy7TghGfzVyxJtNyCqkoRqiaoUJcGibTumqlIe2DtZTYlcXhbRMPewygrmJeEOmjEN6LDgbZglf_3lZf_EHzcsYE7EA7aI9vfaiOfQEtIpX2mYjS6fAcPVp8Pi54SWsiIcH8XB9K0ViiTon5NxbqRtytltzV7pcPDOf6pw-eLQh9DHDFEIeURdoNOWeK4mamcOOSEeS07woc-h4QtPFX2hKSpQMamOioWij6zNo--g_jeU1JOeHwYJCGrKGF7Eg0Al4ERu1jgGw77Rj0-t2n8ZuSlm5Svanq-RU6WCuPgs7TmuRO7c__HsrNFN3uSUbxmE6dNAYd1QbjMMTjymabycoquuJxdIIo0cfcaiGSpvMUwWAJRpnQVNaYtig4XGBK_mIRqKEBXBJnbQZMmQEiEh7EIxy1Ct6fcVEuXGjL9qAZnactHAJBeImW3pDcNjAPuJ_jBl2pJnBNMglEkE3ePiEsXcannmHMhiQxkqhnNePTRkj9ZSUSASPpecTWpND22aR5rGAVneQRGZxFfvBRDtudKkjJ5WGzydimuKFyhAOEGLM9WyWudcg7akugbiuGZSlCFiKUDMPc9RvmYGZ9zhwEUak3bQeeFyYj8UetxuOSSdbf3ul5ZMArhLKD9FS0DnHbfBSbONNvquhfRGmsAYMphQBzsNf6bF14nUXpBxLigcFb8EOxvYmd_YrdoQL2RqVIMSoGcg9gEMJQSR6WWRilsy-p9waswFw3jhiTooztMK6Lcl79zpx2aw1pICoPxux4cR3dAnQoGV4KhpwewaNS_IgUQEgL8vHGrlLKSnLROLFR-wQtactjIdZ-ykgrcgLhXE5dUFLeyC5g-hI06DDvEM7vya3AKGkAyKoTeXIfrmHetaKvpiG99tpiZZAAupWbMYWRjsX4OeD5aliF6IAbTrkBnY8UEV9FIFAKq_H4j9D-dHXwK9wYKwdqp7LDmc\",\"id\":\"11111111-1111-4111-8111-111111111111\"}]}]},\"streamSettings\":{\"finalmask\":{\"tcp\":[{\"settings\":{\"delay\":\"10-30\",\"length\":\"100-300\",\"maxSplit\":\"3-7\",\"packets\":\"tlshello\"},\"type\":\"fragment\"}]},\"network\":\"xhttp\",\"realitySettings\":{\"fingerprint\":\"chrome\",\"password\":\"-0Gx_PdcEif6CIdgVqXtB6xE_gwRbsLegLjlI5WdeCQ\",\"serverName\":\"entry.example.test\",\"shortId\":\"0123456789abcdef\"},\"security\":\"reality\",\"xhttpSettings\":{\"mode\":\"auto\",\"path\":\"/entry/authenticated\"}},\"tag\":\"proxy\"}]}",
+            "mode": "reality-xhttp",
+            "tag": "routervpn-relay-max-outer",
+            "type": "routervpn-xray"
+          }
+        ]
+      }
+    },
+    {
+      "id": "image-check",
+      "mode": "naive-h2",
+      "node_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dns_server": "10.88.0.1",
+      "transport": {
+        "password": "private-test-password",
+        "quic": false,
+        "server": "192.0.2.4",
+        "server_port": 13443,
+        "tag": "proxy",
+        "tls": {
+          "enabled": true,
+          "server_name": "fixture.example.test"
+        },
+        "type": "naive",
+        "udp_over_tcp": {
+          "enabled": true,
+          "version": 2
+        },
+        "username": "private-test-user"
+      }
+    },
+    {
+      "id": "image-check",
+      "mode": "naive-h3",
+      "node_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dns_server": "10.88.0.1",
+      "transport": {
+        "password": "private-test-password",
+        "quic": true,
+        "server": "192.0.2.4",
+        "server_port": 13443,
+        "tag": "proxy",
+        "tls": {
+          "enabled": true,
+          "server_name": "fixture.example.test"
+        },
+        "type": "naive",
+        "udp_over_tcp": {
+          "enabled": true,
+          "version": 2
+        },
+        "username": "private-test-user"
+      }
+    },
+    {
+      "id": "exit",
+      "mode": "openvpn",
+      "node_id": "",
+      "dns_server": "",
+      "external": {
+        "expected_public_ip": "203.0.113.88",
+        "response_probe": {
+          "url": "https://203.0.113.20/response",
+          "server_name": "provider.example"
+        },
+        "openvpn": {
+          "owner": "server",
+          "private_key": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI=",
+          "profile": {
+            "config": "client\nremote 203.0.113.20 1194 udp\nremote 203.0.113.20 443 tcp\nremote-random\nauth-user-pass\npeer-fingerprint aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nverify-x509-name provider.example name\ntls-version-min 1.2\ntls-version-max 1.3\ndata-ciphers AES-256-GCM:CHACHA20-POLY1305\nauth SHA256\ntun-mtu 1500\nmssfix 1400 mtu\npull-filter ignore \"dhcp-option DNS\"\nroute-nopull\n",
+            "username": "server-provider",
+            "password": "server-private-password"
+          },
+          "local": {
+            "pairing_public_key": "QElQLbksojQsP5LaxdbefIXbXfVAeltJls458u+36Cc=",
+            "transport": {
+              "auth": "SHA256",
+              "data_ciphers": [
+                "AES-256-GCM",
+                "CHACHA20-POLY1305"
+              ],
+              "mode": "tls",
+              "mss_fix": 1400,
+              "mss_fix_mode": "mtu",
+              "mtu": 1500,
+              "network": "udp",
+              "pull_filters": [
+                {
+                  "action": "ignore",
+                  "text": "dhcp-option DNS"
+                }
+              ],
+              "remote_random": true,
+              "route_no_pull": true,
+              "servers": [
+                {
+                  "network": "udp",
+                  "server": "203.0.113.20",
+                  "server_port": 1194
+                },
+                {
+                  "network": "tcp",
+                  "server": "203.0.113.20",
+                  "server_port": 443
+                }
+              ],
+              "system": false,
+              "tls": {
+                "peer_fingerprint": [
+                  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                ],
+                "remote_certificate_tls": "server",
+                "server_name": "provider.example",
+                "server_name_type": "name",
+                "version_max": "1.3",
+                "version_min": "1.2"
+              },
+              "type": "openvpn-client"
+            },
+            "provider_identity": {
+              "username": "local-provider"
+            }
+          },
+          "server": {
+            "pairing_public_key": "Sk+MzeGY1m6ZtMAUQYoyI84lbJiQCuSmgR/RD364TCw=",
+            "transport": {
+              "auth": "SHA256",
+              "data_ciphers": [
+                "AES-256-GCM",
+                "CHACHA20-POLY1305"
+              ],
+              "mode": "tls",
+              "mss_fix": 1400,
+              "mss_fix_mode": "mtu",
+              "mtu": 1500,
+              "network": "udp",
+              "pull_filters": [
+                {
+                  "action": "ignore",
+                  "text": "dhcp-option DNS"
+                }
+              ],
+              "remote_random": true,
+              "route_no_pull": true,
+              "servers": [
+                {
+                  "network": "udp",
+                  "server": "203.0.113.20",
+                  "server_port": 1194
+                },
+                {
+                  "network": "tcp",
+                  "server": "203.0.113.20",
+                  "server_port": 443
+                }
+              ],
+              "system": false,
+              "tls": {
+                "peer_fingerprint": [
+                  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                ],
+                "remote_certificate_tls": "server",
+                "server_name": "provider.example",
+                "server_name_type": "name",
+                "version_max": "1.3",
+                "version_min": "1.2"
+              },
+              "type": "openvpn-client"
+            },
+            "provider_identity": {
+              "username": "server-provider"
+            }
+          }
+        }
+      },
+      "transport": {
+        "auth": "SHA256",
+        "data_ciphers": [
+          "AES-256-GCM",
+          "CHACHA20-POLY1305"
+        ],
+        "mode": "tls",
+        "mss_fix": 1400,
+        "mss_fix_mode": "mtu",
+        "mtu": 1500,
+        "network": "udp",
+        "password": "server-private-password",
+        "pull_filters": [
+          {
+            "action": "ignore",
+            "text": "dhcp-option DNS"
+          }
+        ],
+        "remote_random": true,
+        "route_no_pull": true,
+        "servers": [
+          {
+            "network": "udp",
+            "server": "203.0.113.20",
+            "server_port": 1194
+          },
+          {
+            "network": "tcp",
+            "server": "203.0.113.20",
+            "server_port": 443
+          }
+        ],
+        "system": false,
+        "tag": "exit",
+        "tls": {
+          "peer_fingerprint": [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          ],
+          "remote_certificate_tls": "server",
+          "server_name": "provider.example",
+          "server_name_type": "name",
+          "version_max": "1.3",
+          "version_min": "1.2"
+        },
+        "type": "openvpn-client",
+        "username": "server-provider"
+      }
+    },
+    {
+      "id": "exit",
+      "mode": "reality-vision",
+      "node_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dns_server": "10.88.0.1",
+      "transport": {
+        "config_json": "{\"inbounds\":[{\"listen\":\"127.0.0.1\",\"port\":1090,\"protocol\":\"socks\",\"settings\":{\"auth\":\"noauth\",\"udp\":true}}],\"outbounds\":[{\"protocol\":\"vless\",\"settings\":{\"vnext\":[{\"address\":\"192.0.2.9\",\"port\":443,\"users\":[{\"encryption\":\"none\",\"flow\":\"xtls-rprx-vision\",\"id\":\"11111111-1111-4111-8111-111111111111\"}]}]},\"streamSettings\":{\"network\":\"raw\",\"realitySettings\":{\"fingerprint\":\"chrome\",\"password\":\"m0rVC68DRvql2CjJskgoBO6cCjUnQpp6kqHVqk2ztiY\",\"serverName\":\"paired.example.test\",\"shortId\":\"0123456789abcdef\"},\"security\":\"reality\"},\"tag\":\"proxy\"}]}",
+        "mode": "reality-vision",
+        "tag": "proxy",
+        "type": "routervpn-xray"
+      }
+    },
+    {
+      "id": "image-check",
+      "mode": "shadowsocks",
+      "node_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dns_server": "10.88.0.1",
+      "transport": {
+        "method": "2022-blake3-aes-128-gcm",
+        "password": "AAAAAAAAAAAAAAAAAAAAAA==",
+        "server": "192.0.2.2",
+        "server_port": 8388,
+        "type": "shadowsocks"
+      }
+    },
+    {
+      "id": "exit",
+      "mode": "socks5",
+      "node_id": "",
+      "dns_server": "",
+      "external": {
+        "expected_public_ip": "203.0.113.88",
+        "response_probe": {
+          "url": "https://203.0.113.20/response",
+          "server_name": "exit.example"
+        }
+      },
+      "transport": {
+        "password": "private-inner-credential",
+        "server": "203.0.113.20",
+        "server_port": 443,
+        "tag": "exit",
+        "type": "socks",
+        "username": "private-proxy-user",
+        "version": "5"
+      }
+    },
+    {
+      "id": "exit",
+      "mode": "split",
+      "node_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dns_server": "10.88.0.1",
+      "transport": {
+        "mode": "split",
+        "node_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "start_layer": "",
+        "tcp": {
+          "config_json": "{\"inbounds\":[{\"listen\":\"127.0.0.1\",\"port\":1090,\"protocol\":\"socks\",\"settings\":{\"auth\":\"noauth\",\"udp\":true}}],\"outbounds\":[{\"protocol\":\"vless\",\"settings\":{\"vnext\":[{\"address\":\"192.0.2.9\",\"port\":443,\"users\":[{\"encryption\":\"none\",\"flow\":\"xtls-rprx-vision\",\"id\":\"11111111-1111-4111-8111-111111111111\"}]}]},\"streamSettings\":{\"network\":\"raw\",\"realitySettings\":{\"fingerprint\":\"chrome\",\"password\":\"m0rVC68DRvql2CjJskgoBO6cCjUnQpp6kqHVqk2ztiY\",\"serverName\":\"paired.example.test\",\"shortId\":\"0123456789abcdef\"},\"security\":\"reality\"},\"tag\":\"proxy\"}]}",
+          "mode": "split",
+          "tag": "routervpn-composite-tcp",
+          "type": "routervpn-xray"
+        },
+        "type": "routervpn-composite-plan",
+        "udp": {
+          "obfs": {
+            "password": "paired-private-mask",
+            "type": "salamander"
+          },
+          "password": "paired-private-hysteria",
+          "server": "192.0.2.9",
+          "server_port": 8443,
+          "tag": "routervpn-composite-udp",
+          "tls": {
+            "certificate": "-----BEGIN CERTIFICATE-----\nMIIBMzCB5qADAgECAgEBMAUGAytlcDAeMRwwGgYDVQQDExNwYWlyZWQuZXhhbXBs\nZS50ZXN0MCAXDTI2MTEyNjA0MDAwOVoYDzIwNzYxMTI2MDUwMDA5WjAeMRwwGgYD\nVQQDExNwYWlyZWQuZXhhbXBsZS50ZXN0MCowBQYDK2VwAyEAyM7fD0A9cG5ViGcQ\nU/xxwVIP3agyefhrSsaXux/tDrCjRzBFMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUE\nDDAKBggrBgEFBQcDATAeBgNVHREEFzAVghNwYWlyZWQuZXhhbXBsZS50ZXN0MAUG\nAytlcANBAM0d3c78RO2KaU/kPp+hhQmF2RF0MIxZY/2V6k+sQ6epYCVH335t7qzj\npv7tiJcEjq5uKGeqgksm4tQ0KySliAg=\n-----END CERTIFICATE-----\n",
+            "enabled": true,
+            "server_name": "paired.example.test"
+          },
+          "type": "hysteria2"
+        }
+      },
+      "start_layer": {
+        "mode": "aes-256-gcm+xor-whitening",
+        "api": "http://10.88.0.1:8787",
+        "transport": {
+          "method": "2022-blake3-aes-256-gcm",
+          "password": "c3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3M=",
+          "server": "192.0.2.9",
+          "server_port": 8388,
+          "tag": "proxy",
+          "type": "shadowsocks"
+        }
+      }
+    },
+    {
+      "id": "image-check",
+      "mode": "wg",
+      "node_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "dns_server": "10.88.0.1",
+      "transport": {
+        "address": [
+          "10.88.0.2/32"
+        ],
+        "mtu": 1280,
+        "peers": [
+          {
+            "address": "192.0.2.2",
+            "allowed_ips": [
+              "0.0.0.0/0",
+              "::/0"
+            ],
+            "port": 51820,
+            "public_key": "Sk+MzeGY1m6ZtMAUQYoyI84lbJiQCuSmgR/RD364TCw="
+          }
+        ],
+        "private_key": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+        "type": "wireguard"
+      }
+    },
+    {
+      "id": "exit",
+      "mode": "wg-pq",
+      "node_id": "abc713cd981849154a01f30979c7306f84d389de27731d8edca47f9368e33f4f",
+      "dns_server": "10.88.0.1",
+      "transport": {
+        "address": [
+          "10.88.0.2/32",
+          "fd88::2/128"
+        ],
+        "mode": "wg-pq",
+        "mtu": 1280,
+        "node_id": "abc713cd981849154a01f30979c7306f84d389de27731d8edca47f9368e33f4f",
+        "peers": [
+          {
+            "address": "192.0.2.2",
+            "allowed_ips": [
+              "0.0.0.0/0",
+              "::/0"
+            ],
+            "persistent_keepalive_interval": 25,
+            "port": 51820,
+            "public_key": "Sk+MzeGY1m6ZtMAUQYoyI84lbJiQCuSmgR/RD364TCw="
+          }
+        ],
+        "pq": {
+          "endpoint": "192.0.2.2:51822",
+          "peer": "cnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnI=",
+          "public": "cHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHA=",
+          "secret": "c3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzcw==",
+          "version": 2
+        },
+        "private_key": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+        "type": "routervpn-pq"
+      }
+    }
+  ]
+}

@@ -24,7 +24,17 @@ type routerHopMeasurementService interface {
 	Close() error
 	Invalidate()
 }
-type RouterHopMeasurement struct{ service routerHopMeasurementService }
+type RouterHopMeasurement struct {
+	service       routerHopMeasurementService
+	localResponse *routerNodeChainLocalResponse
+}
+
+func (m *RouterHopMeasurement) start(work func() error) error {
+	if m.localResponse != nil {
+		return m.localResponse.begin("", work)
+	}
+	return work()
+}
 
 func NewRouterHopMeasurement(server *CommandServer, metadata string) (*RouterHopMeasurement, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), routerMultihopObservationTimeout)
@@ -60,41 +70,47 @@ func newRouterHopMeasurementContext(ctx context.Context, server *CommandServer, 
 	if err != nil {
 		return nil, err
 	}
-	return &RouterHopMeasurement{service}, nil
+	return &RouterHopMeasurement{service: service}, nil
 }
 func (m *RouterHopMeasurement) Start(request string, bytes int64) error {
 	if bytes < 65536 || bytes > hopmeasure.MaxBytes {
 		return errors.New("hop transfer size is outside the bounded range")
 	}
-	return m.service.Start(request, int(bytes))
+	return m.start(func() error { return m.service.Start(request, int(bytes)) })
 }
 func (m *RouterHopMeasurement) StartLatency(request, exitID string) error {
-	return m.service.StartLatency(request, exitID)
+	return m.start(func() error { return m.service.StartLatency(request, exitID) })
 }
 func (m *RouterHopMeasurement) StartResponse(request, exitID string) error {
-	return m.service.StartResponse(request, exitID)
+	return m.start(func() error { return m.service.StartResponse(request, exitID) })
 }
 
-// Both original Local and selected Local/Server ordered owners use the same
-// fixed three-response operation. The raw service still validates its ordered
-// source; an ordinary single-exit or pair service cannot acquire this scope.
+// The caller supplies no endpoint, sample count or route selection.
 func (m *RouterHopMeasurement) StartOrderedResponse(request string) error {
 	if m == nil || m.service == nil {
 		return errors.New("no captured ordered execution")
 	}
-	if service, ok := m.service.(interface{ startOrderedResponse(string) error }); ok {
-		return service.startOrderedResponse(request)
+	if local := m.localResponse; local != nil {
+		return local.begin(request, func() error {
+			return local.service.StartOrderedResponseContext(context.Background(), request, 3)
+		})
 	}
-	if service, ok := m.service.(*hopmeasure.Service); ok {
-		return service.StartOrderedResponseContext(context.Background(), request, hopmeasure.PathResponseSamples)
+	service, ok := m.service.(interface{ startOrderedResponse(string) error })
+	if !ok {
+		return errors.New("no captured ordered execution")
 	}
-	return errors.New("no captured ordered execution")
+	return service.startOrderedResponse(request)
 }
 func (m *RouterHopMeasurement) Cancel(request string)      { m.service.Cancel(request) }
 func (m *RouterHopMeasurement) Drain(request string) error { return m.service.Drain(request) }
-func (m *RouterHopMeasurement) StatusJSON() string         { return m.service.StatusJSON() }
-func (m *RouterHopMeasurement) Close() error               { return m.service.Close() }
-func (m *RouterHopMeasurement) NetworkChanged()            { m.service.Invalidate() }
+func (m *RouterHopMeasurement) StatusJSON() string {
+	if m.localResponse != nil {
+		return m.localResponse.statusJSON()
+	}
+	return m.service.StatusJSON()
+}
+func (m *RouterHopMeasurement) Close() error    { return m.service.Close() }
+func (m *RouterHopMeasurement) NetworkChanged() { m.service.Invalidate() }
 
 type routerHopMeasurementEngine struct{ core *routerMultihopEngine }
 

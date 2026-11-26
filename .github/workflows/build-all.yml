@@ -287,7 +287,7 @@ jobs:
         shell: pwsh
         env:
           ROUTER_VPN_ARCH: '${{ matrix.arch }}'
-          ROUTERVPN_UI_EVIDENCE_DIR: '${{ runner.temp }}/routervpn-ui'
+          ROUTERVPN_CAPTURE_SELF_TEST_LAYOUT: '1'
         run: |
           $ErrorActionPreference='Stop'
           foreach($family in @('Windows','Portable-Windows')){
@@ -299,12 +299,21 @@ jobs:
             $name=if($family -eq 'Windows'){'RouterVPN.exe'}else{'RouterVPNPortable.exe'}
             $p=Start-Process -FilePath (Join-Path $root $name) -ArgumentList '--self-test' -Wait -PassThru
             if($p.ExitCode -ne 0){throw "Packaged $family self-test failed"}
+            $dataRoot=if($family -eq 'Windows'){$root}else{Join-Path $root 'Data'}
+            $evidence=Join-Path $env:RUNNER_TEMP "routervpn-ui/$family"
+            [void][IO.Directory]::CreateDirectory($evidence)
+            foreach($layout in @('windows-640x480.png','windows-1040x720.png')){
+              $image=Join-Path $dataRoot $layout
+              $bytes=[IO.File]::ReadAllBytes($image)
+              if($bytes.Length -lt 33 -or [BitConverter]::ToString($bytes,0,8) -cne '89-50-4E-47-0D-0A-1A-0A'){throw "Packaged $family omitted its rendered $layout"}
+              [IO.File]::Move($image,(Join-Path $evidence $layout))
+            }
           }
       - name: Save rendered Windows layouts
         uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-Windows-layout-${{ matrix.arch }}-${{ github.sha }}
-          path: ${{ runner.temp }}/routervpn-ui/*.png
+          path: ${{ runner.temp }}/routervpn-ui/*/*.png
           if-no-files-found: error
           retention-days: 7
 

@@ -22,16 +22,23 @@ func nodeChainLastLimit(schema, count int) int {
 	return min(nodeChainExtendedLastMaximum, max(nodeChainExecutionLastLimit, 1024+640*count))
 }
 
-func (p *NodeChainExecutionPreparation) originalDeepPrivateFinalCount() int {
-	if p == nil || p.multiple == nil || p.validateCapture() != nil {
-		return 0
+// RequiresRegisteredPrivateFinalObservation identifies the original extended
+// schema-six family. It is only a dispatch hint. Both the shared selection
+// and its native engine verify the complete source and live owners.
+func (p *NodeChainExecutionPreparation) RequiresRegisteredPrivateFinalObservation() bool {
+	if p == nil || p.multiple == nil || p.source.Schema != 6 || p.externalFinal != nil || p.local == nil || p.multiple.source != p.local ||
+		len(p.local.proofs) <= NodeChainMaximumNodes || len(p.local.proofs) > NodeChainExtendedLocalMaximumNodes {
+		return false
 	}
-	count := len(p.local.proofs)
 	privateMiddle, ok := p.local.selectedStreamLayout()
-	if !ok || privateMiddle != 0 || count <= NodeChainMaximumNodes || count > NodeChainExtendedLocalMaximumNodes {
+	return ok && privateMiddle == 0
+}
+
+func (p *NodeChainExecutionPreparation) originalDeepPrivateFinalCount() int {
+	if !p.RequiresRegisteredPrivateFinalObservation() || p.validateCapture() != nil {
 		return 0
 	}
-	return count
+	return len(p.local.proofs)
 }
 
 func (p *NodeChainExecutionPreparation) LastRecordLimit() int {

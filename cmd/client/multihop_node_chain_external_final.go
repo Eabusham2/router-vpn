@@ -8,10 +8,19 @@ import (
 	"router-vpn/internal/mobilemultihop"
 )
 
+// These preferences describe the installed execution engine. Discovery still
+// requires the selected complete graph and an independently registered suffix.
+func desktopExternalFinalExecutionChoices() []string {
+	if nativeDesktopImportedTrioExecutionPlatformSupported() {
+		return []string{"local", "server", "auto"}
+	}
+	return []string{"local"}
+}
+
 // The external final has its own public exit and DNS policy. The paired entry
 // remains the selected control; it cannot impersonate the final's proof.
 func desktopNodeChainExternalFinalSchema(members []desktopNodeChainMember) (int, error) {
-	bad := errors.New("ordered external final requires a Local WireGuard or AWG2 entry and independently captured literal SS2022 streams")
+	bad := errors.New("ordered external final requires a paired WireGuard or AWG2 entry and independently captured literal SS2022 streams")
 	if len(members) < 3 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes ||
 		!mobilemultihop.NodeChainPrefixMode(members[0].Mode) || members[0].Profile.External != nil ||
 		members[0].Profile.NodeKind != "" && members[0].Profile.NodeKind != "router-vpn" ||

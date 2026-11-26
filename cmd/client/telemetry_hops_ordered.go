@@ -34,12 +34,13 @@ func (identity speedLabPathIdentity) addOrderedPerformanceSource(payload map[str
 }
 
 type desktopSelectedPerformanceSource struct {
-	SourceSHA256      string   `json:"source_sha256"`
-	ConfigSHA256      string   `json:"config_sha256"`
-	GenerationSHA256  string   `json:"generation_sha256"`
-	Execution         string   `json:"selected_execution"`
-	NodeIDs           []string `json:"node_ids"`
-	SelectedRolesJSON string   `json:"selected_roles_json,omitempty"`
+	SourceSHA256        string   `json:"source_sha256"`
+	ConfigSHA256        string   `json:"config_sha256"`
+	GenerationSHA256    string   `json:"generation_sha256"`
+	Execution           string   `json:"selected_execution"`
+	NodeIDs             []string `json:"node_ids"`
+	SelectedRolesJSON   string   `json:"selected_roles_json,omitempty"`
+	ExternalFinalNodeID string   `json:"external_final_node_id,omitempty"`
 }
 
 // This capture binds the UI's GET to the same complete native graph on POST.

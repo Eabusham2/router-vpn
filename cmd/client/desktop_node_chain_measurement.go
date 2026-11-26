@@ -103,10 +103,10 @@ func bindDesktopNodeChainMeasurementHold(ctx context.Context, launch *desktopNod
 }
 
 func desktopNodeChainMeasurementRows(status hopmeasure.Status, members []desktopNodeChainMember, size int) ([]speedLabHopMeasurement, error) {
-	return desktopNodeChainThroughputRows(status, members, size, "")
+	return desktopNodeChainThroughputRows(status, members, size, nil)
 }
 
-func desktopNodeChainThroughputRows(status hopmeasure.Status, members []desktopNodeChainMember, size int, selected string) ([]speedLabHopMeasurement, error) {
+func desktopNodeChainThroughputRows(status hopmeasure.Status, members []desktopNodeChainMember, size int, selected *desktopSelectedLatencyCapture) ([]speedLabHopMeasurement, error) {
 	bad := errors.New("ordered measurement did not prove every captured node prefix")
 	if !status.Complete || !status.Drained || status.Stage != "complete" || status.Failure != "" || len(members) < 2 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes || len(status.Results) != len(members) {
 		return nil, bad
@@ -115,7 +115,9 @@ func desktopNodeChainThroughputRows(status hopmeasure.Status, members []desktopN
 	if err != nil {
 		return nil, bad
 	}
-	if schema == 8 && selected != "" {
+	if selected != nil && (size != 8<<20 || len(selected.Nodes) != len(members) ||
+		(selected.ExternalFinal != nil) != (schema == 8) || selected.validateTypedShape() != nil ||
+		selected.Execution != "local" && selected.Execution != "server") {
 		return nil, bad
 	}
 	rows := make([]speedLabHopMeasurement, len(members))
@@ -159,23 +161,19 @@ func desktopNodeChainThroughputRows(status hopmeasure.Status, members []desktopN
 			return nil, bad
 		}
 		label := fmt.Sprintf("Cumulative path through node %d of %d", i+1, len(members))
-		if schema == 8 {
+		if selected != nil {
+			// The caller revalidates the original signed capture after draining this transfer.
+			// Every returned prefix, including the public exit, belongs to that exact winner.
+			original := selected.Nodes[i]
+			_, _, expected, _, _ := selected.meaning(i, kind)
+			if original.Position != i || original.NodeID != r.ID || original.Role != role || original.Kind != kind || expected == "" || r.Label != expected {
+				return nil, bad
+			}
+			label = fmt.Sprintf("Cumulative %s path through node %d of %d", selected.Execution, i+1, len(members))
+		} else if schema == 8 {
 			expected := label
 			if imported {
 				expected = fmt.Sprintf("Cumulative path through custom node %d of %d → Cloudflare edge", i+1, len(members))
-			}
-			if r.Label != expected {
-				return nil, bad
-			}
-		}
-		if selected != "" {
-			if selected != "local" && selected != "server" {
-				return nil, bad
-			}
-			label = fmt.Sprintf("Cumulative %s path through node %d of %d", selected, i+1, len(members))
-			expected := label
-			if imported {
-				expected = fmt.Sprintf("Cumulative %s path through custom node %d of %d → Cloudflare edge", selected, i+1, len(members))
 			}
 			if r.Label != expected {
 				return nil, bad

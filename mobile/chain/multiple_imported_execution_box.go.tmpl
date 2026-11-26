@@ -212,12 +212,20 @@ func (e *RouterVPNNodeChainExecutionEngine) ObserveExternalFinalExecutionContext
 // Read the same original selector generation around the complete live
 // observation, including native TUN ingress, resolver and every prefix.
 func (e *RouterVPNNodeChainExecutionEngine) ObserveExternalFinalSelectionContext(ctx context.Context, source *mobilemultihop.NodeChain) (mobilemultihop.NodeChainIdentity, string, uint64, error) {
+	return e.observeImportedSelection(ctx, source, true)
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) ObserveRegisteredPrivateSelectionContext(ctx context.Context, source *mobilemultihop.NodeChain) (mobilemultihop.NodeChainIdentity, string, uint64, error) {
+	return e.observeImportedSelection(ctx, source, false)
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) observeImportedSelection(ctx context.Context, source *mobilemultihop.NodeChain, externalFinal bool) (mobilemultihop.NodeChainIdentity, string, uint64, error) {
 	empty := mobilemultihop.NodeChainIdentity{}
 	if e == nil || e.selector == nil || e.instance == nil || e.instance.ctx == nil {
 		return empty, "", 0, errRouterVPNExecutionOwner
 	}
 	c, ok := e.instance.ctx.Value(routerVPNMultipleImportedExecutionKey{}).(*routerVPNMultipleImportedExecutionConstruction)
-	if !ok || c == nil || !c.externalFinal || c.source != source || c.prep != e.prep {
+	if !ok || c == nil || c.externalFinal != externalFinal || c.source != source || c.prep != e.prep || !externalFinal && !e.prep.RequiresRegisteredPrivateFinalObservation() {
 		return empty, "", 0, errRouterVPNExecutionOwner
 	}
 	state := e.state.Load()
@@ -238,6 +246,14 @@ func (e *RouterVPNNodeChainExecutionEngine) ObserveExternalFinalSelectionContext
 // Keep the reader, permit and selector generation stable across both actual
 // native observations. ApplicationOpenContext independently reads the gate.
 func (e *RouterVPNNodeChainExecutionEngine) ObserveExternalFinalOpenSelectionContext(ctx context.Context, source *mobilemultihop.NodeChain) (mobilemultihop.NodeChainIdentity, string, uint64, bool, error) {
+	return e.observeImportedOpenSelection(ctx, source, true)
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) ObserveRegisteredPrivateOpenSelectionContext(ctx context.Context, source *mobilemultihop.NodeChain) (mobilemultihop.NodeChainIdentity, string, uint64, bool, error) {
+	return e.observeImportedOpenSelection(ctx, source, false)
+}
+
+func (e *RouterVPNNodeChainExecutionEngine) observeImportedOpenSelection(ctx context.Context, source *mobilemultihop.NodeChain, externalFinal bool) (mobilemultihop.NodeChainIdentity, string, uint64, bool, error) {
 	empty := mobilemultihop.NodeChainIdentity{}
 	if e == nil || ctx == nil || ctx.Err() != nil {
 		return empty, "", 0, false, errRouterVPNExecutionOwner
@@ -246,7 +262,7 @@ func (e *RouterVPNNodeChainExecutionEngine) ObserveExternalFinalOpenSelectionCon
 	if state == nil || reader == nil || permit == nil || permit.state != state {
 		return empty, "", 0, false, errRouterVPNExecutionOwner
 	}
-	identity, tag, epoch, err := e.ObserveExternalFinalSelectionContext(ctx, source)
+	identity, tag, epoch, err := e.observeImportedSelection(ctx, source, externalFinal)
 	if err != nil || permit.tag != tag || permit.epoch != epoch {
 		return empty, "", 0, false, errors.Join(err, errRouterVPNExecutionOwner)
 	}

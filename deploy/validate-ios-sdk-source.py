@@ -4,6 +4,7 @@
 The receipt covers actual generated SDK headers, Xcode compilation and original
 IPA provenance. It does not authorize public SOCKS UI or claim device traffic.
 """
+from functools import cache
 from pathlib import Path
 import argparse
 import hashlib
@@ -21,11 +22,6 @@ import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE_PATH = ROOT / "deploy/test_focused_multihop_clocks.py"
-spec = importlib.util.spec_from_file_location("ios_sdk_original_executor", CORE_PATH)
-CORE = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = CORE
-spec.loader.exec_module(CORE)
 sys.dont_write_bytecode = True
 SUITE = "ios-sdk"
 HEX40 = re.compile(r"[0-9a-f]{40}")
@@ -91,6 +87,18 @@ SHARED_PACKET_SOURCES = (
     "App/IOSNodeChainCONNECTCapture.swift",
     "App/IOSNodeChainProviderCapture.swift",
 )
+
+@cache
+def development_executor():
+    # The Xcode release reads its already-built artifacts through the pure
+    # parsers below. Only the standalone development runner uses this helper.
+    path = ROOT / "deploy/test_focused_multihop_clocks.py"
+    spec = importlib.util.spec_from_file_location("ios_sdk_original_executor", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
 
 def sha_file(path):
     with Path(path).open("rb") as stream:
@@ -230,22 +238,22 @@ def selection(source,sha,output):
     for key in ("validator_sha","validator_tree","base_sha","base_tree","source_sha","source_tree"):
         if not isinstance(record.get(key),str) or not HEX40.fullmatch(record[key]):raise ValueError("SDK selection lost Git identity")
     for root,commit,tree in ((source,sha,record["source_tree"]),(ROOT,record["validator_sha"],record["validator_tree"])):
-        if CORE.git(root,"rev-parse","HEAD").decode().strip()!=commit or CORE.git(root,"rev-parse","HEAD^{tree}").decode().strip()!=tree or CORE.git(root,"status","--porcelain","--untracked-files=all"):
+        if development_executor().git(root,"rev-parse","HEAD").decode().strip()!=commit or development_executor().git(root,"rev-parse","HEAD^{tree}").decode().strip()!=tree or development_executor().git(root,"status","--porcelain","--untracked-files=all"):
             raise ValueError("Original iOS SDK source checkout changed")
     return record,raw
 
 
 def require_checkout(root, sha, tree, expected, *, generated=False):
     """Require exact tracked bytes/modes; only the owned build may contain outputs."""
-    if (CORE.git(root,"rev-parse","HEAD").decode().strip()!=sha or
-            CORE.git(root,"rev-parse","HEAD^{tree}").decode().strip()!=tree or
-            CORE.snapshot(root)!=expected):
+    if (development_executor().git(root,"rev-parse","HEAD").decode().strip()!=sha or
+            development_executor().git(root,"rev-parse","HEAD^{tree}").decode().strip()!=tree or
+            development_executor().snapshot(root)!=expected):
         raise ValueError("Original SDK checkout source identity changed")
-    CORE.git(root,"-c","core.fileMode=true","diff","--exit-code","--")
-    CORE.git(root,"diff","--cached","--exit-code","--")
+    development_executor().git(root,"-c","core.fileMode=true","diff","--exit-code","--")
+    development_executor().git(root,"diff","--cached","--exit-code","--")
     arguments=["status","--porcelain","--untracked-files=all"]
     if not generated:arguments.append("--ignored=matching")
-    if CORE.git(root,*arguments):
+    if development_executor().git(root,*arguments):
         raise ValueError("Original SDK checkout is not clean")
 
 class OwnedBuildCheckout:
@@ -263,7 +271,7 @@ class OwnedBuildCheckout:
     def execute(self, command, cwd, env, log, bound):
         if not self.joined:raise ValueError("SDK original child has not proved its join")
         self.joined=False
-        result=CORE.execute(command,cwd,env,log,bound)
+        result=development_executor().execute(command,cwd,env,log,bound)
         self.joined=result[2]
         return result
 
@@ -296,7 +304,7 @@ def validate(source,sha,output):
     output=output.parent.resolve(strict=True)/output.name
     if output.exists() or output.is_symlink() or output==source or source in output.parents:
         raise ValueError("SDK output must be fresh and outside candidate")
-    selected,selection_bytes=selection(source,sha,output);before=CORE.snapshot(source)
+    selected,selection_bytes=selection(source,sha,output);before=development_executor().snapshot(source)
     if platform.system()!="Darwin" or platform.machine() not in ("x86_64","arm64"):
         raise ValueError("iOS SDK gate requires a native macOS host")
     for tool in ("go","swiftc","xcrun","xcodebuild","xcodegen","git","rustup","clang","make","autoconf","automake","glibtool","pkg-config","perl","patch","ditto","zip","unzip"):
@@ -320,7 +328,7 @@ def validate(source,sha,output):
     def save():(output/"progress.json").write_text(json.dumps(receipt,indent=2)+"\n")
     def run(name,command,bound,cwd=None):
         log=output/(name+".log");start=time.monotonic()
-        executor=owned.execute if owned is not None else CORE.execute
+        executor=owned.execute if owned is not None else development_executor().execute
         code,timed_out,joined=executor(command,cwd or build_source or source,env,log,bound)
         receipt["phases"].append(dict(name=name,command=command,seconds=time.monotonic()-start,outer_seconds=bound,
             exit=code,timed_out=timed_out,process_group_joined=joined,log_sha256=sha_file(log)));save()
@@ -333,7 +341,7 @@ def validate(source,sha,output):
         build_source=owned.populate(source,sha,selected["source_tree"],before,run)
         receipt["build_checkout_source_verified"]=True
         receipt["build_checkout_sha"]=sha;receipt["build_checkout_tree"]=selected["source_tree"]
-        (output/"build-source-before.json").write_text(json.dumps(CORE.snapshot(build_source),sort_keys=True)+"\n")
+        (output/"build-source-before.json").write_text(json.dumps(development_executor().snapshot(build_source),sort_keys=True)+"\n")
         app_root=build_source/"ios/RouterVPN";framework=app_root/".deps/Libbox.xcframework"
         receipt["xcode_version"]=run("xcode-version",["xcodebuild","-version"],30).decode("utf-8","strict").strip()
         receipt["swift_version"]=run("swift-version",["swiftc","--version"],30).decode("utf-8","strict").strip()
@@ -364,7 +372,7 @@ def validate(source,sha,output):
         for index,binary in enumerate((regular(app/"RouterVPN"),regular(extension/"RouterVPNPacketTunnel"),regular(derived/"Build/Products/Release-iphoneos/libwg-go.a"))):
             actual=run("shipping-architectures-"+str(index),["xcrun","lipo","-archs",str(binary)],30).decode().split()
             if actual!=["arm64"]:raise ValueError("Shipping iOS executable has wrong architecture")
-        if CORE.git(kit,"rev-parse","HEAD").decode().strip()!=WG_PIN or regular(kit/"Package.swift").read_text().splitlines()[0]!="// swift-tools-version:5.5" or regular(app_root/".deps/wireguard-apple.pin").read_text().strip()!=WG_PIN:
+        if development_executor().git(kit,"rev-parse","HEAD").decode().strip()!=WG_PIN or regular(kit/"Package.swift").read_text().splitlines()[0]!="// swift-tools-version:5.5" or regular(app_root/".deps/wireguard-apple.pin").read_text().strip()!=WG_PIN:
             raise ValueError("Original Apple WireGuardKit source changed")
         run("original-timer-readback",[sys.executable,str(build_source/"deploy/prepare-apple-amnezia-timers.py"),str(kit),"--verify"],120)
         run("canonical-sdk-readback",["bash",str(app_root/"prepare-libbox.sh")],READBACK_SECONDS)
@@ -447,17 +455,17 @@ def self_test():
         source=parent/"candidate";source.mkdir()
         subprocess.run(["git","init","-q",str(source)],check=True)
         for key,value in (("user.name","SDK fixture"),("user.email","fixture@example.invalid")):
-            CORE.git(source,"config",key,value)
+            development_executor().git(source,"config",key,value)
         (source/".gitignore").write_text(".deps/\nbuild/\n*.xcodeproj/\n")
         (source/"source.txt").write_text("original source\n")
         script=source/"builder.sh";script.write_text("#!/bin/sh\nexit 0\n");script.chmod(0o755)
-        CORE.git(source,"add",".");CORE.git(source,"commit","-qm","original source")
+        development_executor().git(source,"add",".");development_executor().git(source,"commit","-qm","original source")
         (source/"source.txt").write_text("original exact candidate\n")
-        CORE.git(source,"commit","-qam","selected candidate")
-        sha=CORE.git(source,"rev-parse","HEAD").decode().strip()
-        tree=CORE.git(source,"rev-parse","HEAD^{tree}").decode().strip()
+        development_executor().git(source,"commit","-qam","selected candidate")
+        sha=development_executor().git(source,"rev-parse","HEAD").decode().strip()
+        tree=development_executor().git(source,"rev-parse","HEAD^{tree}").decode().strip()
         output=parent/"evidence/tests";output.mkdir(parents=True)
-        return source,sha,tree,CORE.snapshot(source),output
+        return source,sha,tree,development_executor().snapshot(source),output
 
     def original_runner(owner,output):
         def run(name,command,bound,cwd):
@@ -552,8 +560,8 @@ def self_test():
                 owner=OwnedBuildCheckout(source,output,parent)
                 try:
                     build=owner.populate(source,sha,tree,before,original_runner(owner,output))
-                    self.assertEqual(CORE.snapshot(build),before)
-                    self.assertEqual(CORE.git(build,"rev-list","--count","HEAD"),b"2\n")
+                    self.assertEqual(development_executor().snapshot(build),before)
+                    self.assertEqual(development_executor().git(build,"rev-list","--count","HEAD"),b"2\n")
                     self.assertEqual((build/"builder.sh").stat().st_mode & 0o111,0o111)
                     source_objects={(p.stat().st_dev,p.stat().st_ino) for p in (source/".git/objects").rglob("*") if p.is_file()}
                     clone_objects={(p.stat().st_dev,p.stat().st_ino) for p in (build/".git/objects").rglob("*") if p.is_file()}
@@ -590,10 +598,10 @@ def self_test():
                         build=owner.populate(source,sha,tree,before,original_runner(owner,output))
                         if change=="bytes":(build/"source.txt").write_text("changed")
                         elif change=="mode":
-                            CORE.git(build,"config","core.fileMode","false")
+                            development_executor().git(build,"config","core.fileMode","false")
                             (build/"builder.sh").chmod(0o644)
-                        elif change=="index":CORE.git(build,"update-index","--chmod=-x","builder.sh")
-                        elif change=="head":CORE.git(build,"checkout","--detach","HEAD~1")
+                        elif change=="index":development_executor().git(build,"update-index","--chmod=-x","builder.sh")
+                        elif change=="head":development_executor().git(build,"checkout","--detach","HEAD~1")
                         elif change=="symlink":
                             (build/"source.txt").unlink();(build/"source.txt").symlink_to(source/"source.txt")
                         else:(build/"unowned").write_text("unowned")
@@ -654,7 +662,7 @@ def self_test():
         def test_original_process_group_is_joined(self):
             with tempfile.TemporaryDirectory() as temporary:
                 directory=Path(temporary);log=directory/"child.log"
-                code,timed_out,joined=CORE.execute([sys.executable,"-c","print('original iOS SDK executor')"],directory,os.environ.copy(),log,10)
+                code,timed_out,joined=development_executor().execute([sys.executable,"-c","print('original iOS SDK executor')"],directory,os.environ.copy(),log,10)
                 self.assertEqual((code,timed_out,joined),(0,False,True));self.assertEqual(log.read_text(),"original iOS SDK executor\n")
     result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(Gate))
     return 0 if result.wasSuccessful() else 1

@@ -21,7 +21,7 @@ import Foundation
 
     static func supported(_ model: RouterVPNModel) -> Bool {
         model.connected && !model.tunnelTransitioning && !model.iosCandidateTesting &&
-            (model.activeSessionIdentity?.selectedMeasurementSource?.externalFinal == true ||
+            (model.activeSessionIdentity?.hasPublicFinalResponse == true ||
              (model.activeEngine == "external-libbox" && model.unifiedSelectedProfile?.normalizedNodeKind == "external"))
     }
 
@@ -72,7 +72,9 @@ import Foundation
             throw CancellationError()
         }
         let ordered = capture.identity.selectedMeasurementSource.flatMap { $0.externalFinal ? $0 : nil }
-        let requested = try ordered?.requested ?? IOSExternalNodeStatistics.requestedExecution(node: capture.nodeID, bundle: capture.identity.bundleData)
+        let local = capture.identity.localPublicResponseSource
+        let publicIDs = local?.ids ?? ordered?.ids
+        let requested = try (local == nil ? ordered?.requested : "local") ?? IOSExternalNodeStatistics.requestedExecution(node: capture.nodeID, bundle: capture.identity.bundleData)
         running = true; progress = "Measuring three HTTPS responses through the proved external path…"
         defer { running = false; transaction = nil; worker = nil }
         let task = Task { @MainActor [self] in
@@ -94,8 +96,12 @@ import Foundation
                     let data = try await IOSMTUControl.send(binding.connection, operation: "hop-measure-info", request: id, session: "")
                     let initial = try IOSHopMeasurementBinding.decode(data, request: id, mtuSession: binding.session)
                     let path: IOSExternalNodeStatistics.PathReceipt?
-                    if let ordered {
-                        guard let execution = initial.ordered_execution, execution.source_sha256 == ordered.source,
+                    if let local {
+                        guard initial.ordered_execution == nil, let binding = initial.local_public_final,
+                              binding.source_sha256 == local.source, binding.config_sha256 == local.config else { throw CancellationError() }
+                        path = nil
+                    } else if let ordered {
+                        guard initial.local_public_final == nil, let execution = initial.ordered_execution, execution.source_sha256 == ordered.source,
                               execution.config_sha256 == ordered.config, execution.requested == requested,
                               execution.nodes == ordered.ids.count, ["local", "server"].contains(execution.selected),
                               requested == "auto" || requested == execution.selected else { throw CancellationError() }
@@ -130,11 +136,11 @@ import Foundation
                           result.role == "exit", result.kind == "public-path", result.ready,
                           result.failure == nil, result.idle == nil, result.download == nil, result.upload == nil, result.benchmark == nil,
                           let response = result.response, response.valid else { throw CancellationError() }
-                    if let ordered {
-                        guard final.ordered_execution == initial.ordered_execution,
-                              status.results.count == 2, status.results.first?.node_id == ordered.ids.first,
+                    if let publicIDs {
+                        guard final.ordered_execution == initial.ordered_execution, final.local_public_final == initial.local_public_final,
+                              status.results.count == 2, status.results.first?.node_id == publicIDs.first,
                               status.results.first?.role == "entry", status.results.first?.kind == "private-node",
-                              status.results.first?.ready == true, result.node_id == ordered.ids.last else { throw CancellationError() }
+                              status.results.first?.ready == true, result.node_id == publicIDs.last else { throw CancellationError() }
                     } else {
                         guard status.results.count == 1, result.node_id == captured.nodeID, final.node_id == captured.nodeID,
                               try IOSExternalNodeStatistics.PathReceipt(binding: final, requested: requested, network: network) == path else { throw CancellationError() }

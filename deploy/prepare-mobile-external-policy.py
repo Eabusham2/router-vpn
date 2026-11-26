@@ -134,10 +134,11 @@ def prepare(vendor, *, mobile=True):
         ('tor_mtu.go', 'routervpn_tor_mtu.go'),
         ('tor_padding.go', 'routervpn_tor_padding_capture.go'),
     ):
+        template = ROOT/'mobile/externalpolicy'/(source+'.tmpl')
         path = vendor / target
-        if path.is_symlink():
+        if template.is_symlink() or path.is_symlink():
             raise ValueError('Linked native external proof source: ' + target)
-        path.write_bytes((ROOT/'mobile/externalpolicy'/(source+'.tmpl')).read_bytes())
+        path.write_bytes(template.read_bytes())
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)

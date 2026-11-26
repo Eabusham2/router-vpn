@@ -21,7 +21,12 @@ struct IOSSessionIdentity: Equatable, Sendable {
         let privateStreamPositions: Set<Int>
         var externalFinal = false
     }
+    struct LocalPublicResponseSource: Equatable, Sendable {
+        let source: String, config: String, ids: [String]
+    }
+    let localPublicResponseSource: LocalPublicResponseSource?
     let selectedMeasurementSource: SelectedMeasurementSource?
+    var hasPublicFinalResponse: Bool { localPublicResponseSource != nil || selectedMeasurementSource?.externalFinal == true }
     let hopMeasurementRows: Int
     private static let physicalTraversalDepth = 96
 
@@ -35,6 +40,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
         }
         guard nodeChainSource == nil || nodeChainExecutionSource == nil else { throw Self.invalid() }
         var capturedRows = 8, selectedSource: SelectedMeasurementSource?
+        var localResponse: LocalPublicResponseSource?
         if let nodeChainExecutionSource {
             guard engine == "multihop-libbox", ["shadowsocks", "hysteria2"].contains(rawProfile), entryBundleData == nil, entryMode == nil,
                   Self.executionSource(nodeChainExecutionSource, rawProfile: rawProfile, capturedRows: &capturedRows, selectedSource: &selectedSource) else { throw Self.invalid() }
@@ -57,7 +63,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
                       source["original_config_sha256"] as? String == config,
                       [digest, config].allSatisfy({ $0.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil }),
                       let ids = Self.externalFinalIDs(nodes) else { throw Self.invalid() }
-                selectedSource = SelectedMeasurementSource(source: digest, config: config, requested: "local", ids: ids, privateStreamPositions: [], externalFinal: true)
+                localResponse = LocalPublicResponseSource(source: digest, config: config, ids: ids)
                 capturedRows = nodes.count
             }
         } else if engine == "multihop-libbox" || engine == "external-libbox" && entryBundleData != nil {
@@ -75,6 +81,7 @@ struct IOSSessionIdentity: Equatable, Sendable {
                   UUID(uuidString: providerSession) != nil,
                   UUID(uuidString: runtimeEpoch) != nil else { throw Self.invalid() }
         }
+        self.localPublicResponseSource = localResponse
         self.selectedMeasurementSource = selectedSource
         self.hopMeasurementRows = capturedRows
         self.connectedAt = connectedAt

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"reflect"
 	"strconv"
 	"sync"
 	"time"
@@ -53,7 +54,14 @@ func (q NodeChainCandidateRequest) Clone() NodeChainCandidateRequest {
 	return q
 }
 func (q NodeChainCandidateRequest) Validate() error {
-	if (q.Schema != 1 && q.Schema != 2 && q.Schema != 3) || q.Lease.validateShape() != nil || !proofID.MatchString(q.OwnerID) || !proofID.MatchString(q.CaptureSHA256) || !proofID.MatchString(q.Operation) || !proofID.MatchString(q.ExecutionSHA256) || !nonce.MatchString(q.Trial) || q.SelectionEpoch == 0 || !proofID.MatchString(q.InventorySHA256) || q.Position < 1 || (q.Schema == 1 && q.Position >= NodeChainMaximumMembers || q.Position >= NodeChainExtendedMaximumMembers) || !ident.MatchString(q.CandidateID) || !proofID.MatchString(q.CandidateSourceSHA256) || !nodeChainCandidateAddress(q.Address) || q.DeadlineAt <= 0 || !proofID.MatchString(q.Password) {
+	if q.Lease.validateShape() != nil {
+		return errNodeChainCandidate
+	}
+	return q.validateCandidateFields()
+}
+
+func (q NodeChainCandidateRequest) validateCandidateFields() error {
+	if (q.Schema != 1 && q.Schema != 2 && q.Schema != 3) || !proofID.MatchString(q.OwnerID) || !proofID.MatchString(q.CaptureSHA256) || !proofID.MatchString(q.Operation) || !proofID.MatchString(q.ExecutionSHA256) || !nonce.MatchString(q.Trial) || q.SelectionEpoch == 0 || !proofID.MatchString(q.InventorySHA256) || q.Position < 1 || (q.Schema == 1 && q.Position >= NodeChainMaximumMembers || q.Position >= NodeChainExtendedMaximumMembers) || !ident.MatchString(q.CandidateID) || !proofID.MatchString(q.CandidateSourceSHA256) || !nodeChainCandidateAddress(q.Address) || q.DeadlineAt <= 0 || !proofID.MatchString(q.Password) {
 		return errNodeChainCandidate
 	}
 	if (q.Schema == 3) != (q.Lease.Schema == 8) || q.Schema == 3 && q.Position >= len(q.Lease.Users) {
@@ -108,7 +116,10 @@ func (c NodeChainCandidateCapture) Clone() NodeChainCandidateCapture {
 func (c NodeChainCandidateCapture) Validate() error {
 	q := c.Request
 	digest, err := c.Lease.Digest()
-	if c.Schema != 1 || c.Lease.Validate() != nil || q.Validate() != nil || err != nil || q.OwnerID != c.Lease.OwnerID || q.CaptureSHA256 != digest || !sameNodeChainRequest(q.Lease, c.Lease.Request) || !proofID.MatchString(c.OperationOwnerID) || q.Position >= len(c.Lease.Source.Members) || c.Member != c.Lease.Source.Members[q.Position-1] {
+	// Digest validated the original lease, including every derived front. Compare
+	// all live request fields before reusing that result for its candidate copy.
+	if err != nil || c.Schema != 1 || q.validateCandidateFields() != nil || q.OwnerID != c.Lease.OwnerID || q.CaptureSHA256 != digest ||
+		(!reflect.DeepEqual(q.Lease, c.Lease.Request) && !sameNodeChainRequest(q.Lease, c.Lease.Request)) || !proofID.MatchString(c.OperationOwnerID) || q.Position >= len(c.Lease.Source.Members) || c.Member != c.Lease.Source.Members[q.Position-1] {
 		return errNodeChainCandidate
 	}
 	if q.Schema == 1 {
@@ -116,7 +127,9 @@ func (c NodeChainCandidateCapture) Validate() error {
 			return errNodeChainCandidate
 		}
 	} else if q.Schema == 3 {
-		if !c.Lease.Source.PublicCandidateResponsePrefix(q.Position) || q.CandidateID == c.Lease.Source.EntryID {
+		// The validated lease descriptor, candidate fields and bounds above
+		// establish that position is an intermediate public prefix of schema 8.
+		if c.Lease.Source.Schema != 8 || q.CandidateID == c.Lease.Source.EntryID {
 			return errNodeChainCandidate
 		}
 		for _, m := range c.Lease.Source.Members {

@@ -22,7 +22,11 @@ struct IOSHopMeasurementBinding: Decodable {
         let source_sha256: String, config_sha256: String, requested: String, selected: String
         let nodes: Int
     }
+    struct LocalPublicFinal: Decodable, Equatable {
+        let source_sha256: String, config_sha256: String
+    }
     let ordered_execution: OrderedExecution?
+    let local_public_final: LocalPublicFinal?
 
     static func decode(_ data: Data, request: String, mtuSession: String) throws -> Self {
         guard data.count <= 1024 else { throw CancellationError() }

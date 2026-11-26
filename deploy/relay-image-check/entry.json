@@ -1,0 +1,6 @@
+{
+  "node_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "tunnel_cidrs": [
+    "10.77.0.0/24"
+  ]
+}

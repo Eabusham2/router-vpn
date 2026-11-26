@@ -34,14 +34,16 @@ func captureOrderedThroughputContext(ctx context.Context, a *app) (speedLabPathI
 		return identity, "", 0, errors.New("selected throughput changed its original frozen graph")
 	}
 	token, err := orderedSelectedMeasurementCapture(identity, ready, publication.Selected, "routervpn-selected-throughput-v1")
-	if err == nil && len(nodes) > mobilemultihop.NodeChainMaximumNodes {
+	if err == nil && (len(nodes) > mobilemultihop.NodeChainMaximumNodes || selected.ExternalFinal != nil) {
 		ids := make([]string, len(nodes))
 		for i, row := range nodes {
 			ids[i] = row.NodeID
 		}
 		identity.orderedOriginalSource = &desktopSelectedPerformanceSource{SourceSHA256: selected.SourceSHA256,
 			ConfigSHA256: selected.ConfigSHA256, GenerationSHA256: selected.GenerationSHA256, Execution: selected.Execution, NodeIDs: ids}
-		if selected.privateStreamShape() {
+		if selected.ExternalFinal != nil {
+			identity.orderedOriginalSource.ExternalFinalNodeID = ids[len(ids)-1]
+		} else if selected.privateStreamShape() {
 			// Preserve the validated native roles in both the preflight and the
 			// completed result. A private stream is not a public benchmark hop.
 			roles := make([]string, len(selected.Nodes))
@@ -111,7 +113,7 @@ func measureDesktopSelectedThroughput(ctx context.Context, a *app, identity spee
 	if err := current(ctx); err != nil {
 		return nil, err
 	}
-	return desktopNodeChainThroughputRows(result.Status, launch.chain.selection.Nodes, 8<<20, capture.Execution)
+	return desktopNodeChainThroughputRows(result.Status, launch.chain.selection.Nodes, 8<<20, &capture)
 }
 
 const desktopSelectedThroughputResultFile = "node-chain-execution-throughput-result.json"

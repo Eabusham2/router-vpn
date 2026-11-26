@@ -117,21 +117,13 @@ tasks.register('prepareSingBoxLibbox', Exec) {
     // Gradle execution time: source-level sed patches can drift and mutate an
     // already-correct package path into a false verifier failure.
     commandLine 'bash', 'build-sing-box-libbox.sh'
-    inputs.file rootProject.file('build-sing-box-libbox.sh')
-    inputs.file rootProject.file('../deploy/fetch_mobile_pinned_git.py')
-    inputs.file rootProject.file('../deploy/prepare-mobile-amnezia.py')
-    inputs.file rootProject.file('../deploy/prepare-mobile-pq.py')
-    inputs.file rootProject.file('../deploy/prepare-mobile-external-policy.py')
-    inputs.files rootProject.file('../deploy/build-mobile-tor-package.py'), rootProject.file('../deploy/prepare-mobile-torpack.py'), rootProject.file('../deploy/prepare-mobile-tor.py'), rootProject.file('../deploy/stage-mobile-tor-notices.py'), rootProject.file('../deploy/verify-mobile-tor-link.py')
-    inputs.file rootProject.file('../deploy/prepare-gvisor-scheduler.py')
-    inputs.file rootProject.file('../deploy/prepare-sing-packet-concurrency.py')
-    inputs.files rootProject.file('../deploy/prepare-mobile-mtu.py'), rootProject.file('../deploy/prepare-retained-tun.py'), rootProject.fileTree('../internal/mobilemtu'), rootProject.fileTree('../internal/mtuprobe'), rootProject.fileTree('../internal/hopmeasure'), rootProject.fileTree('../internal/dnsmeasure')
-    inputs.files rootProject.file('../deploy/prepare-apple-xray.py'), rootProject.file('../deploy/xray_native_dialer_policy.py'), rootProject.fileTree('../internal/applexray'), rootProject.fileTree('../mobile/applexray')
-    inputs.files rootProject.file('../deploy/prepare-mobile-multihop.py'), rootProject.fileTree('../internal/mobilemultihop'), rootProject.fileTree('../internal/mobilepq'), rootProject.fileTree('../internal/routechoice'), rootProject.fileTree('../internal/multihoprelay'), rootProject.fileTree('../mobile')
-    inputs.files rootProject.file('../deploy/prepare-xray-runtime.py'), rootProject.file('../deploy/prepare-go-windows-sockets.py'), rootProject.file('../deploy/xray_connection_policy.py'), rootProject.file('../deploy/xray_datagram_policy.py'), rootProject.file('../deploy/xray_vision_policy.py')
-    inputs.files rootProject.fileTree('../ios/RouterVPN/App') { include '*.swift' }
-    inputs.files rootProject.fileTree('../ios/RouterVPN/PacketTunnel') { include '*.swift' }
-    inputs.files fileTree('src/main/java/com/eabusham/routervpn') { include '*.java' }
+    inputs.property('nativeSourceStamp', providers.exec {
+        workingDir rootProject.projectDir
+        commandLine 'bash', 'build-sing-box-libbox.sh', '--source-stamp'
+    }.standardOutput.asText)
+    inputs.files rootProject.file('../deploy/fetch_mobile_pinned_git.py'),
+        rootProject.file('../deploy/stage-mobile-tor-notices.py'),
+        rootProject.file('../deploy/verify-mobile-tor-link.py')
     outputs.files libboxAar, libboxStamp, libboxLicense, libxrayLicense, libboxOpenVPNStamp, nativeAwgLicense
     outputs.dirs nativeTorPackage, nativeTorNotices
 }

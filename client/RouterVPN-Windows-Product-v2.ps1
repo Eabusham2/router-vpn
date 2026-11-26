@@ -56,11 +56,10 @@ if($SelfTest){
      if($Bounds.Left-lt-1-or$Bounds.Top-lt-1-or$Bounds.Right-gt($Ancestor.ActualWidth+1)-or$Bounds.Bottom-gt($Ancestor.ActualHeight+1)){throw "Windows layout clips $Name at $($Size[0])x$($Size[1])"}
     }
     Write-Host "Windows native layout: $($Size[0])x$($Size[1]), $($Primary.Count) primary controls reachable"
-    if($env:ROUTERVPN_UI_EVIDENCE_DIR){
-     [void][IO.Directory]::CreateDirectory($env:ROUTERVPN_UI_EVIDENCE_DIR)
+    if($env:ROUTERVPN_CAPTURE_SELF_TEST_LAYOUT -ceq '1'){
      $Bitmap=[Windows.Media.Imaging.RenderTargetBitmap]::new([int]$Window.ActualWidth,[int]$Window.ActualHeight,96,96,[Windows.Media.PixelFormats]::Pbgra32);$Bitmap.Render($Window)
      $Encoder=[Windows.Media.Imaging.PngBitmapEncoder]::new();$Encoder.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($Bitmap))
-     $Image=[IO.File]::Create((Join-Path $env:ROUTERVPN_UI_EVIDENCE_DIR "windows-$($Size[0])x$($Size[1]).png"))
+     $Image=[IO.File]::Open("windows-$($Size[0])x$($Size[1]).png",[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
      try{$Encoder.Save($Image)}finally{$Image.Dispose()}
     }
    }

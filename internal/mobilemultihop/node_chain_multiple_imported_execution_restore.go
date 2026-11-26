@@ -88,7 +88,7 @@ func (r *NodeChainExecutionRuntime) admitMultipleImportedExecutionRestoreContext
 	r.multipleRestore = receipt
 	return nil
 }
-func (r *NodeChainExecutionRuntime) observeMultipleImportedExecutionCurrentContext(ctx context.Context) error {
+func (r *NodeChainExecutionRuntime) validateMultipleImportedRestoreContext(ctx context.Context) error {
 	if r == nil || ctx == nil {
 		return nodeChainExecutionError
 	}
@@ -101,7 +101,11 @@ func (r *NodeChainExecutionRuntime) observeMultipleImportedExecutionCurrentConte
 		err = receipt.validate(r)
 	}
 	r.mu.Unlock()
-	if err != nil {
+	return err
+}
+
+func (r *NodeChainExecutionRuntime) observeMultipleImportedExecutionCurrentContext(ctx context.Context) error {
+	if err := r.validateMultipleImportedRestoreContext(ctx); err != nil {
 		return err
 	}
 	return r.projection.preparation.observeMultipleImportedExecutionContext(ctx, r.engine)

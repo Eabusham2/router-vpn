@@ -154,7 +154,10 @@ func (e *nodeChainExecutionMeasurementEngine) current(ctx context.Context) error
 		return errors.Join(err, hopmeasure.ErrStale)
 	}
 	if observer, ok := active.engine.(nodeChainObservedOpenSelection); ok && active.projection.policy.externalFinal != nil {
-		return active.healthyContext(ctx, e.trial, e.identity, observer)
+		return active.healthyContext(ctx, e.trial, e.identity, observer.ObserveExternalFinalOpenSelectionContext)
+	}
+	if observer, ok := active.engine.(nodeChainObservedPrivateSelection); ok && active.projection.preparation.RequiresRegisteredPrivateFinalObservation() {
+		return active.healthyContext(ctx, e.trial, e.identity, observer.ObserveRegisteredPrivateOpenSelectionContext)
 	}
 	if err := active.HealthyContext(ctx); err != nil {
 		return err

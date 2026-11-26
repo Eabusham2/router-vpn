@@ -25,6 +25,29 @@ AMNEZIA_LICENSE_OUT="$LIBDIR/native-amneziawg-LICENSE.txt"
 TOR_PACKAGE="$LIBDIR/tor-native"
 TOR_NOTICES="$LIBDIR/tor-notices"
 TOR_SOURCE_CACHE="$ROOT/.vendor/tor-sources"
+OPENVPN_STAMP="$LIBDIR/libbox.openvpn.sha256"
+TOR_SOURCE_SHA=$(python3 "$ROOT/../deploy/prepare-mobile-tor.py" --digest)
+OPENVPN_SOURCE_SHA=$(python3 "$ROOT/../deploy/prepare-mobile-openvpn.py" --digest)
+MULTIHOP_SHA=$(python3 "$ROOT/../deploy/prepare-mobile-multihop.py" --digest)
+OPENVPN_SHA=$(python3 - "$OPENVPN_SOURCE_SHA" "$MULTIHOP_SHA" "$TOR_SOURCE_SHA" "$ROOT" <<'PYHASH'
+import hashlib
+from pathlib import Path
+import sys
+
+stamp = hashlib.sha256("+".join(sys.argv[1:4]).encode())
+for name in ("build-sing-box-libbox.sh", "routervpn_xray_bridge.go"):
+    stamp.update(b"\0" + (Path(sys.argv[4]) / name).read_bytes())
+print(stamp.hexdigest())
+PYHASH
+)
+EXPECTED_STAMP="$COMMIT+$LIBXRAY_COMMIT+$XRAY_CORE_VERSION+$GO_TOOLCHAIN+$XRAY_POLICY_SHA+$NATIVE_XRAY_SHA"
+
+# Gradle and direct shell invocations use the same native cache identity.
+if [[ ${1:-} == --source-stamp ]]; then
+  printf '%s\n' "$EXPECTED_STAMP" "$OPENVPN_SHA"
+  exit 0
+fi
+
 # Select the shared pinned NDK before either the Tor C package or Libbox is
 # built. Hosted runners may export a different default ANDROID_NDK_HOME.
 SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
@@ -38,16 +61,8 @@ yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
 "$SDKMANAGER" "ndk;$NDK_VERSION" >/dev/null
 export ANDROID_NDK_HOME="$SDK_ROOT/ndk/$NDK_VERSION"
 export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
-TOR_SOURCE_SHA=$(python3 "$ROOT/../deploy/prepare-mobile-tor.py" --digest)
 python3 "$ROOT/../deploy/build-mobile-tor-package.py" --platform android --output "$TOR_PACKAGE" --source-cache "$TOR_SOURCE_CACHE" --ndk "$ANDROID_NDK_HOME"
 python3 "$ROOT/../deploy/stage-mobile-tor-notices.py" --package "$TOR_PACKAGE" --output "$TOR_NOTICES"
-OPENVPN_SOURCE="$ROOT/../mobile/routervpn_openvpn.go"
-OPENVPN_STAMP="$LIBDIR/libbox.openvpn.sha256"
-OPENVPN_SHA=$(python3 "$ROOT/../deploy/prepare-mobile-openvpn.py" --digest)
-MULTIHOP_SHA=$(python3 "$ROOT/../deploy/prepare-mobile-multihop.py" --digest)
-OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$MULTIHOP_SHA")
-OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$TOR_SOURCE_SHA")
-EXPECTED_STAMP="$COMMIT+$LIBXRAY_COMMIT+$XRAY_CORE_VERSION+$GO_TOOLCHAIN+$XRAY_POLICY_SHA+$NATIVE_XRAY_SHA"
 
 require_typed_candidate_prefix_api() {
   local api_list="$1" signature
@@ -394,7 +409,7 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
   }
   gofmt -w experimental/libbox/routervpn_xray_bridge.go
   python3 "$ROOT/../deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"
-  # Link the verified Android Tor package into the combined mobile runtime.
+  # Link the verified Android Tor package into the combined runtime.
   python3 "$ROOT/../deploy/prepare-mobile-torpack.py" "$VENDOR" --native-package "$TOR_PACKAGE"
   go_retry run ./cmd/internal/build_libbox -target android
 )

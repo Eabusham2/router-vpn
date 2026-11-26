@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -54,9 +55,48 @@ func NewNodeChainServerPublicCandidateResponder(c multihoprelay.NodeChainCandida
 	return r, nil
 }
 
+// A candidate is admitted against every original registered member once.
+// Socket and status reads then check the whole current policy and both live
+// captures against the independently retained originals before using its tag.
+type nodeChainServerPublicCandidateTarget struct {
+	owner     *NodeChainServerCandidateTarget
+	capture   multihoprelay.NodeChainCandidateCapture
+	digest    string
+	policy    *nodeChainRegisteredServerSnapshot
+	responder *NodeChainServerPublicCandidateResponder
+	source    candidatePublicResponseSource
+}
+
+func (o *nodeChainServerPublicCandidateTarget) matches(c multihoprelay.NodeChainCandidateCapture) bool {
+	if reflect.DeepEqual(c, o.capture) {
+		return true
+	}
+	// Preserve canonical equivalence for a capture reopened by another decoder.
+	digest, err := c.Digest()
+	return err == nil && digest == o.digest
+}
+
+func (t *NodeChainServerCandidateTarget) readPublicCandidate(p *NodeChainServerPolicy, c multihoprelay.NodeChainCandidateCapture) (string, string, error) {
+	o := t.publicOriginal
+	if o == nil || o.owner != t || o.responder == nil || o.responder.original != o.responder || o.responder.capture != o.digest || o.responder.source != o.source ||
+		p.externalFinal == nil || o.policy == nil || p.externalFinal.original != o.policy || !o.matches(t.capture) || !o.matches(c) {
+		return "", "", nodeChainServerError
+	}
+	// binding compares the fresh descriptor, DNS policy, graph, targets and
+	// every member's actual transport and credentials against the original.
+	if _, err := p.binding(c.Lease); err != nil {
+		return "", "", err
+	}
+	index := o.capture.Request.Position - 1
+	if t.node != nil || t.stream != p.externalFinal.members[index] || t.tag == "" || t.tag != p.proofs[index].Tag {
+		return "", "", nodeChainServerError
+	}
+	return t.tag, o.capture.Request.Address, nil
+}
+
 func (p *NodeChainServerPolicy) PublicResponseCandidateTarget(c multihoprelay.NodeChainCandidateCapture, r *NodeChainServerPublicCandidateResponder) (*NodeChainServerCandidateTarget, error) {
 	seal, err := c.Digest()
-	if err != nil || r == nil || r.original != r || c.Request.Schema != 3 || r.capture != seal || p.validateCapture() != nil || !p.externalFinal.current(p) {
+	if err != nil || r == nil || r.original != r || c.Request.Schema != 3 || r.capture != seal || p.validateCapture() != nil || p.externalFinal == nil || p.externalFinal.original == nil {
 		return nil, nodeChainServerError
 	}
 	for _, m := range p.externalFinal.members {
@@ -69,7 +109,7 @@ func (p *NodeChainServerPolicy) PublicResponseCandidateTarget(c multihoprelay.No
 	if err != nil {
 		return nil, err
 	}
-	target.publicResponder = r
+	target.publicOriginal = &nodeChainServerPublicCandidateTarget{owner: target, capture: c.Clone(), digest: seal, policy: p.externalFinal.original, responder: r, source: r.source}
 	return target, nil
 }
 
@@ -112,8 +152,7 @@ func (r *NodeChainServerPublicCandidateResponder) Reply(ctx context.Context, c m
 }
 func (r *NodeChainServerPublicCandidateResponder) reply(ctx context.Context, c multihoprelay.NodeChainCandidateCapture, original net.Conn, nonce, request string, wrap func(context.Context, net.Conn, string, string, string) (net.Conn, error), trust *tls.Config) (string, error) {
 	digest, err := c.Digest()
-	challenge, authErr := externalFinalPublicChallenge(c, nonce)
-	if err != nil || authErr != nil || r == nil || r.original != r || r.capture != digest || ctx == nil || ctx.Err() != nil || original == nil || wrap == nil || !hmac.Equal([]byte(challenge), []byte(request)) {
+	if err != nil || c.Request.Schema != 3 || !hopmeasure.ValidCandidateNonce(nonce) || r == nil || r.original != r || r.capture != digest || ctx == nil || ctx.Err() != nil || original == nil || wrap == nil || !hmac.Equal([]byte(publicCandidateSampleMAC(c, digest, nonce, "request", "")), []byte(request)) {
 		return "", nodeChainServerError
 	}
 	bounded, cancel := context.WithTimeout(ctx, 5*time.Second)

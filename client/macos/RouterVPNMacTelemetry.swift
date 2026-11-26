@@ -569,8 +569,8 @@ private final class RouterVPNMacPerformanceMeasurement {
             guard (3...96).contains(count), root[selectedSource ? "ordered_local_source" : "ordered_original_source"] == nil,
                   let record = root[key] as? [String: Any] else { return nil }
             if record.keys.contains("external_final_node_id") {
-                guard !selectedSource, let id = record["external_final_node_id"] as? String, id == exit, id != entry,
-                      root["execution"] as? String == "local", Set(record.keys) == ["source_sha256","config_sha256","node_ids","external_final_node_id"] else { return nil }
+                guard let id = record["external_final_node_id"] as? String, id == exit, id != entry,
+                      selectedSource || root["execution"] as? String == "local" && Set(record.keys) == ["source_sha256","config_sha256","node_ids","external_final_node_id"] else { return nil }
                 externalFinal = id
             } else {
                 guard count >= 9 else { return nil }
@@ -578,13 +578,15 @@ private final class RouterVPNMacPerformanceMeasurement {
             }
             if selectedSource {
                 var fields: Set<String> = ["source_sha256", "config_sha256", "generation_sha256", "selected_execution", "node_ids"]
-                if record.keys.contains("selected_roles_json") {
+                if externalFinal != nil {
+                    fields.insert("external_final_node_id"); localRoles = nil
+                } else if record.keys.contains("selected_roles_json") {
                     guard let roles = RouterVPNSelectedPublicInventory.localRoles(record["selected_roles_json"], count: count),
                           RouterVPNSelectedPublicInventory.selectedPrivateRoles(roles) else { return nil }
                     fields.insert("selected_roles_json"); localRoles = roles
                 } else { localRoles = nil }
                 guard Set(record.keys) == fields,
-                      let winner = record["selected_execution"] as? String, ["local", "server"].contains(winner),
+                      let winner = record["selected_execution"] as? String, ["local", "server"].contains(winner), root["execution"] as? String == winner,
                       let epoch = digest(record["generation_sha256"]) else { return nil }
                 selected = winner; generation = epoch; pairedWireGuard = false; pairedPrefixNodes = nil
             } else {
@@ -682,13 +684,11 @@ private final class RouterVPNMacPerformanceMeasurement {
                           count.doubleValue.rounded() == count.doubleValue, (2...96).contains(count.intValue) else {
                         self.finish(.failure(Self.issue("The ordered native route has no complete measurement capture.")), owner: owner); return
                     }
-                    if count.intValue > 8 || root["ordered_local_source"] != nil {
+                    if count.intValue > 8 || root["ordered_local_source"] != nil || root["ordered_original_source"] != nil {
                         extended = ExtendedRoute(root, count: count.intValue, token: capture, entry: entry, exit: exit)
                         guard let route = extended, root["execution"] as? String == (route.selected ?? "local") else {
                             self.finish(.failure(Self.issue("The ordered native route has no complete measurement capture.")), owner: owner); return
                         }
-                    } else if root["ordered_local_source"] != nil || root["ordered_original_source"] != nil {
-                        self.finish(.failure(Self.issue("The ordered native route has no complete measurement capture.")), owner: owner); return
                     }
                     body["ordered_capture"] = capture; body["bytes"] = 8 * 1024 * 1024; timeout = 100
                 }

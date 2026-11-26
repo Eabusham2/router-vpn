@@ -124,22 +124,29 @@ func (r *NodeChainExecutionRuntime) current(ctx context.Context, trial *nodeChai
 	if !r.identityMatches(identity) || trial != nil && (active != trial || trial.lifetime.Err() != nil) {
 		return nodeChainExecutionError
 	}
-	// The native selected observer reads the typed public source, actual
+	// The native selected observer reads the original typed source, actual
 	// members, DNS and ingress inside the same selector generation. Keep
 	// the independent shared source reads on both sides of that call.
-	var originalPublic *NodeChain
+	var originalSelected *NodeChain
+	privateObserver, canObservePrivate := r.engine.(nodeChainObservedPrivateSelection)
+	privateSelected := selected && canObservePrivate && r.projection.preparation.RequiresRegisteredPrivateFinalObservation()
 	if _, ok := r.engine.(nodeChainObservedSelection); ok && selected && r.projection.policy.externalFinal != nil {
 		// projection.validateCapture above verified this exact preparation
 		// and every mutable member. No native call intervenes.
 		binding := r.projection.policy.externalFinal
-		originalPublic = binding.local
-		if originalPublic == nil || binding.preparation != r.projection.preparation || originalPublic != r.projection.policy.local {
+		originalSelected = binding.local
+		if originalSelected == nil || binding.preparation != r.projection.preparation || originalSelected != r.projection.policy.local {
 			return nodeChainExecutionError
 		}
 	} else if err := r.projection.preparation.observeExternalFinalExecution(ctx, r.engine); err != nil {
 		return err
 	}
-	if err := r.observeMultipleImportedExecutionCurrentContext(ctx); err != nil {
+	if privateSelected {
+		originalSelected = r.projection.preparation.multiple.source
+		if originalSelected != r.projection.policy.local || r.validateMultipleImportedRestoreContext(ctx) != nil {
+			return nodeChainExecutionError
+		}
+	} else if err := r.observeMultipleImportedExecutionCurrentContext(ctx); err != nil {
 		return err
 	}
 	if r.projection.preparation.RequiresOpenVPNExecutionObserver() {
@@ -156,12 +163,20 @@ func (r *NodeChainExecutionRuntime) current(ctx context.Context, trial *nodeChai
 			return err
 		}
 	}
-	if err := r.observeTrialSelection(ctx, identity, trial, selected); err != nil {
+	if privateSelected {
+		if trial == nil {
+			return nodeChainExecutionError
+		}
+		observed, tag, epoch, err := privateObserver.ObserveRegisteredPrivateSelectionContext(ctx, originalSelected)
+		if err != nil || observed != identity || tag != trial.tag || epoch == 0 || epoch != trial.selectionEpoch {
+			return errors.Join(err, nodeChainExecutionError)
+		}
+	} else if err := r.observeTrialSelection(ctx, identity, trial, selected); err != nil {
 		return err
 	}
-	if originalPublic != nil {
-		again, err := r.projection.preparation.OriginalExternalFinalSource()
-		if err != nil || again != originalPublic {
+	if originalSelected != nil {
+		again, err := r.projection.preparation.extendedExecutionOriginal()
+		if err != nil || again != originalSelected || privateSelected && r.validateMultipleImportedRestoreContext(ctx) != nil {
 			return nodeChainExecutionError
 		}
 	}
@@ -179,6 +194,11 @@ func (r *NodeChainExecutionRuntime) current(ctx context.Context, trial *nodeChai
 // their individual original-owner observations.
 type nodeChainObservedSelection interface {
 	ObserveExternalFinalSelectionContext(context.Context, *NodeChain) (NodeChainIdentity, string, uint64, error)
+}
+
+type nodeChainObservedPrivateSelection interface {
+	ObserveRegisteredPrivateSelectionContext(context.Context, *NodeChain) (NodeChainIdentity, string, uint64, error)
+	ObserveRegisteredPrivateOpenSelectionContext(context.Context, *NodeChain) (NodeChainIdentity, string, uint64, bool, error)
 }
 
 func (r *NodeChainExecutionRuntime) observeTrialSelection(ctx context.Context, identity NodeChainIdentity, trial *nodeChainExecutionTrial, selected bool) error {
@@ -566,14 +586,14 @@ func (r *NodeChainExecutionRuntime) HealthyContext(ctx context.Context) error {
 	return r.healthyContext(ctx, nil, NodeChainIdentity{}, nil)
 }
 
-// A native public-exit measurement can observe the open gate inside the
+// A native typed measurement can observe the open gate inside the
 // original selector generation. Both source reads and the normal retirement
 // join still surround the complete native observation.
 type nodeChainObservedOpenSelection interface {
 	ObserveExternalFinalOpenSelectionContext(context.Context, *NodeChain) (NodeChainIdentity, string, uint64, bool, error)
 }
 
-func (r *NodeChainExecutionRuntime) healthyContext(ctx context.Context, expected *nodeChainExecutionTrial, identity NodeChainIdentity, observer nodeChainObservedOpenSelection) (failure error) {
+func (r *NodeChainExecutionRuntime) healthyContext(ctx context.Context, expected *nodeChainExecutionTrial, identity NodeChainIdentity, observer func(context.Context, *NodeChain) (NodeChainIdentity, string, uint64, bool, error)) (failure error) {
 	if r == nil || ctx == nil {
 		return nodeChainExecutionError
 	}
@@ -604,15 +624,17 @@ func (r *NodeChainExecutionRuntime) healthyContext(ctx context.Context, expected
 		return nodeChainExecutionError
 	}
 	if observer != nil {
-		if expected == nil || r.projection.validateCapture() != nil || r.projection.policy.externalFinal == nil || !r.identityMatches(identity) || s.lifetime.Err() != nil {
+		privateFinal := r.projection.preparation.RequiresRegisteredPrivateFinalObservation()
+		if expected == nil || r.projection.validateCapture() != nil || (r.projection.policy.externalFinal == nil && !privateFinal) ||
+			!r.identityMatches(identity) || s.lifetime.Err() != nil || privateFinal && r.validateMultipleImportedRestoreContext(ctx) != nil {
 			return nodeChainExecutionError
 		}
 		source := r.projection.policy.local
-		actual, tag, epoch, open, err := observer.ObserveExternalFinalOpenSelectionContext(ctx, source)
+		actual, tag, epoch, open, err := observer(ctx, source)
 		if err != nil || !open || actual != identity || tag != s.tag || epoch == 0 || epoch != s.selectionEpoch {
 			return errors.Join(err, nodeChainExecutionError)
 		}
-		if r.projection.validateCapture() != nil || r.projection.policy.local != source {
+		if r.projection.validateCapture() != nil || r.projection.policy.local != source || privateFinal && r.validateMultipleImportedRestoreContext(ctx) != nil {
 			return nodeChainExecutionError
 		}
 		r.mu.Lock()

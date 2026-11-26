@@ -35,7 +35,7 @@ final class AndroidTelemetry {
         PathResult(double median,int samples,int failed,String proof){this.medianMs=median;this.samples=samples;this.failed=failed;this.proof=proof;}
         void requireCurrent()throws Exception{
             if(android.os.SystemClock.elapsedRealtime()-measuredAt>15000)throw new IllegalStateException("The live path response expired. Measure again.");
-            if(orderedOwner!=null){if(!publicExitId.equals(orderedOwner.orderedResponseExitID()))throw new IllegalStateException("The measured final node changed.");}
+            if(orderedOwner!=null){if(!publicExitId.equals(orderedOwner.orderedResponseEndpoints()[1]))throw new IllegalStateException("The measured final node changed.");}
             else if(capture!=null)capture.requireCurrent();
             else throw new IllegalStateException("No captured live path response.");
         }
@@ -170,9 +170,14 @@ final class AndroidTelemetry {
             orderedResponse.runOrderedResponse(new AndroidNativeHopMeasurement.Callback(){
                 public void progress(String status){}
                 public void commit(LayeredVpnService.HopMeasurementOwner owner,String raw)throws Exception{
-                    String exit=owner.orderedResponseExitID();
+                    String[] endpoints=owner.orderedResponseEndpoints();
+                    String exit=endpoints[1];
                     org.json.JSONArray rows=new JSONObject(raw).getJSONArray("results");
                     if(rows.length()!=2)throw new IllegalStateException("Incomplete ordered response.");
+                    JSONObject entry=rows.getJSONObject(0);
+                    if(!endpoints[0].equals(entry.getString("node_id"))||!"entry".equals(entry.getString("role"))
+                            ||!"private-node".equals(entry.getString("kind"))||!Boolean.TRUE.equals(entry.get("ready")))
+                        throw new IllegalStateException("The response lost the original private entry.");
                     JSONObject row=rows.getJSONObject(1),response=row.getJSONObject("response"),stats=response.getJSONObject("distribution");
                     double median=stats.getDouble("median_ms");
                     if(!exit.equals(row.getString("node_id"))||!"exit".equals(row.getString("role"))||!"public-path".equals(row.getString("kind"))

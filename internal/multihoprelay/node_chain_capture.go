@@ -404,7 +404,15 @@ func (q NodeChainRequest) validateShape() error {
 
 func (q NodeChainRequest) Validate(source NodeChainDescriptor) error {
 	digest, err := source.Digest()
-	if err != nil || q.validateShape() != nil || q.Schema != source.Schema || q.EntryNodeID != source.EntryNodeID || q.SourceSHA256 != source.SourceSHA256 ||
+	if err != nil {
+		return nodeChainCaptureError
+	}
+	return q.validateAgainstDescriptor(source, digest)
+}
+
+// The caller has validated and hashed this precise descriptor in the same call.
+func (q NodeChainRequest) validateAgainstDescriptor(source NodeChainDescriptor, digest string) error {
+	if q.validateShape() != nil || q.Schema != source.Schema || q.EntryNodeID != source.EntryNodeID || q.SourceSHA256 != source.SourceSHA256 ||
 		q.DescriptorSHA256 != digest || q.DNSPolicySHA256 != source.DNSPolicySHA256 || len(q.Users) != len(source.Members) {
 		return nodeChainCaptureError
 	}
@@ -473,7 +481,7 @@ func (q NodeChainRequest) Digest() (string, error) {
 func (c NodeChainCapture) Validate() error {
 	digest, err := c.Source.Digest()
 	_, offset := c.BootstrapDeadline.Zone()
-	if err != nil || c.Schema != 1 || c.Request.Validate(c.Source) != nil || c.RegistrySHA256 != digest || c.RegistrySHA256 != c.Request.DescriptorSHA256 ||
+	if err != nil || c.Schema != 1 || c.Request.validateAgainstDescriptor(c.Source, digest) != nil || c.RegistrySHA256 != digest || c.RegistrySHA256 != c.Request.DescriptorSHA256 ||
 		!proofID.MatchString(c.OwnerID) || c.Peer != c.Request.Peer || !nodeChainPrivateAddress(c.Host) ||
 		c.BootstrapDeadline.IsZero() || c.BootstrapDeadline.UnixMilli() <= 0 || offset != 0 {
 		return nodeChainCaptureError

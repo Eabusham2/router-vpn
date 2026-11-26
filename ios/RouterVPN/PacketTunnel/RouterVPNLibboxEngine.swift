@@ -2215,7 +2215,8 @@ final class RouterVPNLibboxEngine {
             return Self.retiredMeasurements.start(probe, request: request, session: session, requiresLiveOwner: ordered,
                 maximumBytes: max(16384, Int(nodeChainExecution?.capture.plan.extendedOriginalStatusLimit() ?? nodeChain?.extendedLocalStatusLimit() ?? 0)))
         }
-        if operation == "hop-measure-response-start", nodeChainExecution?.capture.isExternalFinal == true || nodeChain?.hasExternalFinal() == true {
+        if operation == "hop-measure-response-start", nodeCandidatePrefix == nil,
+           nodeChainExecution?.capture.isExternalFinal == true || nodeChainExecution == nil && nodeChainDelivery != nil && nodeChain?.hasExternalFinal() == true {
             guard !starting, hopMeasurementExitID == nil, !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
             return Self.retiredMeasurements.start(probe, request: request, session: session, liveResponse: true, requiresLiveOwner: true)
         }
@@ -2253,12 +2254,9 @@ final class RouterVPNLibboxEngine {
                         "requested": capture.requested, "selected": try capture.execution(), "nodes": capture.members.count] as [String: Any]
                 }
             } catch { return nil }
-        } else if let localPlan, localPlan.hasExternalFinal() {
-            guard localDelivery != nil, prefix == nil, localPlan.healthy(),
-                  let capture = try? IOSNodeChainCapture(plan: localPlan), capture.sourceSchema == 8,
-                  capture.selectionExecution == "local" else { return nil }
-            information["ordered_execution"] = ["source_sha256": capture.sourceSHA256, "config_sha256": capture.configSHA256,
-                "requested": "local", "selected": "local", "nodes": capture.members.count] as [String: Any]
+        } else if executionHost == nil, let localPlan, localPlan.hasExternalFinal() {
+            guard localDelivery != nil, prefix == nil, localPlan.healthy() else { return nil }
+            information["local_public_final"] = ["source_sha256": localPlan.sourceSHA256(), "config_sha256": localPlan.configSHA256()]
         }
         if let exitID {
             guard (external != nil) != (tor != nil), !config.isEmpty,
