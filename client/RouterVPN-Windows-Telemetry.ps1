@@ -827,11 +827,79 @@ function TestOrderedCandidateConnectedCatalog($Value,[int]$Position){
  if((ExternalComparisonValue $Value 'candidate_mode') -ceq 'hysteria2'){return TestOrderedCandidateHysteriaCatalog $Value $Position}
  return TestOrderedCandidatePacketCatalog $Value $Position
 }
+function TestOrderedCandidatePreparedEnvelope($S,$Value){
+ $draft=ExternalComparisonValue $S 'Draft'
+ if(-not [bool](ExternalComparisonValue $S 'SavedPath') -or -not [bool](ExternalComparisonValue $S 'SavedPrefix') -or
+    (ExternalComparisonValue $Value 'scope') -cne 'saved-prefix-local' -or
+    (ExternalComparisonValue $Value 'proof_scope') -cne 'selected-prefix' -or
+    (ExternalComparisonValue $Value 'measurement') -cne 'routed-candidate-response' -or
+    (OrderedCandidateNumber $Value 'schema') -ne 1 -or (OrderedCandidateNumber $Value 'prefix_position') -ne $S.Position){return $false}
+ foreach($field in @('application_open','dns_open')){$flag=ExternalComparisonValue $Value $field;if($flag -isnot [bool] -or $flag){return $false}}
+ $fields=if($Value -is [Collections.IDictionary]){$Value.Keys}else{$Value.PSObject.Properties.Name}
+ foreach($field in @('selected_execution','selection_epoch','required_selected_execution','response_executions','public_response_source_nodes','external_final')){if($field -cin $fields){return $false}}
+ if($null -ne $draft){
+  if($draft.execution -cne 'local' -or (ExternalComparisonValue $Value 'origin') -cne 'editor-draft' -or
+     (ExternalComparisonValue $Value 'requested_execution') -cne 'local'){return $false}
+ }elseif('origin' -cin $fields -or 'requested_execution' -cin $fields){return $false}
+ $mode=ExternalComparisonValue $Value 'candidate_mode';$nodes=ExternalComparisonValue $Value 'response_source_nodes'
+ if($mode -cnotin @('wg','awg2-fast','awg2-strong','hysteria2') -or $nodes -isnot [array] -or $nodes.Count -lt 2 -or $nodes.Count -gt 96 -or $S.Position -lt 0){return $false}
+ if($mode -ceq 'hysteria2'){if($nodes.Count -gt 8 -or $S.Position -ne $nodes.Count-2){return $false}}
+ elseif($nodes.Count -lt 3 -or $S.Position -gt $nodes.Count-3){return $false}
+ if($null -ne $draft -and ($draft.nodes -isnot [array] -or $draft.nodes.Count -ne $nodes.Count)){return $false}
+ $ids=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+ for($i=0;$i -lt $nodes.Count;$i++){
+  $node=$nodes[$i];$keys=if($node -is [Collections.IDictionary]){$node.Keys}else{$node.PSObject.Properties.Name}
+  if(@($keys).Count -ne 3 -or 'id' -cnotin $keys -or 'mode' -cnotin $keys -or 'kind' -cnotin $keys -or
+     $node.id -isnot [string] -or $node.id -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or $node.kind -cne 'router-vpn' -or -not $ids.Add($node.id)){return $false}
+  if($i -eq $nodes.Count-1){if($node.mode -cnotin @('shadowsocks','hysteria2') -or ($nodes.Count -gt 8 -and $node.mode -cne 'shadowsocks')){return $false}}
+  elseif($node.mode -cnotin @('wg','awg2-fast','awg2-strong') -or ($nodes.Count -gt 8 -and $node.mode -cne 'wg')){return $false}
+  if($null -ne $draft){$original=$draft.nodes[$i];$keys=if($original -is [Collections.IDictionary]){$original.Keys}else{$original.PSObject.Properties.Name}
+   if(@($keys).Count -ne 2 -or 'id' -cnotin $keys -or 'mode' -cnotin $keys -or $original.id -cne $node.id -or $original.mode -cne $node.mode){return $false}}
+ }
+ return $nodes[$S.Position+1].mode -ceq $mode
+}
+function TestOrderedCandidatePreparedPath($S,$View,$Choice,$Path){
+ if(-not(TestOrderedCandidatePreparedEnvelope $S $View)){return $false}
+ $nodes=$View.response_source_nodes;$id=ExternalComparisonValue $Choice 'id'
+ $action=if($View.candidate_mode -ceq 'hysteria2'){'save-final-profile'}else{'save-intermediate-profile'}
+ if($Path -isnot [array] -or $Path.Count -ne $nodes.Count -or (ExternalComparisonValue $Choice 'kind') -cne 'router-vpn' -or
+    $id -isnot [string] -or $id -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or $id -cin @($nodes | ForEach-Object {$_.id}) -or
+    (ExternalComparisonValue $Choice 'proposal_action') -cne $action){return $false}
+ for($i=0;$i -lt $nodes.Count;$i++){
+  $node=$Path[$i];$keys=if($node -is [Collections.IDictionary]){$node.Keys}else{$node.PSObject.Properties.Name}
+  if(@($keys).Count -ne 2 -or 'id' -cnotin $keys -or 'mode' -cnotin $keys){return $false}
+  if($i -eq $S.Position+1){if($node.id -cne $id -or $node.mode -cne $View.candidate_mode){return $false}}
+  elseif($node.id -cne $nodes[$i].id -or $node.mode -cne $nodes[$i].mode){return $false}
+ }
+ return $true
+}
+function TestOrderedCandidatePreparedCatalog($S,$Value){
+ if(-not(TestOrderedCandidatePreparedEnvelope $S $Value) -or (OrderedCandidateNumber $Value 'samples') -ne 50){return $false}
+ $nodes=$Value.response_source_nodes;$prefixes=$Value.prefixes;$choices=$Value.candidates
+ if($choices -isnot [array] -or $choices.Count -eq 0 -or $prefixes -isnot [array] -or $prefixes.Count -ne $nodes.Count-1){return $false}
+ $ids=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+ foreach($choice in $choices){
+  if(-not(TestOrderedCandidatePreparedPath $S $Value $choice (ExternalComparisonValue $choice 'proposed_path')) -or -not $ids.Add($choice.id)){return $false}
+  $fields=if($choice -is [Collections.IDictionary]){$choice.Keys}else{$choice.PSObject.Properties.Name}
+  if($null -ne (ExternalComparisonValue $S 'Draft') -and $Value.candidate_mode -cne 'hysteria2'){
+   if((ExternalComparisonValue $choice 'draft_action') -cne 'replace-measured-hop' -or
+      -not(TestOrderedCandidatePreparedPath $S $Value $choice (ExternalComparisonValue $choice 'draft_path'))){return $false}
+  }elseif('draft_action' -cin $fields -or 'draft_path' -cin $fields){return $false}
+ }
+ for($i=0;$i -lt $prefixes.Count;$i++){
+  $prefix=$prefixes[$i];$metric=ExternalComparisonValue $prefix 'measurement'
+  if((OrderedCandidateNumber $prefix 'position') -ne $i -or $prefix.id -cne $nodes[$i].id -or $prefix.mode -cne $nodes[$i].mode){return $false}
+  if($i -eq $S.Position){if($metric -cne 'routed-candidate-response'){return $false}}
+  elseif($null -ne $metric -and $metric -cnotin @('routed-tcp-connect','routed-candidate-response')){return $false}
+ }
+ return $true
+}
 function OrderedCandidateViewMetric($S,$View){
  $metric=ExternalComparisonValue $View 'measurement'
  if($metric -cnotin @('routed-tcp-connect','routed-candidate-response','routed-public-candidate-response')){return ''}
  $fields=if($View -is [Collections.IDictionary]){$View.Keys}else{$View.PSObject.Properties.Name}
  if('candidate_mode' -cin $fields){
+  if(TestOrderedCandidatePreparedCatalog $S $View){return $metric}
   if(-not [bool](ExternalComparisonValue $S 'SavedPath') -and $null -eq (ExternalComparisonValue $S 'Draft') -and (TestOrderedCandidateConnectedCatalog $View $S.Position)){return $metric}
   return ''
  }
@@ -868,6 +936,7 @@ function OrderedCandidateViewMetric($S,$View){
 function TestOrderedCandidateDraftInsertion($S,$Choice,$Path,$View=$null){
  $draft=ExternalComparisonValue $S 'Draft'
  if($null -eq $View){$View=ExternalComparisonValue $S 'View'}
+ if($null -ne (ExternalComparisonValue $View 'candidate_mode')){return $null -ne $draft -and $View.candidate_mode -cne 'hysteria2' -and (ExternalComparisonValue $Choice 'draft_action') -ceq 'replace-measured-hop' -and (TestOrderedCandidatePreparedPath $S $View $Choice $Path)}
  if($null -ne $draft -and (OrderedCandidateViewMetric $S $View) -ceq 'routed-public-candidate-response'){
   return (ExternalComparisonValue $Choice 'draft_action') -ceq 'insert-measured-hop' -and (TestOrderedCandidatePublicPath $S $View $Choice $Path)
  }
@@ -891,6 +960,7 @@ function TestOrderedCandidateDraftInsertion($S,$Choice,$Path,$View=$null){
 }
 function OrderedCandidateFinalProfileChoice($S,$Choice){
  $draft=ExternalComparisonValue $S 'Draft'
+ if($null -ne (ExternalComparisonValue $S.View 'candidate_mode')){return TestOrderedCandidatePreparedPath $S $S.View $Choice (ExternalComparisonValue $Choice 'proposed_path')}
  if($null -ne $draft -and (OrderedCandidateViewMetric $S $S.View) -ceq 'routed-public-candidate-response'){
   return (ExternalComparisonValue $Choice 'proposal_action') -ceq 'save-intermediate-profile' -and
     (TestOrderedCandidatePublicPath $S $S.View $Choice (ExternalComparisonValue $Choice 'proposed_path'))
@@ -1010,6 +1080,7 @@ function SetOrderedCandidateControls($S){
   $row=$S.Table.SelectedItem
   $insert=$null -ne $row -and (TestOrderedCandidateDraftInsertion $S $row.Choice (ExternalComparisonValue $row.Choice 'draft_path'))
   $useDraft.Visibility=if($insert){'Visible'}else{'Collapsed'}
+  $useDraft.Content=if((ExternalComparisonValue $S.View 'candidate_mode')){'Use replacement in draft'}else{'Use in draft'}
   $useDraft.IsEnabled=$insert -and $null -eq $S.Task -and $Captured -and (OrderedCandidateReady $S) -and $null -ne $row.Receipt -and
      $null -ne (OrderedCandidateScore $row.Receipt ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) (OrderedCandidateViewMetric $S $S.View))
  }
@@ -1034,7 +1105,35 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
  $priorMode=ExternalComparisonValue (ExternalComparisonValue $S 'View') 'candidate_mode'
  $modeFields=if($Value -is [Collections.IDictionary]){$Value.Keys}else{$Value.PSObject.Properties.Name}
  $packetMode=(ExternalComparisonValue $Value 'candidate_mode') -cin @('wg','awg2-fast','awg2-strong') -or ($Phase -cne 'catalog' -and $priorMode -cin @('wg','awg2-fast','awg2-strong'))
- if('candidate_mode' -cin $modeFields -or ($Phase -cne 'catalog' -and $null -ne $priorMode)){
+  $preparedMode=('candidate_mode' -cin $modeFields -or ($Phase -cne 'catalog' -and $null -ne $priorMode)) -and
+    ([bool](ExternalComparisonValue $S 'SavedPath') -or $null -ne (ExternalComparisonValue $S 'Draft'))
+  if($preparedMode){
+   if($Phase -ceq 'catalog'){
+    if(-not(TestOrderedCandidatePreparedCatalog $S $Value)){throw 'The temporary candidate catalog changed its captured Local source.'}
+   }else{
+    if(-not(TestOrderedCandidatePreparedEnvelope $S $Value) -or -not(TestOrderedCandidatePreparedEnvelope $S $S.View) -or
+       $Value.candidate_mode -cne $priorMode -or $Value.view_token -cne $S.View.view_token -or $Value.request_id -cne $S.RequestID -or
+       $Value.response_source_nodes.Count -ne $S.View.response_source_nodes.Count){throw 'The temporary candidate response belongs to another captured source.'}
+    foreach($field in @('started','admission_cancelled','running','drained','cancelled','native_down','accepted','reviewing','cleanup_pending','active_path_changed')){if((ExternalComparisonValue $Value $field) -isnot [bool]){throw 'The temporary candidate lost its native lifecycle proof.'}}
+    if($Value.started -eq $Value.admission_cancelled){throw 'The temporary candidate changed its admission state.'}
+   if($Phase -ceq 'cancel'){
+    if($Value.results -isnot [array] -or $Value.results.Count -ne 0 -or (ExternalComparisonValue $Value 'saved_profile_id') -isnot [string] -or $Value.saved_profile_id -cne '' -or
+       $Value.native_down -ne $Value.started -or ($Value.admission_cancelled -and [bool](ExternalComparisonValue $S 'SavedAdmitted'))){throw 'Original temporary candidate cleanup remains pending.'}
+    foreach($field in @('ok','cancelled','drained')){$flag=ExternalComparisonValue $Value $field;if($flag -isnot [bool] -or -not $flag){throw 'Original temporary candidate cleanup was not confirmed.'}}
+    foreach($field in @('running','accepted','reviewing','cleanup_pending','active_path_changed')){if($Value.$field){throw 'Temporary candidate work or review remains active.'}}
+   }elseif($Value.admission_cancelled){throw 'An unstarted candidate response cannot complete admitted work.'}
+    for($i=0;$i -lt $Value.response_source_nodes.Count;$i++){foreach($key in @('id','mode','kind')){if($Value.response_source_nodes[$i].$key -cne $S.View.response_source_nodes[$i].$key){throw 'The temporary candidate changed an original member.'}}}
+    if($Phase -cin @('save','choose') -or [string](ExternalComparisonValue $Value 'saved_profile_id')){
+     $choices=@($S.View.candidates | Where-Object {$_.id -ceq $S.ChoiceID})
+     if($choices.Count -ne 1 -or $Value.candidate_id -cne $S.ChoiceID -or
+        -not(TestOrderedCandidatePreparedPath $S $S.View $choices[0] (ExternalComparisonValue $Value 'proposed_path'))){throw 'The temporary candidate changed the measured replacement or retained suffix.'}
+     if($Phase -ceq 'choose'){
+      if($Value.candidate_mode -ceq 'hysteria2' -or $null -eq (ExternalComparisonValue $S 'Draft') -or (ExternalComparisonValue $Value 'draft_action') -cne 'replace-measured-hop'){throw 'The draft update is not the measured replacement.'}
+     }elseif($Value.proposal_action -cne $choices[0].proposal_action){throw 'The saved replacement changed its original profile action.'}
+    }
+   }
+  }
+ if(-not $preparedMode -and ('candidate_mode' -cin $modeFields -or ($Phase -cne 'catalog' -and $null -ne $priorMode))){
   if([bool](ExternalComparisonValue $S 'SavedPath') -or $null -ne (ExternalComparisonValue $S 'Draft')){throw 'These candidate responses require the original connected Local path.'}
   if($Phase -ceq 'catalog'){
    if(-not(TestOrderedCandidateConnectedCatalog $Value $S.Position)){throw 'The candidate catalog changed its original route or protocol.'}
@@ -1065,7 +1164,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
  }
  $source=ExternalComparisonValue $Value 'response_source_nodes'
  $expected=ExternalComparisonValue (ExternalComparisonValue $S 'View') 'response_source_nodes'
- if($packetMode){$source=$null;$expected=$null}
+ if($packetMode -or $preparedMode){$source=$null;$expected=$null}
  $fields=if($Value -is [Collections.IDictionary]){$Value.Keys}else{$Value.PSObject.Properties.Name}
  $owners=ExternalComparisonValue $Value 'response_executions'
  $prior=ExternalComparisonValue $S 'View';$originalOwners=ExternalComparisonValue $prior 'response_executions'
@@ -1190,10 +1289,10 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
   $S.View=$Value;$S.SaveFinalProfile=$false;$S.SelectedWinner='';$S.SelectedEpoch=0;$S.Receipt=$null;$S.Rows=@();foreach($C in @($Value.candidates)){$S.Rows+= [pscustomobject]@{Name=[string]$C.name;ID=[string]$C.id;Timing='Not tested';Choice=$C;Receipt=$null}}
   $S.Table.ItemsSource=$S.Rows;$S.Prefix.ItemsSource=@($Value.prefixes|ForEach-Object{[pscustomobject]@{position=[int]$_.position;display=('After node '+([int]$_.position+1)+' · '+[string]$_.name+' · '+[string]$_.mode)}});$S.Prefix.SelectedValue=$S.Position
   if($null-ne(ExternalComparisonValue $S 'Draft')){
-   foreach($row in $S.Rows){if($metric -ceq 'routed-public-candidate-response' -or @((ExternalComparisonValue $row.Choice 'proposed_path')|Where-Object{$null-ne$_}).Count-ge3 -or (TestOrderedCandidateDraftInsertion $S $row.Choice (ExternalComparisonValue $row.Choice 'draft_path'))){[void]$S.Table.SelectedItems.Add($row)}}
+   foreach($row in $S.Rows){if($metric -ceq 'routed-public-candidate-response' -or @((ExternalComparisonValue $row.Choice 'proposed_path')|Where-Object{$null-ne$_}).Count-ge$(if($preparedMode){2}else{3}) -or (TestOrderedCandidateDraftInsertion $S $row.Choice (ExternalComparisonValue $row.Choice 'draft_path'))){[void]$S.Table.SelectedItems.Add($row)}}
    $S.AutoRun=$S.Table.SelectedItems.Count-gt0
   }
-  $S.SavedProfileID='';$S.Status.Text=if((OrderedCandidateScope $S)-ceq'draft-complete-selected'){'Test the complete draft temporarily. Choose a measured hop after the route closes.'}elseif([bool](ExternalComparisonValue $S 'SavedPrefix')){'Test only the selected saved prefix. It must return to Disconnected before future-profile choices appear.'}elseif($SavedPath){'Test the complete saved Local path temporarily. It must return to Disconnected before future-profile choices appear.'}elseif((ExternalComparisonValue $Value 'candidate_mode') -ceq 'hysteria2'){'Measure 50 authenticated Hysteria2 responses through the connected Local prefix. Saving replaces only the final node and preserves Hysteria2 for the next connection.'}elseif((ExternalComparisonValue $Value 'candidate_mode') -cin @('wg','awg2-fast','awg2-strong')){'Measure 50 authenticated responses through a candidate tunnel. Saving replaces this intermediate node and keeps the complete remaining route.'}elseif($metric -ceq 'routed-candidate-response'){'Measure 50 authenticated private-agent responses through the captured prefix and each eligible paired candidate.'}elseif($metric -ceq 'routed-public-candidate-response'){'Measure 50 HTTPS responses after TLS through each candidate and verify its expected public exit IP.'}else{'Select candidates, then test 50 TCP handshakes through this connected prefix.'};return
+  $S.SavedProfileID='';$S.Status.Text=if($preparedMode){'Measure 50 authenticated candidate responses through this temporary Local prefix. The route closes before using a replacement or saving a future profile.'}elseif((OrderedCandidateScope $S)-ceq'draft-complete-selected'){'Test the complete draft temporarily. Choose a measured hop after the route closes.'}elseif([bool](ExternalComparisonValue $S 'SavedPrefix')){'Test only the selected saved prefix. It must return to Disconnected before future-profile choices appear.'}elseif($SavedPath){'Test the complete saved Local path temporarily. It must return to Disconnected before future-profile choices appear.'}elseif((ExternalComparisonValue $Value 'candidate_mode') -ceq 'hysteria2'){'Measure 50 authenticated Hysteria2 responses through the connected Local prefix. Saving replaces only the final node and preserves Hysteria2 for the next connection.'}elseif((ExternalComparisonValue $Value 'candidate_mode') -cin @('wg','awg2-fast','awg2-strong')){'Measure 50 authenticated responses through a candidate tunnel. Saving replaces this intermediate node and keeps the complete remaining route.'}elseif($metric -ceq 'routed-candidate-response'){'Measure 50 authenticated private-agent responses through the captured prefix and each eligible paired candidate.'}elseif($metric -ceq 'routed-public-candidate-response'){'Measure 50 HTTPS responses after TLS through each candidate and verify its expected public exit IP.'}else{'Select candidates, then test 50 TCP handshakes through this connected prefix.'};return
  }
  if($SavedPath){
   if(-not(OrderedCandidateSavedEnvelope $S $Value)){throw 'The response changed its original saved-path purpose or prefix.'}
@@ -1203,16 +1302,17 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
   if([bool](ExternalComparisonValue $Value 'running')-or[bool](ExternalComparisonValue $Value 'started')-or[bool](ExternalComparisonValue $Value 'native_down')-or[bool](ExternalComparisonValue $Value 'reviewing')){$S.SavedAdmitted=$true}
   $draft=ExternalComparisonValue $S 'Draft'
   if($Phase -ceq 'choose'){
+   $draftAction=if($preparedMode){'replace-measured-hop'}else{'insert-measured-hop'}
    $matches=@($S.View.candidates | Where-Object {$_.id -ceq $S.ChoiceID})
    $ownerMatches=if($null -ne (ExternalComparisonValue $S.View 'response_executions')){
     $S.SelectedWinner -ceq (ExternalComparisonValue $Value 'selected_execution') -and $S.SelectedEpoch -gt 0
    }else{$null -eq $draft -or $draft.execution -cne 'auto' -or ($S.SelectedWinner -ceq 'local' -and $S.SelectedEpoch -gt 0)}
    if($null -eq $draft -or $S.CancelWanted -or $S.CloseWanted -or $matches.Count -ne 1 -or
-      (ExternalComparisonValue $Value 'candidate_id') -cne $S.ChoiceID -or (ExternalComparisonValue $Value 'draft_action') -cne 'insert-measured-hop' -or
+      (ExternalComparisonValue $Value 'candidate_id') -cne $S.ChoiceID -or (ExternalComparisonValue $Value 'draft_action') -cne $draftAction -or
       (ExternalComparisonValue $Value 'saved_profile_id') -cne '' -or
       -not (TestOrderedCandidateDraftInsertion $S $matches[0] (ExternalComparisonValue $matches[0] 'draft_path')) -or
       -not (TestOrderedCandidateDraftInsertion $S $matches[0] (ExternalComparisonValue $Value 'proposed_path')) -or
-      -not $ownerMatches){throw 'The chosen path differs from the measured draft insertion.'}
+      -not $ownerMatches){throw 'The chosen path differs from the measured draft update.'}
    foreach($field in @('chosen','drained','native_down')){
     $flag=ExternalComparisonValue $Value $field
     if($flag -isnot [bool] -or -not $flag){throw 'The measured draft choice did not finish cleanup.'}
@@ -1229,7 +1329,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
    $savedAction=ExternalComparisonValue $Value 'proposal_action'
    $chosenSource=@($S.View.candidates | Where-Object {$_.id -ceq $S.ChoiceID})
    if($chosenSource.Count -ne 1 -or $chosenSource[0].proposal_action -cne $savedAction){throw 'The saved profile action changed.'}
-   if($savedAction -ceq 'save-intermediate-profile' -or $null -ne $expected){
+   if($preparedMode -or $savedAction -ceq 'save-intermediate-profile' -or $null -ne $expected){
     $receipt=@{id=$S.ChoiceID;kind=$chosenSource[0].kind;proposal_action=$savedAction;proposed_path=(ExternalComparisonValue $Value 'proposed_path')}
     if(-not (OrderedCandidateFinalProfileChoice $S $chosenSource[0]) -or -not (OrderedCandidateFinalProfileChoice $S $receipt)){throw 'The saved profile changed the measured intermediate or original suffix.'}
    }

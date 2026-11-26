@@ -57,7 +57,7 @@ import Foundation
         case .local(let capture):
             selectedDraft = nil
             launchInput = capture.launchInput; sourceSHA256 = capture.sourceSHA256; configSHA256 = capture.configSHA256
-            prefixes = capture.candidatePrefixes
+            prefixes = prefixPosition == nil ? capture.candidatePrefixes : capture.preparedCandidatePrefixes
         case .selected(let draft):
             selectedDraft = draft
             launchInput = draft.launchInput; sourceSHA256 = draft.sourceSHA256; configSHA256 = draft.configSHA256
@@ -71,7 +71,8 @@ import Foundation
         records = snapshot.records; stamp = snapshot.stamp
         if case .local(let capture) = purpose, let position = prefixPosition, let request {
             let candidate = try IOSNodeCandidateCapture.make(request: request, prefixPosition: position,
-                proofs: prefixes, chainSource: sourceSHA256, chainConfig: configSHA256, originalLaunch: Data(capture.launchInput.utf8))
+                proofs: prefixes, chainSource: sourceSHA256, chainConfig: configSHA256,
+                originalLaunch: Data(capture.launchInput.utf8), preparedResponse: true)
             do {
                 let prefix = try IOSNodeCandidatePrefixCapture.compile(original: capture, position: position,
                     inventory: String(decoding: candidate.source.inventory.data, as: UTF8.self))

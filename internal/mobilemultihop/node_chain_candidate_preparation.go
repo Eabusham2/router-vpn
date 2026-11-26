@@ -72,7 +72,19 @@ func newNodeChainCandidatePreparationOwned(original *NodeChain, typed *nodeChain
 		}
 		source, savedConfig, kind = read.source, read.config, read.kind
 	}
-	candidates, err := original.newPacketCandidatePlanOwned(position, inventory, multiple)
+	requested, err := candidateInventoryResponseMode(inventory)
+	if err != nil {
+		return nil, err
+	}
+	var candidates *NodeChainCandidatePlan
+	if requested != "" {
+		if typed != nil || multiple != nil {
+			return nil, nodeChainCandidatePreparationError
+		}
+		candidates, err = original.newPreparedPacketCandidatePlan(position, inventory, requested)
+	} else {
+		candidates, err = original.newPacketCandidatePlanOwned(position, inventory, multiple)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -166,6 +178,110 @@ func newNodeChainCandidatePreparationOwned(original *NodeChain, typed *nodeChain
 	return p, p.validate()
 }
 
+// PreparedCandidateResponseMode describes only the original paired, Off Local
+// source. The source may be an unsaved draft; this does not acquire a native
+// route. A preparation separately seals and proves its closed prefix owner.
+func (c *NodeChain) PreparedCandidateResponseMode(position int) string {
+	if mode := c.ConnectedPacketSuccessorCandidateMode(position); mode != "" {
+		return mode
+	}
+	if c.SupportsConnectedHysteria2FinalCandidate(position) {
+		return "hysteria2"
+	}
+	return ""
+}
+
+// PreparedCandidateInputFitsSource performs the same complete replacement
+// validation as the preparation factory without acquiring a native owner.
+func (c *NodeChain) PreparedCandidateInputFitsSource(position int, input string) bool {
+	mode := c.PreparedCandidateResponseMode(position)
+	if mode == "" || len(input) == 0 || len(input) > NodeChainInputLimit {
+		return false
+	}
+	inventory, err := json.Marshal(NodeChainCandidateInventory{Schema: 1,
+		Revision: "prepared-candidate-row-preflight", Inputs: []string{input}, ResponseMode: mode})
+	if err != nil {
+		return false
+	}
+	_, err = c.newPreparedPacketCandidatePlan(position, string(inventory), mode)
+	clear(inventory)
+	return err == nil
+}
+
+// This source capability has a distinct purpose and exact original identity.
+// It is never accepted by the connected measurement constructor.
+type nodeChainCandidatePreparationPacketSource struct {
+	self                     *nodeChainCandidatePreparationPacketSource
+	chain                    *NodeChain
+	position                 int
+	mode, inventorySHA, seal string
+}
+
+func (s *nodeChainCandidatePreparationPacketSource) digest() string {
+	if s == nil || s.chain == nil {
+		return ""
+	}
+	raw, _ := json.Marshal([]any{"routervpn-closed-local-packet-candidate-v1",
+		s.chain.SourceSHA256(), s.chain.ConfigSHA256(), s.position, s.mode, s.inventorySHA})
+	defer clear(raw)
+	return externalDigest(raw)
+}
+func (s *nodeChainCandidatePreparationPacketSource) matches(p *NodeChainCandidatePlan) bool {
+	return s != nil && s.self == s && p != nil && s.chain == p.chain &&
+		p.multiple == nil && !p.connectedFinalResponse && p.responseMode != "" &&
+		s.position == p.prefix.Position && s.mode == p.responseMode &&
+		s.inventorySHA == externalDigest([]byte(p.inventory)) && s.seal != "" && s.seal == s.digest() &&
+		s.chain.PreparedCandidateResponseMode(s.position) == s.mode
+}
+
+func (c *NodeChain) newPreparedPacketCandidatePlan(position int, inventory, mode string) (*NodeChainCandidatePlan, error) {
+	if mode == "" || c.PreparedCandidateResponseMode(position) != mode {
+		return nil, nodeChainCandidatePreparationError
+	}
+	plan, err := c.newCandidatePlanInputs(position, inventory, nil, nil, false, mode)
+	if err != nil {
+		return nil, err
+	}
+	// Packet replacements already compile their complete future route and seal
+	// its effective candidate MTU. The HY2 final must also retain the complete
+	// original policy and suffix role before its prefix is opened.
+	if mode == "hysteria2" {
+		var inventory NodeChainCandidateInventory
+		if exactJSON([]byte(plan.inventory), &inventory, NodeChainInputLimit) != nil {
+			return nil, nodeChainCandidatePreparationError
+		}
+		for _, input := range inventory.Inputs {
+			node, err := ParseNodeLaunchInput(input)
+			if err != nil || node == nil || node.mode != mode {
+				return nil, nodeChainCandidatePreparationError
+			}
+			proposed := append([]*NodeProfile(nil), c.nodes...)
+			proposed[position+1] = node
+			_, proofs, _, _, err := compileNodeChain(proposed)
+			if err != nil || len(proofs) != len(c.proofs) || !reflect.DeepEqual(proofs[:position+1], c.proofs[:position+1]) {
+				return nil, errors.Join(err, nodeChainCandidatePreparationError)
+			}
+		}
+	}
+	source := &nodeChainCandidatePreparationPacketSource{chain: c, position: position,
+		mode: mode, inventorySHA: externalDigest([]byte(inventory))}
+	source.self = source
+	source.seal = source.digest()
+	plan.preparedPacket = source
+	raw, _ := json.Marshal([]string{"routervpn-closed-local-packet-candidate-v1", plan.capture, source.seal})
+	plan.capture = externalDigest(raw)
+	clear(raw)
+	plan.seal = plan.digest()
+	return plan, plan.validate()
+}
+
+func (p *NodeChainCandidatePreparation) CandidateMode() string {
+	if p.validate() != nil {
+		return ""
+	}
+	return p.candidates.CandidateMode()
+}
+
 // ParseNodeChainCandidatePreparation derives the executable graph again; no
 // host-provided config, outbound tag, credential or ingress flag is trusted.
 func ParseNodeChainCandidatePreparation(input string) (*NodeChainCandidatePreparation, error) {
@@ -226,6 +342,9 @@ func (p *NodeChainCandidatePreparation) validate() error {
 	// pointer first so this synchronous validation needs only one source walk.
 	if p == nil || p.original == nil || p.candidates == nil || p.candidates.chain != p.original || p.candidates.multiple != p.multipleOriginal || p.candidates.validate() != nil ||
 		p.seal == "" || p.seal != p.digest() || p.position < 0 || p.position >= len(p.original.proofs)-1 || !reflect.DeepEqual(p.proofs, p.original.proofs[:p.position+1]) {
+		return nodeChainCandidatePreparationError
+	}
+	if p.candidates.responseMode != "" && (p.typedOriginal != nil || p.multipleOriginal != nil || !p.candidates.preparedPacket.matches(p.candidates)) {
 		return nodeChainCandidatePreparationError
 	}
 	if p.multipleOriginal != nil && (p.typedOriginal != nil || !p.multipleOriginal.currentValidated(p.original)) {

@@ -60,6 +60,7 @@ type NodeChainCandidatePlan struct {
 	measurement            string
 	connectedFinalResponse bool
 	responseMode           string
+	preparedPacket         *nodeChainCandidatePreparationPacketSource
 	responses              []candidateResponseSource
 	publicResponses        []candidatePublicResponseSource
 	capture                string
@@ -87,8 +88,9 @@ func (c *NodeChain) newPacketCandidatePlanOwned(position int, inventory string, 
 // occur at the same ordinal in the complete inventory.
 func (c *NodeChain) NewCandidatePlanFromInputs(position int, inventory string, inputs []*NodeChainCandidateInput) (*NodeChainCandidatePlan, error) {
 	// The optional discriminator is revalidated with the complete inventory
-	// below. Only this connected Local factory can request the native UDP
-	// carrier; dormant and selected factories retain their existing admission.
+	// below. This factory seals connected Local provenance. The distinct
+	// preparation factory rebinds that source to its closed-prefix purpose;
+	// selected factories retain their existing admission.
 	requested, err := candidateInventoryResponseMode(inventory)
 	if err != nil {
 		return nil, err
@@ -520,6 +522,9 @@ func (p *NodeChainCandidatePlan) digest() string {
 	if p.responseMode != "" {
 		fields = append(fields, p.responseMode)
 	}
+	if p.preparedPacket != nil {
+		fields = append(fields, p.preparedPacket.seal)
+	}
 	if p.multiple != nil {
 		fields = append(fields, p.multiple.digest())
 	}
@@ -532,6 +537,9 @@ func (p *NodeChainCandidatePlan) validate() error {
 	if p == nil || p.chain == nil || p.chain.validateCapture() != nil || p.seal == "" || p.seal != p.digest() ||
 		p.prefix.Position < 0 || p.prefix.Position >= len(p.chain.proofs) || p.prefix != p.chain.proofs[p.prefix.Position] {
 		return errors.New("candidate plan changed its sealed original capture")
+	}
+	if p.preparedPacket != nil && !p.preparedPacket.matches(p) {
+		return nodeChainCandidatePreparationError
 	}
 	if p.connectedFinalResponse && (p.multiple != nil || p.measurement != hopmeasure.CandidatePrivateResponseMeasurement || !p.chain.connectedFinalResponsePrefix(p.prefix.Position)) {
 		return nodeChainCandidatePreparationError
@@ -552,7 +560,7 @@ func (p *NodeChainCandidatePlan) NewMeasurementContext(ctx context.Context, owne
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if p.validate() != nil || owner == nil {
+	if p.validate() != nil || p.preparedPacket != nil || owner == nil {
 		return nil, errors.New("candidate measurement lost its original source owner")
 	}
 	active, err := owner.MeasurementChainContext(ctx)

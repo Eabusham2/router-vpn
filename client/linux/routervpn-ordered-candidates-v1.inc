@@ -149,6 +149,88 @@ static gboolean linux_oc_packet_catalog(JsonObject *view, int position) {
     }
     return TRUE;
 }
+/* Temporary prefix measurements carry their own closed-application proof.
+ * They never acquire authority from a connected or selected-owner envelope. */
+static JsonArray *linux_oc_prepared_source(JsonObject *view, JsonObject *draft, int position) {
+    const char *mode=linux_ec_string(view,"candidate_mode");
+    gboolean packet=linux_oc_packet_mode(mode);
+    if ((!packet && strcmp(mode,"hysteria2")) || strcmp(linux_ec_string(view,"scope"),"saved-prefix-local") ||
+        strcmp(linux_ec_string(view,"proof_scope"),"selected-prefix") || linux_ec_number(view,"schema")!=1 ||
+        strcmp(linux_ec_string(view,"measurement"),"routed-candidate-response") ||
+        linux_ec_number(view,"prefix_position")!=position) return NULL;
+    const char *closed[]={"application_open","dns_open"};
+    for (guint i=0;i<G_N_ELEMENTS(closed);i++) {
+        JsonNode *flag=linux_ec_member(view,closed[i]);
+        if (!flag || !JSON_NODE_HOLDS_VALUE(flag) || json_node_get_value_type(flag)!=G_TYPE_BOOLEAN || json_node_get_boolean(flag)) return NULL;
+    }
+    const char *forbidden[]={"selected_execution","selection_epoch","required_selected_execution","response_executions","public_response_source_nodes","external_final"};
+    for (guint i=0;i<G_N_ELEMENTS(forbidden);i++) if (linux_ec_member(view,forbidden[i])) return NULL;
+    if (draft) {
+        if (strcmp(linux_ec_string(draft,"execution"),"local") || strcmp(linux_ec_string(view,"origin"),"editor-draft") ||
+            strcmp(linux_ec_string(view,"requested_execution"),"local")) return NULL;
+    } else if (linux_ec_member(view,"origin") || linux_ec_member(view,"requested_execution")) return NULL;
+    JsonArray *nodes=linux_ec_array(view,"response_source_nodes"), *original=linux_ec_array(draft,"nodes");
+    guint count=nodes ? json_array_get_length(nodes):0;
+    if (count<(packet?3u:2u) || count>(packet?96u:8u) || position<0 ||
+        (packet ? position>(int)count-3 : position!=(int)count-2) ||
+        (draft && (!original || json_array_get_length(original)!=count))) return NULL;
+    g_autoptr(GHashTable) ids=g_hash_table_new(g_str_hash,g_str_equal);
+    for (guint i=0;i<count;i++) {
+        JsonObject *node=linux_oc_root(json_array_get_element(nodes,i));
+        const char *id=linux_ec_string(node,"id"), *node_mode=linux_ec_string(node,"mode");
+        if (!node || json_object_get_size(node)!=3 || !linux_oc_response_id(id) ||
+            strcmp(linux_ec_string(node,"kind"),"router-vpn") || !g_hash_table_add(ids,(gpointer)id)) return NULL;
+        if (i==count-1 ? (packet ? strcmp(node_mode,"shadowsocks") && strcmp(node_mode,"hysteria2") : strcmp(node_mode,"hysteria2")) :
+            !linux_oc_packet_mode(node_mode)) return NULL;
+        if (count>8 && strcmp(node_mode,i==count-1?"shadowsocks":"wg")) return NULL;
+        if (draft) {
+            JsonObject *row=linux_oc_root(json_array_get_element(original,i));
+            if (!row || json_object_get_size(row)!=2 || strcmp(linux_ec_string(row,"id"),id) ||
+                strcmp(linux_ec_string(row,"mode"),node_mode)) return NULL;
+        }
+    }
+    return strcmp(linux_ec_string(linux_oc_root(json_array_get_element(nodes,position+1)),"mode"),mode)?NULL:nodes;
+}
+static gboolean linux_oc_prepared_path(JsonObject *view, JsonObject *draft, JsonObject *choice, JsonArray *path, int position) {
+    JsonArray *nodes=linux_oc_prepared_source(view,draft,position);
+    const char *id=linux_ec_string(choice,"id"), *mode=linux_ec_string(view,"candidate_mode");
+    if (!nodes || !path || json_array_get_length(path)!=json_array_get_length(nodes) || !linux_oc_response_id(id) ||
+        strcmp(linux_ec_string(choice,"kind"),"router-vpn") ||
+        strcmp(linux_ec_string(choice,"proposal_action"),!strcmp(mode,"hysteria2")?"save-final-profile":"save-intermediate-profile")) return FALSE;
+    for (guint i=0;i<json_array_get_length(nodes);i++) {
+        JsonObject *node=linux_oc_root(json_array_get_element(path,i)), *original=linux_oc_root(json_array_get_element(nodes,i));
+        if (!node || json_object_get_size(node)!=2 || !strcmp(id,linux_ec_string(original,"id"))) return FALSE;
+        if (i==(guint)position+1) {
+            if (strcmp(linux_ec_string(node,"id"),id) || strcmp(linux_ec_string(node,"mode"),mode)) return FALSE;
+        } else if (strcmp(linux_ec_string(node,"id"),linux_ec_string(original,"id")) ||
+            strcmp(linux_ec_string(node,"mode"),linux_ec_string(original,"mode"))) return FALSE;
+    }
+    return TRUE;
+}
+static gboolean linux_oc_prepared_catalog(JsonObject *view, JsonObject *draft, int position) {
+    JsonArray *nodes=linux_oc_prepared_source(view,draft,position), *prefixes=linux_ec_array(view,"prefixes"), *choices=linux_ec_array(view,"candidates");
+    if (!nodes || !prefixes || json_array_get_length(prefixes)!=json_array_get_length(nodes)-1 || !choices ||
+        !json_array_get_length(choices) || linux_ec_number(view,"samples")!=50) return FALSE;
+    g_autoptr(GHashTable) ids=g_hash_table_new(g_str_hash,g_str_equal);
+    for (guint i=0;i<json_array_get_length(choices);i++) {
+        JsonObject *choice=linux_oc_root(json_array_get_element(choices,i));
+        if (!linux_oc_prepared_path(view,draft,choice,linux_ec_array(choice,"proposed_path"),position) ||
+            !g_hash_table_add(ids,(gpointer)linux_ec_string(choice,"id"))) return FALSE;
+        if (draft && linux_oc_packet_mode(linux_ec_string(view,"candidate_mode"))) {
+            if (strcmp(linux_ec_string(choice,"draft_action"),"replace-measured-hop") ||
+                !linux_oc_prepared_path(view,draft,choice,linux_ec_array(choice,"draft_path"),position)) return FALSE;
+        } else if (linux_ec_member(choice,"draft_action") || linux_ec_member(choice,"draft_path")) return FALSE;
+    }
+    for (guint i=0;i<json_array_get_length(prefixes);i++) {
+        JsonObject *prefix=linux_oc_root(json_array_get_element(prefixes,i)), *node=linux_oc_root(json_array_get_element(nodes,i));
+        const char *measurement=linux_ec_string(prefix,"measurement");
+        if (linux_ec_number(prefix,"position")!=i || strcmp(linux_ec_string(prefix,"id"),linux_ec_string(node,"id")) ||
+            strcmp(linux_ec_string(prefix,"mode"),linux_ec_string(node,"mode"))) return FALSE;
+        if (i==(guint)position ? strcmp(measurement,"routed-candidate-response")!=0 :
+            linux_ec_member(prefix,"measurement") && strcmp(measurement,"routed-tcp-connect") && strcmp(measurement,"routed-candidate-response")) return FALSE;
+    }
+    return TRUE;
+}
 static gboolean linux_oc_connected_catalog(JsonObject *view, int position) {
     return !strcmp(linux_ec_string(view,"candidate_mode"),"hysteria2") ? linux_oc_hysteria_catalog(view,position):linux_oc_packet_catalog(view,position);
 }
@@ -478,6 +560,7 @@ static gboolean linux_oc_final_choice(LinuxOrderedCandidates*s,JsonObject*choice
     guint count=original?json_array_get_length(original):0;
     const char*id=linux_ec_string(choice,"id");
     JsonObject *view = linux_oc_root(s->view);
+    if (linux_ec_member(view,"candidate_mode")) return s->saved_path && s->saved_prefix && linux_oc_prepared_path(view,draft,choice,proposed,s->position);
     if (!strcmp(linux_ec_string(view,"measurement"),"routed-public-candidate-response")) {
         return s->draft && !strcmp(linux_ec_string(choice,"proposal_action"),"save-intermediate-profile") &&
             linux_oc_public_path(view,draft,choice,s->position,"proposed_path");
@@ -524,6 +607,11 @@ static gboolean linux_oc_final_choice(LinuxOrderedCandidates*s,JsonObject*choice
 }
 static JsonNode *linux_oc_response_draft_path(LinuxOrderedCandidates *s, JsonObject *view, JsonObject *choice) {
     JsonObject *draft=linux_oc_root(s->draft_source);
+    if (linux_ec_member(view,"candidate_mode")) {
+        return s->saved_path && s->saved_prefix && draft && linux_oc_packet_mode(linux_ec_string(view,"candidate_mode")) &&
+            !strcmp(linux_ec_string(choice,"draft_action"),"replace-measured-hop") &&
+            linux_oc_prepared_path(view,draft,choice,linux_ec_array(choice,"draft_path"),s->position) ? linux_ec_member(choice,"draft_path"):NULL;
+    }
     if (!strcmp(linux_ec_string(view,"measurement"),"routed-public-candidate-response")) {
         return draft && !strcmp(linux_ec_string(choice,"draft_action"),"insert-measured-hop") &&
             linux_oc_public_path(view,draft,choice,s->position,"draft_path") ? linux_ec_member(choice,"draft_path"):NULL;
@@ -581,6 +669,7 @@ static void linux_oc_controls(LinuxOrderedCandidates*s){
     gboolean ready=s->job==NULL && captured && linux_oc_ready(s) && isfinite(linux_oc_current_score(s,row,g_get_real_time()/1000));
     gboolean insert=linux_oc_response_draft_path(s,linux_oc_root(s->view),choice)!=NULL;
     gtk_widget_set_visible(s->use_draft,insert);
+    gtk_button_set_label(GTK_BUTTON(s->use_draft),linux_ec_member(linux_oc_root(s->view),"candidate_mode")?"Use replacement in draft":"Use in draft");
     gtk_widget_set_sensitive(s->use_draft,ready && insert);
     gtk_widget_set_sensitive(s->save,ready && allowed && path && json_array_get_length(path)>=2);
 }
@@ -632,7 +721,53 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
     JsonObject *prior = linux_oc_root(s->view), *draft_source = linux_oc_root(s->draft_source);
     JsonNode *mode=linux_ec_member(o,"candidate_mode"), *prior_mode=linux_ec_member(prior,"candidate_mode");
     gboolean packet_mode=linux_oc_packet_mode(linux_ec_string(o,"candidate_mode")) || (phase!=1 && linux_oc_packet_mode(linux_ec_string(prior,"candidate_mode")));
-    if (mode || (phase!=1 && prior_mode)) {
+    gboolean prepared_mode=(s->saved_path || s->draft) && (mode || (phase!=1 && prior_mode));
+    if (prepared_mode) {
+        if (!s->saved_path || !s->saved_prefix) return FALSE;
+        if (phase==1) {
+            if (!linux_oc_prepared_catalog(o,draft_source,s->position)) return FALSE;
+        } else {
+            if (!linux_oc_prepared_source(o,draft_source,s->position) || !linux_oc_prepared_source(prior,draft_source,s->position) ||
+                strcmp(linux_ec_string(o,"candidate_mode"),linux_ec_string(prior,"candidate_mode")) ||
+                !json_node_equal(linux_ec_member(o,"response_source_nodes"),linux_ec_member(prior,"response_source_nodes")) ||
+                strcmp(linux_ec_string(o,"view_token"),linux_ec_string(prior,"view_token")) || strcmp(linux_ec_string(o,"request_id"),s->request)) return FALSE;
+            const char *fields[]={"started","admission_cancelled","running","drained","cancelled","native_down","accepted","reviewing","cleanup_pending","active_path_changed"};
+            for (guint i=0;i<G_N_ELEMENTS(fields);i++) {
+                JsonNode *flag=linux_ec_member(o,fields[i]);
+                if (!flag || !JSON_NODE_HOLDS_VALUE(flag) || json_node_get_value_type(flag)!=G_TYPE_BOOLEAN) return FALSE;
+            }
+            if (linux_ec_bool(o,"started")==linux_ec_bool(o,"admission_cancelled")) return FALSE;
+            if (phase==3) {
+                JsonArray *results=linux_ec_array(o,"results");
+                JsonNode *saved=linux_ec_member(o,"saved_profile_id");
+                if (!results || json_array_get_length(results) || !saved || !JSON_NODE_HOLDS_VALUE(saved) ||
+                    json_node_get_value_type(saved)!=G_TYPE_STRING || *json_node_get_string(saved) ||
+                    linux_ec_bool(o,"native_down")!=linux_ec_bool(o,"started") ||
+                    (linux_ec_bool(o,"admission_cancelled") && s->saved_admitted)) return FALSE;
+                const char *fields[]={"ok","cancelled","drained","running","accepted","reviewing","cleanup_pending","active_path_changed"};
+                for (guint i=0;i<G_N_ELEMENTS(fields);i++) {
+                    JsonNode *flag=linux_ec_member(o,fields[i]);
+                    if (!flag || !JSON_NODE_HOLDS_VALUE(flag) || json_node_get_value_type(flag)!=G_TYPE_BOOLEAN ||
+                        json_node_get_boolean(flag)!=(i<3)) return FALSE;
+                }
+            } else if (linux_ec_bool(o,"admission_cancelled")) return FALSE;
+            if (phase==4 || phase==6 || linux_ec_string(o,"saved_profile_id")[0]) {
+                JsonArray *choices=linux_ec_array(prior,"candidates");guint matches=0;
+                for (guint i=0;choices && i<json_array_get_length(choices);i++) {
+                    JsonObject *choice=linux_oc_root(json_array_get_element(choices,i));
+                    if (g_strcmp0(linux_ec_string(choice,"id"),s->chosen_id)) continue;
+                    if (!linux_oc_prepared_path(prior,draft_source,choice,linux_ec_array(o,"proposed_path"),s->position)) return FALSE;
+                    if (phase==6) {
+                        if (!s->draft || !linux_oc_packet_mode(linux_ec_string(prior,"candidate_mode")) ||
+                            strcmp(linux_ec_string(o,"draft_action"),"replace-measured-hop")) return FALSE;
+                    } else if (strcmp(linux_ec_string(o,"proposal_action"),linux_ec_string(choice,"proposal_action"))) return FALSE;
+                    matches++;
+                }
+                if (matches!=1 || g_strcmp0(linux_ec_string(o,"candidate_id"),s->chosen_id)) return FALSE;
+            }
+        }
+    }
+    if (!prepared_mode && (mode || (phase!=1 && prior_mode))) {
         if (s->saved_path || s->draft) return FALSE;
         if (phase==1) {
             if (!linux_oc_connected_catalog(o,s->position)) return FALSE;
@@ -682,7 +817,7 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
         }
     }
     JsonNode *source = linux_ec_member(o,"response_source_nodes"), *expected = linux_ec_member(prior,"response_source_nodes");
-    if (packet_mode) source=expected=NULL;
+    if (packet_mode || prepared_mode) source=expected=NULL;
     JsonNode *owners = linux_ec_member(o,"response_executions"), *original_owners = linux_ec_member(prior,"response_executions");
     JsonNode *public_source=linux_ec_member(o,"public_response_source_nodes");
     JsonNode *expected_public=linux_ec_member(prior,"public_response_source_nodes");
@@ -778,7 +913,7 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
     }
     if(phase==1){
         if(s->saved_path&&!linux_oc_saved_envelope(s,o,TRUE))return FALSE;
-        if(!linux_oc_catalog_measurement(o,s->position))return FALSE;
+        if(!prepared_mode && !linux_oc_catalog_measurement(o,s->position))return FALSE;
         if(!strcmp(linux_ec_string(o,"measurement"),"routed-public-candidate-response")){
             if(!linux_oc_public_source(o,draft_source,s->position))return FALSE;
             JsonArray *choices=linux_ec_array(o,"candidates");
@@ -791,7 +926,7 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
                 if(linux_ec_member(choice,"draft_path")&&!linux_oc_response_draft_path(s,o,choice))return FALSE;
             }
         }
-        if(s->draft&&!strcmp(linux_ec_string(o,"measurement"),"routed-candidate-response")){
+        if(!prepared_mode && s->draft&&!strcmp(linux_ec_string(o,"measurement"),"routed-candidate-response")){
             JsonObject*draft=linux_oc_root(s->draft_source);JsonArray*nodes=linux_ec_array(draft,"nodes");
             if((strcmp(linux_ec_string(draft,"execution"),"local") && !(linux_oc_response_draft(draft,s->position,o) && linux_oc_response_winner(o,s->position)))||!nodes||s->position<1||(guint)s->position+1>=json_array_get_length(nodes))return FALSE;
             JsonObject*original=linux_oc_root(json_array_get_element(nodes,s->position));JsonArray*prefixes=linux_ec_array(o,"prefixes");
@@ -808,13 +943,15 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
             JsonObject*p=linux_oc_root(json_array_get_element(prefixes,i));double value=linux_ec_number(p,"position");
             /* This offers a fresh capture, not permission to use the old catalog
              * for this prefix. The returned HY2 marker and path must validate. */
-            gboolean packet_response=!s->saved_path&&!s->draft&&linux_oc_packet_mode(linux_ec_string(p,"mode"))&&
+            gboolean packet_response=(prepared_mode || (!s->saved_path&&!s->draft))&&linux_oc_packet_mode(linux_ec_string(p,"mode"))&&
                 !strcmp(linux_ec_string(p,"measurement"),"routed-candidate-response");
             if(!isfinite(value)||value<0||value>=96||floor(value)!=value||(!linux_oc_prefix_measurement(p)[0]&&!packet_response))continue;
             char*id=g_strdup_printf("%d",(int)value),*name=g_strdup_printf("After node %d · %s · %s",(int)value+1,linux_ec_string(p,"name"),linux_ec_string(p,"mode"));
             gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(s->prefix),id,name);if((int)value==s->position)gtk_combo_box_set_active_id(GTK_COMBO_BOX(s->prefix),id);g_free(id);g_free(name);
         }
-        const char*note=!strcmp(linux_ec_string(o,"measurement"),"routed-public-candidate-response")?
+        const char*note=prepared_mode?
+            "Measure 50 authenticated candidate responses through this temporary Local prefix. The route must close before using a measured replacement or saving a future profile.":
+            !strcmp(linux_ec_string(o,"measurement"),"routed-public-candidate-response")?
             "Measure 50 HTTPS responses after TLS through the captured prefix and each imported candidate. Every response verifies its recorded public exit IP. Save and Use retain the original suffix and public final.":
             !strcmp(linux_ec_string(o,"candidate_mode"),"hysteria2")?
             "Measure 50 authenticated Hysteria2 responses through the connected Local prefix. Saving replaces only the final node and preserves Hysteria2 for the next connection.":
@@ -832,7 +969,7 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
                 JsonArray *path=linux_ec_array(candidate,"proposed_path");
                 gboolean measure_only = !strcmp(linux_ec_string(o,"measurement"),"routed-public-candidate-response") &&
                     !path && linux_ec_string(candidate,"save_reason")[0];
-                if(measure_only || linux_oc_response_draft_path(s,o,candidate) || (path && json_array_get_length(path)>=3&&
+                if(measure_only || linux_oc_response_draft_path(s,o,candidate) || (path && json_array_get_length(path)>=(prepared_mode?2u:3u)&&
                    (strcmp(linux_ec_string(o,"measurement"),"routed-candidate-response")||linux_oc_final_choice(s,candidate)))){
                     gtk_tree_selection_select_iter(gtk_tree_view_get_selection(GTK_TREE_VIEW(s->table)),&iter);s->auto_run=TRUE;
                 }
@@ -868,7 +1005,8 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
             if (phase==6) {
                 JsonArray *choices=linux_ec_array(linux_oc_root(s->view),"candidates");
                 JsonNode *confirmed=linux_ec_member(o,"proposed_path");
-                if (strcmp(linux_ec_string(o,"draft_action"),"insert-measured-hop") || !confirmed ||
+                const char *draft_action=prepared_mode?"replace-measured-hop":"insert-measured-hop";
+                if (strcmp(linux_ec_string(o,"draft_action"),draft_action) || !confirmed ||
                     linux_ec_member(o,"profile_id") ||
                     (!strcmp(linux_oc_scope(s),"draft-complete-selected") && (strcmp(s->selected_winner,linux_ec_member(prior,"response_executions") ? linux_ec_string(o,"selected_execution") : "local") || s->selected_epoch<=0))) return FALSE;
                 const char *fields[]={"accepted","running","reviewing","cleanup_pending","cancelled","saved"};

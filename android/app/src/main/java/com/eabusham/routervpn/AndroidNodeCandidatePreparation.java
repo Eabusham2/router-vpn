@@ -79,7 +79,7 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
             owner.requireCurrent();
             if(packetPrefix(source,prefix)){
                 owner.capturedSource=AndroidNodeChainCapture.compile(source,prefix);
-                owner.catalog=AndroidNodeCandidateCatalog.captureSources(context,source,prefix);
+                owner.catalog=AndroidNodeCandidateCatalog.captureSources(context,source,owner.capturedSource,prefix);
                 owner.capturedPrefix=AndroidNodeCandidatePrefixCapture.compile(owner.capturedSource,prefix,owner.catalog.inventory);
                 owner.requireCurrent();
             }

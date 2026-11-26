@@ -333,7 +333,7 @@ struct IOSCandidateMetadataPages {
             fields.insert("measurement")
         }
         if let mode = body["candidate_mode"] {
-            guard family == .ordinary, let mode = mode as? String, ["hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(mode),
+            guard family == .ordinary || family == .preparation, let mode = mode as? String, ["hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(mode),
                   body["measurement"] as? String == "routed-candidate-response" else { throw Self.issue() }
             fields.insert("candidate_mode")
         }

@@ -348,6 +348,20 @@ func RouterNodeChainPacketSuccessorCandidateInputSupported(input, mode string) b
 	return mobilemultihop.NodeChainPacketSuccessorCandidateInputSupported(input, mode)
 }
 
+// This describes a source-only temporary preparation. Its native carrier has
+// a distinct closed-ingress owner and never borrows a connected route.
+func RouterNodeChainPreparedCandidateResponseMode(plan *RouterNodeChain, position int32) string {
+	if plan == nil || plan.self != plan || plan.chain == nil {
+		return ""
+	}
+	return plan.chain.PreparedCandidateResponseMode(int(position))
+}
+
+func RouterNodeChainPreparedCandidateInputFitsSource(plan *RouterNodeChain, position int32, input string) bool {
+	return plan != nil && plan.self == plan && plan.chain != nil &&
+		plan.chain.PreparedCandidateInputFitsSource(int(position), input)
+}
+
 func RouterNodeChainConnectedPacketSuccessorCandidateMode(plan *RouterNodeChain, position int32) string {
 	if plan == nil || plan.self != plan || plan.chain == nil {
 		return ""

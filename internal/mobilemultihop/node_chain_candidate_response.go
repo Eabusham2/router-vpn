@@ -280,15 +280,17 @@ func (c *NodeChain) SupportsConnectedHysteria2FinalCandidate(position int) bool 
 	return true
 }
 
-// NodeChainCandidatePacketEngine is implemented only by the ordinary Local
-// native adapter. The sealed request supplies one original UDP endpoint and
-// prefix; the caller cannot supply a tag, address or replacement native owner.
+// NodeChainCandidatePacketEngine is implemented by the ordinary Local and
+// separately owned preparation native adapters. Their distinct request reads
+// supply one original UDP endpoint and prefix; a caller cannot supply a tag,
+// address or replacement native owner.
 type NodeChainCandidatePacketEngine interface {
 	DialCandidatePacketContext(context.Context, *NodeChainCandidatePacketRequest) (net.Conn, error)
 }
 
-// Only the original ordinary Local native adapter can construct this endpoint.
-// Its private stream destination comes from the sealed candidate, not a caller.
+// A connected or prepared Local adapter can construct this endpoint only
+// after its own exact request read succeeds. The private stream destination
+// comes from the sealed candidate, not a caller.
 type NodeChainCandidatePacketEndpointEngine interface {
 	OpenCandidatePacketEndpointContext(context.Context, *NodeChainCandidatePacketRequest) (NodeChainCandidatePacketEndpoint, error)
 }
@@ -305,60 +307,109 @@ type NodeChainCandidatePacketCapture struct {
 type NodeChainCandidatePacketRequest struct {
 	self     *NodeChainCandidatePacketRequest
 	engine   *nodeChainCandidateEngine
+	prepared *nodeChainCandidatePreparationPacketCapability
 	response candidateResponseSource
 }
 
 func (r *NodeChainCandidatePacketRequest) Read(ctx context.Context, reader NodeChainEngine, original *NodeChain) (NodeChainIdentity, string, string, error) {
-	empty := NodeChainIdentity{}
-	if r == nil || r.self != r || r.engine == nil || reader == nil || !reflect.TypeOf(reader).Comparable() || reader != r.engine.reader ||
-		original == nil || original != r.engine.active || r.engine.plan == nil || original != r.engine.plan.chain {
-		return empty, "", "", hopmeasure.ErrStale
-	}
-	mode := r.engine.plan.responseMode
-	if mode == "hysteria2" {
-		if r.response.Hysteria2Options == "" || r.response.PacketMode != "" || r.response.PacketOptions != "" {
-			return empty, "", "", hopmeasure.ErrStale
-		}
-	} else if !NodeChainPrefixMode(mode) || r.response.PacketMode != mode || r.response.PacketOptions == "" || r.response.Hysteria2Options != "" {
-		return empty, "", "", hopmeasure.ErrStale
+	if r == nil || r.self != r || r.prepared != nil || r.engine == nil || reader == nil ||
+		!reflect.TypeOf(reader).Comparable() || reader != r.engine.reader || original == nil ||
+		original != r.engine.active || r.engine.plan == nil || original != r.engine.plan.chain ||
+		r.engine.plan.preparedPacket != nil {
+		return NodeChainIdentity{}, "", "", hopmeasure.ErrStale
 	}
 	if _, err := r.engine.current(ctx); err != nil {
-		return empty, "", "", err
+		return NodeChainIdentity{}, "", "", err
 	}
-	for _, source := range r.engine.plan.responses {
-		if source == r.response {
-			return r.engine.identity, r.engine.plan.prefix.Tag, source.Target.Address, nil
-		}
-	}
-	return empty, "", "", hopmeasure.ErrStale
+	return r.readResponse(r.engine.plan, r.engine.identity)
 }
 
-func (r *NodeChainCandidatePacketRequest) ReadPacketEndpoint(ctx context.Context, reader NodeChainEngine, original *NodeChain) (NodeChainCandidatePacketCapture, error) {
-	if _, _, _, err := r.Read(ctx, reader, original); err != nil {
-		return NodeChainCandidatePacketCapture{}, err
+// ReadPreparation accepts only the independently sealed temporary capability.
+// A connected request, copied preparation, replaced reader or reopened ingress
+// cannot borrow this route even when its original profile bytes match.
+func (r *NodeChainCandidatePacketRequest) ReadPreparation(ctx context.Context, reader NodeChainCandidatePreparationPacketEngine, preparation *NodeChainCandidatePreparation) (NodeChainIdentity, string, string, error) {
+	if r == nil || r.self != r || r.engine != nil || r.prepared == nil || reader == nil ||
+		!reflect.TypeOf(reader).Comparable() || reader != r.prepared.reader ||
+		r.prepared.runtime == nil || preparation == nil || preparation != r.prepared.runtime.preparation ||
+		preparation.candidates != r.prepared.plan {
+		return NodeChainIdentity{}, "", "", hopmeasure.ErrStale
 	}
+	if err := r.prepared.current(ctx); err != nil {
+		return NodeChainIdentity{}, "", "", err
+	}
+	return r.readResponse(r.prepared.plan, r.prepared.identity)
+}
+
+func (r *NodeChainCandidatePacketRequest) readResponse(plan *NodeChainCandidatePlan, identity NodeChainIdentity) (NodeChainIdentity, string, string, error) {
+	mode := plan.responseMode
+	if mode == "hysteria2" {
+		if r.response.Hysteria2Options == "" || r.response.PacketMode != "" || r.response.PacketOptions != "" {
+			return NodeChainIdentity{}, "", "", hopmeasure.ErrStale
+		}
+	} else if !NodeChainPrefixMode(mode) || r.response.PacketMode != mode || r.response.PacketOptions == "" || r.response.Hysteria2Options != "" {
+		return NodeChainIdentity{}, "", "", hopmeasure.ErrStale
+	}
+	for _, source := range plan.responses {
+		if source == r.response {
+			return identity, plan.prefix.Tag, source.Target.Address, nil
+		}
+	}
+	return NodeChainIdentity{}, "", "", hopmeasure.ErrStale
+}
+
+func (r *NodeChainCandidatePacketRequest) readCurrent(ctx context.Context) (NodeChainIdentity, string, string, error) {
+	if r != nil && r.engine != nil && r.prepared == nil {
+		return r.Read(ctx, r.engine.reader, r.engine.active)
+	}
+	if r != nil && r.engine == nil && r.prepared != nil && r.prepared.runtime != nil {
+		return r.ReadPreparation(ctx, r.prepared.reader, r.prepared.runtime.preparation)
+	}
+	return NodeChainIdentity{}, "", "", hopmeasure.ErrStale
+}
+
+func (r *NodeChainCandidatePacketRequest) packetCapture() (NodeChainCandidatePacketCapture, error) {
 	api, err := privateAPI(r.response.API)
 	if err != nil || !NodeChainPrefixMode(r.response.PacketMode) || r.response.PacketOptions == "" {
 		return NodeChainCandidatePacketCapture{}, hopmeasure.ErrStale
 	}
 	return NodeChainCandidatePacketCapture{r.response.PacketMode, r.response.PacketOptions, api.Host}, nil
 }
+func (r *NodeChainCandidatePacketRequest) ReadPacketEndpoint(ctx context.Context, reader NodeChainEngine, original *NodeChain) (NodeChainCandidatePacketCapture, error) {
+	if _, _, _, err := r.Read(ctx, reader, original); err != nil {
+		return NodeChainCandidatePacketCapture{}, err
+	}
+	return r.packetCapture()
+}
+func (r *NodeChainCandidatePacketRequest) ReadPreparationPacketEndpoint(ctx context.Context, reader NodeChainCandidatePreparationPacketEngine, preparation *NodeChainCandidatePreparation) (NodeChainCandidatePacketCapture, error) {
+	if _, _, _, err := r.ReadPreparation(ctx, reader, preparation); err != nil {
+		return NodeChainCandidatePacketCapture{}, err
+	}
+	return r.packetCapture()
+}
+func (r *NodeChainCandidatePacketRequest) readCurrentPacketEndpoint(ctx context.Context) (NodeChainCandidatePacketCapture, error) {
+	if _, _, _, err := r.readCurrent(ctx); err != nil {
+		return NodeChainCandidatePacketCapture{}, err
+	}
+	return r.packetCapture()
+}
 
 func (r *NodeChainCandidatePacketRequest) dial(ctx context.Context) (net.Conn, error) {
-	if r == nil || r.engine == nil {
-		return nil, hopmeasure.ErrStale
-	}
-	reader, ok := r.engine.reader.(NodeChainCandidatePacketEngine)
-	if !ok {
-		return nil, hopmeasure.ErrStale
-	}
-	if _, _, _, err := r.Read(ctx, r.engine.reader, r.engine.active); err != nil {
+	if _, _, _, err := r.readCurrent(ctx); err != nil {
 		return nil, err
 	}
+	var reader NodeChainCandidatePacketEngine
+	if r.engine != nil {
+		reader, _ = r.engine.reader.(NodeChainCandidatePacketEngine)
+	} else {
+		reader = r.prepared.reader
+	}
+	if reader == nil {
+		return nil, hopmeasure.ErrStale
+	}
 	connection, err := reader.DialCandidatePacketContext(ctx, r)
-	_, _, _, observed := r.Read(ctx, r.engine.reader, r.engine.active)
-	// The native carrier retains even a late nonnil connection with an error
-	// and joins its Close before the sample or measurement can release.
+	_, _, _, observed := r.readCurrent(ctx)
+	// Retain every late nonnil result. The protocol carrier joins its exact
+	// Close before the connected or prepared measurement lease is released.
 	return connection, errors.Join(err, observed, ctx.Err())
 }
 
@@ -570,30 +621,52 @@ func (p *NodeChainCandidatePlan) newService(ctx context.Context, engine hopmeasu
 	if p.measurement == hopmeasure.CandidatePublicResponseMeasurement {
 		return p.newPublicResponseService(ctx, engine, prefix)
 	}
-	if NodeChainPrefixMode(p.responseMode) {
-		original, ok := engine.(*nodeChainCandidateEngine)
-		if !ok || original.plan != p {
+	var requestFor func(candidateResponseSource) *NodeChainCandidatePacketRequest
+	var factory NodeChainCandidatePacketEndpointEngine
+	if p.responseMode != "" {
+		var original *nodeChainCandidateEngine
+		var prepared *nodeChainCandidatePreparationPacketCapability
+		switch owner := engine.(type) {
+		case *nodeChainCandidateEngine:
+			if owner.plan != p || p.preparedPacket != nil {
+				return nil, hopmeasure.ErrStale
+			}
+			original = owner
+			factory, _ = owner.reader.(NodeChainCandidatePacketEndpointEngine)
+		case *NodeChainCandidatePreparationRuntime:
+			var err error
+			prepared, err = owner.packetCapability(ctx, p)
+			if err != nil {
+				return nil, err
+			}
+			factory, _ = prepared.reader.(NodeChainCandidatePacketEndpointEngine)
+		default:
 			return nil, hopmeasure.ErrStale
 		}
-		factory, ok := original.reader.(NodeChainCandidatePacketEndpointEngine)
-		if !ok {
-			return nil, errors.New("authenticated packet candidate requires its original Local endpoint factory")
+		requestFor = func(source candidateResponseSource) *NodeChainCandidatePacketRequest {
+			request := &NodeChainCandidatePacketRequest{engine: original, prepared: prepared, response: source}
+			request.self = request
+			return request
+		}
+	}
+	if NodeChainPrefixMode(p.responseMode) {
+		if factory == nil {
+			return nil, errors.New("authenticated packet candidate requires its exact Local endpoint factory")
 		}
 		open := func(ctx context.Context, target hopmeasure.CandidateTarget) (hopmeasure.CandidateResponseSession, error) {
 			for _, source := range p.responses {
 				if source.Target != target {
 					continue
 				}
-				request := &NodeChainCandidatePacketRequest{engine: original, response: source}
-				request.self = request
-				if _, _, _, err := request.Read(ctx, original.reader, original.active); err != nil {
+				request := requestFor(source)
+				if _, _, _, err := request.readCurrent(ctx); err != nil {
 					return nil, err
 				}
 				endpoint, err := factory.OpenCandidatePacketEndpointContext(ctx, request)
 				if endpoint == nil {
 					return nil, errors.Join(err, errors.New("packet candidate returned no original endpoint"))
 				}
-				_, _, _, observed := request.Read(ctx, original.reader, original.active)
+				_, _, _, observed := request.readCurrent(ctx)
 				// Preserve a late nonnil endpoint even when its open failed. The
 				// generalized worker joins this exact Close before publishing.
 				return &candidatePacketResponseSession{request: request, endpoint: endpoint, prefix: p.prefix.Tag}, errors.Join(err, observed, ctx.Err())
@@ -606,15 +679,13 @@ func (p *NodeChainCandidatePlan) newService(ctx context.Context, engine hopmeasu
 		return hopmeasure.NewCapturedResponseSessionCandidatesContext(ctx, engine, prefix, p.targets, NodeChainInputLimit, open)
 	}
 	if p.responseMode == "hysteria2" {
-		original, ok := engine.(*nodeChainCandidateEngine)
-		if !ok || original.plan != p || openCandidateHysteria2 == nil {
+		if requestFor == nil || openCandidateHysteria2 == nil {
 			return nil, errors.New("authenticated Hysteria2 candidate requires its original Local packet carrier")
 		}
 		respond := func(ctx context.Context, target hopmeasure.CandidateTarget, complete func() error) error {
 			for _, source := range p.responses {
 				if source.Target == target {
-					request := &NodeChainCandidatePacketRequest{engine: original, response: source}
-					request.self = request
+					request := requestFor(source)
 					nonce, err := randomHex(16)
 					if err != nil {
 						return err
@@ -659,7 +730,7 @@ func (s *candidatePacketResponseSession) Respond(ctx context.Context, complete f
 		return hopmeasure.ErrStale
 	}
 	r := s.request
-	if _, _, _, err := r.Read(ctx, r.engine.reader, r.engine.active); err != nil {
+	if _, _, _, err := r.readCurrent(ctx); err != nil {
 		return err
 	}
 	nonce, err := randomHex(16)
@@ -667,12 +738,12 @@ func (s *candidatePacketResponseSession) Respond(ctx context.Context, complete f
 		return err
 	}
 	return r.response.exchangeChallenge(ctx, func(call context.Context, tag, destination string) (net.Conn, error) {
-		capture, err := r.ReadPacketEndpoint(call, r.engine.reader, r.engine.active)
+		capture, err := r.readCurrentPacketEndpoint(call)
 		if err != nil || tag != s.prefix || destination != capture.PrivateAddress {
 			return nil, hopmeasure.ErrStale
 		}
 		connection, err := s.endpoint.DialPrivateContext(call)
-		_, _, _, observed := r.Read(call, r.engine.reader, r.engine.active)
+		_, _, _, observed := r.readCurrent(call)
 		return connection, errors.Join(err, observed, call.Err())
 	}, s.prefix, nonce, func(string) error { return complete() })
 }

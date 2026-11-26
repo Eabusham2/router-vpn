@@ -167,7 +167,10 @@ func orderedResponseProfileWithMode(ctx context.Context, root, execution string,
 	return p, rows, action, nil
 }
 
-const orderedCandidateDraftInsertAction = "insert-measured-hop"
+const (
+	orderedCandidateDraftInsertAction  = "insert-measured-hop"
+	orderedCandidateDraftReplaceAction = "replace-measured-hop"
+)
 
 // A draft response choice always inserts the measured relay. In particular,
 // the penultimate choice retains the original final even though its separate

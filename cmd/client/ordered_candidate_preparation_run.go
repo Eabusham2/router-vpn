@@ -215,7 +215,7 @@ func (p *orderedCandidatePreparation) startCompleteLocalRuntime(ctx context.Cont
 }
 
 func orderedCandidateSameInventory(a, b *desktopNodeChainCandidateCatalog) bool {
-	if a == nil || b == nil || a.serverResponse != b.serverResponse || a.revision != b.revision || a.inventory != b.inventory ||
+	if a == nil || b == nil || a.serverResponse != b.serverResponse || a.revision != b.revision || a.inventory != b.inventory || a.candidateMode != b.candidateMode ||
 		(a.prefixPreparation == nil) != (b.prefixPreparation == nil) ||
 		!reflect.DeepEqual(a.assets, b.assets) || !reflect.DeepEqual(a.profiles, b.profiles) || len(a.files) != len(b.files) {
 		return false

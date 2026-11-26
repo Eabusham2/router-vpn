@@ -298,6 +298,19 @@ func (m *routerVPNNodeCandidatePrefixOwner) ObservePreparationContext(ctx contex
 	}
 	return m.state.engine.ObservePreparationContext(ctx)
 }
+func (m *routerVPNNodeCandidatePrefixOwner) CandidatePreparationPacketEngineContext(ctx context.Context, preparation *mobilemultihop.NodeChainCandidatePreparation) (mobilemultihop.NodeChainCandidatePreparationPacketEngine, error) {
+	if m == nil || m.owner == nil || m.owner.preparation != preparation || preparation == nil || preparation.CandidateMode() == "" {
+		return nil, routerVPNExternalFailure
+	}
+	if _, err := m.ObservePreparationContext(ctx); err != nil {
+		return nil, err
+	}
+	reader, ok := m.state.engine.(mobilemultihop.NodeChainCandidatePreparationPacketEngine)
+	if !ok || reader == nil || m.owner.nativeCurrent(ctx, m.state) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	return reader, nil
+}
 func (m *routerVPNNodeCandidatePrefixOwner) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
 	if _, err := m.ObservePreparationContext(ctx); err != nil {
 		return nil, err

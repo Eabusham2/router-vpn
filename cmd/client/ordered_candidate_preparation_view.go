@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"time"
 
+	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilemultihop"
@@ -17,6 +18,7 @@ type orderedCandidatePreparedView struct {
 	draft          *multihopConnectRequest
 	token, network string
 	scope          string
+	candidateMode  string
 	expires        time.Time
 	position       int
 	selection      multihopSelection
@@ -109,6 +111,12 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 	}
 	view := &orderedCandidatePreparedView{draft: draft, scope: scope, token: token, network: network, expires: time.Now().Add(120 * time.Second), position: position, selection: selection}
 	view.responseNodes = orderedCandidateResponseSourceNodes(selection, orderedCandidateDraftExecution(draft), position)
+	if scope == orderedCandidateSavedPrefixScope {
+		view.candidateMode = desktopPreparedCandidateMode(launch, position)
+		if view.candidateMode != "" {
+			view.responseNodes = originalCandidateResponseNodes(selection)
+		}
+	}
 	if candidateServerRequested(ctx) && launch.chain.execution != nil {
 		view.responseOwners = candidateResponseExecutions(launch.chain.execution.preparation, position)
 		if len(view.responseOwners) > 0 {
@@ -120,6 +128,15 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 		view.responseNodes = originalCandidateResponseNodes(selection)
 	}
 	catalogMetric := desktopCandidateCatalogMetric(launch, candidateServerRequested(ctx))
+	if scope == orderedCandidateSavedPrefixScope {
+		fallback := catalogMetric
+		catalogMetric = func(at int) string {
+			if desktopPreparedCandidateMode(launch, at) != "" {
+				return hopmeasure.CandidatePrivateResponseMeasurement
+			}
+			return fallback(at)
+		}
+	}
 	if draft != nil && draft.Execution == "auto" && len(view.responseOwners) == 0 && catalogMetric(position) == hopmeasure.CandidatePublicResponseMeasurement {
 		view.responseOwners = []string{"local"}
 		view.responseNodes = originalCandidateResponseNodes(selection)
@@ -149,10 +166,13 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 		}
 		proposalProfiles := index.members(selection.Nodes, profile.ID)
 		if desktopCandidateResponseMetric(candidateViewMetric(view.prefixes, position)) {
-			_, choice.Proposal, choice.ProposalAction, err = orderedResponseProfile(ctx, selection.Native.root, orderedCandidateDraftExecution(draft), selection.Nodes, position, profile, proposalProfiles)
-			if draft == nil && candidateViewMetric(view.prefixes, position) != hopmeasure.CandidatePublicResponseMeasurement {
+			_, choice.Proposal, choice.ProposalAction, err = orderedResponseProfileWithMode(ctx, selection.Native.root, orderedCandidateDraftExecution(draft), selection.Nodes, position, profile, proposalProfiles, view.candidateMode)
+			if draft == nil && view.candidateMode == "" && candidateViewMetric(view.prefixes, position) != hopmeasure.CandidatePublicResponseMeasurement {
 				choice.ProposalAction = ""
-			} else if draft != nil {
+			} else if draft != nil && mobilemultihop.NodeChainPrefixMode(view.candidateMode) && err == nil {
+				choice.DraftProposal = append([]common.MultihopNodeSelection(nil), choice.Proposal...)
+				choice.DraftAction = orderedCandidateDraftReplaceAction
+			} else if draft != nil && view.candidateMode == "" {
 				var draftErr error
 				_, choice.DraftProposal, draftErr = orderedResponseDraftProposal(ctx, selection.Native.root, draft.Execution, selection.Nodes, position, profile, proposalProfiles)
 				if draftErr == nil {
@@ -181,7 +201,7 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 		return nil, errors.New("no saved candidate supports the measurement available through this prefix")
 	}
 	view.catalog, err = combineDesktopCandidateViewSources(ctx, candidates, position, scope)
-	if err != nil || view.catalog.revision != revision {
+	if err != nil || view.catalog.revision != revision || view.catalog.candidateMode != view.candidateMode {
 		return nil, errors.Join(err, errors.New("saved candidate catalog changed during its view capture"))
 	}
 	if scope == orderedCandidateSavedPrefixScope {
@@ -212,6 +232,9 @@ func (view *orderedCandidatePreparedView) matchesPreparation(p *orderedCandidate
 	if view == nil || p == nil || !now.Before(view.expires) || view.draft != p.request.draft || view.position != p.request.Position || view.scopeValue() != p.request.Scope || view.catalog == nil || view.catalog.serverResponse != p.request.serverResponse ||
 		view.selection.Native == nil || p.selection.Native == nil || view.selection.Native.source != p.selection.Native.source ||
 		view.network != p.network || view.catalog.revision != p.revision || p.inventory == nil {
+		return false
+	}
+	if view.candidateMode != p.inventory.candidateMode {
 		return false
 	}
 	for id, token := range p.inventory.profiles {

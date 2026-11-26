@@ -616,6 +616,23 @@ function global:Test-RouterVPNOrderedResponsePrefix {
     return $true
 }
 
+function global:Get-RouterVPNOrderedPreparedCandidateMode {
+    param($Nodes,[int]$Position,[string]$Execution,$Profiles)
+    $count=@($Nodes).Count
+    if($Execution-cne'local'-or$count-lt2-or$count-gt(Get-RouterVPNOrderedPhysicalTraversalDepth)-or$Position-lt0-or$Position-ge$count-1-or$Nodes[-1].mode-cnotin@('shadowsocks','hysteria2')){return ''}
+    $index=Get-RouterVPNOrderedProfileIndex $Profiles
+    $ids=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    for($i=0;$i-lt$count;$i++){
+        $node=$Nodes[$i]
+        if([string]$node.id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'-or-not$ids.Add([string]$node.id)-or-not(Test-RouterVPNOrderedPairedOff $index[$node.id])){return ''}
+        if($i-lt$count-1-and-not(Test-RouterVPNOrderedPrefixMode $node.mode)){return ''}
+        if($count-gt8-and$node.mode-cne$(if($i-eq$count-1){'shadowsocks'}else{'wg'})){return ''}
+    }
+    if($Position-lt$count-2){return [string]$Nodes[$Position+1].mode}
+    if($Nodes[-1].mode-ceq'hysteria2'-and$count-le8){return 'hysteria2'}
+    return ''
+}
+
 function global:Test-RouterVPNOrderedCandidatePosition {
     param($Nodes,[int]$Position,[string]$Execution,$Profiles)
     if($Position -lt 0 -or $Position -ge $Nodes.Count-1 -or $Nodes.Count -gt (Get-RouterVPNOrderedPhysicalTraversalDepth)){return $false}
@@ -626,6 +643,7 @@ function global:Test-RouterVPNOrderedCandidatePosition {
         for($i=1;$i -lt $Nodes.Count-1;$i++){if(-not(Test-RouterVPNOrderedLiteralOff $index[$Nodes[$i].id])){return $false}}
         return $true
     }
+    if(Get-RouterVPNOrderedPreparedCandidateMode $Nodes $Position $Execution $Profiles){return $true}
     if($Nodes[$Position].mode -ceq 'shadowsocks'){return Test-RouterVPNOrderedResponsePrefix $Nodes $Position $Execution $Profiles}
     if(-not(Test-RouterVPNOrderedPrefixMode $Nodes[$Position].mode) -or $Nodes.Count -eq (Get-RouterVPNOrderedPhysicalTraversalDepth)){return $false}
     if($Execution -ceq 'local' -and @($Nodes|Select-Object -First ($Position+1)|Where-Object{-not(Test-RouterVPNOrderedPrefixMode $_.mode)}).Count){return $false}

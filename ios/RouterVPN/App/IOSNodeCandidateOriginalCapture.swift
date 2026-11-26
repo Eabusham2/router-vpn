@@ -192,12 +192,13 @@ enum IOSNodeCandidateOriginalCapture {
         }
     }
 
-    // Dormant preparations retain their original metrics. Only the connected
-    // provider can describe an additional authenticated response carrier.
+    // A complete temporary route, a connected route and a closed prefix test
+    // retain different native owners even when their original source is equal.
     var candidatePrefixes: [IOSNodeCandidatePrefix] { makeCandidatePrefixes(connected: false) }
     var connectedCandidatePrefixes: [IOSNodeCandidatePrefix] { makeCandidatePrefixes(connected: true) }
+    var preparedCandidatePrefixes: [IOSNodeCandidatePrefix] { makeCandidatePrefixes(connected: false, prepared: true) }
 
-    private func makeCandidatePrefixes(connected: Bool) -> [IOSNodeCandidatePrefix] {
+    private func makeCandidatePrefixes(connected: Bool, prepared: Bool = false) -> [IOSNodeCandidatePrefix] {
         members.enumerated().map { position, member in
             var prefix = IOSNodeCandidatePrefix(position: position, profile_id: member.id,
                 node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode)
@@ -225,6 +226,13 @@ enum IOSNodeCandidateOriginalCapture {
                         prefix.measurement = "routed-candidate-response"
                         prefix.candidate_mode = mode
                     }
+                }
+            }
+            if prepared, selectionExecution == "local", case .ordinary(let capture) = self {
+                let mode = LibboxRouterNodeChainPreparedCandidateResponseMode(capture.plan, Int32(position)) ?? ""
+                if mode == "hysteria2" || IOSMultihopNodeSelection.supportsNativePrefix(mode) {
+                    prefix.measurement = "routed-candidate-response"
+                    prefix.candidate_mode = mode
                 }
             }
             return prefix

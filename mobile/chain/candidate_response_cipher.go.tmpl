@@ -35,10 +35,10 @@ var errCandidateHysteria2 = errors.New("candidate Hysteria2 requires its origina
 // The returned connection owns that whole client, including a late shared
 // offer. Closing its stream cannot leave a reusable candidate carrier behind.
 func openNativeCandidateHysteria2(ctx context.Context, request *NodeChainCandidatePacketRequest, destination string) (net.Conn, error) {
-	if ctx == nil || request == nil || request.engine == nil || request.response.Hysteria2Options == "" {
+	if ctx == nil || request == nil || request.response.Hysteria2Options == "" {
 		return nil, errCandidateHysteria2
 	}
-	_, _, endpoint, err := request.Read(ctx, request.engine.reader, request.engine.active)
+	_, _, endpoint, err := request.readCurrent(ctx)
 	api, apiErr := privateAPI(request.response.API)
 	if err != nil || apiErr != nil || api.Host != destination {
 		return nil, errCandidateHysteria2
@@ -123,7 +123,7 @@ func openNativeCandidateHysteria2(ctx context.Context, request *NodeChainCandida
 		_ = closeAll()
 		return nil, errors.Join(ctx.Err(), errCandidateHysteria2)
 	}
-	_, _, _, err = request.Read(ctx, request.engine.reader, request.engine.active)
+	_, _, _, err = request.readCurrent(ctx)
 	if err != nil {
 		stop()
 		_ = stream.Close()
@@ -172,6 +172,16 @@ func NewNativeCandidatePacketDialer(ctx context.Context, request *NodeChainCandi
 	_, _, endpoint, err := request.Read(ctx, reader, chain)
 	if err != nil || !NodeChainPrefixMode(request.response.PacketMode) {
 		return nil, errors.New("packet candidate lost its original endpoint owner")
+	}
+	return &NativeCandidatePacketDialer{&candidatePacketDialer{request: request, endpoint: endpoint, ctx: ctx}}, nil
+}
+
+// Prepared callers use a different source readback. The owned packet/socket
+// lifecycle is shared only after that exact closed-prefix capability passes.
+func NewNativePreparedCandidatePacketDialer(ctx context.Context, request *NodeChainCandidatePacketRequest, reader NodeChainCandidatePreparationPacketEngine, preparation *NodeChainCandidatePreparation) (*NativeCandidatePacketDialer, error) {
+	_, _, endpoint, err := request.ReadPreparation(ctx, reader, preparation)
+	if err != nil || !NodeChainPrefixMode(request.response.PacketMode) {
+		return nil, errors.New("packet candidate lost its original preparation owner")
 	}
 	return &NativeCandidatePacketDialer{&candidatePacketDialer{request: request, endpoint: endpoint, ctx: ctx}}, nil
 }

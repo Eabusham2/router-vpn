@@ -534,8 +534,19 @@ struct RouterVPNOrderedNodeDraft {
             (modes.first == "wg" || execution != "local" && RouterVPNOrderedNodes.prefixModes.contains(modes.first ?? "")) && modes.dropFirst().allSatisfy { $0 == "shadowsocks" } && finalMode == "shadowsocks" &&
             RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog, selectedExecution: execution != "local"))
     }
+    func preparedCandidateMode(after index: Int) -> String? {
+        guard execution == "local", externalExit == nil, (2...RouterVPNOrderedNodes.physicalTraversalDepth).contains(nodes.count),
+              modes.indices.contains(index), ["shadowsocks","hysteria2"].contains(finalMode),
+              modes.allSatisfy(RouterVPNOrderedNodes.prefixModes.contains),
+              Set(prefixes + [control]).count == nodes.count,
+              RouterVPNOrderedNodes.pairedMembersOff(nodes, profiles: capturedCatalog),
+              nodes.count <= 8 || finalMode == "shadowsocks" && modes.allSatisfy({ $0 == "wg" }) else { return nil }
+        if index + 1 < prefixes.count { return modes[index + 1] }
+        return finalMode == "hysteria2" && nodes.count <= 8 ? "hysteria2":nil
+    }
     func canMeasure(after index: Int) -> Bool {
         guard modes.indices.contains(index) else { return false }
+        if preparedCandidateMode(after: index) != nil { return true }
         if externalExit != nil {
             return ["local","server","auto"].contains(execution) && (index > 0 || execution == "local") && RouterVPNOrderedNodes.externalFinalPath(nodes,control:control,profiles:capturedCatalog)
         }
@@ -635,7 +646,20 @@ struct RouterVPNOrderedNodeDraft {
         }
         var updated = self
         guard proposed.indices.contains(index + 1), let proposedMode = proposed[index + 1]["mode"] else { throw RouterVPNOrderedNodes.issue("The measured hop has no transport.") }
-        try updated.insert(id, mode: proposedMode, at: index + 1)
+        if response.keys.contains("candidate_mode") {
+            guard let mode = preparedCandidateMode(after: index), RouterVPNOrderedNodes.prefixModes.contains(mode),
+                  response["candidate_mode"] as? String == mode, response["draft_action"] as? String == "replace-measured-hop",
+                  proposedMode == mode, prefixes.indices.contains(index + 1), candidates.contains(id),
+                  !importedIDs.contains(id), !nodes.contains(where: { $0["id"] == id }) else {
+                throw RouterVPNOrderedNodes.issue("The measured replacement no longer matches this Local packet route.")
+            }
+            var expected = nodes
+            expected[index + 1] = ["id": id, "mode": mode]
+            guard proposed == expected else { throw RouterVPNOrderedNodes.issue("The original route or retained suffix changed.") }
+            updated.prefixes[index + 1] = id
+        } else {
+            try updated.insert(id, mode: proposedMode, at: index + 1)
+        }
         try updated.chooseMode(proposedMode, at: index + 1)
         let checked = try updated.selection()
         guard checked.orderedNodes == proposed, checked.profileTokens == sourceTokens else {
@@ -1517,7 +1541,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
                 self.draft = updated
                 let inserted = index + 1
                 self.render(selected: inserted)
-                guard updated.nodes.count < RouterVPNOrderedNodes.physicalTraversalDepth || updated.externalExit != nil,
+                guard response["draft_action"] as? String == "replace-measured-hop" || updated.nodes.count < RouterVPNOrderedNodes.physicalTraversalDepth || updated.externalExit != nil,
                       updated.canMeasure(after: inserted) else { return }
                 let revision = self.revision
                 DispatchQueue.main.async { [weak self, weak owner] in

@@ -189,6 +189,10 @@ final class RouterVPNNodeCandidatePrefixHost: NSObject, LibboxRouterNodeChainCan
     private func envelope(request: String, values: [String: Any]) -> Data? {
         var body = values
         body["session_id"] = input.epoch; body["owner_request"] = input.source.request; body["request_id"] = request
+        if let mode = input.capture.responseMode, let source = input.capture.responseSourceNodes {
+            body["candidate_mode"] = mode
+            body["response_source_nodes"] = source.map(\.object)
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: body), data.count <= 131072 else { return nil }
         if values["closed"] as? Bool != true, (try? requirePrepared()) == nil { return nil }
         return data

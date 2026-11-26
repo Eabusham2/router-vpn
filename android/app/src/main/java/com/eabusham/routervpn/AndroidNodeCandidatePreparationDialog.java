@@ -68,9 +68,15 @@ final class AndroidNodeCandidatePreparationDialog {
                 source.requireCurrent();
                 if(draft!=null){
                     source.requireCandidatePurpose(prefix);
-                    if(!source.measurementOnly() || !(AndroidNodeChainCapture.publicExitPacketEntry(source,prefix)
-                            || AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,source.execution)))
-                        throw new IllegalStateException("The draft lost its selected packet entry or Shadowsocks response prefix.");
+                    boolean supported=AndroidNodeChainCapture.publicExitPacketEntry(source,prefix)
+                            ||AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,source.execution);
+                    if(!supported&&"local".equals(source.execution)) {
+                        try(AndroidNodeChainCapture captured=AndroidNodeChainCapture.compile(source,prefix)) {
+                            supported=!AndroidNodeCandidateCatalog.preparedResponseMode(captured,source,prefix).isEmpty();
+                        }
+                    }
+                    if(!source.measurementOnly()||!supported)
+                        throw new IllegalStateException("The draft lost its original qualified candidate prefix.");
                     activity.runOnUiThread(()->{
                         if(visible()){
                             editorSource=new WeakReference<>(source);sourceEditor=new WeakReference<>(editor);
@@ -111,14 +117,14 @@ final class AndroidNodeCandidatePreparationDialog {
         if(!visible() || waitingForReviewRelease)return;if(owner==null)owner=capturedOwner();choices=Collections.unmodifiableList(new ArrayList<>(completed));
         boolean savable=false;for(var choice:choices)if(choice.profile!=null&&choice.saveReason.isEmpty()&&choice.result.current(System.currentTimeMillis()))savable=true;
         StringBuilder text=new StringBuilder(failure==null?(choices.isEmpty()?"Temporary VPN stopped. No complete current candidate scores are available.":savable?"Temporary VPN stopped. Complete proposals are ready to save.":"Temporary VPN stopped. Candidate measurements are available. Each row gives its Save reason."):"Candidate results unavailable: "+failure.getMessage());
-        text.append("\n\nPacket prefixes measure TCP handshakes. Paired candidates return authenticated private responses. On a route with a paired entry and an imported exit, an eligible imported candidate returns its verified public address over HTTPS. Server measurements require that candidate to be registered. Each score requires 50 successful samples. Load and Connect remain separate choices.");
+        text.append("\n\nCandidates use the captured successor transport: eligible paired WireGuard, AmneziaWG, Hysteria2 and Shadowsocks candidates return authenticated private responses; other supported packet-prefix measurements time TCP handshakes. On a route with a paired entry and an imported exit, an eligible imported candidate returns its verified public address over HTTPS. Server measurements require that candidate to be registered. Each score requires 50 successful samples. Load and Connect remain separate choices.");
         appendMeasuredRows(text,choices);output.setText(text.toString());changed.run();
     });}
     private static void appendMeasuredRows(StringBuilder text,List<AndroidNodeCandidatePreparation.Choice> rows){
         for(var choice:rows){
             text.append(String.format(Locale.US,"\n%s • %.2f ms (50/50, trimmed mean)",choice.result.name,choice.result.score));
             if(!choice.saveReason.isEmpty())text.append("\nSave unavailable: ").append(choice.saveReason);
-            if(!choice.draftReason().isEmpty())text.append("\nCannot insert into this draft. ").append(choice.draftReason());
+            if(!choice.draftReason().isEmpty())text.append("\nCannot use in this draft. ").append(choice.draftReason());
         }
     }
     private void chooseDraftInsertion() {
@@ -131,10 +137,10 @@ final class AndroidNodeCandidatePreparationDialog {
             labels.add(String.format(Locale.US,"%s • %.2f ms",choice.result.name,choice.result.score));
         }
         if (available.isEmpty()) {
-            StringBuilder detail=new StringBuilder("A fresh, complete insertion is required to update this draft.");
+            StringBuilder detail=new StringBuilder("A fresh, complete measured proposal is required to update this draft.");
             appendMeasuredRows(detail,choices);output.setText(detail.toString());return;
         }
-        proposalDialog=new AlertDialog.Builder(activity).setTitle("Insert after measured hop").setItems(labels.toArray(new CharSequence[0]),(d,w)->{
+        proposalDialog=new AlertDialog.Builder(activity).setTitle("Use measured node in draft").setItems(labels.toArray(new CharSequence[0]),(d,w)->{
             if (!visible()) return;
             try {
                 AndroidNodeCandidatePreparation original=capturedOwner();
@@ -149,8 +155,8 @@ final class AndroidNodeCandidatePreparationDialog {
                 }))throw new IllegalStateException("The previous review changed. Reopen the current draft.");
                 choices=Collections.emptyList();
                 waitingForReviewRelease=true;
-                output.setText("Added the measured hop. Waiting for the previous review to close.");
-            } catch (Exception stale) { update("Cannot insert into this draft. "+stale.getMessage()); }
+                output.setText("Applied the measured node. Waiting for the previous review to close.");
+            } catch (Exception stale) { update("Cannot use in this draft. "+stale.getMessage()); }
         }).setNegativeButton("Back",null).show();
     }
     private void continueReleasedDraft(AndroidHomeStateStore.Snapshot home,long revision,int inserted) {

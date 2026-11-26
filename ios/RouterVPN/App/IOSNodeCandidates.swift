@@ -35,17 +35,23 @@ private final class IOSCandidateReply: @unchecked Sendable {
     private let responseSourceNodes: [IOSNodeCandidateResponseNode]?
     private var cancelled = false, observationActive = false
     init(epoch: String, owner: String, responseMode: String? = nil, responseSourceNodes: [IOSNodeCandidateResponseNode]? = nil,
-         send: @escaping Send, recovered: @escaping @MainActor () -> Bool,
+         preparedResponse: Bool = false, send: @escaping Send, recovered: @escaping @MainActor () -> Bool,
          pause: @escaping @MainActor () async -> Void = { try? await Task.sleep(for: .milliseconds(250)) }) throws {
         let responseNodes = responseSourceNodes ?? []
         let extendedPacket = responseMode == "wg" &&
             IOSMultihopNodeSelection.extendedPairedModes(responseNodes.map(\.mode), execution: "local") &&
             responseNodes.allSatisfy({ !$0.id.isEmpty && $0.kind == "router-vpn" }) &&
             Set(responseNodes.map(\.id)).count == responseNodes.count
+        let completeSource = !responseNodes.isEmpty && responseNodes.allSatisfy({ !$0.id.isEmpty && $0.kind == "router-vpn" }) &&
+            Set(responseNodes.map(\.id)).count == responseNodes.count &&
+            responseNodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) &&
+            ["shadowsocks", "hysteria2"].contains(responseNodes.last?.mode ?? "")
+        let packetResponse = IOSMultihopNodeSelection.supportsNativePrefix(responseMode ?? "") &&
+            ((3...IOSMultihopNodeSelection.maximumNodes).contains(responseNodes.count) || extendedPacket)
+        let preparedFinal = preparedResponse && responseMode == "hysteria2" && responseNodes.last?.mode == "hysteria2" &&
+            (2...IOSMultihopNodeSelection.maximumNodes).contains(responseNodes.count)
         guard UUID(uuidString: epoch) != nil, IOSCandidateCatalogPublication.validRequest(owner),
-              (responseMode == nil && responseSourceNodes == nil) ||
-                IOSMultihopNodeSelection.supportsNativePrefix(responseMode ?? "") &&
-                    ((3...IOSMultihopNodeSelection.maximumNodes).contains(responseNodes.count) || extendedPacket) else { throw IOSNodeCandidateResult.issue() }
+              (responseMode == nil && responseSourceNodes == nil) || completeSource && (packetResponse || preparedFinal) else { throw IOSNodeCandidateResult.issue() }
         self.epoch = epoch; self.owner = owner; self.send = send; self.recovered = recovered; self.pause = pause
         self.responseMode = responseMode; self.responseSourceNodes = responseSourceNodes
     }
@@ -247,7 +253,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                 let capture = try model.captureIOSCandidateOriginal(bundle)
                 defer { try? capture.close() }
                 independentOnly = capture.requiresIndependentPrefix
-                let originalPrefixes = capture.candidatePrefixes
+                let originalPrefixes = capture.preparedCandidatePrefixes
                 prefixes = originalPrefixes.filter { $0.supported(in: originalPrefixes) }
                 independentPrefixes = Set(prefixes.filter { prefix in
                     capture.canPreparePrefix(at: prefix.position)
@@ -508,7 +514,8 @@ private final class IOSCandidateReply: @unchecked Sendable {
         guard let prefix = temporary.prefixCapture, let capture = temporary.prefixCandidate,
               let binding = temporary.prefixBinding, capture.source.request == owner else { throw CancellationError() }
         let owned = try IOSNodeCandidateTransaction(epoch: temporary.prefixEpoch.uuidString, owner: owner,
-            send: { op, request, candidate, selected, deadline in
+            responseMode: prefix.responseMode, responseSourceNodes: prefix.responseSourceNodes,
+            preparedResponse: prefix.responseMode != nil, send: { op, request, candidate, selected, deadline in
                 try await self.send(binding.connection, operation: "prefix-" + op, request: request,
                     epoch: temporary.prefixEpoch.uuidString, owner: owner, candidate: candidate, prefix: selected, deadline: deadline)
             }, recovered: { IOSCandidateCatalogPublication.shared.closed(epoch: temporary.prefixEpoch.uuidString, request: owner) })
@@ -555,14 +562,16 @@ private final class IOSCandidateReply: @unchecked Sendable {
                 defer { try? original.close() }
                 guard original.sourceSHA256 == temporary.sourceSHA256, original.configSHA256 == temporary.configSHA256 else { throw IOSNodeCandidateResult.issue() }
                 do { proposals[score.token] = try IOSNodeCandidateProposal.compile(original: original, records: capture.records,
-                    position: position, candidateID: score.id, measuredInput: row.input) }
+                    position: position, candidateID: score.id, measuredInput: row.input, preparedLocal: true) }
                 catch { try current(); failures[score.token] = error.localizedDescription }
                 if editor && ["routed-candidate-response", "routed-public-candidate-response"].contains(metadata.metric) {
-                    if position < temporary.prefixes.count - 2, let named = proposals[score.token] {
+                    if capture.prefix.hysteria2Response {
+                        insertions[score.token] = .failure(IOSMultihopNodeSelection.issue("Save this measured final as a named profile; the draft keeps its selected final node."))
+                    } else if position < temporary.prefixes.count - 2, let named = proposals[score.token] {
                         insertions[score.token] = .success(named)
                     } else {
                         insertions[score.token] = Result { try IOSNodeCandidateProposal.compile(original: original, records: capture.records,
-                            position: position, candidateID: score.id, measuredInput: row.input, retainFinal: true) }
+                            position: position, candidateID: score.id, measuredInput: row.input, retainFinal: true, preparedLocal: true) }
                     }
                 }
             }
@@ -718,7 +727,7 @@ struct IOSCandidateProfileChoices: View {
                     if let useInDraft, let insertion = probe.draftInsertion(for: row) {
                         switch insertion {
                         case .success: Button("Use in draft") { useInDraft(row) }
-                        case .failure(let error): Text("Cannot insert into this draft. " + error.localizedDescription).font(.caption)
+                        case .failure(let error): Text("Cannot use in this draft. " + error.localizedDescription).font(.caption)
                         }
                     }
                     Button("Prepare next connection") { probe.prepare(row) }.disabled(!probe.canPrepare)

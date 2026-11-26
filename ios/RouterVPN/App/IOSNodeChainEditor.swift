@@ -47,13 +47,24 @@ struct IOSNodeChainDraft {
             IOSMultihopNodeSelection.nativeFinalModes.contains(nodes.last?.mode ?? "")
     }
 
-    mutating func insertMeasured(_ candidate: String, after position: Int, compiled: [IOSMultihopNodeSelection]) throws {
+    mutating func insertMeasured(_ candidate: String, after position: Int, compiled: [IOSMultihopNodeSelection], replacingPacketSuccessor: Bool = false) throws {
         var expected = nodes.filter { !$0.id.isEmpty }
-        guard position > 0, position < expected.count - 1, expected.count < IOSMultihopNodeSelection.physicalTraversalDepth,
+        guard position >= 0, position < expected.count - 1,
               nodes.prefix(position + 1).allSatisfy({ !$0.id.isEmpty }), !expected.contains(where: { $0.id == candidate }) else {
             throw IOSMultihopNodeSelection.issue("Measure this draft again.")
         }
-        expected.insert(.init(id: candidate, mode: "shadowsocks"), at: position + 1)
+        if replacingPacketSuccessor {
+            guard canSave, !hasExternalFinal, expected == nodes, position < expected.count - 2,
+                  IOSMultihopNodeSelection.supportsNativePrefix(expected[position + 1].mode) else {
+                throw IOSMultihopNodeSelection.issue("The original packet successor or full draft changed.")
+            }
+            expected[position + 1] = .init(id: candidate, mode: expected[position + 1].mode)
+        } else {
+            guard position > 0, expected.count < IOSMultihopNodeSelection.physicalTraversalDepth else {
+                throw IOSMultihopNodeSelection.issue("Measure this draft again.")
+            }
+            expected.insert(.init(id: candidate, mode: "shadowsocks"), at: position + 1)
+        }
         guard compiled == expected, compiled.last?.id == controlID || hasExternalFinal && IOSMultihopNodeSelection.externalExitReferences(compiled, controlID: controlID, execution: "local") else { throw IOSMultihopNodeSelection.issue("The measured path and the current draft differ.") }
         nodes = expected
     }

@@ -101,7 +101,7 @@ final class AndroidNodeCandidateMeasurement {
         if(!catalog.measurement.equals(metadata.optString("measurement","routed-tcp-connect"))||!nativeOwner.captureSHA256().equals(metadata.getString("capture_sha256"))||catalog.prefix!=metadata.getInt("prefix_position"))
             throw new IllegalStateException("Candidate metadata belongs to another original chain.");
         if(catalog.responseMode.isEmpty()?metadata.has("candidate_mode"):
-                !catalog.responseMode.equals(metadata.optString("candidate_mode"))||catalog.executionOwner!=null||catalog.session.candidatePrefix!=null||!(catalog.connectedFinalResponse()||catalog.connectedPacketResponse()))
+                !catalog.responseMode.equals(metadata.optString("candidate_mode"))||catalog.executionOwner!=null||!(catalog.preparedResponse()||catalog.connectedFinalResponse()||catalog.connectedPacketResponse()))
             throw new IllegalStateException("The response carrier differs from the captured original successor transport.");
         if(catalog.executionOwner!=null){
             var owner=catalog.executionOwner;

@@ -13,6 +13,7 @@ import (
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
+	"router-vpn/internal/mobilemultihop"
 )
 
 // The identity returned by the original atomic rename is the sole rollback
@@ -200,11 +201,13 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 			namedAction = choice.ProposalAction
 		}
 		if privateResponse && choice.ID == q.CandidateID && len(choice.DraftProposal) != 0 &&
-			choice.DraftAction == orderedCandidateDraftInsertAction && reflect.DeepEqual(choice.DraftProposal, q.ProposedPath) {
+			(choice.DraftAction == orderedCandidateDraftInsertAction && job.view.candidateMode == "" ||
+				choice.DraftAction == orderedCandidateDraftReplaceAction && mobilemultihop.NodeChainPrefixMode(job.view.candidateMode)) &&
+			reflect.DeepEqual(choice.DraftProposal, q.ProposedPath) {
 			draftAction = choice.DraftAction
 		}
 	}
-	if draftSave && namedAction == "" || draftChoice && privateResponse && draftAction == "" {
+	if (draftSave || job.view.candidateMode != "" && !draftChoice) && namedAction == "" || draftChoice && privateResponse && draftAction == "" {
 		control.mu.Unlock()
 		http.Error(w, "Action differs from the original measured candidate proposal", 409)
 		return
@@ -255,7 +258,20 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 	var profile common.RouterProfile
 	var err error
 	var nodes []common.MultihopNodeSelection
-	if draftSave {
+	if job.view.candidateMode != "" {
+		if p.prefixPreparation == nil || p.request.Scope != orderedCandidateSavedPrefixScope ||
+			p.prefixPreparation.CandidateMode() != job.view.candidateMode ||
+			desktopPreparedCandidateMode(p.inventory.launch, p.request.Position) != job.view.candidateMode {
+			http.Error(w, "the original prepared response source changed", 409)
+			return
+		}
+		var action string
+		profile, nodes, action, err = orderedResponseProfileWithMode(ctx, p.selection.Native.root,
+			orderedCandidateDraftExecution(p.request.draft), p.selection.Nodes, p.request.Position, candidate, profiles, job.view.candidateMode)
+		if err == nil && !draftChoice && action != namedAction {
+			err = errors.New("original prepared candidate action changed")
+		}
+	} else if draftSave {
 		var action string
 		profile, nodes, action, err = orderedResponseProfile(ctx, p.selection.Native.root, p.request.draft.Execution, p.selection.Nodes, p.request.Position, candidate, profiles)
 		if err == nil && action != namedAction {

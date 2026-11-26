@@ -28,6 +28,7 @@ final class AndroidNodeCandidateProfile {
     private final List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();
     private final List<String> modes=new ArrayList<>();
     private final String execution;
+    private final boolean preparedPacketReplacement;
     final String description;
     AndroidNodeCandidateProfile(AndroidNodeCandidateMeasurement operation,AndroidNodeCandidateResult result)throws Exception {
         this(operation,result,null,false);
@@ -41,6 +42,12 @@ final class AndroidNodeCandidateProfile {
         AndroidNodeCandidateCatalog catalog = operation.catalog;
         if (!catalog.originalSource.measurementOnly() || !java.util.List.of("routed-candidate-response","routed-public-candidate-response").contains(catalog.measurement)) return null;
         catalog.originalSource.requireCandidatePurpose(catalog.prefix);
+        if (catalog.preparedResponse()) {
+            if ("hysteria2".equals(catalog.responseMode))
+                throw new ProposalUnavailable("Save this measured final as a named profile; the draft keeps its selected final node.");
+            if (named != null && named.preparedPacketReplacement && named.sources.size() == catalog.originalSource.members.size()) return named;
+            throw new ProposalUnavailable("The complete measured successor replacement is unavailable.");
+        }
         if (named != null && named.sources.size() == catalog.originalSource.members.size() + 1) return named;
         return new AndroidNodeCandidateProfile(operation,result,authority,true);
     }
@@ -63,15 +70,19 @@ final class AndroidNodeCandidateProfile {
         if(original==null||replacement<1||replacement>=original.members.size()||original.members.size()!=original.modes.size())
             throw new IllegalStateException("The measured prefix has no original next-hop position.");
         execution=original.execution;
-        boolean finalResponse=authority==null&&catalog.connectedFinalResponse();
-        boolean packetResponse=authority==null&&catalog.connectedPacketResponse();
+        boolean preparedResponse=authority!=null&&catalog.preparedResponse();
+        boolean finalResponse=authority==null&&catalog.connectedFinalResponse()||preparedResponse&&"hysteria2".equals(catalog.responseMode);
+        boolean packetResponse=authority==null&&catalog.connectedPacketResponse()||preparedResponse&&AndroidNodeCandidateCatalog.packetMode(catalog.responseMode);
+        preparedPacketReplacement=preparedResponse&&packetResponse;
         if(AndroidNodeCandidateCatalog.packetMode(catalog.responseMode)&&(!packetResponse||retainFinal||!"local".equals(execution)
                 ||replacement>=original.members.size()-1||!candidateMode.equals(original.modes.get(replacement))
-                ||!Libbox.routerNodeChainPacketSuccessorCandidateFitsSource(catalog.session.capture.plan,catalog.prefix,actual)))
-            throw new IllegalStateException("The packet response requires the original connected intermediate replacement.");
+                ||!(preparedResponse?Libbox.routerNodeChainPreparedCandidateInputFitsSource(catalog.session.capture.plan,catalog.prefix,actual)
+                    :Libbox.routerNodeChainPacketSuccessorCandidateFitsSource(catalog.session.capture.plan,catalog.prefix,actual))))
+            throw new IllegalStateException("The packet response requires its original intermediate replacement.");
         boolean hysteria2="hysteria2".equals(catalog.responseMode);
-        if(hysteria2&&(!finalResponse||!"local".equals(execution)||!Libbox.routerNodeChainHysteria2CandidateInputSupported(actual)))
-            throw new IllegalStateException("The Hysteria2 response requires the original connected final replacement.");
+        if(hysteria2&&(!finalResponse||!"local".equals(execution)||!Libbox.routerNodeChainHysteria2CandidateInputSupported(actual)
+                ||preparedResponse&&!Libbox.routerNodeChainPreparedCandidateInputFitsSource(catalog.session.capture.plan,catalog.prefix,actual)))
+            throw new IllegalStateException("The Hysteria2 response requires its original final replacement.");
         if(finalResponse&&(retainFinal||replacement!=original.members.size()-1))
             throw new IllegalStateException("The captured prefix must remain immediately before the replacement final node.");
         boolean insert=response&&!packetResponse&&(publicResponse || retainFinal || replacement<original.members.size()-1);
@@ -196,10 +207,12 @@ final class AndroidNodeCandidateProfile {
         synchronized (operation) {
             AndroidNodeCandidateCatalog catalog = operation.catalog;
             if (savedAuthority == null || !java.util.List.of("routed-candidate-response","routed-public-candidate-response").contains(catalog.measurement)
-                    || sources.size() != catalog.originalSource.members.size() + 1)
-                throw new IllegalStateException("This measurement has no complete insertion for the current draft.");
+                    || sources.size() != catalog.originalSource.members.size() + (preparedPacketReplacement ? 0 : 1))
+                throw new IllegalStateException("This measurement has no complete proposal for the current draft.");
             requireSavedCurrent();
-            draft.insertMeasured(catalog.originalSource,catalog.prefix,sources.get(catalog.prefix + 1),()->result.current(System.currentTimeMillis()));
+            if(preparedPacketReplacement)
+                draft.replaceMeasured(catalog.originalSource,catalog.prefix,sources.get(catalog.prefix + 1),modes.get(catalog.prefix + 1),()->result.current(System.currentTimeMillis()));
+            else draft.insertMeasured(catalog.originalSource,catalog.prefix,sources.get(catalog.prefix + 1),()->result.current(System.currentTimeMillis()));
             return catalog.prefix + 1;
         }
     }

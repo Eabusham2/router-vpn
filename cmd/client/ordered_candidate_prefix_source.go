@@ -25,6 +25,22 @@ func normalizedOrderedCandidateSavedScope(scope string) (string, error) {
 	return scope, nil
 }
 
+// This source-only query cannot borrow a connected or selected runtime. The
+// distinct closed preparation seals the complete replacement and native owner.
+func desktopPreparedCandidateMode(launch *desktopNodeLaunch, position int) string {
+	if launch == nil || launch.command != nil || launch.chain == nil || launch.chain.preparation != nil ||
+		launch.chain.execution != nil || launch.chain.policy == nil {
+		return ""
+	}
+	return launch.chain.policy.OriginalChain().PreparedCandidateResponseMode(position)
+}
+
+func publishPreparedCandidateResponseSource(response map[string]any, mode string, nodes []orderedCandidateResponseSourceNode) {
+	if mode != "" {
+		response["candidate_mode"], response["response_source_nodes"] = mode, nodes
+	}
+}
+
 func captureDesktopNodeCandidatePrefixSource(ctx context.Context, selection multihopSelection, position int, inventory string) (*mobilemultihop.NodeChainCandidatePreparation, error) {
 	if ctx == nil || ctx.Err() != nil || selection.Native == nil || selection.Native.chain == nil || selection.Native.validate(selection) != nil || position < 0 || position >= len(selection.Nodes)-1 {
 		return nil, errors.New("candidate prefix requires its complete original saved source and a non-final position")

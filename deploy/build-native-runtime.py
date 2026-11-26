@@ -11,6 +11,7 @@ from pathlib import Path
 import argparse
 import ast
 import base64
+import errno
 import hashlib
 import http.client
 import http.server
@@ -975,10 +976,48 @@ def smoke_protocols(binary, env, *, source=None):
                         raise ValueError('Native protocol returned a different target or payload')
                     client_stage = 'verified'
 
-        def port(kind=socket.SOCK_STREAM):
-            with socket.socket(socket.AF_INET, kind) as reservation:
-                reservation.bind(('127.0.0.1', 0))
-                return reservation.getsockname()[1]
+        allocated_ports = {target_port}
+
+        def port(*kinds, address='127.0.0.1', dual_stack=False):
+            # A TCP-only probe does not exclude Windows' UDP reservations.
+            # Hold every required socket until the same port is verified for
+            # the listener's complete transport/address set, without reuse.
+            kinds = kinds or (socket.SOCK_STREAM,)
+            bindings = [(socket.AF_INET, address)]
+            if dual_stack and socket.has_ipv6:
+                bindings.append((socket.AF_INET6, '::'))
+            last_error = None
+            for _ in range(32):
+                reservations, selected = [], 0
+                try:
+                    for family, host in bindings:
+                        for kind in kinds:
+                            try:
+                                reservation = socket.socket(family, kind)
+                                reservations.append(reservation)
+                                if family == socket.AF_INET6:
+                                    reservation.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                                if hasattr(socket, 'SO_EXCLUSIVEADDRUSE'):
+                                    reservation.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                                reservation.bind((host, selected))
+                                selected = reservation.getsockname()[1]
+                            except OSError as error:
+                                # The pinned WG/AWG bind also permits an absent
+                                # IPv6 family, while requiring its IPv4 listener.
+                                if family == socket.AF_INET6 and (error.errno == errno.EAFNOSUPPORT or getattr(error, 'winerror', None) == 10047):
+                                    continue
+                                raise
+                    if selected not in allocated_ports:
+                        allocated_ports.add(selected)
+                        return selected
+                except OSError as error:
+                    if error.errno not in (errno.EACCES, errno.EADDRINUSE) and getattr(error, 'winerror', None) not in (10013, 10048):
+                        raise
+                    last_error = error
+                finally:
+                    for reservation in reservations:
+                        reservation.close()
+            raise RuntimeError('No distinct native smoke listener port after 32 allocation attempts') from last_error
 
         def stop(process, *, clean=False):
             if process.stdin is not None:
@@ -996,9 +1035,11 @@ def smoke_protocols(binary, env, *, source=None):
 
         try:
             for protocol in ('socks', 'http', 'https', 'shadowsocks', 'hysteria2', 'naive-h2', 'naive-h3', 'wireguard', 'openvpn-tcp', 'openvpn-udp', 'amneziawg', 'reality-vision', 'reality-pq-vision', 'reality-xhttp'):
-                upstream_port, proxy_port = port(socket.SOCK_DGRAM if protocol in ('hysteria2', 'naive-h3', 'wireguard', 'openvpn-udp', 'amneziawg') else socket.SOCK_STREAM), port()
-                while upstream_port == proxy_port:
-                    proxy_port = port()
+                udp = protocol in ('hysteria2', 'naive-h3', 'wireguard', 'openvpn-udp', 'amneziawg')
+                wildcard = protocol in ('wireguard', 'amneziawg')
+                upstream_kinds = (socket.SOCK_DGRAM, socket.SOCK_STREAM) if protocol == 'shadowsocks' else (socket.SOCK_DGRAM if udp else socket.SOCK_STREAM,)
+                upstream_host = '0.0.0.0' if wildcard else target_host if protocol.startswith('reality-') else '127.0.0.1'
+                upstream_port, proxy_port = port(*upstream_kinds, address=upstream_host, dual_stack=wildcard), port()
                 pq_case = protocol in ('reality-pq-vision', 'reality-xhttp')
                 cover_port = port() if pq_case else None
                 kind = 'http' if protocol == 'https' else 'naive' if protocol in ('naive-h2', 'naive-h3') else protocol
@@ -1098,6 +1139,8 @@ def smoke_protocols(binary, env, *, source=None):
                         if process.poll() is not None or time.monotonic() >= deadline:
                             raise RuntimeError('Native '+protocol+' helper did not become ready')
                         time.sleep(0.01)
+                    if process.poll() is not None:
+                        raise RuntimeError('Native '+protocol+' helper exited after its readiness marker')
 
                 def launch(role, configuration):
                     config_path, log_path = work/(protocol+'-'+role+'.json'), work/(protocol+'-'+role+'.log')
@@ -1116,14 +1159,23 @@ def smoke_protocols(binary, env, *, source=None):
                         ready(process, log_path, b'Passive AWG smoke peer ready', deadline)
                     return process
 
+                def check_processes():
+                    for process in (*processes, *((cover_process,) if cover_process is not None else ())):
+                        status = process.poll()
+                        if status is not None:
+                            raise RuntimeError('Native '+protocol+' process exited during '+phase+' with status '+str(status))
+
                 def await_payload(deadline):
                     while True:
-                        if any(process.poll() is not None for process in processes) or cover_process is not None and cover_process.poll() is not None:
-                            raise RuntimeError('Native '+protocol+' process exited before its traffic check')
+                        check_processes()
                         try:
                             exchange(proxy_port)
+                            check_processes()
                             return
                         except (OSError, http.client.HTTPException):
+                            # Preserve a dead peer's first cause rather than
+                            # timing out with its client's last refused socket.
+                            check_processes()
                             failures[client_stage] += 1
                             if time.monotonic() >= deadline:
                                 raise

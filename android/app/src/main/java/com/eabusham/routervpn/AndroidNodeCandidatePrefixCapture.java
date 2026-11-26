@@ -13,7 +13,7 @@ import java.util.Set;
 final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
     final RouterNodeChainCandidatePreparation plan;
     final AndroidNodeChainCapture original;
-    final String launchInput, config, metadata, inventory;
+    final String launchInput, config, metadata, inventory, responseMode;
     final String sourceSHA256, configSHA256, captureSHA256;
     final int prefix, originalMTU, ceilingMTU;
     final String tunTag;
@@ -43,6 +43,12 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
     private static void requireSource(AndroidNodeChainCapture original,int prefix,String inventory)throws Exception {
         if(original==null||original.socks!=null&&original.connect!=null||!"local".equals(original.selectionExecution)||prefix<0||prefix>=original.memberInputs.size()-1)throw invalid();
         original.requireCurrent();bounded(inventory,AndroidNodeChainCapture.MAX_INPUT);
+        JSONObject offered=new JSONObject(inventory);
+        if(offered.has("response_mode")) {
+            String mode=offered.getString("response_mode");
+            if(mode.isEmpty()||original.plan==null||!mode.equals(Libbox.routerNodeChainPreparedCandidateResponseMode(original.plan,prefix)))throw invalid();
+            return;
+        }
         JSONObject selected=new JSONObject(original.memberInputs.get(prefix));
         boolean stream="routervpn-node-chain-imported-member".equals(selected.optString("kind"))||"shadowsocks".equals(selected.optString("mode"));
         if(stream){
@@ -64,7 +70,9 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
         this.original=original;this.prefix=prefix;this.inventory=inventory;this.plan=plan;
         launchInput=bounded(plan.launchInput(),AndroidNodeChainCapture.MAX_INPUT);
         config=bounded(plan.config(),4*1024*1024);
-        JSONArray inputs=new JSONObject(inventory).getJSONArray("inputs");int originalCount=inputs.length();
+        JSONObject offered=new JSONObject(inventory);
+        responseMode=offered.has("response_mode")?offered.getString("response_mode"):"";
+        JSONArray inputs=offered.getJSONArray("inputs");int originalCount=inputs.length();
         long observationDeadline=AndroidNodeCandidateMetadata.observationDeadline();String first=plan.metadata();
         JSONObject meta=AndroidNodeCandidateMetadata.read(first,plan::metadataPage,originalCount,observationDeadline);
         boolean paged=new JSONObject(first).getInt("schema")==2;
@@ -74,6 +82,9 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
         if(!purposeKind(original).equals(source.getString("kind"))||integer(source,"schema")!=1
                 ||original.connect!=null&&!original.connect.source.equals(source.getString("original_source"))
                 ||original.socks!=null&&!original.socks.source.equals(source.getString("original_source"))
+                ||!responseMode.equals(plan.candidateMode())
+                ||(responseMode.isEmpty()?meta.has("candidate_mode"):!responseMode.equals(meta.optString("candidate_mode"))
+                    ||!"routed-candidate-response".equals(meta.optString("measurement")))
                 ||integer(source,"prefix_position")!=prefix||!inventory.equals(source.getString("inventory"))
                 ||integer(meta,"schema")!=1||integer(meta,"prefix_position")!=prefix
                 ||!sourceSHA256.equals(meta.getString("source_sha256"))||!configSHA256.equals(meta.getString("config_sha256"))

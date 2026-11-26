@@ -169,6 +169,8 @@ func captureDesktopCandidateSourceProfiles(ctx context.Context, a *app, launch *
 	result := &desktopNodeChainCandidateCatalog{serverResponse: candidateServerRequested(ctx), app: a, launch: launch, revision: revision, profiles: map[string]string{}}
 	if scope == orderedCandidateSavedCompleteScope {
 		result.candidateMode = desktopConnectedCandidateMode(launch, position)
+	} else if scope == orderedCandidateSavedPrefixScope {
+		result.candidateMode = desktopPreparedCandidateMode(launch, position)
 	}
 	capture := &desktopNodeChainCapture{root: launch.root}
 	// Pin each original asset directory before and after compilation, including
@@ -296,7 +298,9 @@ func (result *desktopNodeChainCandidateCatalog) sealSourcePlan(ctx context.Conte
 	} else {
 		result.plan, err = launch.chain.policy.NodeChain().NewCandidatePlanFromInputs(position, result.inventory, result.parsedInputs)
 	}
-	if err == nil && (result.plan != nil && result.plan.CandidateMode() != result.candidateMode || result.candidateMode != "" && result.plan == nil) {
+	if err == nil && (result.plan != nil && result.plan.CandidateMode() != result.candidateMode ||
+		result.prefixPreparation != nil && result.prefixPreparation.CandidateMode() != result.candidateMode ||
+		result.candidateMode != "" && result.plan == nil && result.prefixPreparation == nil) {
 		return errors.New("candidate source plan changed its authenticated protocol")
 	}
 	return err
@@ -318,7 +322,7 @@ func captureDesktopCandidateViewSource(ctx context.Context, a *app, launch *desk
 	}
 	if slices.ContainsFunc(members[position+1:], sameNode) {
 		execution := desktopNodeChainLaunchExecution(launch)
-		if desktopConnectedCandidateMode(launch, position) != "" || catalogMetric(position) == hopmeasure.CandidatePublicResponseMeasurement || execution != nil && (execution.preparation.SupportsCompareLocalResponseCandidate(position) || candidateServerRequested(ctx) && execution.preparation.SupportsServerResponseCandidate(position)) {
+		if desktopConnectedCandidateMode(launch, position) != "" || scope == orderedCandidateSavedPrefixScope && desktopPreparedCandidateMode(launch, position) != "" || catalogMetric(position) == hopmeasure.CandidatePublicResponseMeasurement || execution != nil && (execution.preparation.SupportsCompareLocalResponseCandidate(position) || candidateServerRequested(ctx) && execution.preparation.SupportsServerResponseCandidate(position)) {
 			return nil, errors.New("candidate duplicates a retained route member")
 		}
 	}
@@ -334,6 +338,9 @@ func captureDesktopCandidateViewSource(ctx context.Context, a *app, launch *desk
 	if part.candidateMode == "hysteria2" {
 		if metric != hopmeasure.CandidatePrivateResponseMeasurement || !mobilemultihop.NodeChainHysteria2CandidateInputSupported(inventory.Inputs[0]) {
 			return nil, errors.New("candidate has no original authenticated Hysteria2 response source")
+		}
+		if err := part.sealSourcePlan(ctx, position, scope); err != nil {
+			return nil, err
 		}
 	} else if mobilemultihop.NodeChainPrefixMode(part.candidateMode) {
 		if metric != hopmeasure.CandidatePrivateResponseMeasurement || !mobilemultihop.NodeChainPacketSuccessorCandidateInputSupported(inventory.Inputs[0], part.candidateMode) {

@@ -258,6 +258,36 @@ final class AndroidOrderedPathSelection {
         });
     }
 
+    void replaceMeasured(AndroidNodeStore.ChainCapture original,int prefix,AndroidNodeStore.ChainSource candidate,String mode,
+            java.util.function.BooleanSupplier fresh) throws Exception {
+        requireCurrent();
+        int position=prefix+1;
+        if(!"local".equals(execution)||!execution.equals(original.execution)||!original.measurementOnly()||candidate.imported
+                ||prefix<0||position>=members.size()-1||members.size()!=original.members.size()
+                ||!AndroidNodeCandidateCatalog.packetMode(mode)||!mode.equals(original.modes.get(position)))
+            throw new IllegalStateException("This measured node cannot replace the original packet successor.");
+        for(int i=0;i<members.size();i++) {
+            Member retained=members.get(i);AndroidNodeStore.ChainSource captured=original.members.get(i);
+            if(!retained.mode.equals(original.modes.get(i))||!retained.source.id.equals(captured.id)
+                    ||!java.util.Arrays.equals(retained.source.bytes(),captured.bytes()))
+                throw new IllegalStateException("The original measured draft or its suffix changed.");
+        }
+        AndroidNodeStore.ChainSource linked=catalog.source(candidate.id);
+        if(!linked.profileId.equals(candidate.profileId)||!linked.proofId.equals(candidate.proofId)
+                ||!java.util.Arrays.equals(linked.bytes(),candidate.bytes()))
+            throw new IllegalStateException("The measured candidate has changed. Measure it again.");
+        original.editDraft(catalog,prefix,()->{
+            if(!fresh.getAsBoolean())throw new IllegalStateException("The measured candidate expired before replacement.");
+            Member previous=members.set(position,new Member(linked,mode));
+            try {
+                requireBound();
+                if(!fresh.getAsBoolean())throw new IllegalStateException("The measured candidate expired before replacement.");
+            } catch(Exception failure){members.set(position,previous);throw failure;}
+            revision++;
+            return null;
+        });
+    }
+
     void addPrefix(String id,String mode) throws Exception {
         requireCurrent();
         if(members.isEmpty())throw new IllegalStateException("Choose the final node first.");

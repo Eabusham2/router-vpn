@@ -1035,10 +1035,20 @@ function ShowUnifiedOrderedNodes {
                 $fresh=&$captureEditor
                 if([string]$RouterCombo.SelectedValue-cne$id-or[string]$choice.expected_selected_node_id-cne$id-or$fresh.execution-cne$captured.execution-or($captured.execution-cne'local'-and[string]$choice.requested_execution-cne$captured.execution)){throw 'The selected exit or execution changed. Recapture the draft.'}
                 $proposed=@($choice.proposed_path);$next=$position+1
-                if(@($choice.expected_profile_tokens.PSObject.Properties).Count-ne$proposed.Count-or$proposed.Count-ne($captured.nodes.Count+1)-or$fresh.nodes.Count-ne$captured.nodes.Count-or[string]$proposed[$next].id-cne[string]$choice.candidate_id){throw 'The proposed path changed.'}
+                $replacement=$null-ne$choice.PSObject.Properties['candidate_mode']
+                $expectedCount=$captured.nodes.Count+1
+                if($replacement){
+                    $mode=Get-RouterVPNOrderedPreparedCandidateMode $captured.nodes $position $captured.execution $store.profiles
+                    if(-not(Test-RouterVPNOrderedPrefixMode $mode)-or[string]$choice.candidate_mode-cne$mode-or[string]$choice.draft_action-cne'replace-measured-hop'-or$next-ge$captured.nodes.Count-1-or[string]$proposed[$next].mode-cne$mode){throw 'The measured replacement no longer matches this Local packet route.'}
+                    $expectedCount=$captured.nodes.Count
+                }
+                if(@($choice.expected_profile_tokens.PSObject.Properties).Count-ne$proposed.Count-or$proposed.Count-ne$expectedCount-or$fresh.nodes.Count-ne$captured.nodes.Count-or[string]$proposed[$next].id-cne[string]$choice.candidate_id){throw 'The proposed path changed.'}
                 for($i=0;$i-lt$captured.nodes.Count;$i++){
-                    $j=if($i-lt$next){$i}else{$i+1}
-                    foreach($field in @('id','mode')){if($fresh.nodes[$i].$field-cne$captured.nodes[$i].$field-or$proposed[$j].$field-cne$captured.nodes[$i].$field){throw 'The original draft changed. Recapture the prefix.'}}
+                    $j=if($replacement-or$i-lt$next){$i}else{$i+1}
+                    foreach($field in @('id','mode')){
+                        if($fresh.nodes[$i].$field-cne$captured.nodes[$i].$field-or(( -not $replacement -or $i-ne$next)-and$proposed[$j].$field-cne$captured.nodes[$i].$field)){throw 'The original draft changed. Recapture the prefix.'}
+                    }
+                    if($replacement-and[string]$captured.nodes[$i].id-ceq[string]$choice.candidate_id){throw 'The replacement must be a different paired node.'}
                 }
                 $current=Api '/api/profiles' -Timeout 5
                 $tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
@@ -1049,9 +1059,10 @@ function ShowUnifiedOrderedNodes {
                     $tokens.Add($node.id,$issued[0].Value)
                 }
                 [void](New-RouterVPNOrderedConnectPayload ([pscustomobject]@{control_id=$id;nodes=$proposed;profile_tokens=$tokens;execution=$captured.execution}) $current)
-                $rows.Insert($next,[pscustomobject]@{id=$proposed[$next].id;mode=$proposed[$next].mode})
-                &$refresh;$list.SelectedIndex=$next;$status.Text='Added the measured hop to this draft.'
-            } while (($proposed.Count -lt (Get-RouterVPNOrderedPhysicalTraversalDepth) -or (Get-RouterVPNOrderedValue $body 'external_final' $false)) -and (Test-RouterVPNOrderedCandidatePosition $proposed $next $fresh.execution $store.profiles))
+                $measured=[pscustomobject]@{id=$proposed[$next].id;mode=$proposed[$next].mode}
+                if($replacement){$rows[$next]=$measured}else{$rows.Insert($next,$measured)}
+                &$refresh;$list.SelectedIndex=$next;$status.Text=if($replacement){'Replaced the measured hop in this draft.'}else{'Added the measured hop to this draft.'}
+            } while (($replacement -or $proposed.Count -lt (Get-RouterVPNOrderedPhysicalTraversalDepth) -or (Get-RouterVPNOrderedValue $body 'external_final' $false)) -and (Test-RouterVPNOrderedCandidatePosition $proposed $next $fresh.execution $store.profiles))
         }catch{$status.Text=$_.Exception.Message}})
         $dialog.FindName('Apply').Add_Click({try{
             Assert-RouterVPNMutationIdle 'applying the ordered node path'

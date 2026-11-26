@@ -490,6 +490,22 @@ static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selectio
     return TRUE;
 }
 
+static const char *linux_ordered_prepared_candidate_mode_v1(const LinuxOrderedSelectionV1 *selection, JsonObject *catalog, int position) {
+    if (!selection || strcmp(selection->execution,"local") || position<0) return "";
+    guint count=json_array_get_length(selection->nodes);
+    if (count<2 || count>ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH || (guint)position+1>=count) return "";
+    const char *final=linux_ordered_string_v1(json_array_get_object_element(selection->nodes,count-1),"mode");
+    if (strcmp(final,"shadowsocks") && strcmp(final,"hysteria2")) return "";
+    for (guint i=0;i<count;i++) {
+        JsonObject *node=json_array_get_object_element(selection->nodes,i);
+        const char *mode=linux_ordered_string_v1(node,"mode");
+        if (!linux_ordered_paired_off_v1(external_source_profile_v24(catalog,linux_ordered_string_v1(node,"id"))) ||
+            (i+1<count && !linux_ordered_prefix_v1(mode)) || (count>8 && strcmp(mode,i+1==count?"shadowsocks":"wg"))) return "";
+    }
+    if ((guint)position+2<count) return linux_ordered_string_v1(json_array_get_object_element(selection->nodes,position+1),"mode");
+    return count<=8 && !strcmp(final,"hysteria2") ? "hysteria2":"";
+}
+
 static gboolean linux_ordered_measurement_prefix_v1(const LinuxOrderedSelectionV1 *selection, JsonObject *catalog, int position) {
     if (!selection || position < 0 || !linux_ordered_current_v1(selection, catalog)) return FALSE;
     guint count = json_array_get_length(selection->nodes);
@@ -498,6 +514,7 @@ static gboolean linux_ordered_measurement_prefix_v1(const LinuxOrderedSelectionV
         return !strcmp(selection->execution, "local") ||
                (position >= 1 && (!strcmp(selection->execution, "server") || !strcmp(selection->execution, "auto")));
     }
+    if (*linux_ordered_prepared_candidate_mode_v1(selection,catalog,position)) return TRUE;
     const char *mode = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, position), "mode");
     if (!strcmp(mode, "shadowsocks")) {
         JsonObject *first = json_array_get_object_element(selection->nodes, 0), *final = json_array_get_object_element(selection->nodes, count - 1);
@@ -1151,24 +1168,45 @@ static gboolean linux_ordered_adopt_measured_v1(GtkWindow *parent, const char *c
     JsonArray *rows = linux_ordered_array_v1(response, "proposed_path");
     JsonObject *tokens = linux_ordered_object_v1(response, "expected_profile_tokens");
     const guint added = (guint)position + 1;
+    gboolean replacement=json_object_has_member(response,"candidate_mode");
+    if (replacement) {
+        const char *mode=linux_ordered_prepared_candidate_mode_v1(before,json_node_get_object(editor->catalog),position);
+        valid=valid && linux_ordered_prefix_v1(mode) && added+1<json_array_get_length(before->nodes) &&
+            !strcmp(linux_ordered_string_v1(response,"candidate_mode"),mode) &&
+            !strcmp(linux_ordered_string_v1(response,"draft_action"),"replace-measured-hop");
+    }
     LinuxOrderedSelectionV1 *next = valid ? linux_ordered_selection_v1(editor->control, rows, tokens) : NULL;
-    valid = next && json_array_get_length(next->nodes) == json_array_get_length(before->nodes) + 1 &&
+    valid = next && json_array_get_length(next->nodes) == json_array_get_length(before->nodes) + (replacement?0:1) &&
         linux_ordered_execution_v1(next, before->execution) && linux_ordered_current_v1(next, json_node_get_object(editor->catalog));
     for (guint i = 0; valid && i < json_array_get_length(before->nodes); i++) {
         JsonNode *original_row = json_array_get_element(before->nodes, i);
-        valid = json_node_equal(original_row, json_array_get_element(next->nodes, i < added ? i : i + 1));
+        JsonObject *original_object=json_node_get_object(original_row);
+        if (replacement) {
+            valid=strcmp(linux_ordered_string_v1(original_object,"id"),linux_ordered_string_v1(response,"candidate_id"))!=0;
+            if (i==added) {
+                valid=valid && !strcmp(linux_ordered_string_v1(original_object,"mode"),
+                    linux_ordered_string_v1(json_array_get_object_element(next->nodes,i),"mode"));
+                continue;
+            }
+        }
+        valid = valid && json_node_equal(original_row, json_array_get_element(next->nodes, replacement || i < added ? i : i + 1));
     }
     JsonObject *row = valid ? json_array_get_object_element(next->nodes, added) : NULL;
     valid = valid && !strcmp(linux_ordered_string_v1(row, "id"), linux_ordered_string_v1(response, "candidate_id"));
     JsonNode *current = valid ? linux_ordered_read_v1("/api/profiles") : NULL;
     valid = current && linux_ordered_current_v1(next, json_node_get_object(current)) && linux_ordered_editable_v1(editor);
     if (valid) {
-        g_ptr_array_insert(editor->ids, added, g_strdup(linux_ordered_string_v1(row, "id")));
-        g_ptr_array_insert(editor->modes, added, g_strdup(linux_ordered_string_v1(row, "mode")));
+        if (replacement) {
+            g_free(g_ptr_array_index(editor->ids,added));
+            g_ptr_array_index(editor->ids,added)=g_strdup(linux_ordered_string_v1(row,"id"));
+        } else {
+            g_ptr_array_insert(editor->ids, added, g_strdup(linux_ordered_string_v1(row, "id")));
+            g_ptr_array_insert(editor->modes, added, g_strdup(linux_ordered_string_v1(row, "mode")));
+        }
         linux_ordered_render_v1(editor, added);
-        gtk_label_set_text(GTK_LABEL(editor->status), "Added the measured hop to this draft.");
+        gtk_label_set_text(GTK_LABEL(editor->status), replacement?"Replaced the measured hop in this draft.":"Added the measured hop to this draft.");
         if (linux_ordered_present_measurement_v1 &&
-            (json_array_get_length(next->nodes) < ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH || linux_ordered_external_final_shape_v1(next->nodes,next->control)) &&
+            (replacement || json_array_get_length(next->nodes) < ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH || linux_ordered_external_final_shape_v1(next->nodes,next->control)) &&
             linux_ordered_measurement_prefix_v1(next, json_node_get_object(current), added)) {
             editor->next_position = (int)added;
             editor->next_draft = linux_ordered_connect_body_v1(next);

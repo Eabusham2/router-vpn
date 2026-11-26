@@ -21,6 +21,7 @@ struct IOSNodeCandidatePrefixCapture {
         }
         let schema: Int, prefix_position: Int
         let measurement: String?
+        let candidate_mode: String?
         let prefix_id: String, capture_sha256: String, source_sha256: String, config_sha256: String, original_source_sha256: String
         let targets: [Target]
         let prefixes: [Prefix]
@@ -34,6 +35,8 @@ struct IOSNodeCandidatePrefixCapture {
     let originalLaunchInput: String
     let inventory: String
     let metadata: Metadata
+    let responseSourceNodes: [IOSNodeCandidateResponseNode]?
+    var responseMode: String? { metadata.candidate_mode }
     let strict: Bool
     let homeLANAccess: Bool
     var config: String { native.config() }
@@ -84,7 +87,14 @@ struct IOSNodeCandidatePrefixCapture {
 
     private init(native: LibboxRouterNodeChainCandidatePreparation, original: IOSNodeCandidateOriginalCapture,
                  position: Int, inventory: String) throws {
-        guard original.selectionExecution == "local", position >= 0, position < original.members.count - 1 else { throw Self.issue() }
+        guard original.selectionExecution == "local", position >= 0, position < original.members.count - 1,
+              let offered = try JSONSerialization.jsonObject(with: Data(inventory.utf8)) as? [String: Any] else { throw Self.issue() }
+        let responseMode = offered["response_mode"] as? String
+        guard offered["response_mode"] == nil || responseMode?.isEmpty == false else { throw Self.issue() }
+        let prefixes = responseMode == nil ? original.candidatePrefixes : original.preparedCandidatePrefixes
+        guard responseMode == prefixes[position].candidate_mode,
+              responseMode == nil || prefixes[position].supported(in: prefixes),
+              native.candidateMode() == (responseMode ?? "") else { throw Self.issue() }
         let launch = native.launchInput(), raw = native.metadata(), config = native.config()
         guard !launch.isEmpty, launch.utf8.count <= IOSNodeChainCapture.maximumInputBytes,
               !raw.isEmpty, raw.utf8.count <= 65536, !config.isEmpty, config.utf8.count <= 4 * 1024 * 1024,
@@ -95,7 +105,8 @@ struct IOSNodeCandidatePrefixCapture {
         var pages = try IOSCandidateMetadataPages(raw, inventoryBytes: inventory.utf8.count, legacyLimit: 65536, family: .preparation)
         while let offset = pages.nextOffset { try pages.append(native.metadataPage(offset)) }
         let value = try JSONDecoder().decode(Metadata.self, from: pages.result())
-        guard (value.measurement ?? "routed-tcp-connect") == original.candidatePrefixes[position].metric,
+        guard (value.measurement ?? "routed-tcp-connect") == prefixes[position].metric,
+              value.candidate_mode == responseMode,
               value.schema == 1, value.prefix_position == position, value.prefix_id == original.members[position].id,
               value.source_sha256 == native.sourceSHA256(), value.config_sha256 == native.configSHA256(),
               value.capture_sha256 == native.captureSHA256(), value.original_source_sha256 == native.originalSourceSHA256(),
@@ -145,6 +156,7 @@ struct IOSNodeCandidatePrefixCapture {
         guard value.mtu.ceiling == value.mtu.prefixes.map(\.ceiling).min() else { throw Self.issue() }
         self.native = native; launchInput = launch; originalLaunchInput = original.launchInput
         self.inventory = inventory; metadata = value; strict = original.strict; homeLANAccess = original.homeLANAccess
+        responseSourceNodes = responseMode == nil ? nil : original.members.map { IOSNodeCandidateResponseNode(id: $0.id, mode: $0.mode) }
     }
 
     private static func integer(_ value: Any?) -> Int? {

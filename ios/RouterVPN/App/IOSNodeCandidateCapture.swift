@@ -13,10 +13,10 @@ import Libbox
     let chainConfig: String
 
     static func make(request: String, prefixPosition: Int, proofs: [IOSNodeCandidatePrefix],
-                     chainSource: String, chainConfig: String, selectedResponse: Bool = false, originalLaunch: Data? = nil) throws -> Self {
+                     chainSource: String, chainConfig: String, selectedResponse: Bool = false, originalLaunch: Data? = nil, preparedResponse: Bool = false) throws -> Self {
         let snapshot = try IOSNodeBundleStore.shared.candidateSnapshot()
         let compiled = try compile(records: snapshot.records, stamp: snapshot.stamp,
-                                   prefixPosition: prefixPosition, proofs: proofs, selectedResponse: selectedResponse, originalLaunch: originalLaunch)
+                                   prefixPosition: prefixPosition, proofs: proofs, selectedResponse: selectedResponse, originalLaunch: originalLaunch, preparedResponse: preparedResponse)
         guard IOSCandidateCatalogPublication.isDigest(chainSource), IOSCandidateCatalogPublication.isDigest(chainConfig) else { throw issue() }
         let published = try IOSCandidateCatalogPublication.shared.capture(request: request, inventory: compiled.inventory, expected: snapshot.stamp)
         let result = Self(source: published, records: snapshot.records, rows: compiled.rows,
@@ -30,16 +30,17 @@ import Libbox
               IOSCandidateCatalogPublication.shared.current(source) else { throw Self.issue() }
     }
     static func compile(records: [String: Data], stamp: IOSCandidateCatalogPublication.Stamp,
-                        prefixPosition: Int, proofs: [IOSNodeCandidatePrefix], selectedResponse: Bool = false, originalLaunch: Data? = nil) throws -> (inventory: Data, rows: [Row]) {
+                        prefixPosition: Int, proofs: [IOSNodeCandidatePrefix], selectedResponse: Bool = false, originalLaunch: Data? = nil, preparedResponse: Bool = false) throws -> (inventory: Data, rows: [Row]) {
         guard stamp.ready, stamp.sources_sha256 == (try IOSCandidateCatalogPublication.sourcesDigest(records)),
               proofs.indices.contains(prefixPosition), selectedResponse ? proofs[prefixPosition].selectedResponse(in: proofs) : proofs[prefixPosition].supported(in: proofs),
               proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }), (2...8).contains(proofs.count) || IOSMultihopNodeSelection.extendedOriginalModes(proofs.map(\.mode), execution: "local") else { throw issue() }
         let publicResponse = proofs[prefixPosition].metric == "routed-public-candidate-response"
         let hysteria2Response = proofs[prefixPosition].hysteria2Response
         let packetResponse = proofs[prefixPosition].packetSuccessorResponse
-        guard !(hysteria2Response || packetResponse) || !selectedResponse else { throw issue() }
+        guard !(hysteria2Response || packetResponse) || !selectedResponse, !preparedResponse || !selectedResponse else { throw issue() }
         let candidateMode = proofs[prefixPosition].candidate_mode ?? "shadowsocks"
-        let packetPlan = packetResponse ? try packetSourcePlan(originalLaunch, proofs: proofs, position: prefixPosition, mode: candidateMode) : nil
+        let packetPlan = packetResponse || preparedResponse && hysteria2Response ?
+            try responseSourcePlan(originalLaunch, proofs: proofs, position: prefixPosition, mode: candidateMode, prepared: preparedResponse) : nil
         defer { if let packetPlan { try? packetPlan.close() } }
         let completeSource = publicResponse || selectedResponse || hysteria2Response || packetResponse
         let excludedMembers = proofs.prefix(completeSource ? proofs.count : prefixPosition + 1)
@@ -83,9 +84,13 @@ import Libbox
                     input = try member(profile: profile, files: files, mode: candidateMode)
                     if packetResponse {
                         guard let packetPlan, LibboxRouterNodeChainPacketSuccessorCandidateInputSupported(input, candidateMode),
-                              LibboxRouterNodeChainPacketSuccessorCandidateFitsSource(packetPlan, Int32(prefixPosition), input) else { throw issue() }
+                              preparedResponse ? LibboxRouterNodeChainPreparedCandidateInputFitsSource(packetPlan, Int32(prefixPosition), input) :
+                                LibboxRouterNodeChainPacketSuccessorCandidateFitsSource(packetPlan, Int32(prefixPosition), input) else { throw issue() }
                     } else if hysteria2Response {
                         guard LibboxRouterNodeChainHysteria2CandidateInputSupported(input) else { throw issue() }
+                        if preparedResponse {
+                            guard let packetPlan, LibboxRouterNodeChainPreparedCandidateInputFitsSource(packetPlan, Int32(prefixPosition), input) else { throw issue() }
+                        }
                     } else {
                         guard LibboxRouterNodeChainCandidateInputSupported(input) else { throw issue() }
                     }
@@ -158,7 +163,7 @@ import Libbox
         }
         guard let result, !result.isEmpty, failure == nil else { throw failure ?? issue() }; return result
     }
-    private static func packetSourcePlan(_ input: Data?, proofs: [IOSNodeCandidatePrefix], position: Int, mode: String) throws -> LibboxRouterNodeChain {
+    private static func responseSourcePlan(_ input: Data?, proofs: [IOSNodeCandidatePrefix], position: Int, mode: String, prepared: Bool) throws -> LibboxRouterNodeChain {
         guard let input, input.count <= IOSNodeChainCapture.maximumInputBytes,
               let launch = try JSONSerialization.jsonObject(with: input) as? [String: Any],
               launch["schema"] as? Int == 1, launch["execution"] as? String == "local" else { throw issue() }
@@ -168,10 +173,13 @@ import Libbox
         guard let plan = LibboxNewRouterNodeChain(String(decoding: data, as: UTF8.self), &failure), failure == nil else { throw failure ?? issue() }
         do {
             let original = try IOSNodeChainCapture(plan: plan)
+            let retained = IOSNodeCandidateOriginalCapture.ordinary(original)
+            let expected = prepared ? retained.preparedCandidatePrefixes : retained.connectedCandidatePrefixes
+            let nativeMode = prepared ? LibboxRouterNodeChainPreparedCandidateResponseMode(plan, Int32(position)) :
+                LibboxRouterNodeChainConnectedPacketSuccessorCandidateMode(plan, Int32(position))
             guard original.sourceSHA256 == launch["source_sha256"] as? String,
                   original.configSHA256 == launch["config_sha256"] as? String,
-                  IOSNodeCandidateOriginalCapture.ordinary(original).connectedCandidatePrefixes == proofs,
-                  LibboxRouterNodeChainConnectedPacketSuccessorCandidateMode(plan, Int32(position)) == mode else { throw issue() }
+                  expected == proofs, nativeMode == mode else { throw issue() }
             return plan
         } catch { try? plan.close(); throw error }
     }

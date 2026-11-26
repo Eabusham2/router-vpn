@@ -121,6 +121,7 @@ func (a *app) orderedCandidatePreparedCatalogWithNetwork(w http.ResponseWriter, 
 		"candidates": view.candidates, "samples": 50, "measurement": metric,
 		"note": note}, scope)
 	addOrderedPublicCandidateSource(response, view.selection, view.position, metric)
+	publishPreparedCandidateResponseSource(response, view.candidateMode, view.responseNodes)
 	if isDraft {
 		response["origin"] = "editor-draft"
 		response["requested_execution"] = view.draft.Execution
@@ -283,6 +284,7 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 		"current_candidate": job.current, "results": rows, "errors": append([]viaEntryCandidateError{}, job.failures...),
 		"failure": job.failure, "cleanup_error": job.cleanupError, "measurement": candidateViewMetric(job.view.prefixes, job.view.position),
 		"active_path_changed": false, "saved_profile_id": "", "started": true, "admission_cancelled": false}
+	publishPreparedCandidateResponseSource(response, job.view.candidateMode, job.view.responseNodes)
 	if job.view.draft != nil {
 		response["requested_execution"] = job.view.draft.Execution
 		if len(job.view.responseOwners) > 0 {
@@ -304,7 +306,7 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 	}
 	if job.saved != nil {
 		response["saved_profile_id"], response["profile_id"], response["profile_name"], response["saved"] = job.saved.ID, job.saved.ID, job.saved.Name, true
-		if job.savedRequest != nil && (job.view.draft != nil || response["measurement"] == hopmeasure.CandidatePublicResponseMeasurement) {
+		if job.savedRequest != nil && (job.view.draft != nil || job.view.candidateMode != "" || response["measurement"] == hopmeasure.CandidatePublicResponseMeasurement) {
 			response["proposal_action"], response["candidate_id"], response["proposed_path"] = job.savedAction, job.savedCandidate, job.savedRequest.ProposedPath
 		}
 	}

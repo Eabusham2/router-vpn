@@ -166,10 +166,10 @@ struct IOSNodeChainEditorView: View {
                                 guard let position = request?.position else { throw CancellationError() }
                                 try candidates.useInDraft(score) { proposal in
                                     guard let compiled = proposal.orderedNodes else { throw CancellationError() }
-                                    try draft.insertMeasured(score.id, after: position, compiled: compiled)
+                                    try draft.insertMeasured(score.id, after: position, compiled: compiled, replacingPacketSuccessor: proposal.replacesPacketSuccessor)
                                 }
                                 request = nil
-                                detail = "Inserted the measured node into this draft."
+                                detail = "Applied the measured node to this draft."
                                 schedule(after: position + 1)
                             } catch { detail = error.localizedDescription }
                         })
