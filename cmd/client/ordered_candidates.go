@@ -33,6 +33,7 @@ type orderedCandidateView struct {
 	responseRequested, responseSelected string
 	responseEpoch                       uint64
 	candidateMode                       string
+	originalFinal                       *common.MultihopNodeSelection
 }
 type orderedCandidateChoice struct {
 	ID             string                         `json:"id"`
@@ -65,6 +66,10 @@ func desktopCandidateMetricForIntent(launch *desktopNodeLaunch, position int, se
 	if launch == nil || launch.chain == nil || position < 0 || position >= len(launch.chain.selection.Nodes) || !desktopCandidatePositionForIntent(launch, position, serverResponse) {
 		return ""
 	}
+	// A paired final is the retained replacement target, never another prefix.
+	if position == len(launch.chain.selection.Nodes)-1 && desktopFinalCandidateSourceMode(launch, position-1) != "" {
+		return ""
+	}
 	privateSelected := launch.chain.execution != nil && launch.chain.execution.preparation != nil &&
 		(launch.chain.execution.preparation.SupportsCompareLocalResponseCandidate(position) || serverResponse && launch.chain.execution.preparation.SupportsServerResponseCandidate(position))
 	publicSelected := launch.chain.execution != nil && launch.chain.execution.preparation != nil &&
@@ -72,7 +77,7 @@ func desktopCandidateMetricForIntent(launch *desktopNodeLaunch, position int, se
 	if position > 7 && !privateSelected && !publicSelected && (launch.chain.execution != nil || launch.chain.policy == nil || launch.chain.policy.OriginalChain().ExtendedLocalNodeCount() <= position+1) {
 		return ""
 	}
-	if desktopConnectedCandidateMode(launch, position) != "" {
+	if desktopCandidateSourceMode(launch, position) != "" {
 		return hopmeasure.CandidatePrivateResponseMeasurement
 	}
 	if mobilemultihop.NodeChainPrefixMode(launch.chain.selection.Nodes[position].Mode) {
@@ -111,15 +116,42 @@ func desktopCandidateMetricForIntent(launch *desktopNodeLaunch, position int, se
 
 // Source classification selects the candidate protocol. The live catalog and
 // native operation separately retain and verify the original connected owner.
+func desktopConnectedFinalCandidateMode(launch *desktopNodeLaunch, position int) string {
+	if launch == nil || launch.command == nil || launch.chain == nil ||
+		launch.chain.preparation != nil || launch.chain.execution != nil || launch.chain.policy == nil {
+		return ""
+	}
+	return launch.chain.policy.OriginalChain().ConnectedFinalCandidateResponseMode(position)
+}
+
+// The source classifier grants no running owner. A dormant catalog retains its
+// complete original graph and must acquire its distinct native preparation.
+func desktopFinalCandidateSourceMode(launch *desktopNodeLaunch, position int) string {
+	if launch == nil || launch.chain == nil || launch.chain.execution != nil || launch.chain.policy == nil {
+		return ""
+	}
+	if launch.command != nil && launch.chain.preparation == nil {
+		return desktopConnectedFinalCandidateMode(launch, position)
+	}
+	return launch.chain.policy.OriginalChain().PreparedFinalCandidateResponseMode(position)
+}
+
+// Connected intermediate and final measurements have distinct source shapes.
 func desktopConnectedCandidateMode(launch *desktopNodeLaunch, position int) string {
+	if mode := desktopConnectedFinalCandidateMode(launch, position); mode != "" {
+		return mode
+	}
 	if launch == nil || launch.command == nil || launch.chain == nil || launch.chain.preparation != nil || launch.chain.execution != nil || launch.chain.policy == nil {
 		return ""
 	}
-	original := launch.chain.policy.OriginalChain()
-	if original.SupportsConnectedHysteria2FinalCandidate(position) {
-		return "hysteria2"
+	return launch.chain.policy.OriginalChain().ConnectedPacketSuccessorCandidateMode(position)
+}
+
+func desktopCandidateSourceMode(launch *desktopNodeLaunch, position int) string {
+	if mode := desktopConnectedCandidateMode(launch, position); mode != "" {
+		return mode
 	}
-	return original.ConnectedPacketSuccessorCandidateMode(position)
+	return desktopFinalCandidateSourceMode(launch, position)
 }
 
 func orderedPrefixChoice(position int, n desktopNodeChainMember, metric string) orderedCandidatePrefix {
@@ -206,10 +238,13 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 	view := &orderedCandidateView{token: hex.EncodeToString(nonce), capture: capture, expires: time.Now().Add(120 * time.Second), position: position, identity: identity}
 	view.candidateMode = desktopConnectedCandidateMode(identity.Ordered.launch, position)
-	if mobilemultihop.NodeChainPrefixMode(view.candidateMode) {
+	members := identity.Ordered.launch.chain.selection.Nodes
+	if desktopConnectedFinalCandidateMode(identity.Ordered.launch, position) != "" {
+		final := members[len(members)-1]
+		view.originalFinal = &common.MultihopNodeSelection{ID: final.Profile.ID, Mode: final.Mode}
+	} else if mobilemultihop.NodeChainPrefixMode(view.candidateMode) {
 		view.responseNodes = originalCandidateResponseNodes(identity.Ordered.launch.chain.selection)
 	}
-	members := identity.Ordered.launch.chain.selection.Nodes
 	requested, err := orderedCandidateRequestedExecution(identity.Ordered.launch)
 	if err != nil {
 		http.Error(w, err.Error(), 409)
@@ -293,10 +328,10 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 	note := "50 TCP connection handshakes through the retained connected prefix. This does not authenticate candidate credentials. Saving creates a next-connection profile; it does not change the active path."
 	if metric == hopmeasure.CandidatePrivateResponseMeasurement {
 		note = "50 authenticated private agent responses through the selected prefix and paired candidate. Saving creates a profile for the next connection."
-		if view.candidateMode == "hysteria2" {
-			note = "50 authenticated Hysteria2 responses through the original connected prefix. Saving replaces only the final node in a profile for the next connection."
+		if view.originalFinal != nil {
+			note = "50 authenticated responses through the original connected prefix and the candidate's selected transport. Saving replaces only the final node, preserving its transport in a profile for the next connection."
 		} else if mobilemultihop.NodeChainPrefixMode(view.candidateMode) {
-			note = "50 authenticated private agent responses through the original prefix and a WireGuard or AmneziaWG candidate tunnel. Saving replaces that intermediate node while retaining the complete suffix for the next connection."
+			note = "50 authenticated responses through the original prefix and candidate packet tunnel. Save replaces this intermediate node and preserves the complete prefix and suffix."
 		}
 	} else if metric == hopmeasure.CandidatePublicResponseMeasurement {
 		note = "50 HTTPS responses after TLS through the selected prefix and the imported candidate. Every response verifies the candidate's recorded public exit IP. Save retains the original suffix and public final in a separate next-connection profile."
@@ -410,7 +445,7 @@ func orderedCandidateProposalForExecution(members []desktopNodeChainMember, posi
 func orderedCandidateProposalForExecutionWithMode(members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile, requested, candidateMode string) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var control common.RouterProfile
 	if candidateMode != "" && !desktopConnectedResponseMembers(members, requested, position, candidate, candidateMode) {
-		return control, nil, errors.New("candidate response changed its original protocol or path")
+		return control, nil, errors.New("candidate response changed its original member protocol or complete path")
 	}
 	publicResponse := desktopPublicCandidateMembers(members, requested, position) && desktopNodeChainImportedExecutionMiddle(candidate)
 	typedFinal := desktopTypedFinalResponseMembers(members, requested, position)

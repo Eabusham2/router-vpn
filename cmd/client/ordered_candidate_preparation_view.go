@@ -27,6 +27,7 @@ type orderedCandidatePreparedView struct {
 	prefixes       []orderedCandidatePrefix
 	responseNodes  []orderedCandidateResponseSourceNode
 	responseOwners []string
+	originalFinal  *common.MultihopNodeSelection
 }
 
 func (view *orderedCandidatePreparedView) scopeValue() string {
@@ -110,10 +111,16 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 		return nil, err
 	}
 	view := &orderedCandidatePreparedView{draft: draft, scope: scope, token: token, network: network, expires: time.Now().Add(120 * time.Second), position: position, selection: selection}
-	view.responseNodes = orderedCandidateResponseSourceNodes(selection, orderedCandidateDraftExecution(draft), position)
+	view.candidateMode = desktopFinalCandidateSourceMode(launch, position)
 	if scope == orderedCandidateSavedPrefixScope {
 		view.candidateMode = desktopPreparedCandidateMode(launch, position)
-		if view.candidateMode != "" {
+	}
+	if view.candidateMode != "" && view.candidateMode == desktopFinalCandidateSourceMode(launch, position) {
+		final := selection.Nodes[len(selection.Nodes)-1]
+		view.originalFinal = &common.MultihopNodeSelection{ID: final.Profile.ID, Mode: final.Mode}
+	} else {
+		view.responseNodes = orderedCandidateResponseSourceNodes(selection, orderedCandidateDraftExecution(draft), position)
+		if scope == orderedCandidateSavedPrefixScope && view.candidateMode != "" {
 			view.responseNodes = originalCandidateResponseNodes(selection)
 		}
 	}
@@ -169,7 +176,7 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 			_, choice.Proposal, choice.ProposalAction, err = orderedResponseProfileWithMode(ctx, selection.Native.root, orderedCandidateDraftExecution(draft), selection.Nodes, position, profile, proposalProfiles, view.candidateMode)
 			if draft == nil && view.candidateMode == "" && candidateViewMetric(view.prefixes, position) != hopmeasure.CandidatePublicResponseMeasurement {
 				choice.ProposalAction = ""
-			} else if draft != nil && mobilemultihop.NodeChainPrefixMode(view.candidateMode) && err == nil {
+			} else if draft != nil && view.originalFinal == nil && mobilemultihop.NodeChainPrefixMode(view.candidateMode) && err == nil {
 				choice.DraftProposal = append([]common.MultihopNodeSelection(nil), choice.Proposal...)
 				choice.DraftAction = orderedCandidateDraftReplaceAction
 			} else if draft != nil && view.candidateMode == "" {
@@ -185,7 +192,7 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 			_, choice.Proposal, err = orderedDraftProposal(draft.Execution, selection.Nodes, position, profile, proposalProfiles)
 		}
 		if err != nil {
-			if len(view.responseNodes) != 0 && len(choice.DraftProposal) == 0 && candidateViewMetric(view.prefixes, position) == hopmeasure.CandidatePrivateResponseMeasurement {
+			if (view.candidateMode != "" || len(view.responseNodes) != 0) && len(choice.DraftProposal) == 0 && candidateViewMetric(view.prefixes, position) == hopmeasure.CandidatePrivateResponseMeasurement {
 				continue
 			}
 			choice.SaveReason = err.Error()
@@ -231,10 +238,7 @@ func captureOrderedCandidatePreparedSelection(ctx context.Context, a *app, posit
 func (view *orderedCandidatePreparedView) matchesPreparation(p *orderedCandidatePreparation, now time.Time) bool {
 	if view == nil || p == nil || !now.Before(view.expires) || view.draft != p.request.draft || view.position != p.request.Position || view.scopeValue() != p.request.Scope || view.catalog == nil || view.catalog.serverResponse != p.request.serverResponse ||
 		view.selection.Native == nil || p.selection.Native == nil || view.selection.Native.source != p.selection.Native.source ||
-		view.network != p.network || view.catalog.revision != p.revision || p.inventory == nil {
-		return false
-	}
-	if view.candidateMode != p.inventory.candidateMode {
+		view.network != p.network || view.catalog.revision != p.revision || p.inventory == nil || view.candidateMode != p.inventory.candidateMode {
 		return false
 	}
 	for id, token := range p.inventory.profiles {
@@ -261,4 +265,10 @@ func (view *orderedCandidatePreparedView) matchesPreparation(p *orderedCandidate
 		}
 	}
 	return true
+}
+
+func (view *orderedCandidatePreparedView) addResponseSource(response map[string]any) {
+	if view != nil {
+		publishOrderedCandidateResponseSource(response, view.candidateMode, view.responseNodes, view.originalFinal)
+	}
 }

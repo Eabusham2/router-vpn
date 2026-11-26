@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/netip"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -20,11 +19,9 @@ import (
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing-box/protocol/routervpnamnezia"
-	wg "github.com/sagernet/sing-box/transport/wireguard"
 	"github.com/sagernet/sing/common/json"
-	"github.com/sagernet/sing/common/logger"
 	M "github.com/sagernet/sing/common/metadata"
-	"github.com/sagernet/sing/service"
+	N "github.com/sagernet/sing/common/network"
 )
 
 // Capture the actual parsed graph at Box construction. Comparing a caller's
@@ -376,206 +373,21 @@ func (e *RouterVPNNodeChainEngine) DialCandidatePacketContext(ctx context.Contex
 	return connection, errors.Join(dialErr, observeErr, ctx.Err())
 }
 
-func (e *RouterVPNNodeChainEngine) OpenCandidatePacketEndpointContext(ctx context.Context, request *mobilemultihop.NodeChainCandidatePacketRequest) (mobilemultihop.NodeChainCandidatePacketEndpoint, error) {
-	if e == nil || e.observation == nil || e.public == nil || e.public.self != e.public ||
-		e.public.observation != e.observation || e.public.source != e.public.originalSource || e.observation.instance == nil ||
+func (e *RouterVPNNodeChainEngine) OpenCandidateEndpointContext(ctx context.Context, request *mobilemultihop.NodeChainCandidatePacketRequest) (mobilemultihop.NodeChainCandidateEndpoint, error) {
+	if e == nil || e.public == nil || e.public.self != e.public || e.public.source != e.public.originalSource ||
+		e.observation == nil || e.public.observation != e.observation || e.observation.instance == nil ||
 		e.observation.instance.routerVPNNodeChainExecutionOptions != "" {
-		return nil, errors.New("candidate endpoint lost its original Local source")
+		return nil, errors.New("candidate endpoint requires an original Local packet owner")
 	}
-	identity, _, _, err := request.Read(ctx, e, e.public.source)
-	if err != nil || identity != e.observation.identity {
-		return nil, errors.New("candidate endpoint changed its original native identity")
-	}
-	return RouterVPNOpenCandidatePacketEndpoint(ctx, request, e, e.public.source)
+	return request.OpenNativeEndpoint(ctx, e, e.public.source, routerVPNNewCandidateAWG)
 }
 
-type routerVPNCandidateEndpoint interface {
-	DialContext(context.Context, string, M.Socksaddr) (net.Conn, error)
-	Close() error
-}
-
-type routerVPNPacketCandidate struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	current   func(context.Context) error
-	private   M.Socksaddr
-	packet    *mobilemultihop.NativeCandidatePacketDialer
-	life      sync.Mutex
-	closing   bool
-	inner     routerVPNCandidateEndpoint
-	opening   sync.WaitGroup
-	once      sync.Once
-	err       error
-	stop      func() bool
-	watched   chan struct{}
-	watchOnce sync.Once
-}
-
-// This helper still requires the opaque request and its exact original reader.
-// It never receives arbitrary credentials, a physical dialer or a prefix tag.
-func RouterVPNOpenCandidatePacketEndpoint(ctx context.Context, request *mobilemultihop.NodeChainCandidatePacketRequest, reader mobilemultihop.NodeChainEngine, chain *mobilemultihop.NodeChain) (mobilemultihop.NodeChainCandidatePacketEndpoint, error) {
-	capture, err := request.ReadPacketEndpoint(ctx, reader, chain)
+func routerVPNNewCandidateAWG(ctx context.Context, options mobilemultihop.AmneziaEndpointConfig, carrier N.Dialer) (mobilemultihop.NativeCandidateDevice, error) {
+	ep, err := routervpnamnezia.NewCandidateEndpoint(ctx, routervpnamnezia.Options(options), carrier)
 	if err != nil {
 		return nil, err
 	}
-	_, _, address, err := request.Read(ctx, reader, chain)
-	if err != nil {
-		return nil, err
-	}
-	return routerVPNOpenCandidatePacketEndpoint(ctx, capture, address, func(call context.Context) error {
-		_, _, _, err := request.Read(call, reader, chain)
-		return err
-	}, func(call context.Context) (*mobilemultihop.NativeCandidatePacketDialer, error) {
-		return mobilemultihop.NewNativeCandidatePacketDialer(call, request, reader, chain)
-	})
-}
-
-// The preparation helper shares only the protocol implementation. Its request
-// must name the exact separately proved, closed-ingress preparation reader.
-func RouterVPNOpenPreparedCandidatePacketEndpoint(ctx context.Context, request *mobilemultihop.NodeChainCandidatePacketRequest, reader mobilemultihop.NodeChainCandidatePreparationPacketEngine, preparation *mobilemultihop.NodeChainCandidatePreparation) (mobilemultihop.NodeChainCandidatePacketEndpoint, error) {
-	capture, err := request.ReadPreparationPacketEndpoint(ctx, reader, preparation)
-	if err != nil {
-		return nil, err
-	}
-	_, _, address, err := request.ReadPreparation(ctx, reader, preparation)
-	if err != nil {
-		return nil, err
-	}
-	return routerVPNOpenCandidatePacketEndpoint(ctx, capture, address, func(call context.Context) error {
-		_, _, _, err := request.ReadPreparation(call, reader, preparation)
-		return err
-	}, func(call context.Context) (*mobilemultihop.NativeCandidatePacketDialer, error) {
-		return mobilemultihop.NewNativePreparedCandidatePacketDialer(call, request, reader, preparation)
-	})
-}
-
-func routerVPNOpenCandidatePacketEndpoint(ctx context.Context, capture mobilemultihop.NodeChainCandidatePacketCapture, address string,
-	current func(context.Context) error, packetFactory func(context.Context) (*mobilemultihop.NativeCandidatePacketDialer, error)) (mobilemultihop.NodeChainCandidatePacketEndpoint, error) {
-	bad := errors.New("candidate requires its exact native WG/AWG packet endpoint")
-	private := M.ParseSocksaddr(capture.PrivateAddress)
-	if ctx == nil || current == nil || packetFactory == nil || current(ctx) != nil || !private.IsIP() || private.Port == 0 {
-		return nil, bad
-	}
-	owned, cancel := context.WithCancel(ctx)
-	// No inherited router, DNS, pause callback or interface manager can attach
-	// another owner. The sealed packet dialer alone reaches the retained prefix.
-	owned = service.ContextWithRegistry(owned, service.NewRegistry())
-	packet, err := packetFactory(owned)
-	if err != nil {
-		cancel()
-		return nil, bad
-	}
-	e := &routerVPNPacketCandidate{ctx: owned, cancel: cancel, current: current, private: private, packet: packet, watched: make(chan struct{})}
-	e.life.Lock()
-	defer e.life.Unlock()
-	e.stop = context.AfterFunc(ctx, func() {
-		_ = e.retire()
-		e.watchOnce.Do(func() { close(e.watched) })
-	})
-	if owned.Err() != nil {
-		return e, bad
-	}
-	if capture.Mode == "wg" {
-		var captured struct {
-			Type string `json:"type"`
-			Tag  string `json:"tag"`
-			option.WireGuardEndpointOptions
-		}
-		if json.Unmarshal([]byte(capture.Options), &captured) != nil {
-			return e, bad
-		}
-		o := captured.WireGuardEndpointOptions
-		if captured.Type != "wireguard" || o.System || o.Name != "" || o.ListenPort != 0 || len(o.Peers) != 1 || o.Detour != "" || o.DomainResolver != nil {
-			return e, bad
-		}
-		peer := o.Peers[0]
-		destination := M.Socksaddr{Addr: M.ParseAddr(peer.Address), Port: peer.Port}
-		if !destination.IsIP() || destination.String() != address {
-			return e, bad
-		}
-		endpoint, err := wg.NewEndpoint(wg.EndpointOptions{Context: owned, Logger: logger.NOP(), System: false,
-			Dialer: packet, MTU: o.MTU, Address: o.Address, PrivateKey: o.PrivateKey, Workers: o.Workers,
-			Peers: []wg.PeerOptions{{Endpoint: destination, PublicKey: peer.PublicKey, PreSharedKey: peer.PreSharedKey,
-				AllowedIPs: peer.AllowedIPs, PersistentKeepaliveInterval: peer.PersistentKeepaliveInterval, Reserved: peer.Reserved}}})
-		if err != nil {
-			return e, bad
-		}
-		e.inner = endpoint
-		if endpoint.Start(false) != nil {
-			return e, bad
-		}
-	} else if capture.Mode == "awg2-fast" || capture.Mode == "awg2-strong" {
-		var options routervpnamnezia.Options
-		if json.Unmarshal([]byte(capture.Options), &options) != nil || options.Type != mobilemultihop.AmneziaType || len(options.Peers) != 1 {
-			return e, bad
-		}
-		peer := options.Peers[0]
-		if M.ParseSocksaddr(net.JoinHostPort(peer.Address, fmt.Sprint(peer.Port))).String() != address {
-			return e, bad
-		}
-		endpoint, err := routervpnamnezia.NewCandidateEndpoint(owned, logger.NOP(), options, packet)
-		if err != nil {
-			return e, bad
-		}
-		e.inner = endpoint
-		if endpoint.Start(adapter.StartStateStart) != nil {
-			return e, bad
-		}
-	} else {
-		return e, bad
-	}
-	err = current(ctx)
-	return e, errors.Join(err, owned.Err())
-}
-
-func (e *routerVPNPacketCandidate) DialPrivateContext(ctx context.Context) (net.Conn, error) {
-	if ctx == nil {
-		return nil, net.ErrClosed
-	}
-	if e == nil || e.current == nil {
-		return nil, net.ErrClosed
-	}
-	if err := e.current(ctx); err != nil {
-		return nil, err
-	}
-	e.life.Lock()
-	if e.closing || e.ctx.Err() != nil || e.inner == nil {
-		e.life.Unlock()
-		return nil, net.ErrClosed
-	}
-	e.opening.Add(1)
-	inner := e.inner
-	e.life.Unlock()
-	defer e.opening.Done()
-	connection, err := inner.DialContext(ctx, "tcp", e.private)
-	observed := e.current(ctx)
-	return e.packet.OwnConnection(ctx, connection, errors.Join(err, observed, ctx.Err()))
-}
-
-func (e *routerVPNPacketCandidate) retire() error {
-	e.once.Do(func() {
-		e.cancel()
-		e.packet.BeginClose()
-		e.life.Lock()
-		e.closing = true
-		inner := e.inner
-		e.life.Unlock()
-		if inner != nil {
-			e.err = inner.Close()
-		}
-		e.opening.Wait()
-		e.err = errors.Join(e.err, e.packet.Join())
-	})
-	return e.err
-}
-
-func (e *routerVPNPacketCandidate) Close() error {
-	if e.stop() {
-		e.watchOnce.Do(func() { close(e.watched) })
-	}
-	err := e.retire()
-	<-e.watched
-	return err
+	return ep, nil
 }
 
 func (e *RouterVPNNodeChainEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {

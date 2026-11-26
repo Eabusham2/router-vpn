@@ -42,6 +42,12 @@ func desktopOrderedExecutionMembers(members []desktopNodeChainMember, requested 
 	if !validDesktopOrderedExecution(requested) {
 		return bad
 	}
+	if len(members) > 0 && mobilemultihop.NodeChainPrefixMode(members[len(members)-1].Mode) {
+		if !desktopPacketFinalMembersSupported(members, requested) {
+			return errors.New("a packet final requires the original paired Local source with Start Layer off")
+		}
+		return nil
+	}
 	if requested == "local" {
 		return nil
 	}

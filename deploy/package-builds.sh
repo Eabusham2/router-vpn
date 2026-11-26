@@ -6,6 +6,12 @@ write_blank_routers(){ cat >"$1" <<'JSON'
 JSON
 }
 copy_runtime(){ local dir=$1;mkdir -p "$dir/modes" "$dir/generated";cp "$ROOT/configs/client/client.json.example" "$dir/client.json";cp "$ROOT/configs/client/modes.json" "$dir/modes.json";cp "$ROOT/configs/client/logical-modes.json" "$dir/logical-modes.json";cp -a "$ROOT/modes/." "$dir/modes/";write_blank_routers "$dir/routers.json";cp "$ROOT/docs/MODES.md" "$dir/MODES.md";cp "$ROOT/docs/CLIENT.md" "$dir/CLIENT.md";cp "$ROOT/SECURITY.md" "$dir/SECURITY.md";cp "$ROOT/LICENSE" "$dir/LICENSE";python3 "$ROOT/deploy/build-dnsproxy.py" notices "$dir/DNS-PROXY-NOTICES.json";}
+# Linux packages use the same complete map geometry and attribution as the native app.
+copy_linux_map(){
+  local dir=$1
+  mkdir -p "$dir/client/shared/map"
+  cp "$ROOT/client/shared/map/routervpn-land-110m.json" "$ROOT/client/shared/map/NATURAL-EARTH.txt" "$dir/client/shared/map/"
+}
 materialize_icons(){ python3 "$ROOT/deploy/materialize-desktop-icons.py" --png "$1/RouterVPN.png" --ico "$1/RouterVPN.ico"; }
 # Every native package carries exact-source metadata in ROUTER-VPN-SOURCE.json.
 write_provenance(){ python3 "$ROOT/server/scripts/source_provenance.py" "$1" --family "$2"; }
@@ -67,5 +73,5 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd);export HOMEVPN_ROOT="$ROOT";ex
 if [ -x "$ROOT/router-vpn-update" ]; then "$ROOT/router-vpn-update" --download --json >/dev/null 2>&1 & fi
 exec ./router-vpn-client
 SH2
-chmod +x "$dir/start-router-vpn.sh";if [[ "$os" =~ ^(linux|darwin)$ && "$arch" =~ ^(amd64|arm64)$ ]];then "$ROOT/deploy/package-xray-runtime.sh" "$os/$arch" "$dir";"$ROOT/deploy/package-amnezia-runtime.sh" "$os/$arch" "$dir";"$ROOT/deploy/package-native-runtime.sh" "$os/$arch" "$dir";fi;write_provenance "$dir" "$os-$arch";package_tgz "$name" "$dir";if [[ "$os" =~ ^(linux|darwin)$ && "$arch" =~ ^(amd64|arm64)$ ]];then python3 "$ROOT/deploy/native-runtime-bundle.py" verify-package "$os/$arch" "$OUT/$name.tar.gz";fi;done < <(find "$DIST/client" -maxdepth 1 -type f -name 'router-vpn-client-*'|sort)
+chmod +x "$dir/start-router-vpn.sh";if [[ "$os" == linux && "$arch" =~ ^(amd64|arm64)$ ]];then copy_linux_map "$dir";fi;if [[ "$os" =~ ^(linux|darwin)$ && "$arch" =~ ^(amd64|arm64)$ ]];then "$ROOT/deploy/package-xray-runtime.sh" "$os/$arch" "$dir";"$ROOT/deploy/package-amnezia-runtime.sh" "$os/$arch" "$dir";"$ROOT/deploy/package-native-runtime.sh" "$os/$arch" "$dir";fi;write_provenance "$dir" "$os-$arch";package_tgz "$name" "$dir";if [[ "$os" =~ ^(linux|darwin)$ && "$arch" =~ ^(amd64|arm64)$ ]];then python3 "$ROOT/deploy/native-runtime-bundle.py" verify-package "$os/$arch" "$OUT/$name.tar.gz";fi;done < <(find "$DIST/client" -maxdepth 1 -type f -name 'router-vpn-client-*'|sort)
 python3 "$ROOT/deploy/check-generic-package-secrets.py" "$OUT";cp "$DIST/SHA256SUMS" "$OUT/BINARY-SHA256SUMS";(cd "$OUT";find . -maxdepth 1 -type f ! -name 'SHA256SUMS' -print0|sort -z|xargs -0 sha256sum>SHA256SUMS);rm -rf "$OUT/work";printf 'Packaged MIT-licensed secret-free generic artifacts in %s\n' "$OUT"

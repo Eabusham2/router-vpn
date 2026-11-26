@@ -43,6 +43,10 @@ func desktopOrderedExecutionSelection(nodes []common.MultihopNodeSelection, requ
 	if err := common.ValidateMultihopNodes(nodes); err != nil {
 		return err
 	}
+	if mobilemultihop.NodeChainPrefixMode(nodes[len(nodes)-1].Mode) &&
+		(requested != "local" || !common.PairedPacketLocalMultihopSelection(nodes)) {
+		return errors.New("a packet final requires the complete bounded paired Local selection")
+	}
 	if requested != "local" && (common.ExtendedPairedLocalMultihopSelection(nodes) || common.ExtendedMixedLocalPacketCount(nodes) > 0) && !common.ExtendedAWGSelectedMultihopSelection(nodes) {
 		return errors.New("extended paired WireGuard routes require Local execution")
 	}

@@ -307,16 +307,23 @@ function global:Test-RouterVPNOrderedPrefixMode {
 
 function global:Test-RouterVPNOrderedFinalMode {
     param($Mode)
-    return $Mode-is[string]-and@('shadowsocks','hysteria2')-ccontains$Mode
+    return $Mode -is [string] -and ($Mode -cin @('shadowsocks','hysteria2') -or (Test-RouterVPNOrderedPrefixMode $Mode))
 }
 
 function global:Get-RouterVPNOrderedFinalModes {
-    param($Profile,$Prefixes)
+    param($Profile,$Prefixes,[string]$Execution,$ProfileIndex)
     if($null-eq$Profile-or[string](Get-RouterVPNOrderedValue $Profile 'node_kind' '')-cnotin@('','router-vpn')){return @()}
     $choices=@('shadowsocks')
     $layer=Get-RouterVPNOrderedValue $Profile 'start_layer' ''
     $imported=@($Prefixes|Where-Object{(Get-RouterVPNOrderedValue $_ 'mode')-cin@('shadowsocks','socks5','http-connect','https-connect','openvpn')}).Count-gt0
     if($Prefixes.Count -lt 8 -and $layer-is[string]-and$layer-cin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')-and-not$imported){$choices+='hysteria2'}
+    if($Execution -ceq 'local' -and $Prefixes.Count -ge 1 -and $Prefixes.Count -le 7 -and
+       $null -ne $ProfileIndex -and (Test-RouterVPNOrderedPairedOff $Profile)){
+        foreach($prefix in $Prefixes){
+            if(-not(Test-RouterVPNOrderedPrefixMode $prefix.mode) -or -not(Test-RouterVPNOrderedPairedOff $ProfileIndex[$prefix.id])){return $choices}
+        }
+        $choices+=@('wg','awg2-fast','awg2-strong')
+    }
     return $choices
 }
 
@@ -619,7 +626,9 @@ function global:Test-RouterVPNOrderedResponsePrefix {
 function global:Get-RouterVPNOrderedPreparedCandidateMode {
     param($Nodes,[int]$Position,[string]$Execution,$Profiles)
     $count=@($Nodes).Count
-    if($Execution-cne'local'-or$count-lt2-or$count-gt(Get-RouterVPNOrderedPhysicalTraversalDepth)-or$Position-lt0-or$Position-ge$count-1-or$Nodes[-1].mode-cnotin@('shadowsocks','hysteria2')){return ''}
+    if($Execution-cne'local'-or$count-lt2-or$count-gt(Get-RouterVPNOrderedPhysicalTraversalDepth)-or$Position-lt0-or$Position-ge$count-1){return ''}
+    $final=[string]$Nodes[-1].mode
+    if($final -cnotin @('shadowsocks','hysteria2') -and -not($Position -eq $count-2 -and $count -le 8 -and (Test-RouterVPNOrderedPrefixMode $final))){return ''}
     $index=Get-RouterVPNOrderedProfileIndex $Profiles
     $ids=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     for($i=0;$i-lt$count;$i++){
@@ -629,7 +638,7 @@ function global:Get-RouterVPNOrderedPreparedCandidateMode {
         if($count-gt8-and$node.mode-cne$(if($i-eq$count-1){'shadowsocks'}else{'wg'})){return ''}
     }
     if($Position-lt$count-2){return [string]$Nodes[$Position+1].mode}
-    if($Nodes[-1].mode-ceq'hysteria2'-and$count-le8){return 'hysteria2'}
+    if($count -le 8 -and $final -cne 'shadowsocks'){return $final}
     return ''
 }
 
@@ -774,7 +783,7 @@ function global:New-RouterVPNOrderedConnectPayload {
         }
         if(-not $externalFinal -and $imported){if((-not(Test-RouterVPNOrderedImportedPosition $node.mode $position $nodes.Count)-and-not(($localImported-or$multipleImported)-and((Test-RouterVPNOrderedLocalSSPosition $node.mode $position $nodes.Count)-or($position-eq0-and(Test-RouterVPNOrderedCustomEntryShape $nodes)))))-or$node.mode-cne(Get-RouterVPNOrderedImportedMode $profile)){throw 'An imported node retains its exact Shadowsocks 2022, SOCKS5, HTTP(S) CONNECT or OpenVPN transport between the paired entry and final.'}}
         elseif(-not $externalFinal -and ([string](Get-RouterVPNOrderedValue $profile 'node_kind' '')-cnotin@('','router-vpn')-or($position-lt$nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $node.mode)-and-not(($localImported-or$multipleImported)-and$node.mode-ceq'shadowsocks')))){throw 'The ordered source kind or transport changed.'}
-        if(-not$externalFinal-and$position-eq$nodes.Count-1-and@(Get-RouterVPNOrderedFinalModes $profile @($nodes|Select-Object -SkipLast 1))-cnotcontains$node.mode){throw 'The selected final transport is incompatible with its captured Start Layer or imported middle.'}
+        if(-not$externalFinal-and$position-eq$nodes.Count-1-and@(Get-RouterVPNOrderedFinalModes $profile @($nodes|Select-Object -SkipLast 1) $execution $profileIndex)-cnotcontains$node.mode){throw 'The selected final transport is incompatible with its captured Start Layer or imported middle.'}
         $token=Get-RouterVPNOrderedValue $expected $node.id
         if($token-isnot[string]-or$token-cnotmatch'\A[0-9a-f]{64}\z'-or[string](Get-RouterVPNOrderedValue $profile 'profile_token')-cne$token){throw 'An ordered node changed or was relinked. Reopen its editor before connecting.'}
         $tokens[$node.id]=$token

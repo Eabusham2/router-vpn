@@ -20,6 +20,22 @@ type MultihopNodeSelection struct {
 	Mode string `json:"mode"`
 }
 
+// PairedPacketLocalMultihopSelection checks the saved IDs and raw modes.
+// The Local compiler separately verifies each original paired capture and key.
+func PairedPacketLocalMultihopSelection(nodes []MultihopNodeSelection) bool {
+	if len(nodes) > MultihopMaximumNodes || ValidateMultihopNodes(nodes) != nil {
+		return false
+	}
+	for _, node := range nodes {
+		switch node.Mode {
+		case "wg", "awg2-fast", "awg2-strong":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // ExtendedLocalMultihopSelection checks only the saved modes. Actual launch
 // requires independent private source, endpoint and key validation for every
 // imported interior and paired control of the first and final Router nodes.
@@ -112,6 +128,9 @@ func validateRouterProfileNodeChain(p *RouterProfile) error {
 	if len(p.MultihopNodes) != 0 {
 		if err := ValidateMultihopNodes(p.MultihopNodes); err != nil {
 			return err
+		}
+		if PairedPacketLocalMultihopSelection(p.MultihopNodes) && p.MultihopExecution != "local" {
+			return errors.New("paired packet finals require Local execution")
 		}
 		if (ExtendedPairedLocalMultihopSelection(p.MultihopNodes) || ExtendedMixedLocalPacketCount(p.MultihopNodes) > 0) && !ExtendedAWGSelectedMultihopSelection(p.MultihopNodes) && p.MultihopExecution != "local" {
 			return errors.New("extended packet routes with paired intermediates or AmneziaWG require Local execution")

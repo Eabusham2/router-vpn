@@ -6,9 +6,9 @@ import (
 	"slices"
 	"time"
 
+	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/hopmeasure"
-	"router-vpn/internal/mobilemultihop"
 )
 
 // A connected cancellation retains only the original public view identities.
@@ -22,13 +22,22 @@ type orderedCandidateResponseAdmission struct {
 	selected, requested string
 	measurement         string
 	candidateMode       string
+	originalFinal       *common.MultihopNodeSelection
 	created             time.Time
 	started             bool
 	drained             bool
 }
 
+func (record orderedCandidateResponseAdmission) copyForRequest() orderedCandidateResponseAdmission {
+	record.originalFinal = copyOrderedCandidateFinal(record.originalFinal)
+	record.nodes = slices.Clone(record.nodes)
+	record.owners = slices.Clone(record.owners)
+	record.created = time.Now()
+	return record
+}
+
 func rememberOrderedCandidateResponseViewLocked(c *viaEntryControl, view *orderedCandidateView) error {
-	if len(view.responseNodes) == 0 {
+	if len(view.responseNodes) == 0 && view.originalFinal == nil {
 		return nil
 	}
 	c.pruneNoncesLocked()
@@ -40,13 +49,14 @@ func rememberOrderedCandidateResponseViewLocked(c *viaEntryControl, view *ordere
 	}
 	c.orderedResponseViews[view.token] = &orderedCandidateResponseAdmission{
 		token: view.token, position: view.position, epoch: view.responseEpoch, candidateMode: view.candidateMode, measurement: candidateViewMetric(view.prefixes, view.position),
-		owners: slices.Clone(view.responseOwners), requested: view.responseRequested, selected: view.responseSelected, nodes: slices.Clone(view.responseNodes), created: time.Now(), drained: true,
+		originalFinal: copyOrderedCandidateFinal(view.originalFinal),
+		owners:        slices.Clone(view.responseOwners), requested: view.responseRequested, selected: view.responseSelected, nodes: slices.Clone(view.responseNodes), created: time.Now(), drained: true,
 	}
 	return nil
 }
 
 func reserveOrderedCandidateResponseAdmissionLocked(c *viaEntryControl, id string, view *orderedCandidateView) error {
-	if len(view.responseNodes) == 0 {
+	if len(view.responseNodes) == 0 && view.originalFinal == nil {
 		return nil
 	}
 	recorded := c.orderedResponseViews[view.token]
@@ -56,8 +66,8 @@ func reserveOrderedCandidateResponseAdmissionLocked(c *viaEntryControl, id strin
 	if c.orderedResponseAdmissions == nil {
 		c.orderedResponseAdmissions = map[string]*orderedCandidateResponseAdmission{}
 	}
-	record := *recorded
-	record.created, record.started, record.drained = time.Now(), true, false
+	record := recorded.copyForRequest()
+	record.started, record.drained = true, false
 	c.orderedResponseAdmissions[id] = &record
 	return nil
 }
@@ -109,8 +119,7 @@ func (a *app) orderedCandidateConnectedCancel(w http.ResponseWriter, r *http.Req
 		if c.orderedResponseAdmissions == nil {
 			c.orderedResponseAdmissions = map[string]*orderedCandidateResponseAdmission{}
 		}
-		record := *recorded
-		record.created = time.Now()
+		record := recorded.copyForRequest()
 		c.orderedResponseAdmissions[q.RequestID], admission = &record, &record
 		// Reserve the nonce in the same snapshot so a delayed start cannot
 		// enter another candidate purpose before this cancellation joins.
@@ -140,11 +149,9 @@ func writeOrderedCandidateResponseCancel(w http.ResponseWriter, c *viaEntryContr
 	}
 	response := map[string]any{
 		"schema": 1, "request_id": id, "view_token": admission.token,
-		"prefix_position":     admission.position,
-		"requested_execution": "auto", "required_selected_execution": "local",
-		"selected_execution": "local", "selection_epoch": admission.epoch,
-		"measurement": hopmeasure.CandidatePrivateResponseMeasurement,
-		"started":     admission.started, "admission_cancelled": !admission.started,
+		"prefix_position": admission.position,
+		"measurement":     hopmeasure.CandidatePrivateResponseMeasurement,
+		"started":         admission.started, "admission_cancelled": !admission.started,
 		"running": running, "drained": drained, "cancelled": true,
 		"accepted": false, "reviewing": false, "cleanup_pending": !drained,
 		"cleanup_error": cleanup, "failure": "", "saved_profile_id": "",
@@ -154,16 +161,16 @@ func writeOrderedCandidateResponseCancel(w http.ResponseWriter, c *viaEntryContr
 	if admission.measurement == hopmeasure.CandidatePublicResponseMeasurement {
 		response["measurement"] = admission.measurement
 	}
-	if mobilemultihop.NodeChainPrefixMode(admission.candidateMode) {
-		response["candidate_mode"] = admission.candidateMode
-		for _, field := range []string{"requested_execution", "required_selected_execution", "selected_execution", "selection_epoch"} {
-			delete(response, field)
+	if admission.candidateMode != "" {
+		publishOrderedCandidateResponseSource(response, admission.candidateMode, admission.nodes, admission.originalFinal)
+	} else {
+		response["requested_execution"], response["required_selected_execution"] = "auto", "local"
+		response["selected_execution"], response["selection_epoch"] = "local", admission.epoch
+		publishSelectedResponseSource(response, admission.measurement, admission.nodes)
+		if len(admission.owners) > 0 {
+			response["requested_execution"], response["selected_execution"] = admission.requested, admission.selected
+			publishCandidateResponseOwners(response, admission.owners, admission.selected)
 		}
-	}
-	publishSelectedResponseSource(response, admission.measurement, admission.nodes)
-	if len(admission.owners) > 0 {
-		response["requested_execution"], response["selected_execution"] = admission.requested, admission.selected
-		publishCandidateResponseOwners(response, admission.owners, admission.selected)
 	}
 	c.mu.Unlock()
 	viaEntryJSON(w, response)

@@ -202,7 +202,7 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 		}
 		if privateResponse && choice.ID == q.CandidateID && len(choice.DraftProposal) != 0 &&
 			(choice.DraftAction == orderedCandidateDraftInsertAction && job.view.candidateMode == "" ||
-				choice.DraftAction == orderedCandidateDraftReplaceAction && mobilemultihop.NodeChainPrefixMode(job.view.candidateMode)) &&
+				choice.DraftAction == orderedCandidateDraftReplaceAction && job.view.originalFinal == nil && mobilemultihop.NodeChainPrefixMode(job.view.candidateMode)) &&
 			reflect.DeepEqual(choice.DraftProposal, q.ProposedPath) {
 			draftAction = choice.DraftAction
 		}
@@ -259,7 +259,16 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 	var err error
 	var nodes []common.MultihopNodeSelection
 	if job.view.candidateMode != "" {
-		if p.prefixPreparation == nil || p.request.Scope != orderedCandidateSavedPrefixScope ||
+		if p.inventory == nil || p.inventory.candidateMode != job.view.candidateMode {
+			http.Error(w, "the original prepared response source changed", 409)
+			return
+		}
+		if job.view.originalFinal != nil {
+			if draftChoice || desktopFinalCandidateSourceMode(p.inventory.launch, p.request.Position) != job.view.candidateMode {
+				http.Error(w, "paired final responses require their original captured mode and a named next-connection profile", 409)
+				return
+			}
+		} else if p.prefixPreparation == nil || p.request.Scope != orderedCandidateSavedPrefixScope ||
 			p.prefixPreparation.CandidateMode() != job.view.candidateMode ||
 			desktopPreparedCandidateMode(p.inventory.launch, p.request.Position) != job.view.candidateMode {
 			http.Error(w, "the original prepared response source changed", 409)

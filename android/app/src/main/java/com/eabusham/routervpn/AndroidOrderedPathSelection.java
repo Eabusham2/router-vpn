@@ -202,6 +202,18 @@ final class AndroidOrderedPathSelection {
             if(hasMode(source,"shadowsocks"))result.add("shadowsocks");
             boolean imported=false;for(Member member:members)imported|=member.source.imported;
             if(!imported&&hasCapturedHysteriaFinal(source))result.add("hysteria2");
+            boolean packetPrefix="local".equals(execution)&&members.size()<=8;
+            for(int i=0;packetPrefix&&i<members.size()-1;i++) {
+                Member prefix=members.get(i);
+                packetPrefix=AndroidNodeChainCapture.pairedPacketWithoutStartLayer(prefix.source,prefix.mode);
+            }
+            if(packetPrefix)for(String mode:PREFIX_MODES) {
+                if(!AndroidNodeChainCapture.pairedPacketWithoutStartLayer(source,mode)||!hasMode(source,mode))continue;
+                try {
+                    String input=AndroidNodeChainCapture.memberInput(source,mode,source.profile());
+                    if(Libbox.routerNodeChainResponseCandidateInputSupported(input,mode))result.add(mode);
+                } catch(Exception unavailable) { /* Another transport may have a valid source. */ }
+            }
         } else if (externalExitPrefix() && literalSS(source)) result.add("shadowsocks");
         requireCurrent();return Collections.unmodifiableList(result);
     }
@@ -209,6 +221,7 @@ final class AndroidOrderedPathSelection {
     static String finalModeTitle(String mode) {
         if("shadowsocks".equals(mode))return "Shadowsocks 2022";
         if("hysteria2".equals(mode))return "Hysteria2";
+        if(PREFIX_MODES.contains(mode))return prefixModeTitle(mode);
         throw new IllegalArgumentException("Choose an exact supported final transport.");
     }
 
@@ -264,7 +277,7 @@ final class AndroidOrderedPathSelection {
         int position=prefix+1;
         if(!"local".equals(execution)||!execution.equals(original.execution)||!original.measurementOnly()||candidate.imported
                 ||prefix<0||position>=members.size()-1||members.size()!=original.members.size()
-                ||!AndroidNodeCandidateCatalog.packetMode(mode)||!mode.equals(original.modes.get(position)))
+                ||!NativeSingBoxController.nativeWireGuardFamily(mode)||!mode.equals(original.modes.get(position)))
             throw new IllegalStateException("This measured node cannot replace the original packet successor.");
         for(int i=0;i<members.size();i++) {
             Member retained=members.get(i);AndroidNodeStore.ChainSource captured=original.members.get(i);

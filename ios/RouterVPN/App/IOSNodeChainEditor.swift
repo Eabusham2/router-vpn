@@ -44,7 +44,8 @@ struct IOSNodeChainDraft {
             Set(nodes.map(\.id)).count == nodes.count && (nodes.last?.id == controlID || IOSMultihopNodeSelection.externalExitReferences(nodes, controlID: controlID, execution: "local")) &&
             (nodes.first?.mode != "shadowsocks" || IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) &&
             nodes.dropLast().enumerated().allSatisfy({ position, node in IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || (IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count) || IOSMultihopNodeSelection.supportsLocalImportedNode(node.mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes))) && nodes.last?.mode == "shadowsocks" }) &&
-            IOSMultihopNodeSelection.nativeFinalModes.contains(nodes.last?.mode ?? "")
+            (IOSMultihopNodeSelection.nativeFinalModes.contains(nodes.last?.mode ?? "") ||
+             IOSMultihopNodeSelection.supportsLocalPacketRoute(nodes, execution: "local"))
     }
 
     mutating func insertMeasured(_ candidate: String, after position: Int, compiled: [IOSMultihopNodeSelection], replacingPacketSuccessor: Bool = false) throws {
@@ -238,10 +239,10 @@ struct IOSNodeChainDraft {
         nodes.insert(.init(id: "", mode: "wg"), at: nodes.count - (beforeCONNECT ? 2 : 1))
     }
 
-    mutating func chooseFinalMode(_ mode: String) throws {
-        guard !nodes.isEmpty, IOSMultihopNodeSelection.nativeFinalModes.contains(mode),
+    mutating func chooseFinalMode(_ mode: String, execution: String = "local") throws {
+        guard !nodes.isEmpty, IOSMultihopNodeSelection.nativeFinalModes.contains(mode) || execution == "local" && IOSMultihopNodeSelection.supportsNativePrefix(mode),
               mode == "shadowsocks" || nodes.count <= IOSMultihopNodeSelection.maximumNodes && nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) else {
-            throw IOSMultihopNodeSelection.issue("Hysteria2 requires paired WireGuard or AWG2 preceding nodes and an independent Off, AES or AES with XOR whitening layer on the final node.")
+            throw IOSMultihopNodeSelection.issue("Choose a final transport supported by the selected execution and paired packet prefix.")
         }
         nodes[nodes.count - 1].mode = mode
     }
@@ -385,7 +386,8 @@ enum IOSNodeChainEditorVisible {
         if selectedPacket && nodeCount > IOSMultihopNodeSelection.maximumNodes { return IOSMultihopNodeSelection.nativePrefixModes }
         return nodeCount > IOSMultihopNodeSelection.maximumNodes && !mixedPacket ? ["wg"] : IOSMultihopNodeSelection.nativePrefixModes
     }
-    static func finalModes(_ profile: RouterProfile?, nodes: [IOSMultihopNodeSelection]) -> [String] {
+    static func finalModes(_ profile: RouterProfile?, nodes: [IOSMultihopNodeSelection], execution: String = "local",
+                           linked: [RouterProfile] = [], bundle: ClientBundle? = nil) -> [String] {
         guard let profile, nodes.last?.id == profile.id else { return [] }
         if IOSImportedShadowsocksSource.eligibleLiteral(profile) && IOSMultihopNodeSelection.supportsNativePrefix(nodes.first?.mode ?? "") { return ["shadowsocks"] }
         guard profile.normalizedNodeKind == "router-vpn", profile.external == nil else { return [] }
@@ -394,10 +396,23 @@ enum IOSNodeChainEditorVisible {
             nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) {
             modes.append("hysteria2")
         }
+        if execution == "local", nodes.count <= IOSMultihopNodeSelection.maximumNodes,
+           [nil, "", "off"].contains(profile.startLayer), let bundle, bundle.selectedRouterID == profile.id,
+           bundle.profiles["wg"]?["wg.conf"]?.isEmpty == false,
+           nodes.dropLast().allSatisfy({ node in
+               IOSMultihopNodeSelection.supportsNativePrefix(node.mode) && (node.id.isEmpty || linked.contains { member in
+                   member.id == node.id && member.normalizedNodeKind == "router-vpn" && member.external == nil && [nil, "", "off"].contains(member.startLayer)
+               })
+           }) {
+            modes += IOSMultihopNodeSelection.nativePrefixModes.filter { mode in
+                bundle.profiles[mode]?[mode == "wg" ? "wg.conf" : "awg.conf"]?.isEmpty == false
+            }
+        }
         return modes
     }
-    static func requireFinalMode(_ mode: String, profile: RouterProfile?, nodes: [IOSMultihopNodeSelection]) throws {
-        guard finalModes(profile, nodes: nodes).contains(mode) else {
+    static func requireFinalMode(_ mode: String, profile: RouterProfile?, nodes: [IOSMultihopNodeSelection], execution: String = "local",
+                                 linked: [RouterProfile] = [], bundle: ClientBundle? = nil) throws {
+        guard finalModes(profile, nodes: nodes, execution: execution, linked: linked, bundle: bundle).contains(mode) else {
             throw IOSMultihopNodeSelection.issue("Choose a final transport compatible with its original node, Start Layer and preceding nodes.")
         }
     }

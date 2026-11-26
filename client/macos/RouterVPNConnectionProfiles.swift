@@ -14,17 +14,23 @@ func macCustomPresetName(in mode: String) -> String? {
 
 enum RouterVPNOrderedNodes {
     static let prefixModes = ["wg", "awg2-fast", "awg2-strong"]
-    static let finalModes = ["shadowsocks", "hysteria2"]
-    static let editorModes = prefixModes + finalModes + ["socks5", "http-connect", "https-connect", "openvpn"]
+    static let finalModes = ["shadowsocks", "hysteria2"] + prefixModes
+    static let editorModes = prefixModes + ["shadowsocks", "hysteria2"] + ["socks5", "http-connect", "https-connect", "openvpn"]
     static func finalProfile(_ profile: [String: Any], mode: String) -> Bool {
         guard finalModes.contains(mode), profile["external"] == nil else { return false }
         if let kind = profile["node_kind"] {
             guard let kind = kind as? String, ["", "router-vpn"].contains(kind) else { return false }
         }
         if mode == "shadowsocks" { return true }
+        if prefixModes.contains(mode) { return startLayerOff(profile) }
         guard let raw = profile["start_layer"] else { return true }
         guard let hysteriaFinalLayer = raw as? String else { return false }
         return ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(hysteriaFinalLayer)
+    }
+    static func supportsPacketFinal(_ rows: [[String:String]], execution: String, profiles: [[String:Any]]) -> Bool {
+        execution == "local" && (2...8).contains(rows.count) &&
+            rows.dropLast().allSatisfy { prefixModes.contains($0["mode"] ?? "") } &&
+            pairedMembersOff(rows, profiles: profiles)
     }
     static func pairedHysteriaExecutionPath(_ rows: [[String: String]], profiles: [[String: Any]]) -> Bool {
         guard (2...8).contains(rows.count), rows.last?["mode"] == "hysteria2",
@@ -372,6 +378,9 @@ enum RouterVPNOrderedNodes {
               let profiles = current["profiles"] as? [[String: Any]] else {
             throw issue("The ordered path or selected exit changed. Reopen its editor.")
         }
+        if prefixModes.contains(rows.last?["mode"] ?? "") && !supportsPacketFinal(rows, execution: selection.execution, profiles: profiles) {
+            throw issue("A WireGuard or AWG2 final requires two to eight paired Local packet nodes with Start Layer Off throughout.")
+        }
         let externalFinal = rows.first?["id"] == selection.selectedNodeID
         if externalFinal && !externalFinalPath(rows, control: selection.selectedNodeID, profiles: profiles) {
             throw issue("An external exit requires the original paired WireGuard or AmneziaWG entry and independently linked literal Shadowsocks hops.")
@@ -518,7 +527,12 @@ struct RouterVPNOrderedNodeDraft {
                RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog) { return ["shadowsocks"] }
             return RouterVPNOrderedNodes.prefixModes
         }
-        if index == prefixes.count { return finalModes.filter { $0 == "shadowsocks" || importedIDs.isDisjoint(with: prefixes) } }
+        if index == prefixes.count {
+            let packetFinal = RouterVPNOrderedNodes.supportsPacketFinal(nodes, execution: execution, profiles: capturedCatalog)
+            return finalModes.filter { mode in
+                RouterVPNOrderedNodes.prefixModes.contains(mode) ? packetFinal : mode == "shadowsocks" || importedIDs.isDisjoint(with: prefixes)
+            }
+        }
         return []
     }
     var hasRoomForMeasuredHop: Bool {
@@ -536,13 +550,14 @@ struct RouterVPNOrderedNodeDraft {
     }
     func preparedCandidateMode(after index: Int) -> String? {
         guard execution == "local", externalExit == nil, (2...RouterVPNOrderedNodes.physicalTraversalDepth).contains(nodes.count),
-              modes.indices.contains(index), ["shadowsocks","hysteria2"].contains(finalMode),
+              modes.indices.contains(index), ["shadowsocks","hysteria2"].contains(finalMode) ||
+              (index + 1 == prefixes.count && nodes.count <= 8 && RouterVPNOrderedNodes.prefixModes.contains(finalMode)),
               modes.allSatisfy(RouterVPNOrderedNodes.prefixModes.contains),
               Set(prefixes + [control]).count == nodes.count,
               RouterVPNOrderedNodes.pairedMembersOff(nodes, profiles: capturedCatalog),
               nodes.count <= 8 || finalMode == "shadowsocks" && modes.allSatisfy({ $0 == "wg" }) else { return nil }
         if index + 1 < prefixes.count { return modes[index + 1] }
-        return finalMode == "hysteria2" && nodes.count <= 8 ? "hysteria2":nil
+        return nodes.count <= 8 && finalMode != "shadowsocks" ? finalMode:nil
     }
     func canMeasure(after index: Int) -> Bool {
         guard modes.indices.contains(index) else { return false }
@@ -688,6 +703,9 @@ struct RouterVPNOrderedNodeDraft {
     }
     func selection() throws -> RouterVPNConnectionProfileSelection {
         let ordered = try RouterVPNOrderedNodes.decode(nodes, control: control)
+        guard allowedModes(at: prefixes.count).contains(finalMode) else {
+            throw RouterVPNOrderedNodes.issue("The selected final transport is unavailable for this path and execution.")
+        }
         if externalExit != nil {
             let selection = RouterVPNConnectionProfileSelection(selectedNodeID: control, multihopEnabled: true, entryMode: "", execution: execution,
                 profileTokens: tokens.filter { key, _ in ordered.contains { $0["id"] == key } }, orderedNodes: ordered)
@@ -1439,7 +1457,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         super.init(window: window)
         let root = NSStackView(); root.orientation = .vertical; root.alignment = .leading; root.spacing = 12
         root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        let note = NSTextField(wrappingLabelWithString: "Choose the entry and preceding hops. Longer Local packet paths use paired WireGuard nodes and a paired Shadowsocks 2022 final, all with Start Layer Off. Longer Local routes can also begin with paired WireGuard or AWG2 nodes followed by literal Shadowsocks 2022 imports. For a paired final, keep every Start Layer Off on these longer routes. A Local route to an imported exit uses the paired entry’s saved Start Layer and requires Off on every import. Each packet layer must fit the route MTU. Choose Shadowsocks 2022 or Hysteria2 for the selected final exit; Hysteria2 keeps its own Start Layer. An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN middle requires a Shadowsocks 2022 final. With a paired entry, supported SS2022 imports can occupy any interior position. Server and Compare require support from every import and the native controller. An OpenVPN middle also needs its own private pairing. Each node keeps its own linked credentials and settings.")
+        let note = NSTextField(wrappingLabelWithString: "Choose the entry and preceding hops. Longer Local packet paths use paired WireGuard nodes and a paired Shadowsocks 2022 final, all with Start Layer Off. Longer Local routes can also begin with paired WireGuard or AWG2 nodes followed by literal Shadowsocks 2022 imports. For a paired final, keep every Start Layer Off on these longer routes. A Local route to an imported exit uses the paired entry’s saved Start Layer and requires Off on every import. Each packet layer must fit the route MTU. A WireGuard or AWG2 final requires two to eight paired Local packet nodes with Start Layer Off throughout. A Hysteria2 final keeps its own Start Layer. An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN middle requires a Shadowsocks 2022 final. With a paired entry, supported SS2022 imports can occupy any interior position. Server and Compare require support from every import and the native controller. An OpenVPN middle also needs its own private pairing. Each node keeps its own linked credentials and settings.")
         root.addArrangedSubview(note)
         path.setAccessibilityLabel("Ordered path"); path.target = self; path.action = #selector(selectedHopChanged); root.addArrangedSubview(path)
         transport.setAccessibilityLabel("Selected node transport")

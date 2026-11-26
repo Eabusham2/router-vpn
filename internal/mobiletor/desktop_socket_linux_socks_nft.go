@@ -5,7 +5,6 @@ package mobiletor
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"strconv"
 	"time"
@@ -50,7 +49,7 @@ func desktopLinuxSOCKSTimeout(now, deadline, controlUntil time.Time) (int64, err
 	return seconds, nil
 }
 
-func (n *desktopLinuxNFT) grantSOCKS(ctx context.Context, grant, control DesktopSocketGrant, controlUntil time.Time) (DesktopSocketReceipt, error) {
+func (n *desktopLinuxNFT) grantSOCKS(ctx context.Context, grant, previous, control DesktopSocketGrant, controlUntil time.Time) (DesktopSocketReceipt, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return DesktopSocketReceipt{}, errors.New("Linux SOCKS grant has no current original operation")
 	}
@@ -61,10 +60,8 @@ func (n *desktopLinuxNFT) grantSOCKS(ctx context.Context, grant, control Desktop
 		grant.Sequence == 0 || control.Sequence == 0 || grant.SocketID == control.SocketID {
 		return DesktopSocketReceipt{}, errors.Join(err, errors.New("Linux SOCKS grant substituted its original association"))
 	}
-	set := n.Prefix + "_" + n.kind(grant)
 	comment := grant.SocketID + ":" + strconv.FormatUint(grant.Sequence, 10) + ":socks:" + control.SocketID + ":" + strconv.FormatUint(control.Sequence, 10)
-	script := fmt.Sprintf("destroy element inet %s %s { %s }\nadd element inet %s %s { %s timeout %ds comment %s }\n", n.table(), set, n.key(grant), n.table(), set, n.key(grant), seconds, strconv.Quote(comment))
-	if _, err := desktopLinuxNFTCommand(ctx, []string{"-f", "-"}, script); err != nil {
+	if err := n.installElement(ctx, grant, previous, seconds, comment, &control); err != nil {
 		return DesktopSocketReceipt{}, err
 	}
 	readStarted := time.Now()

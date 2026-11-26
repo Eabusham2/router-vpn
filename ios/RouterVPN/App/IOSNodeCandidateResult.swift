@@ -28,7 +28,7 @@ struct IOSNodeCandidateMetadata: Decodable {
                   requestedExecution: String? = nil, selectedExecution: String? = nil, selectedPositions: [Int] = [0],
                   selectedResponse: IOSNodeCandidatePrefix? = nil) throws {
         guard candidate_mode == prefix.candidate_mode,
-              candidate_mode == nil || (prefix.hysteria2Response || prefix.packetSuccessorResponse) && requestedExecution == nil && selectedExecution == nil else { throw IOSNodeCandidateResult.issue() }
+              candidate_mode == nil || prefix.pairedFinalResponse && requestedExecution == nil && selectedExecution == nil else { throw IOSNodeCandidateResult.issue() }
         if let requestedExecution, let selectedExecution {
             guard ["server", "auto"].contains(requestedExecution), ["local", "server"].contains(selectedExecution),
                   requestedExecution == "auto" || requestedExecution == selectedExecution,

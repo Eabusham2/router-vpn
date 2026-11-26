@@ -8,6 +8,7 @@ import (
 	"net"
 	"reflect"
 	"strings"
+	"sync"
 
 	"router-vpn/internal/hopmeasure"
 )
@@ -24,173 +25,7 @@ type candidateResponseSource struct {
 	Target                               hopmeasure.CandidateTarget
 	NodeID, API, Token, Method, Password string
 	Hysteria2Options                     string `json:",omitempty"`
-	PacketMode, PacketOptions            string `json:",omitempty"`
-}
-
-func parseCandidatePacketResponseSource(input, mode string) (candidateResponseSource, error) {
-	bad := errors.New("candidate response requires its original paired WG/AWG source with Start Layer off")
-	node, err := ParseNodeLaunchInput(input)
-	if err != nil || node == nil || !NodeChainPrefixMode(mode) || node.mode != mode {
-		return candidateResponseSource{}, bad
-	}
-	layer := predecessorText(node.profile, "start_layer")
-	api, apiErr := privateAPI(predecessorText(node.profile, "router_api"))
-	token, proof := predecessorText(node.profile, "api_token"), predecessorText(node.profile, "node_proof_id")
-	if layer != "" && layer != "off" || apiErr != nil || token == "" || !proofID.MatchString(proof) {
-		return candidateResponseSource{}, bad
-	}
-	closure, err := nodeMultihopPredecessor(node)
-	if err != nil || closure == nil || closure.final["type"] != nodeChainPrefixType(mode) ||
-		closure.final["system"] != false || closure.final["detour"] != nil || closure.final["domain_resolver"] != nil || closure.final["realm"] != nil {
-		return candidateResponseSource{}, bad
-	}
-	if port, present := closure.final["listen_port"]; present && port != float64(0) {
-		return candidateResponseSource{}, bad
-	}
-	peers, ok := closure.final["peers"].([]any)
-	if !ok || len(peers) != 1 {
-		return candidateResponseSource{}, bad
-	}
-	peer, ok := peers[0].(map[string]any)
-	if !ok {
-		return candidateResponseSource{}, bad
-	}
-	target, err := nodeChainCandidateLiteralTarget(predecessorText(node.profile, "id"), node.SourceSHA256(), map[string]any{
-		"server": peer["address"], "server_port": peer["port"],
-	})
-	if err != nil {
-		return candidateResponseSource{}, bad
-	}
-	options, err := json.Marshal(closure.final)
-	if err != nil || len(options) > 4<<20 {
-		return candidateResponseSource{}, bad
-	}
-	return candidateResponseSource{Target: target, NodeID: proof, API: strings.TrimRight(api.String(), "/"), Token: token,
-		PacketMode: mode, PacketOptions: string(options)}, nil
-}
-
-// ConnectedPacketSuccessorCandidateMode describes the exact next packet role.
-// It never grants a carrier to a selected, temporary, imported or layered path.
-func (c *NodeChain) ConnectedPacketSuccessorCandidateMode(position int) string {
-	if c == nil || c.validateCapture() != nil || len(c.nodes) < 3 || len(c.nodes) > NodeChainExtendedLocalMaximumNodes ||
-		position < 0 || position >= len(c.nodes)-2 || c.importedNodes != nil || c.importedMiddle != nil || c.openVPNMiddle != nil ||
-		c.socksSource != nil || c.connectSource != nil {
-		return ""
-	}
-	if len(c.nodes) > NodeChainMaximumNodes && c.ExtendedPairedLocalNodeCount() != len(c.nodes) {
-		return ""
-	}
-	for i, node := range c.nodes {
-		proof := c.proofs[i]
-		if node == nil || proof.NodeKind != "" || proof.Kind != "" || proof.StartLayer != "off" || !proofID.MatchString(proof.NodeID) ||
-			proof.SourceSHA256 != node.SourceSHA256() || i < len(c.nodes)-1 && !NodeChainPrefixMode(proof.Mode) ||
-			i == len(c.nodes)-1 && proof.Mode != "shadowsocks" && proof.Mode != "hysteria2" {
-			return ""
-		}
-	}
-	return c.proofs[position+1].Mode
-}
-
-func (c *NodeChain) connectedCandidateResponseMode(position int, mode string) bool {
-	if mode == "hysteria2" {
-		return c.SupportsConnectedHysteria2FinalCandidate(position)
-	}
-	return NodeChainPrefixMode(mode) && c.ConnectedPacketSuccessorCandidateMode(position) == mode
-}
-
-// Reject identities already in the complete active graph before a candidate
-// handshake can roam that peer. Different clamped private-key encodings are
-// compared by their derived public identity, including client/server aliases.
-func (c *NodeChain) validatePacketSuccessorCandidate(position int, input string, response *candidateResponseSource) error {
-	bad := errors.New("packet candidate changes or aliases the original complete path")
-	if response == nil || c.ConnectedPacketSuccessorCandidateMode(position) != response.PacketMode || !NodeChainPrefixMode(response.PacketMode) {
-		return bad
-	}
-	node, err := ParseNodeLaunchInput(input)
-	if err != nil || node == nil || node.mode != response.PacketMode || node.SourceSHA256() != response.Target.SourceSHA256 {
-		return bad
-	}
-	keys := func(node *NodeProfile) (string, string, error) {
-		client, err := node.PacketClientPublicKey()
-		if err != nil {
-			return "", "", bad
-		}
-		closure, err := nodeMultihopPredecessor(node)
-		if err != nil || closure == nil {
-			return "", "", bad
-		}
-		peers, ok := closure.final["peers"].([]any)
-		if !ok || len(peers) != 1 {
-			return "", "", bad
-		}
-		peer, ok := peers[0].(map[string]any)
-		if !ok {
-			return "", "", bad
-		}
-		return client, predecessorText(peer, "public_key"), nil
-	}
-	client, server, err := keys(node)
-	if err != nil || client == server {
-		return bad
-	}
-	for i, original := range c.nodes {
-		if c.proofs[i].ProfileID == response.Target.ID || c.proofs[i].NodeID == response.NodeID {
-			return bad
-		}
-		if !NodeChainPrefixMode(original.mode) {
-			continue
-		}
-		activeClient, activeServer, err := keys(original)
-		if err != nil || client == activeClient || client == activeServer || server == activeClient || server == activeServer {
-			return bad
-		}
-	}
-	proposed := append([]*NodeProfile(nil), c.nodes...)
-	proposed[position+1] = node
-	config, proofs, _, _, err := compileNodeChain(proposed)
-	if err != nil || len(proofs) != len(proposed) {
-		return bad
-	}
-	// The original complete compiler owns nested packet MTU and fixed policy.
-	// Reuse only its candidate interface budget; credentials, outer endpoint,
-	// obfuscation and the retained prefix remain the original sealed capture.
-	var graph, options map[string]any
-	if exactJSON([]byte(config), &graph, NodeChainInputLimit) != nil ||
-		exactJSON([]byte(response.PacketOptions), &options, 4<<20) != nil ||
-		options["type"] != nodeChainPrefixType(response.PacketMode) {
-		return bad
-	}
-	rows, ok := graph["endpoints"].([]any)
-	if !ok {
-		return bad
-	}
-	mtu := 0
-	for _, raw := range rows {
-		endpoint, ok := raw.(map[string]any)
-		if !ok {
-			return bad
-		}
-		if endpoint["tag"] != proofs[position+1].Tag {
-			continue
-		}
-		if mtu != 0 || endpoint["type"] != options["type"] {
-			return bad
-		}
-		mtu, err = mtuNumber(endpoint["mtu"])
-		if err != nil {
-			return bad
-		}
-	}
-	if mtu == 0 {
-		return bad
-	}
-	options["mtu"] = mtu
-	encoded, err := json.Marshal(options)
-	if err != nil {
-		return bad
-	}
-	response.PacketOptions = string(encoded)
-	return nil
+	PacketOptions, ClientKey, ServerKey  string `json:",omitempty"`
 }
 
 func parseCandidateResponseSource(input string) (candidateResponseSource, error) {
@@ -220,10 +55,10 @@ func parseCandidateResponseSource(input string) (candidateResponseSource, error)
 		Method: predecessorText(closure.final, "method"), Password: predecessorText(closure.final, "password")}, nil
 }
 
-func parseCandidateHysteria2ResponseSource(input string) (candidateResponseSource, error) {
-	bad := errors.New("candidate response requires its original paired Hysteria2 node with Start Layer off and a private proof endpoint")
+func parseCandidateNativeResponseSource(input, mode string) (candidateResponseSource, error) {
+	bad := errors.New("candidate response requires its original paired native node with Start Layer off and a private proof endpoint")
 	node, err := ParseNodeLaunchInput(input)
-	if err != nil || node == nil || node.mode != "hysteria2" {
+	if err != nil || node == nil || node.mode != mode || !nodeChainNativeResponseMode(mode) {
 		return candidateResponseSource{}, bad
 	}
 	layer := predecessorText(node.profile, "start_layer")
@@ -236,12 +71,26 @@ func parseCandidateHysteria2ResponseSource(input string) (candidateResponseSourc
 		return candidateResponseSource{}, bad
 	}
 	closure, err := nodeMultihopPredecessor(node)
-	if err != nil || !nodeChainFinalClosure(node, closure) || closure.final["type"] != "hysteria2" ||
+	if err != nil || !nodeChainFinalClosure(node, closure) ||
 		closure.final["detour"] != nil || closure.final["domain_resolver"] != nil || closure.final["realm"] != nil ||
 		closure.final["server_ports"] != nil {
 		return candidateResponseSource{}, bad
 	}
-	target, err := nodeChainCandidateLiteralTarget(predecessorText(node.profile, "id"), node.SourceSHA256(), closure.final)
+	result := candidateResponseSource{NodeID: nodeID, API: strings.TrimRight(api.String(), "/"), Token: token}
+	targetSource := closure.final
+	if NodeChainPrefixMode(mode) {
+		peer, ok := closure.final["peers"].([]any)[0].(map[string]any)
+		if !ok {
+			return candidateResponseSource{}, bad
+		}
+		result.ClientKey, err = node.PacketClientPublicKey()
+		result.ServerKey = predecessorText(peer, "public_key")
+		if err != nil || !nodeChainCanonicalPeer(result.ServerKey) || result.ClientKey == result.ServerKey {
+			return candidateResponseSource{}, bad
+		}
+		targetSource = map[string]any{"server": peer["address"], "server_port": peer["port"]}
+	}
+	target, err := nodeChainCandidateLiteralTarget(predecessorText(node.profile, "id"), node.SourceSHA256(), targetSource)
 	if err != nil {
 		return candidateResponseSource{}, bad
 	}
@@ -249,8 +98,106 @@ func parseCandidateHysteria2ResponseSource(input string) (candidateResponseSourc
 	if err != nil || len(options) > 4<<20 {
 		return candidateResponseSource{}, bad
 	}
-	return candidateResponseSource{Target: target, NodeID: nodeID, API: strings.TrimRight(api.String(), "/"), Token: token,
-		Hysteria2Options: string(options)}, nil
+	result.Target = target
+	if mode == "hysteria2" {
+		result.Hysteria2Options = string(options)
+	} else {
+		result.PacketOptions = string(options)
+	}
+	return result, nil
+}
+
+// Compile the complete prospective route, including every unchanged suffix.
+// Its replacement uses the same nested MTU and peer options as future launch.
+// The active prefix cannot be resized to accommodate a replacement candidate.
+func (c *NodeChain) candidatePacketOptions(position int, input string) (string, error) {
+	candidate, err := ParseNodeLaunchInput(input)
+	if err != nil {
+		return "", err
+	}
+	nodes := append([]*NodeProfile(nil), c.nodes...)
+	successor := position + 1
+	if position < 0 || successor >= len(nodes) {
+		return "", nodeChainCandidatePreparationError
+	}
+	nodes[successor] = candidate
+	config, proofs, _, physical, err := compileNodeChain(nodes)
+	if err != nil || !reflect.DeepEqual(physical, c.physical) {
+		return "", nodeChainCandidatePreparationError
+	}
+	original, err := packetCandidateEndpoints(c.config)
+	if err != nil {
+		return "", err
+	}
+	prospective, err := packetCandidateEndpoints(config)
+	if err != nil {
+		return "", err
+	}
+	for i, proof := range proofs[:successor] {
+		old, next := original[proof.Tag], prospective[proof.Tag]
+		if proof != c.proofs[i] || old == nil || next == nil || old["mtu"] != next["mtu"] {
+			return "", nodeChainCandidatePreparationError
+		}
+	}
+	endpoint := prospective[proofs[successor].Tag]
+	if endpoint == nil || endpoint["type"] != nodeChainPrefixType(candidate.mode) || endpoint["detour"] != proofs[position].Tag {
+		return "", nodeChainCandidatePreparationError
+	}
+	if successor < len(nodes)-1 && !candidateUnboundPacket(endpoint) {
+		return "", nodeChainCandidatePreparationError
+	}
+	delete(endpoint, "detour") // Replaced exclusively by the sealed live prefix dialer.
+	endpoint["tag"] = "proxy"
+	raw, err := json.Marshal(endpoint)
+	return string(raw), err
+}
+
+func candidateUnboundPacket(endpoint map[string]any) bool {
+	port, present := endpoint["listen_port"]
+	return !present || port == float64(0)
+}
+
+func packetCandidateEndpoints(config string) (map[string]map[string]any, error) {
+	var graph struct {
+		Endpoints []map[string]any `json:"endpoints"`
+	}
+	if json.Unmarshal([]byte(config), &graph) != nil {
+		return nil, nodeChainCandidatePreparationError
+	}
+	result := make(map[string]map[string]any, len(graph.Endpoints))
+	for _, endpoint := range graph.Endpoints {
+		result[predecessorText(endpoint, "tag")] = endpoint
+	}
+	return result, nil
+}
+
+// ConnectedPacketSuccessorCandidateMode describes the exact next packet role.
+// This source readback grants no carrier. Connected and prepared owners are acquired separately.
+func (c *NodeChain) ConnectedPacketSuccessorCandidateMode(position int) string {
+	if c == nil || c.validateCapture() != nil || len(c.nodes) < 3 || len(c.nodes) > NodeChainExtendedLocalMaximumNodes ||
+		position < 0 || position >= len(c.nodes)-2 || c.importedNodes != nil || c.importedMiddle != nil || c.openVPNMiddle != nil ||
+		c.socksSource != nil || c.connectSource != nil {
+		return ""
+	}
+	if len(c.nodes) > NodeChainMaximumNodes && c.ExtendedPairedLocalNodeCount() != len(c.nodes) {
+		return ""
+	}
+	for i, node := range c.nodes {
+		proof := c.proofs[i]
+		if node == nil || proof.NodeKind != "" || proof.Kind != "" || proof.StartLayer != "off" || !proofID.MatchString(proof.NodeID) ||
+			proof.SourceSHA256 != node.SourceSHA256() || i < len(c.nodes)-1 && !NodeChainPrefixMode(proof.Mode) ||
+			i == len(c.nodes)-1 && proof.Mode != "shadowsocks" && proof.Mode != "hysteria2" {
+			return ""
+		}
+	}
+	return c.proofs[position+1].Mode
+}
+
+func (c *NodeChain) candidateNativeResponseModeAt(position int) string {
+	if mode := c.nativeFinalCandidateMode(position); mode != "" {
+		return mode
+	}
+	return c.ConnectedPacketSuccessorCandidateMode(position)
 }
 
 // SupportsConnectedHysteria2FinalCandidate is descriptive source metadata.
@@ -258,159 +205,266 @@ func parseCandidateHysteria2ResponseSource(input string) (candidateResponseSourc
 // owner. No imported, dormant, selected Server/Compare or layered source
 // receives this admission; the original complete packet prefix stays intact.
 func (c *NodeChain) SupportsConnectedHysteria2FinalCandidate(position int) bool {
+	return c.ConnectedFinalCandidateResponseMode(position) == "hysteria2"
+}
+
+func nodeChainNativeResponseMode(mode string) bool {
+	return mode == "hysteria2" || NodeChainPrefixMode(mode)
+}
+
+func (c *NodeChain) ConnectedFinalCandidateResponseMode(position int) string {
+	return c.nativeFinalCandidateMode(position)
+}
+
+// PreparedFinalCandidateResponseMode describes a potential replacement for
+// this complete source. Only a separately acquired closed prefix can execute it.
+func (c *NodeChain) PreparedFinalCandidateResponseMode(position int) string {
+	return c.nativeFinalCandidateMode(position)
+}
+
+func (c *NodeChain) nativeFinalCandidateMode(position int) string {
 	if c == nil || c.validateCapture() != nil || len(c.nodes) < 2 || len(c.nodes) > NodeChainMaximumNodes ||
 		position != len(c.nodes)-2 || c.importedNodes != nil || c.importedMiddle != nil || c.openVPNMiddle != nil ||
 		c.socksSource != nil || c.connectSource != nil {
-		return false
+		return ""
 	}
 	for i, node := range c.nodes {
 		proof := c.proofs[i]
 		if node == nil || proof.NodeKind != "" || proof.Kind != "" || proof.StartLayer != "off" || !proofID.MatchString(proof.NodeID) ||
 			proof.SourceSHA256 != node.SourceSHA256() {
-			return false
+			return ""
 		}
 		if i <= position {
 			if !NodeChainPrefixMode(proof.Mode) {
-				return false
+				return ""
 			}
-		} else if proof.Mode != "hysteria2" || proof.StartLayer != "off" {
-			return false
+		} else if !nodeChainNativeResponseMode(proof.Mode) || proof.StartLayer != "off" {
+			return ""
 		}
 	}
-	return true
+	return c.proofs[len(c.proofs)-1].Mode
 }
 
-// NodeChainCandidatePacketEngine is implemented by the ordinary Local and
-// separately owned preparation native adapters. Their distinct request reads
-// supply one original UDP endpoint and prefix; a caller cannot supply a tag,
-// address or replacement native owner.
+// NodeChainCandidatePacketEngine is implemented only by the ordinary Local
+// native adapter. The sealed request supplies one original UDP endpoint and
+// prefix; the caller cannot supply a tag, address or replacement native owner.
 type NodeChainCandidatePacketEngine interface {
 	DialCandidatePacketContext(context.Context, *NodeChainCandidatePacketRequest) (net.Conn, error)
 }
 
-// A connected or prepared Local adapter can construct this endpoint only
-// after its own exact request read succeeds. The private stream destination
-// comes from the sealed candidate, not a caller.
-type NodeChainCandidatePacketEndpointEngine interface {
-	OpenCandidatePacketEndpointContext(context.Context, *NodeChainCandidatePacketRequest) (NodeChainCandidatePacketEndpoint, error)
-}
-
-type NodeChainCandidatePacketEndpoint interface {
-	DialPrivateContext(context.Context) (net.Conn, error)
+type NodeChainCandidateEndpoint interface {
+	DialPrivate(context.Context, string) (net.Conn, error)
 	Close() error
 }
 
-type NodeChainCandidatePacketCapture struct {
-	Mode, Options, PrivateAddress string
+type NodeChainCandidateEndpointEngine interface {
+	OpenCandidateEndpointContext(context.Context, *NodeChainCandidatePacketRequest) (NodeChainCandidateEndpoint, error)
+}
+
+// One request owns the candidate's key across all fifty streams. A second
+// simultaneous WG device with that key would move the peer's reply endpoint.
+type candidatePacketRun struct {
+	ctx       context.Context
+	cancel    context.CancelFunc
+	request   *NodeChainCandidatePacketRequest
+	open      func(context.Context, *NodeChainCandidatePacketRequest) (NodeChainCandidateEndpoint, error)
+	endpoint  NodeChainCandidateEndpoint
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (r *candidatePacketRun) Respond(ctx context.Context, complete func() error) error {
+	q := r.request
+	if _, _, _, err := q.current(ctx); err != nil {
+		return err
+	}
+	if r.endpoint == nil {
+		// Construction and the initial handshake belong to the first sample.
+		// Keep the endpoint only after its original per-sample budget succeeds.
+		owned, cancel := context.WithCancel(r.ctx)
+		stop := context.AfterFunc(ctx, cancel)
+		var err error
+		r.endpoint, err = r.open(owned, q)
+		if !stop() || err != nil || r.endpoint == nil || ctx.Err() != nil {
+			cancel()
+			return errors.Join(err, ctx.Err(), hopmeasure.ErrStale)
+		}
+		r.cancel = cancel
+	}
+	nonce, err := randomHex(16)
+	if err != nil {
+		return err
+	}
+	return q.response.exchangeChallenge(ctx, func(call context.Context, tag, address string) (net.Conn, error) {
+		if tag != q.plan.prefix.Tag {
+			return nil, hopmeasure.ErrStale
+		}
+		return r.endpoint.DialPrivate(call, address)
+	}, q.plan.prefix.Tag, nonce, func(string) error { return complete() })
+}
+
+func (r *candidatePacketRun) Close() error {
+	r.closeOnce.Do(func() {
+		if r.cancel != nil {
+			r.cancel()
+		}
+		if r.endpoint != nil {
+			r.closeErr = r.endpoint.Close()
+		}
+		mu, keys := r.request.reservations()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, key := range []string{r.request.response.ClientKey, r.request.response.ServerKey} {
+			if (*keys)[key] == r {
+				delete(*keys, key)
+			}
+		}
+	})
+	return r.closeErr
+}
+
+// The temporary Box retains its own closed ingress, physical identity and
+// native prefix instances. Neither interface supplies an arbitrary UDP socket.
+type NodeChainPreparedPacketEngine interface {
+	ObservePreparationContext(context.Context) (NodeChainIdentity, error)
+	DialPreparedCandidatePacketContext(context.Context, *NodeChainCandidatePacketRequest) (net.Conn, error)
+	OpenPreparedCandidateEndpointContext(context.Context, *NodeChainCandidatePacketRequest) (NodeChainCandidateEndpoint, error)
+}
+
+type nodeChainPreparedPacketOwner interface {
+	PreparedPacketEngineContext(context.Context, *NodeChainCandidatePreparation) (NodeChainPreparedPacketEngine, error)
 }
 
 type NodeChainCandidatePacketRequest struct {
-	self     *NodeChainCandidatePacketRequest
-	engine   *nodeChainCandidateEngine
-	prepared *nodeChainCandidatePreparationPacketCapability
-	response candidateResponseSource
+	self           *NodeChainCandidatePacketRequest
+	plan           *NodeChainCandidatePlan
+	engine         *nodeChainCandidateEngine
+	prepared       *NodeChainCandidatePreparationRuntime
+	preparedReader NodeChainPreparedPacketEngine
+	response       candidateResponseSource
+}
+
+func (r *NodeChainCandidatePacketRequest) source(identity NodeChainIdentity) (NodeChainIdentity, string, string, error) {
+	if nodeChainNativeResponseMode(r.plan.responseMode) && (r.response.Hysteria2Options != "" || r.response.PacketOptions != "") {
+		for _, source := range r.plan.responses {
+			if source == r.response {
+				return identity, r.plan.prefix.Tag, source.Target.Address, nil
+			}
+		}
+	}
+	return NodeChainIdentity{}, "", "", hopmeasure.ErrStale
 }
 
 func (r *NodeChainCandidatePacketRequest) Read(ctx context.Context, reader NodeChainEngine, original *NodeChain) (NodeChainIdentity, string, string, error) {
-	if r == nil || r.self != r || r.prepared != nil || r.engine == nil || reader == nil ||
-		!reflect.TypeOf(reader).Comparable() || reader != r.engine.reader || original == nil ||
-		original != r.engine.active || r.engine.plan == nil || original != r.engine.plan.chain ||
-		r.engine.plan.preparedPacket != nil {
+	if r == nil || r.self != r || r.engine == nil || r.prepared != nil || reader == nil || !reflect.TypeOf(reader).Comparable() || reader != r.engine.reader ||
+		original == nil || original != r.engine.active || r.plan == nil || r.plan != r.engine.plan || r.plan.preparedNativeResponse || original != r.plan.chain {
 		return NodeChainIdentity{}, "", "", hopmeasure.ErrStale
 	}
 	if _, err := r.engine.current(ctx); err != nil {
 		return NodeChainIdentity{}, "", "", err
 	}
-	return r.readResponse(r.engine.plan, r.engine.identity)
+	return r.source(r.engine.identity)
 }
 
-// ReadPreparation accepts only the independently sealed temporary capability.
-// A connected request, copied preparation, replaced reader or reopened ingress
-// cannot borrow this route even when its original profile bytes match.
-func (r *NodeChainCandidatePacketRequest) ReadPreparation(ctx context.Context, reader NodeChainCandidatePreparationPacketEngine, preparation *NodeChainCandidatePreparation) (NodeChainIdentity, string, string, error) {
-	if r == nil || r.self != r || r.engine != nil || r.prepared == nil || reader == nil ||
-		!reflect.TypeOf(reader).Comparable() || reader != r.prepared.reader ||
-		r.prepared.runtime == nil || preparation == nil || preparation != r.prepared.runtime.preparation ||
-		preparation.candidates != r.prepared.plan {
+func (r *NodeChainCandidatePacketRequest) ReadPrepared(ctx context.Context, reader NodeChainPreparedPacketEngine, original *NodeChainCandidatePreparation) (NodeChainIdentity, string, string, error) {
+	if r == nil || r.self != r || r.engine != nil || r.prepared == nil || reader == nil || !reflect.TypeOf(reader).Comparable() || reader != r.preparedReader ||
+		original == nil || original != r.prepared.preparation || r.plan == nil || !r.plan.preparedNativeResponse || original.candidates != r.plan {
 		return NodeChainIdentity{}, "", "", hopmeasure.ErrStale
 	}
-	if err := r.prepared.current(ctx); err != nil {
+	native, err := r.prepared.retainedPacketEngine(ctx)
+	if err != nil || native != reader {
+		return NodeChainIdentity{}, "", "", errors.Join(err, hopmeasure.ErrStale)
+	}
+	identity, err := reader.ObservePreparationContext(ctx)
+	if err != nil || identity.SourceSHA256 != original.sourceSHA || identity.ConfigSHA256 != original.configSHA {
+		return NodeChainIdentity{}, "", "", errors.Join(err, hopmeasure.ErrStale)
+	}
+	if err = externalObservationLock(ctx, &r.prepared.mu); err != nil {
 		return NodeChainIdentity{}, "", "", err
 	}
-	return r.readResponse(r.prepared.plan, r.prepared.identity)
-}
-
-func (r *NodeChainCandidatePacketRequest) readResponse(plan *NodeChainCandidatePlan, identity NodeChainIdentity) (NodeChainIdentity, string, string, error) {
-	mode := plan.responseMode
-	if mode == "hysteria2" {
-		if r.response.Hysteria2Options == "" || r.response.PacketMode != "" || r.response.PacketOptions != "" {
-			return NodeChainIdentity{}, "", "", hopmeasure.ErrStale
-		}
-	} else if !NodeChainPrefixMode(mode) || r.response.PacketMode != mode || r.response.PacketOptions == "" || r.response.Hysteria2Options != "" {
+	current := r.prepared.started && !r.prepared.retired && r.prepared.identity == identity
+	r.prepared.mu.Unlock()
+	if !current {
 		return NodeChainIdentity{}, "", "", hopmeasure.ErrStale
 	}
-	for _, source := range plan.responses {
-		if source == r.response {
-			return identity, plan.prefix.Tag, source.Target.Address, nil
+	return r.source(identity)
+}
+
+func (r *NodeChainCandidatePacketRequest) current(ctx context.Context) (NodeChainIdentity, string, string, error) {
+	if r != nil && r.self == r {
+		if r.prepared != nil {
+			return r.ReadPrepared(ctx, r.preparedReader, r.prepared.preparation)
+		}
+		if r.engine != nil {
+			return r.Read(ctx, r.engine.reader, r.engine.active)
 		}
 	}
 	return NodeChainIdentity{}, "", "", hopmeasure.ErrStale
-}
-
-func (r *NodeChainCandidatePacketRequest) readCurrent(ctx context.Context) (NodeChainIdentity, string, string, error) {
-	if r != nil && r.engine != nil && r.prepared == nil {
-		return r.Read(ctx, r.engine.reader, r.engine.active)
-	}
-	if r != nil && r.engine == nil && r.prepared != nil && r.prepared.runtime != nil {
-		return r.ReadPreparation(ctx, r.prepared.reader, r.prepared.runtime.preparation)
-	}
-	return NodeChainIdentity{}, "", "", hopmeasure.ErrStale
-}
-
-func (r *NodeChainCandidatePacketRequest) packetCapture() (NodeChainCandidatePacketCapture, error) {
-	api, err := privateAPI(r.response.API)
-	if err != nil || !NodeChainPrefixMode(r.response.PacketMode) || r.response.PacketOptions == "" {
-		return NodeChainCandidatePacketCapture{}, hopmeasure.ErrStale
-	}
-	return NodeChainCandidatePacketCapture{r.response.PacketMode, r.response.PacketOptions, api.Host}, nil
-}
-func (r *NodeChainCandidatePacketRequest) ReadPacketEndpoint(ctx context.Context, reader NodeChainEngine, original *NodeChain) (NodeChainCandidatePacketCapture, error) {
-	if _, _, _, err := r.Read(ctx, reader, original); err != nil {
-		return NodeChainCandidatePacketCapture{}, err
-	}
-	return r.packetCapture()
-}
-func (r *NodeChainCandidatePacketRequest) ReadPreparationPacketEndpoint(ctx context.Context, reader NodeChainCandidatePreparationPacketEngine, preparation *NodeChainCandidatePreparation) (NodeChainCandidatePacketCapture, error) {
-	if _, _, _, err := r.ReadPreparation(ctx, reader, preparation); err != nil {
-		return NodeChainCandidatePacketCapture{}, err
-	}
-	return r.packetCapture()
-}
-func (r *NodeChainCandidatePacketRequest) readCurrentPacketEndpoint(ctx context.Context) (NodeChainCandidatePacketCapture, error) {
-	if _, _, _, err := r.readCurrent(ctx); err != nil {
-		return NodeChainCandidatePacketCapture{}, err
-	}
-	return r.packetCapture()
 }
 
 func (r *NodeChainCandidatePacketRequest) dial(ctx context.Context) (net.Conn, error) {
-	if _, _, _, err := r.readCurrent(ctx); err != nil {
+	if _, _, _, err := r.current(ctx); err != nil {
 		return nil, err
 	}
-	var reader NodeChainCandidatePacketEngine
-	if r.engine != nil {
-		reader, _ = r.engine.reader.(NodeChainCandidatePacketEngine)
+	var connection net.Conn
+	var err error
+	if r.prepared != nil {
+		connection, err = r.preparedReader.DialPreparedCandidatePacketContext(ctx, r)
 	} else {
-		reader = r.prepared.reader
+		reader, ok := r.engine.reader.(NodeChainCandidatePacketEngine)
+		if !ok {
+			return nil, hopmeasure.ErrStale
+		}
+		connection, err = reader.DialCandidatePacketContext(ctx, r)
 	}
-	if reader == nil {
+	_, _, _, observed := r.current(ctx)
+	// Retain nonnil late connections for the original transport's joined Close.
+	return connection, errors.Join(err, observed, ctx.Err())
+}
+
+func (r *NodeChainCandidatePacketRequest) reservations() (*sync.Mutex, *map[string]*candidatePacketRun) {
+	if r.prepared != nil {
+		return &r.prepared.mu, &r.prepared.candidatePacketKeys
+	}
+	runtime := &r.engine.active.runtime
+	return &runtime.mu, &runtime.candidatePacketKeys
+}
+
+func (r *NodeChainCandidatePacketRequest) reserve(ctx context.Context) (hopmeasure.CandidateResponseRun, error) {
+	run := &candidatePacketRun{ctx: ctx, request: r}
+	if r.prepared != nil {
+		run.open = r.preparedReader.OpenPreparedCandidateEndpointContext
+	} else {
+		reader, ok := r.engine.reader.(NodeChainCandidateEndpointEngine)
+		if !ok {
+			return nil, hopmeasure.ErrStale
+		}
+		run.open = reader.OpenCandidateEndpointContext
+	}
+	mu, keys := r.reservations()
+	if err := externalObservationLock(ctx, mu); err != nil {
+		return nil, err
+	}
+	defer mu.Unlock()
+	if r.prepared != nil {
+		if r.prepared.retired || r.prepared.lifetime == nil || r.prepared.lifetime.Err() != nil {
+			return nil, hopmeasure.ErrStale
+		}
+	} else {
+		runtime := &r.engine.active.runtime
+		if runtime.closed || runtime.identity != r.engine.identity || runtime.engine != r.engine.reader {
+			return nil, hopmeasure.ErrStale
+		}
+	}
+	source := r.response
+	if (*keys)[source.ClientKey] != nil || (*keys)[source.ServerKey] != nil {
 		return nil, hopmeasure.ErrStale
 	}
-	connection, err := reader.DialCandidatePacketContext(ctx, r)
-	_, _, _, observed := r.readCurrent(ctx)
-	// Retain every late nonnil result. The protocol carrier joins its exact
-	// Close before the connected or prepared measurement lease is released.
-	return connection, errors.Join(err, observed, ctx.Err())
+	if *keys == nil {
+		*keys = make(map[string]*candidatePacketRun)
+	}
+	(*keys)[source.ClientKey], (*keys)[source.ServerKey] = run, run
+	return run, nil
 }
 
 func NodeChainCandidateInputSupportedForMeasurement(input, measurement string) bool {
@@ -496,7 +550,7 @@ func (c *NodeChain) pairedCandidateStream(position int) bool {
 }
 
 func (c *NodeChain) candidatePrefixMeasurementValidated(position int) string {
-	if position < 0 || position >= len(c.proofs) {
+	if position < 0 || position >= len(c.proofs)-1 {
 		return ""
 	}
 	if c.socksSource != nil {
@@ -621,84 +675,74 @@ func (p *NodeChainCandidatePlan) newService(ctx context.Context, engine hopmeasu
 	if p.measurement == hopmeasure.CandidatePublicResponseMeasurement {
 		return p.newPublicResponseService(ctx, engine, prefix)
 	}
-	var requestFor func(candidateResponseSource) *NodeChainCandidatePacketRequest
-	var factory NodeChainCandidatePacketEndpointEngine
 	if p.responseMode != "" {
-		var original *nodeChainCandidateEngine
-		var prepared *nodeChainCandidatePreparationPacketCapability
+		var base NodeChainCandidatePacketRequest
+		base.plan = p
 		switch owner := engine.(type) {
 		case *nodeChainCandidateEngine:
-			if owner.plan != p || p.preparedPacket != nil {
+			if p.preparedNativeResponse || owner.plan != p {
 				return nil, hopmeasure.ErrStale
 			}
-			original = owner
-			factory, _ = owner.reader.(NodeChainCandidatePacketEndpointEngine)
+			base.engine = owner
 		case *NodeChainCandidatePreparationRuntime:
-			var err error
-			prepared, err = owner.packetCapability(ctx, p)
+			if !p.preparedNativeResponse || owner.preparation == nil || owner.preparation.candidates != p {
+				return nil, hopmeasure.ErrStale
+			}
+			native, err := owner.retainedPacketEngine(ctx)
 			if err != nil {
 				return nil, err
 			}
-			factory, _ = prepared.reader.(NodeChainCandidatePacketEndpointEngine)
+			base.prepared, base.preparedReader = owner, native
 		default:
 			return nil, hopmeasure.ErrStale
 		}
-		requestFor = func(source candidateResponseSource) *NodeChainCandidatePacketRequest {
-			request := &NodeChainCandidatePacketRequest{engine: original, prepared: prepared, response: source}
-			request.self = request
-			return request
-		}
-	}
-	if NodeChainPrefixMode(p.responseMode) {
-		if factory == nil {
-			return nil, errors.New("authenticated packet candidate requires its exact Local endpoint factory")
-		}
-		open := func(ctx context.Context, target hopmeasure.CandidateTarget) (hopmeasure.CandidateResponseSession, error) {
+		requestFor := func(ctx context.Context, target hopmeasure.CandidateTarget) (*NodeChainCandidatePacketRequest, error) {
 			for _, source := range p.responses {
-				if source.Target != target {
-					continue
+				if source.Target == target {
+					request := base
+					request.self, request.response = &request, source
+					_, _, _, err := request.current(ctx)
+					return &request, err
 				}
-				request := requestFor(source)
-				if _, _, _, err := request.readCurrent(ctx); err != nil {
-					return nil, err
-				}
-				endpoint, err := factory.OpenCandidatePacketEndpointContext(ctx, request)
-				if endpoint == nil {
-					return nil, errors.Join(err, errors.New("packet candidate returned no original endpoint"))
-				}
-				_, _, _, observed := request.readCurrent(ctx)
-				// Preserve a late nonnil endpoint even when its open failed. The
-				// generalized worker joins this exact Close before publishing.
-				return &candidatePacketResponseSession{request: request, endpoint: endpoint, prefix: p.prefix.Tag}, errors.Join(err, observed, ctx.Err())
 			}
 			return nil, hopmeasure.ErrStale
 		}
-		if len(p.chain.proofs) > NodeChainMaximumNodes {
-			return hopmeasure.NewExtendedResponseSessionCandidatesContext(ctx, engine, prefix, p.targets, NodeChainInputLimit, p, open)
-		}
-		return hopmeasure.NewCapturedResponseSessionCandidatesContext(ctx, engine, prefix, p.targets, NodeChainInputLimit, open)
-	}
-	if p.responseMode == "hysteria2" {
-		if requestFor == nil || openCandidateHysteria2 == nil {
-			return nil, errors.New("authenticated Hysteria2 candidate requires its original Local packet carrier")
-		}
-		respond := func(ctx context.Context, target hopmeasure.CandidateTarget, complete func() error) error {
-			for _, source := range p.responses {
-				if source.Target == target {
-					request := requestFor(source)
-					nonce, err := randomHex(16)
-					if err != nil {
-						return err
-					}
-					return source.exchangeChallenge(ctx, func(call context.Context, tag, destination string) (net.Conn, error) {
-						if tag != p.prefix.Tag {
-							return nil, hopmeasure.ErrStale
-						}
-						return openCandidateHysteria2(call, request, destination)
-					}, p.prefix.Tag, nonce, func(string) error { return complete() })
+		if NodeChainPrefixMode(p.responseMode) {
+			if base.engine != nil {
+				if _, ok := base.engine.reader.(NodeChainCandidateEndpointEngine); !ok {
+					return nil, hopmeasure.ErrStale
 				}
 			}
-			return hopmeasure.ErrStale
+			open := func(ctx context.Context, target hopmeasure.CandidateTarget) (hopmeasure.CandidateResponseRun, error) {
+				request, err := requestFor(ctx, target)
+				if err != nil {
+					return nil, err
+				}
+				return request.reserve(ctx)
+			}
+			if len(p.chain.proofs) > NodeChainMaximumNodes {
+				return hopmeasure.NewExtendedResponseRunContext(ctx, engine, prefix, p.targets, NodeChainInputLimit, p, open)
+			}
+			return hopmeasure.NewCapturedResponseRunContext(ctx, engine, prefix, p.targets, NodeChainInputLimit, open)
+		}
+		if p.responseMode != "hysteria2" || openCandidateHysteria2 == nil {
+			return nil, hopmeasure.ErrStale
+		}
+		respond := func(ctx context.Context, target hopmeasure.CandidateTarget, complete func() error) error {
+			request, err := requestFor(ctx, target)
+			if err != nil {
+				return err
+			}
+			nonce, err := randomHex(16)
+			if err != nil {
+				return err
+			}
+			return request.response.exchangeChallenge(ctx, func(call context.Context, tag, destination string) (net.Conn, error) {
+				if tag != p.prefix.Tag {
+					return nil, hopmeasure.ErrStale
+				}
+				return openCandidateHysteria2(call, request, destination)
+			}, p.prefix.Tag, nonce, func(string) error { return complete() })
 		}
 		return hopmeasure.NewCapturedResponseCandidatesContext(ctx, engine, prefix, p.targets, NodeChainInputLimit, respond)
 	}
@@ -717,42 +761,6 @@ func (p *NodeChainCandidatePlan) newService(ctx context.Context, engine hopmeasu
 		return hopmeasure.NewExtendedResponseCandidatesContext(ctx, engine, prefix, p.targets, NodeChainInputLimit, p, respond)
 	}
 	return hopmeasure.NewCapturedResponseCandidatesContext(ctx, engine, prefix, p.targets, NodeChainInputLimit, respond)
-}
-
-type candidatePacketResponseSession struct {
-	request  *NodeChainCandidatePacketRequest
-	endpoint NodeChainCandidatePacketEndpoint
-	prefix   string
-}
-
-func (s *candidatePacketResponseSession) Respond(ctx context.Context, complete func() error) error {
-	if s == nil || s.request == nil || s.endpoint == nil || complete == nil {
-		return hopmeasure.ErrStale
-	}
-	r := s.request
-	if _, _, _, err := r.readCurrent(ctx); err != nil {
-		return err
-	}
-	nonce, err := randomHex(16)
-	if err != nil {
-		return err
-	}
-	return r.response.exchangeChallenge(ctx, func(call context.Context, tag, destination string) (net.Conn, error) {
-		capture, err := r.readCurrentPacketEndpoint(call)
-		if err != nil || tag != s.prefix || destination != capture.PrivateAddress {
-			return nil, hopmeasure.ErrStale
-		}
-		connection, err := s.endpoint.DialPrivateContext(call)
-		_, _, _, observed := r.readCurrent(call)
-		return connection, errors.Join(err, observed, call.Err())
-	}, s.prefix, nonce, func(string) error { return complete() })
-}
-
-func (s *candidatePacketResponseSession) Close() error {
-	if s == nil || s.endpoint == nil {
-		return nil
-	}
-	return s.endpoint.Close()
 }
 
 func (s candidateResponseSource) exchange(ctx context.Context, engine hopmeasure.CandidateEngine, tag string, complete func() error) error {

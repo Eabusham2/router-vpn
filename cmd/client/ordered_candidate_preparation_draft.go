@@ -56,8 +56,9 @@ func desktopTypedFinalResponseMembers(members []desktopNodeChainMember, executio
 
 // This describes a next-connection proposal, not a connected measurement
 // grant. Only the retained Local catalog can choose this response protocol.
-func desktopHysteria2FinalResponseMembers(members []desktopNodeChainMember, execution string, position int, candidate common.RouterProfile) bool {
+func desktopFinalResponseMembers(members []desktopNodeChainMember, execution string, position int, candidate common.RouterProfile, mode string) bool {
 	if execution != "local" || len(members) < 2 || len(members) > mobilemultihop.NodeChainMaximumNodes || position != len(members)-2 ||
+		mode != "hysteria2" && !mobilemultihop.NodeChainPrefixMode(mode) ||
 		candidate.External != nil || candidate.NodeKind != "" && candidate.NodeKind != "router-vpn" ||
 		candidate.StartLayer != "" && candidate.StartLayer != "off" {
 		return false
@@ -68,18 +69,18 @@ func desktopHysteria2FinalResponseMembers(members []desktopNodeChainMember, exec
 			candidate.NodeProofID != "" && member.Profile.NodeProofID == candidate.NodeProofID {
 			return false
 		}
-		if i < len(members)-1 && !mobilemultihop.NodeChainPrefixMode(member.Mode) || i == len(members)-1 && member.Mode != "hysteria2" {
+		if i < len(members)-1 && !mobilemultihop.NodeChainPrefixMode(member.Mode) || i == len(members)-1 && member.Mode != mode {
 			return false
 		}
 	}
 	return true
 }
 
-// Packet candidates replace one original successor and preserve the complete
-// suffix. The native parser also checks the actual peer keys and source closure.
+// Packet successor proposals retain every original suffix member. This source
+// classifier grants no native or dormant measurement authority.
 func desktopConnectedResponseMembers(members []desktopNodeChainMember, execution string, position int, candidate common.RouterProfile, mode string) bool {
-	if mode == "hysteria2" {
-		return desktopHysteria2FinalResponseMembers(members, execution, position, candidate)
+	if desktopFinalResponseMembers(members, execution, position, candidate, mode) {
+		return true
 	}
 	if !mobilemultihop.NodeChainPrefixMode(mode) || execution != "local" || len(members) < 3 || len(members) > mobilemultihop.NodeChainMaximumNodes && (mode != "wg" || !common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members))) || position < 0 || position > len(members)-3 || members[position+1].Mode != mode ||
 		candidate.External != nil || candidate.NodeKind != "" && candidate.NodeKind != "router-vpn" || candidate.StartLayer != "" && candidate.StartLayer != "off" {
@@ -142,7 +143,7 @@ func orderedResponseProfileWithMode(ctx context.Context, root, execution string,
 	typedFinal := desktopTypedFinalResponseMembers(members, execution, position)
 	if candidateMode != "" {
 		if !desktopConnectedResponseMembers(members, execution, position, candidate, candidateMode) {
-			return empty, nil, "", errors.New("this response cannot replace the original successor")
+			return empty, nil, "", errors.New("this response cannot replace the original member while preserving its transport and complete route")
 		}
 	} else if !publicResponse && (execution != "local" && !desktopSelectedResponseProposal(members, execution, position, candidate) || position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" && !typedFinal) {
 		return empty, nil, "", errors.New("this measurement has no complete supported stream path")

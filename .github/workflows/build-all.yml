@@ -484,11 +484,17 @@ jobs:
                       shell("input", "tap", (x + end_x) // 2, (y + end_y) // 2)
                       prefix = f"{pages}-{caption.lower()}"
                       popup = capture(prefix + "-choices")
-                      choices = {item.get("text") for widget in popup if widget.get("package") == package
+                      choices = {item.get("text"): item for widget in popup if widget.get("package") == package
                                  and widget.get("class") == "android.widget.ListView"
                                  for item in widget.iter("node") if item.get("text")}
                       if original not in choices or len(choices) < 2:
                           raise RuntimeError(f"{caption}: the installed spinner did not expose its choices")
+                      row_x, row_y, row_end_x, row_end_y = bounds(choices[original])
+                      label = next(item for item in spinner if item.get("text") == original)
+                      label_x, label_y, label_end_x, label_end_y = bounds(label)
+                      if row_x < x or row_end_x > end_x or (row_end_x-row_x <= label_end_x-label_x and
+                              row_end_y-row_y < label_end_y-label_y):
+                          raise RuntimeError(f"{caption}: the popup clipped its original visible choice")
                       shell("input", "keyevent", "KEYCODE_BACK")
                       nodes = capture(prefix + "-closed")
                       if not any(n.get("package") == package for n in nodes) or selected_label(home_choice(nodes, caption)) != original:

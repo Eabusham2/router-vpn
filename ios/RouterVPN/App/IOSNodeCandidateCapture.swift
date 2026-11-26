@@ -35,14 +35,14 @@ import Libbox
               proofs.indices.contains(prefixPosition), selectedResponse ? proofs[prefixPosition].selectedResponse(in: proofs) : proofs[prefixPosition].supported(in: proofs),
               proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }), (2...8).contains(proofs.count) || IOSMultihopNodeSelection.extendedOriginalModes(proofs.map(\.mode), execution: "local") else { throw issue() }
         let publicResponse = proofs[prefixPosition].metric == "routed-public-candidate-response"
-        let hysteria2Response = proofs[prefixPosition].hysteria2Response
-        let packetResponse = proofs[prefixPosition].packetSuccessorResponse
-        guard !(hysteria2Response || packetResponse) || !selectedResponse, !preparedResponse || !selectedResponse else { throw issue() }
+        let pairedFinalResponse = proofs[prefixPosition].pairedFinalResponse
+        guard !selectedResponse || (!pairedFinalResponse && !preparedResponse) else { throw issue() }
         let candidateMode = proofs[prefixPosition].candidate_mode ?? "shadowsocks"
-        let packetPlan = packetResponse || preparedResponse && hysteria2Response ?
+        let packetResponse = proofs[prefixPosition].packetSuccessorResponse(in: proofs)
+        let packetPlan = packetResponse || preparedResponse && pairedFinalResponse ?
             try responseSourcePlan(originalLaunch, proofs: proofs, position: prefixPosition, mode: candidateMode, prepared: preparedResponse) : nil
         defer { if let packetPlan { try? packetPlan.close() } }
-        let completeSource = publicResponse || selectedResponse || hysteria2Response || packetResponse
+        let completeSource = publicResponse || selectedResponse || pairedFinalResponse
         let excludedMembers = proofs.prefix(completeSource ? proofs.count : prefixPosition + 1)
         let excluded = Set(excludedMembers.map(\.profile_id))
         let paired = Set(excludedMembers.map(\.node_id).filter { !$0.isEmpty })
@@ -82,19 +82,17 @@ import Libbox
                 var input = "", reason = "This saved transport or Start Layer cannot supply this measurement"
                 do {
                     input = try member(profile: profile, files: files, mode: candidateMode)
-                    if packetResponse {
+                    if preparedResponse && pairedFinalResponse {
+                        guard let packetPlan, LibboxRouterNodeChainPreparedCandidateInputFitsSource(packetPlan, Int32(prefixPosition), input) else { throw issue() }
+                    } else if packetResponse {
                         guard let packetPlan, LibboxRouterNodeChainPacketSuccessorCandidateInputSupported(input, candidateMode),
-                              preparedResponse ? LibboxRouterNodeChainPreparedCandidateInputFitsSource(packetPlan, Int32(prefixPosition), input) :
-                                LibboxRouterNodeChainPacketSuccessorCandidateFitsSource(packetPlan, Int32(prefixPosition), input) else { throw issue() }
-                    } else if hysteria2Response {
-                        guard LibboxRouterNodeChainHysteria2CandidateInputSupported(input) else { throw issue() }
-                        if preparedResponse {
-                            guard let packetPlan, LibboxRouterNodeChainPreparedCandidateInputFitsSource(packetPlan, Int32(prefixPosition), input) else { throw issue() }
-                        }
+                              LibboxRouterNodeChainPacketSuccessorCandidateFitsSource(packetPlan, Int32(prefixPosition), input) else { throw issue() }
+                    } else if pairedFinalResponse {
+                        guard LibboxRouterNodeChainResponseCandidateInputSupported(input, candidateMode) else { throw issue() }
                     } else {
                         guard LibboxRouterNodeChainCandidateInputSupported(input) else { throw issue() }
                     }
-                    if !hysteria2Response && !packetResponse && (publicResponse || proofs[prefixPosition].metric == "routed-candidate-response") {
+                    if !pairedFinalResponse && (publicResponse || proofs[prefixPosition].metric == "routed-candidate-response") {
                         guard LibboxRouterNodeChainCandidateInputSupportedForMeasurement(input, proofs[prefixPosition].metric) else { throw issue() }
                     }
                     reason = ""; inputs.append(input)
@@ -104,7 +102,7 @@ import Libbox
         }
         guard originals.isEmpty, !inputs.isEmpty else { throw issue() }
         var offered: [String: Any] = ["schema": 1, "revision": stamp.revision, "inputs": inputs]
-        if hysteria2Response || packetResponse { offered["response_mode"] = candidateMode }
+        if pairedFinalResponse { offered["response_mode"] = candidateMode }
         let inventory = try JSONSerialization.data(withJSONObject: offered, options: [.sortedKeys])
         guard inventory.count <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw issue() }
         guard publicResponse else { return (inventory, rows) }
@@ -131,7 +129,7 @@ import Libbox
         })
     }
     static func member(profile: [String: Any], files: [String: [String: String]], mode: String = "shadowsocks") throws -> String {
-        guard ["shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(mode) else { throw issue() }
+        guard ["shadowsocks", "hysteria2"].contains(mode) || IOSMultihopNodeSelection.supportsNativePrefix(mode) else { throw issue() }
         guard profile["start_layer"] == nil || profile["start_layer"] is String else { throw issue() }
         let layer = profile["start_layer"] as? String ?? "off"
         guard ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(layer),

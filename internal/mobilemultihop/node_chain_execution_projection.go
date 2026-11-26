@@ -359,6 +359,24 @@ func nodeChainExecutionGate(graph map[string]any) error {
 		return nodeChainExecutionError
 	}
 	graph["outbounds"] = append(rows, map[string]any{"type": NodeChainExecutionGateType, "tag": NodeChainExecutionGateTag, "detour": SelectorTag})
+	// The local compiler may have routed the paired final API through its
+	// selector before a LAN deny. It must close along with application ingress.
+	rules, ok := route["rules"].([]any)
+	if route["rules"] != nil && !ok {
+		return nodeChainExecutionError
+	}
+	for _, raw := range rules {
+		rule, ok := raw.(map[string]any)
+		if !ok {
+			return nodeChainExecutionError
+		}
+		if rule["action"] == "route" {
+			if rule["outbound"] != SelectorTag {
+				return nodeChainExecutionError
+			}
+			rule["outbound"] = NodeChainExecutionGateTag
+		}
+	}
 	route["final"] = NodeChainExecutionGateTag
 	return nil
 }

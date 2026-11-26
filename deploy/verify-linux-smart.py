@@ -26,7 +26,7 @@ import time
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
-from linux_smart_peers import open_peers, prepare_reference_tools
+from linux_smart_peers import OUTER, open_peers, prepare_reference_tools
 
 HERE = Path(__file__).resolve()
 REPO = HERE.parents[1]
@@ -34,6 +34,7 @@ INSTALL = Path("/opt/router-vpn-client")
 CLIENT = INSTALL / "router-vpn-client"
 ENGINE = INSTALL / "runtime/native/sing-box-routervpn"
 POLICY = "com.eabusham.routervpn.controller.policy"
+CLIENT_PHYSICAL = "172.30.241.1"
 DECOY = ("198.18.0.3", 39471)
 PAIRS = (("wg-pq", "wg"), ("naive-h3", "hysteria2"), ("naive-h3", "naive-h2"))
 
@@ -222,7 +223,7 @@ def canary(peer):
     armed = threading.Event()
     with receiver, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
         sender.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"smartphy\0")
-        sender.bind(("198.18.0.1", 0))
+        sender.bind((CLIENT_PHYSICAL, 0))
         nonce = secrets.token_bytes(16)
         def send():
             while not stop.is_set():
@@ -330,7 +331,7 @@ def physical_rejections(peer):
 
 def qualify(work, user, password, peer_ns, source, candidate, policy, layer, succeed):
     with open_peers(peer_ns, work, source, candidate, layer) as peers:
-        profile = dict(peers.profile, kill_switch_policy=policy, mtu_policy="manual", manual_mtu=1360)
+        profile = dict(peers.profile, kill_switch_policy=policy, home_lan_access=False, mtu_policy="manual", manual_mtu=1360)
         private_write(INSTALL / "routers.json", {"schema_version": 4, "selected_id": profile["id"], "profiles": [profile]})
         base = INSTALL / "generated" / profile["id"]
         base.mkdir(mode=0o700)
@@ -518,11 +519,11 @@ def paired_namespaces():
             cleanup.callback(remove_namespace, name)
             run("ip", "-n", name, "link", "set", "lo", "up")
         run("ip", "-n", client, "link", "add", "smartphy", "type", "veth", "peer", "name", "smartpeer", "netns", peer)
-        for ns, link, address in ((client, "smartphy", "198.18.0.1/24"), (peer, "smartpeer", "198.18.0.2/24")):
+        for ns, link, address in ((client, "smartphy", CLIENT_PHYSICAL + "/24"), (peer, "smartpeer", OUTER + "/24")):
             run("ip", "-n", ns, "addr", "add", address, "dev", link)
             run("ip", "-n", ns, "link", "set", link, "up")
-        run("ip", "-n", peer, "addr", "add", "198.18.0.3/32", "dev", "smartpeer")
-        run("ip", "-n", client, "route", "add", "default", "via", "198.18.0.2")
+        run("ip", "-n", peer, "addr", "add", DECOY[0] + "/32", "dev", "smartpeer")
+        run("ip", "-n", client, "route", "add", "default", "via", OUTER)
         yield client, peer
 
 
@@ -624,12 +625,19 @@ def root_fixture(archive, references):
             with tempfile.TemporaryDirectory(prefix=label+"-", dir=temp) as scratch, paired_namespaces() as (client, peer):
                 work = Path(scratch)
                 work.chmod(0o711)
-                upper, overlay_work = work / "upper", work / "overlay"
+                backing = work / "overlay-backing"
+                backing.mkdir(mode=0o700)
+                upper, overlay_work = backing / "upper", backing / "work"
                 upper.mkdir(mode=0o700)
                 overlay_work.mkdir(mode=0o700)
+                # Overlayfs exposes the upper directory's mode at the mounted root.
+                installed_mode = stat.S_IMODE(template.stat().st_mode)
+                upper.chmod(installed_mode)
                 run("mount", "-t", "overlay", "overlay", "-o",
                     f"lowerdir={template},upperdir={upper},workdir={overlay_work}", INSTALL)
                 try:
+                    if stat.S_IMODE(INSTALL.stat().st_mode) != installed_mode:
+                        raise RuntimeError("Mounted application root differs from the installed directory mode")
                     run("ip", "netns", "exec", client, sys.executable, HERE, "--case",
                         work, user, password, peer, source, candidate, policy, layer, outcome, timeout=650)
                 finally:

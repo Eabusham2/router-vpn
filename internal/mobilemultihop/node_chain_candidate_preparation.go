@@ -78,10 +78,10 @@ func newNodeChainCandidatePreparationOwned(original *NodeChain, typed *nodeChain
 	}
 	var candidates *NodeChainCandidatePlan
 	if requested != "" {
-		if typed != nil || multiple != nil {
+		if typed != nil || multiple != nil || original.PreparedCandidateResponseMode(position) != requested {
 			return nil, nodeChainCandidatePreparationError
 		}
-		candidates, err = original.newPreparedPacketCandidatePlan(position, inventory, requested)
+		candidates, err = original.newPreparedResponseCandidatePlan(position, inventory, requested)
 	} else {
 		candidates, err = original.newPacketCandidatePlanOwned(position, inventory, multiple)
 	}
@@ -140,6 +140,23 @@ func newNodeChainCandidatePreparationOwned(original *NodeChain, typed *nodeChain
 	if err != nil || !reflect.DeepEqual(proofs, original.proofs[:position+1]) || !nodeChainSamePhysical(physical, original.physical) {
 		return nil, errors.Join(err, nodeChainCandidatePreparationError)
 	}
+	if requested != "" {
+		// The worker uses the saved route's prospective final MTU. Every live
+		// packet prefix must have the exact endpoint and MTU it was derived from.
+		closed, err := packetCandidateEndpoints(config)
+		if err != nil {
+			return nil, err
+		}
+		saved, err := packetCandidateEndpoints(savedConfig)
+		if err != nil {
+			return nil, err
+		}
+		for _, proof := range proofs {
+			if closed[proof.Tag] == nil || !reflect.DeepEqual(closed[proof.Tag], saved[proof.Tag]) {
+				return nil, nodeChainCandidatePreparationError
+			}
+		}
+	}
 	var graph, saved map[string]any
 	if exactJSON([]byte(config), &graph, 4<<20) != nil || exactJSON([]byte(savedConfig), &saved, 4<<20) != nil {
 		return nil, nodeChainCandidatePreparationError
@@ -178,108 +195,50 @@ func newNodeChainCandidatePreparationOwned(original *NodeChain, typed *nodeChain
 	return p, p.validate()
 }
 
-// PreparedCandidateResponseMode describes only the original paired, Off Local
-// source. The source may be an unsaved draft; this does not acquire a native
-// route. A preparation separately seals and proves its closed prefix owner.
+// PreparedCandidateResponseMode describes an original complete Local source.
+// Executing it requires the separate, closed preparation and its own native owner.
 func (c *NodeChain) PreparedCandidateResponseMode(position int) string {
-	if mode := c.ConnectedPacketSuccessorCandidateMode(position); mode != "" {
-		return mode
-	}
-	if c.SupportsConnectedHysteria2FinalCandidate(position) {
-		return "hysteria2"
-	}
-	return ""
+	return c.candidateNativeResponseModeAt(position)
 }
 
-// PreparedCandidateInputFitsSource performs the same complete replacement
-// validation as the preparation factory without acquiring a native owner.
 func (c *NodeChain) PreparedCandidateInputFitsSource(position int, input string) bool {
 	mode := c.PreparedCandidateResponseMode(position)
 	if mode == "" || len(input) == 0 || len(input) > NodeChainInputLimit {
 		return false
 	}
-	inventory, err := json.Marshal(NodeChainCandidateInventory{Schema: 1,
-		Revision: "prepared-candidate-row-preflight", Inputs: []string{input}, ResponseMode: mode})
+	inventory, err := json.Marshal(NodeChainCandidateInventory{Schema: 1, Revision: "prepared-candidate-row-preflight", Inputs: []string{input}, ResponseMode: mode})
 	if err != nil {
 		return false
 	}
-	_, err = c.newPreparedPacketCandidatePlan(position, string(inventory), mode)
-	clear(inventory)
+	defer clear(inventory)
+	_, err = c.newPreparedResponseCandidatePlan(position, string(inventory), mode)
 	return err == nil
 }
 
-// This source capability has a distinct purpose and exact original identity.
-// It is never accepted by the connected measurement constructor.
-type nodeChainCandidatePreparationPacketSource struct {
-	self                     *nodeChainCandidatePreparationPacketSource
-	chain                    *NodeChain
-	position                 int
-	mode, inventorySHA, seal string
-}
-
-func (s *nodeChainCandidatePreparationPacketSource) digest() string {
-	if s == nil || s.chain == nil {
-		return ""
+func (c *NodeChain) newPreparedResponseCandidatePlan(position int, inventory, mode string) (*NodeChainCandidatePlan, error) {
+	plan, err := c.newCandidatePlanInputs(position, inventory, nil, nil, false, mode, true)
+	if err != nil || mode != "hysteria2" {
+		return plan, err
 	}
-	raw, _ := json.Marshal([]any{"routervpn-closed-local-packet-candidate-v1",
-		s.chain.SourceSHA256(), s.chain.ConfigSHA256(), s.position, s.mode, s.inventorySHA})
-	defer clear(raw)
-	return externalDigest(raw)
-}
-func (s *nodeChainCandidatePreparationPacketSource) matches(p *NodeChainCandidatePlan) bool {
-	return s != nil && s.self == s && p != nil && s.chain == p.chain &&
-		p.multiple == nil && !p.connectedFinalResponse && p.responseMode != "" &&
-		s.position == p.prefix.Position && s.mode == p.responseMode &&
-		s.inventorySHA == externalDigest([]byte(p.inventory)) && s.seal != "" && s.seal == s.digest() &&
-		s.chain.PreparedCandidateResponseMode(s.position) == s.mode
-}
-
-func (c *NodeChain) newPreparedPacketCandidatePlan(position int, inventory, mode string) (*NodeChainCandidatePlan, error) {
-	if mode == "" || c.PreparedCandidateResponseMode(position) != mode {
+	// Packet rows have already compiled every retained suffix and its exact
+	// endpoint MTU. Validate the prospective HY2 final against the same source.
+	var record NodeChainCandidateInventory
+	if exactJSON([]byte(inventory), &record, NodeChainInputLimit) != nil {
 		return nil, nodeChainCandidatePreparationError
 	}
-	plan, err := c.newCandidatePlanInputs(position, inventory, nil, nil, false, mode)
-	if err != nil {
-		return nil, err
-	}
-	// Packet replacements already compile their complete future route and seal
-	// its effective candidate MTU. The HY2 final must also retain the complete
-	// original policy and suffix role before its prefix is opened.
-	if mode == "hysteria2" {
-		var inventory NodeChainCandidateInventory
-		if exactJSON([]byte(plan.inventory), &inventory, NodeChainInputLimit) != nil {
+	for _, input := range record.Inputs {
+		node, err := ParseNodeLaunchInput(input)
+		if err != nil || node == nil || node.mode != mode {
 			return nil, nodeChainCandidatePreparationError
 		}
-		for _, input := range inventory.Inputs {
-			node, err := ParseNodeLaunchInput(input)
-			if err != nil || node == nil || node.mode != mode {
-				return nil, nodeChainCandidatePreparationError
-			}
-			proposed := append([]*NodeProfile(nil), c.nodes...)
-			proposed[position+1] = node
-			_, proofs, _, _, err := compileNodeChain(proposed)
-			if err != nil || len(proofs) != len(c.proofs) || !reflect.DeepEqual(proofs[:position+1], c.proofs[:position+1]) {
-				return nil, errors.Join(err, nodeChainCandidatePreparationError)
-			}
+		proposed := append([]*NodeProfile(nil), c.nodes...)
+		proposed[position+1] = node
+		_, proofs, _, physical, err := compileNodeChain(proposed)
+		if err != nil || len(proofs) != len(c.proofs) || !nodeChainSamePhysical(physical, c.physical) || !reflect.DeepEqual(proofs[:position+1], c.proofs[:position+1]) {
+			return nil, errors.Join(err, nodeChainCandidatePreparationError)
 		}
 	}
-	source := &nodeChainCandidatePreparationPacketSource{chain: c, position: position,
-		mode: mode, inventorySHA: externalDigest([]byte(inventory))}
-	source.self = source
-	source.seal = source.digest()
-	plan.preparedPacket = source
-	raw, _ := json.Marshal([]string{"routervpn-closed-local-packet-candidate-v1", plan.capture, source.seal})
-	plan.capture = externalDigest(raw)
-	clear(raw)
-	plan.seal = plan.digest()
-	return plan, plan.validate()
-}
-
-func (p *NodeChainCandidatePreparation) CandidateMode() string {
-	if p.validate() != nil {
-		return ""
-	}
-	return p.candidates.CandidateMode()
+	return plan, nil
 }
 
 // ParseNodeChainCandidatePreparation derives the executable graph again; no
@@ -344,9 +303,6 @@ func (p *NodeChainCandidatePreparation) validate() error {
 		p.seal == "" || p.seal != p.digest() || p.position < 0 || p.position >= len(p.original.proofs)-1 || !reflect.DeepEqual(p.proofs, p.original.proofs[:p.position+1]) {
 		return nodeChainCandidatePreparationError
 	}
-	if p.candidates.responseMode != "" && (p.typedOriginal != nil || p.multipleOriginal != nil || !p.candidates.preparedPacket.matches(p.candidates)) {
-		return nodeChainCandidatePreparationError
-	}
 	if p.multipleOriginal != nil && (p.typedOriginal != nil || !p.multipleOriginal.currentValidated(p.original)) {
 		return nodeChainCandidatePreparationError
 	}
@@ -399,6 +355,13 @@ func (p *NodeChainCandidatePreparation) CaptureSHA256() string {
 	}
 	return p.capture
 }
+func (p *NodeChainCandidatePreparation) CandidateMode() string {
+	if p.validate() != nil {
+		return ""
+	}
+	return p.candidates.responseMode
+}
+
 func (p *NodeChainCandidatePreparation) PrefixPosition() int {
 	if p.validate() != nil {
 		return -1

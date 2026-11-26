@@ -108,7 +108,7 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 			}
 		} else if !paired || i < len(nodes)-1 && !mobilemultihop.NodeChainPrefixMode(selected.Mode) &&
 			!(privateStreams && selected.Mode == "shadowsocks") || i == len(nodes)-1 && !desktopNodeChainFinalSupported(selected.Mode, profile.StartLayer) {
-			return nil, errors.New("ordered selection requires paired WireGuard or AWG2 prefixes and a paired SS2022 or unlayered Hysteria2 final")
+			return nil, errors.New("ordered selection requires its supported paired packet prefix and captured final transport")
 		}
 		// Only the first closure owns physical bootstrap. An ambient lookup of
 		// any later transport would bypass its preceding selected prefix.
@@ -118,6 +118,9 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 			}
 		}
 		result = append(result, desktopNodeChainMember{Profile: common.CloneRouterProfile(profile), Mode: selected.Mode})
+	}
+	if mobilemultihop.NodeChainPrefixMode(nodes[len(nodes)-1].Mode) && !desktopPacketFinalMembersSupported(result, execution) {
+		return nil, errors.New("a packet final requires two to eight paired Local nodes with Start Layer off")
 	}
 	if _, err := desktopNodeChainSourceSchema(result); err != nil {
 		return nil, err

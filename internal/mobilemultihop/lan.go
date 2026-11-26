@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
+	"net/url"
 	"sort"
 	"strconv"
 )
@@ -133,17 +134,7 @@ func applyLANPolicyFinal(config, profiles, final string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	address, err := netip.ParseAddr(endpoint.Hostname())
-	if err != nil {
-		return "", errors.New("invalid selected control address")
-	}
-	address = address.Unmap()
-	bits := 128
-	if address.Is4() {
-		bits = 32
-	}
-	host := netip.PrefixFrom(address, bits).String()
-	port, _ := strconv.Atoi(endpoint.Port())
+	control, host := pairedControlRoute(endpoint, tag, final)
 	rules, ok := route["rules"].([]any)
 	if route["rules"] != nil && !ok {
 		return "", errors.New("invalid owned route rules")
@@ -157,14 +148,14 @@ func applyLANPolicyFinal(config, profiles, final string) (string, error) {
 	}
 	policy = append(policy, []any{
 		map[string]any{"inbound": []string{tag}, "protocol": "dns", "action": "hijack-dns"},
-		map[string]any{"inbound": []string{tag}, "network": "tcp", "ip_cidr": []string{host}, "port": port, "action": "route", "outbound": final},
+		control,
 		map[string]any{"inbound": []string{tag}, "ip_cidr": networks, "action": "reject"},
 	}...)
 	// Explicit included routes prevent a more-specific physical LAN route from
 	// winning over the TUN default on either operating system. Keep BOTH defaults;
 	// IPv6-Off is separately enforced by the existing graph's reject rule.
 	captures := append([]string{"0.0.0.0/0", "::/0"}, networks...)
-	captures = append(captures, host)
+	captures = append(captures, host.String())
 	tun["route_address"] = captures
 	route["rules"] = append(policy, rules...)
 	body, err := json.Marshal(root)
@@ -172,4 +163,27 @@ func applyLANPolicyFinal(config, profiles, final string) (string, error) {
 		return "", errors.New("compiled LAN policy exceeds safety bound")
 	}
 	return string(body), nil
+}
+
+// The caller has validated the selected paired API with privateAPI and has an
+// exact final outbound. Its host route is separate from physical socket policy.
+func pairedControlRoute(endpoint *url.URL, inbound, final string) (map[string]any, netip.Prefix) {
+	address, _ := netip.ParseAddr(endpoint.Hostname())
+	address = address.Unmap()
+	host := netip.PrefixFrom(address, address.BitLen())
+	port, _ := strconv.Atoi(endpoint.Port())
+	return map[string]any{"inbound": []string{inbound}, "network": "tcp", "ip_cidr": []string{host.String()}, "port": port, "action": "route", "outbound": final}, host
+}
+
+// Return the ordinary profile's one authenticated private TCP socket. Mapped
+// and noncanonical addresses cannot authorize an alias for the captured host.
+func pairedNodeControlRoute(profile map[string]any, endpoint *url.URL, inbound string) map[string]any {
+	if endpoint == nil || profile["node_kind"] != "router-vpn" || !proofID.MatchString(predecessorText(profile, "node_proof_id")) || predecessorText(profile, "api_token") == "" {
+		return nil
+	}
+	control, host := pairedControlRoute(endpoint, inbound, "proxy")
+	if host.Addr().String() != endpoint.Hostname() {
+		return nil
+	}
+	return control
 }

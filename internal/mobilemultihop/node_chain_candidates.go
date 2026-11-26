@@ -34,7 +34,7 @@ func candidateInventoryResponseMode(inventory string) (string, error) {
 		return "", nil
 	}
 	var mode string
-	if json.Unmarshal(header.ResponseMode, &mode) != nil || mode != "hysteria2" && !NodeChainPrefixMode(mode) {
+	if json.Unmarshal(header.ResponseMode, &mode) != nil || !nodeChainNativeResponseMode(mode) {
 		return "", nodeChainCandidatePreparationError
 	}
 	return mode, nil
@@ -59,8 +59,8 @@ type NodeChainCandidatePlan struct {
 	targets                []hopmeasure.CandidateTarget
 	measurement            string
 	connectedFinalResponse bool
+	preparedNativeResponse bool
 	responseMode           string
-	preparedPacket         *nodeChainCandidatePreparationPacketSource
 	responses              []candidateResponseSource
 	publicResponses        []candidatePublicResponseSource
 	capture                string
@@ -88,18 +88,17 @@ func (c *NodeChain) newPacketCandidatePlanOwned(position int, inventory string, 
 // occur at the same ordinal in the complete inventory.
 func (c *NodeChain) NewCandidatePlanFromInputs(position int, inventory string, inputs []*NodeChainCandidateInput) (*NodeChainCandidatePlan, error) {
 	// The optional discriminator is revalidated with the complete inventory
-	// below. This factory seals connected Local provenance. The distinct
-	// preparation factory rebinds that source to its closed-prefix purpose;
-	// selected factories retain their existing admission.
+	// below. Only this connected Local factory can request the native UDP
+	// carrier; dormant and selected factories retain their existing admission.
 	requested, err := candidateInventoryResponseMode(inventory)
 	if err != nil {
 		return nil, err
 	}
 	if requested != "" {
-		return c.newCandidatePlanInputs(position, inventory, nil, inputs, false, requested)
+		return c.newCandidatePlanInputs(position, inventory, nil, inputs, false, requested, false)
 	}
 	if c != nil && c.validateCapture() == nil && c.connectedFinalResponsePrefix(position) {
-		return c.newCandidatePlanInputs(position, inventory, nil, inputs, true, "")
+		return c.newCandidatePlanInputs(position, inventory, nil, inputs, true, "", false)
 	}
 	var multiple *nodeChainCandidateMultipleOriginal
 	if c != nil && c.importedNodes != nil {
@@ -112,17 +111,17 @@ func (c *NodeChain) NewCandidatePlanFromInputs(position int, inventory string, i
 	return c.newPacketCandidatePlanInputs(position, inventory, multiple, inputs)
 }
 func (c *NodeChain) newPacketCandidatePlanInputs(position int, inventory string, multiple *nodeChainCandidateMultipleOriginal, inputs []*NodeChainCandidateInput) (*NodeChainCandidatePlan, error) {
-	return c.newCandidatePlanInputs(position, inventory, multiple, inputs, false, "")
+	return c.newCandidatePlanInputs(position, inventory, multiple, inputs, false, "", false)
 }
 
-func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multiple *nodeChainCandidateMultipleOriginal, inputs []*NodeChainCandidateInput, connectedFinalResponse bool, responseMode string) (*NodeChainCandidatePlan, error) {
+func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multiple *nodeChainCandidateMultipleOriginal, inputs []*NodeChainCandidateInput, connectedFinalResponse bool, responseMode string, prepared bool) (*NodeChainCandidatePlan, error) {
 	requested, err := candidateInventoryResponseMode(inventory)
 	if err != nil || requested != responseMode {
 		return nil, nodeChainCandidatePreparationError
 	}
 	measurement := c.CandidatePrefixMeasurement(position)
 	if responseMode != "" {
-		if multiple != nil || connectedFinalResponse || !c.connectedCandidateResponseMode(position, responseMode) {
+		if multiple != nil || connectedFinalResponse || c.candidateNativeResponseModeAt(position) != responseMode {
 			return nil, nodeChainCandidatePreparationError
 		}
 		measurement = hopmeasure.CandidatePrivateResponseMeasurement
@@ -152,11 +151,30 @@ func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multi
 	plan := &NodeChainCandidatePlan{metadataPages: &nodeChainCandidateMetadataCache{}, chain: c, multiple: multiple, inventory: inventory, revision: record.Revision, prefix: c.proofs[position]}
 	plan.connectedFinalResponse = connectedFinalResponse
 	plan.responseMode = responseMode
+	plan.preparedNativeResponse = prepared
 	if measurement != hopmeasure.CandidateTCPMeasurement {
 		plan.measurement = measurement
 	}
 	ids, proofs := map[string]bool{}, map[string]bool{}
-	for _, member := range c.proofs[:position+1] {
+	members := c.proofs[:position+1]
+	var packetKeys map[string]bool
+	if prepared || NodeChainPrefixMode(responseMode) {
+		members = c.proofs
+	}
+	if NodeChainPrefixMode(responseMode) {
+		packetKeys = make(map[string]bool)
+		for _, member := range c.nodes {
+			if !NodeChainPrefixMode(member.mode) {
+				continue
+			}
+			client, server, err := nodeChainPacketKeys(member)
+			if err != nil || client == server || packetKeys[client] || packetKeys[server] {
+				return nil, nodeChainCandidatePreparationError
+			}
+			packetKeys[client], packetKeys[server] = true, true
+		}
+	}
+	for _, member := range members {
 		ids[member.ProfileID] = true
 		if member.NodeID != "" {
 			proofs[member.NodeID] = true
@@ -171,11 +189,8 @@ func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multi
 		var err error
 		var response candidateResponseSource
 		if inputs == nil {
-			if responseMode == "hysteria2" {
-				response, err = parseCandidateHysteria2ResponseSource(input)
-				target, proof = response.Target, response.NodeID
-			} else if NodeChainPrefixMode(responseMode) {
-				response, err = parseCandidatePacketResponseSource(input, responseMode)
+			if responseMode != "" {
+				response, err = parseCandidateNativeResponseSource(input, responseMode)
 				target, proof = response.Target, response.NodeID
 			} else {
 				target, proof, err = nodeChainCandidateTarget(input)
@@ -191,11 +206,6 @@ func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multi
 		}
 		if err != nil || ids[target.ID] || proof != "" && proofs[proof] {
 			return nil, errors.Join(err, errors.New("candidate source duplicates or changes the captured prefix inventory"))
-		}
-		if NodeChainPrefixMode(responseMode) {
-			if err := c.validatePacketSuccessorCandidate(position, input, &response); err != nil {
-				return nil, err
-			}
 		}
 		ids[target.ID] = true
 		if proof != "" {
@@ -215,6 +225,16 @@ func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multi
 			if err != nil || source.Target != target || source.NodeID != proof {
 				return nil, errors.Join(err, errors.New("invalid private candidate response source"))
 			}
+			if packetKeys != nil {
+				if packetKeys[source.ClientKey] || packetKeys[source.ServerKey] {
+					return nil, errors.New("packet candidate requires independent client and server keys")
+				}
+				packetKeys[source.ClientKey], packetKeys[source.ServerKey] = true, true
+				source.PacketOptions, err = c.candidatePacketOptions(position, input)
+				if err != nil {
+					return nil, err
+				}
+			}
 			plan.responses = append(plan.responses, source)
 		}
 		plan.targets = append(plan.targets, target)
@@ -228,10 +248,16 @@ func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multi
 	if connectedFinalResponse {
 		domain += "/connected-original-final-response"
 	}
-	if NodeChainPrefixMode(responseMode) {
-		domain += "/connected-original-" + responseMode + "-packet-successor-response"
-	} else if responseMode != "" {
-		domain += "/connected-original-" + responseMode + "-final-response"
+	if responseMode != "" {
+		if prepared && position < len(c.proofs)-2 {
+			domain += "/closed-prefix-" + responseMode + "-packet-successor-response"
+		} else if prepared {
+			domain += "/closed-prefix-" + responseMode + "-final-response"
+		} else if position < len(c.proofs)-2 {
+			domain += "/connected-original-" + responseMode + "-packet-successor-response"
+		} else {
+			domain += "/connected-original-" + responseMode + "-final-response"
+		}
 	}
 	if plan.measurement != "" {
 		domain += "/" + plan.measurement
@@ -272,30 +298,14 @@ func ParseNodeChainCandidateInput(input string) (*NodeChainCandidateInput, error
 // ParseNodeChainHysteria2CandidateInput retains only the validated original
 // HY2 source. It grants neither TCP eligibility nor a native prefix owner.
 func ParseNodeChainHysteria2CandidateInput(input string) (*NodeChainCandidateInput, error) {
-	if len(input) == 0 || len(input) > NodeChainInputLimit {
-		return nil, nodeChainError
-	}
-	response, err := parseCandidateHysteria2ResponseSource(input)
-	if err != nil {
-		return nil, err
-	}
-	captured := &NodeChainCandidateInput{input: input, proof: response.NodeID, target: response.Target,
-		originalInput: input, originalProof: response.NodeID, originalTarget: response.Target,
-		responseMode: "hysteria2", originalResponseMode: "hysteria2", response: response, originalResponse: response}
-	captured.self = captured
-	return captured, nil
+	return ParseNodeChainResponseCandidateInput(input, "hysteria2")
 }
 
-func NodeChainHysteria2CandidateInputSupported(input string) bool {
-	_, err := ParseNodeChainHysteria2CandidateInput(input)
-	return err == nil
-}
-
-func ParseNodeChainPacketSuccessorCandidateInput(input, mode string) (*NodeChainCandidateInput, error) {
-	if len(input) == 0 || len(input) > NodeChainInputLimit || !NodeChainPrefixMode(mode) {
+func ParseNodeChainResponseCandidateInput(input, mode string) (*NodeChainCandidateInput, error) {
+	if len(input) == 0 || len(input) > NodeChainInputLimit || !nodeChainNativeResponseMode(mode) {
 		return nil, nodeChainError
 	}
-	response, err := parseCandidatePacketResponseSource(input, mode)
+	response, err := parseCandidateNativeResponseSource(input, mode)
 	if err != nil {
 		return nil, err
 	}
@@ -306,8 +316,32 @@ func ParseNodeChainPacketSuccessorCandidateInput(input, mode string) (*NodeChain
 	return captured, nil
 }
 
+func ParseNodeChainPacketSuccessorCandidateInput(input, mode string) (*NodeChainCandidateInput, error) {
+	if !NodeChainPrefixMode(mode) {
+		return nil, nodeChainError
+	}
+	captured, err := ParseNodeChainResponseCandidateInput(input, mode)
+	if err != nil {
+		return nil, err
+	}
+	var endpoint map[string]any
+	if json.Unmarshal([]byte(captured.response.PacketOptions), &endpoint) != nil || !candidateUnboundPacket(endpoint) {
+		return nil, nodeChainCandidatePreparationError
+	}
+	return captured, nil
+}
+
 func NodeChainPacketSuccessorCandidateInputSupported(input, mode string) bool {
 	_, err := ParseNodeChainPacketSuccessorCandidateInput(input, mode)
+	return err == nil
+}
+
+func NodeChainHysteria2CandidateInputSupported(input string) bool {
+	return NodeChainResponseCandidateInputSupported(input, "hysteria2")
+}
+
+func NodeChainResponseCandidateInputSupported(input, mode string) bool {
+	_, err := ParseNodeChainResponseCandidateInput(input, mode)
 	return err == nil
 }
 
@@ -519,11 +553,11 @@ func (p *NodeChainCandidatePlan) digest() string {
 	if p.connectedFinalResponse {
 		fields = append(fields, true)
 	}
+	if p.preparedNativeResponse {
+		fields = append(fields, "closed-prefix")
+	}
 	if p.responseMode != "" {
 		fields = append(fields, p.responseMode)
-	}
-	if p.preparedPacket != nil {
-		fields = append(fields, p.preparedPacket.seal)
 	}
 	if p.multiple != nil {
 		fields = append(fields, p.multiple.digest())
@@ -538,13 +572,13 @@ func (p *NodeChainCandidatePlan) validate() error {
 		p.prefix.Position < 0 || p.prefix.Position >= len(p.chain.proofs) || p.prefix != p.chain.proofs[p.prefix.Position] {
 		return errors.New("candidate plan changed its sealed original capture")
 	}
-	if p.preparedPacket != nil && !p.preparedPacket.matches(p) {
+	if p.preparedNativeResponse && p.responseMode == "" {
 		return nodeChainCandidatePreparationError
 	}
 	if p.connectedFinalResponse && (p.multiple != nil || p.measurement != hopmeasure.CandidatePrivateResponseMeasurement || !p.chain.connectedFinalResponsePrefix(p.prefix.Position)) {
 		return nodeChainCandidatePreparationError
 	}
-	if p.responseMode != "" && (p.connectedFinalResponse || p.multiple != nil || p.measurement != hopmeasure.CandidatePrivateResponseMeasurement || !p.chain.connectedCandidateResponseMode(p.prefix.Position, p.responseMode)) {
+	if p.responseMode != "" && (p.connectedFinalResponse || p.multiple != nil || p.measurement != hopmeasure.CandidatePrivateResponseMeasurement || p.chain.candidateNativeResponseModeAt(p.prefix.Position) != p.responseMode) {
 		return nodeChainCandidatePreparationError
 	}
 	if p.multiple == nil && p.chain.importedNodes != nil && !p.connectedFinalResponse || p.multiple != nil && !p.multiple.currentValidated(p.chain) {
@@ -560,7 +594,7 @@ func (p *NodeChainCandidatePlan) NewMeasurementContext(ctx context.Context, owne
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if p.validate() != nil || p.preparedPacket != nil || owner == nil {
+	if p.validate() != nil || p.preparedNativeResponse || owner == nil {
 		return nil, errors.New("candidate measurement lost its original source owner")
 	}
 	active, err := owner.MeasurementChainContext(ctx)
@@ -579,11 +613,6 @@ func (p *NodeChainCandidatePlan) NewMeasurementContext(ctx context.Context, owne
 	if p.responseMode != "" {
 		if _, ok := reader.(NodeChainCandidatePacketEngine); !ok {
 			return nil, errors.New("candidate response has no original Local packet carrier")
-		}
-	}
-	if NodeChainPrefixMode(p.responseMode) {
-		if _, ok := reader.(NodeChainCandidatePacketEndpointEngine); !ok {
-			return nil, errors.New("candidate response has no original Local packet endpoint factory")
 		}
 	}
 	engine := &nodeChainCandidateEngine{plan: p, owner: owner, active: active, identity: identity, reader: reader}

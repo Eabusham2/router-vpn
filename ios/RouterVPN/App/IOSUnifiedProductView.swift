@@ -341,8 +341,8 @@ private enum IOSUnifiedHeaderHeight: PreferenceKey {
 }
 
 struct IOSUnifiedProductView: View {
-    var openSpeedLab: () -> Void
-    var addExternalNode: () -> Void
+    let openSpeedLab: () -> Void
+    let addExternalNode: () -> Void
     @EnvironmentObject var model: RouterVPNModel
     @StateObject private var location = IOSUserLocationController()
     @Environment(\.scenePhase) private var scenePhase
@@ -365,19 +365,22 @@ struct IOSUnifiedProductView: View {
     @State private var startupApplied = false
     @State private var measuredHeaderHeight: CGFloat = 0
 
+    init(openSpeedLab: @escaping () -> Void, addExternalNode: @escaping () -> Void) {
+        self.openSpeedLab = openSpeedLab
+        self.addExternalNode = addExternalNode
+    }
+
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .bottom) {
                 IOSUnifiedMap(latencyByID: telemetry.latencyByID, deviceLocation: location.coordinate).environmentObject(model).ignoresSafeArea()
 
                 let sheetHeight = min(geo.size.height * (expanded ? 0.70 : 0.48), expanded ? 620 : 350)
+                let statusInSheet = dynamicTypeSize.isAccessibilitySize || geo.size.height < 450
                 let availableHeaderHeight = max(0, geo.size.height - sheetHeight - 8)
                 VStack(spacing: 0) {
-                    // Measure the actual wrapped controls. A large-text header
-                    // can scroll in its own bounds without covering Connect or
-                    // taking gestures from the remaining map viewport.
                     ScrollView(.vertical) {
-                        mapHeader(compact: dynamicTypeSize.isAccessibilitySize || geo.size.width < 740)
+                        mapHeader(showStatus: !statusInSheet, showStateOnly: geo.size.height - sheetHeight >= 175)
                             .fixedSize(horizontal: false, vertical: true)
                             .background {
                                 GeometryReader { header in
@@ -395,8 +398,8 @@ struct IOSUnifiedProductView: View {
                     }
                 }
 
-                controlSheet(height: sheetHeight,
-                             stackControls: dynamicTypeSize.isAccessibilitySize || geo.size.width < 340)
+                controlSheet(height: sheetHeight, stackControls: dynamicTypeSize.isAccessibilitySize || geo.size.width < 340,
+                             showStatus: statusInSheet)
             }
         }
         .sheet(isPresented: $showingNodes) { RouterVPNNodeManagerSheet().environmentObject(model) }
@@ -425,90 +428,73 @@ struct IOSUnifiedProductView: View {
         .onDisappear { externalLive.cancel(); location.hideRealLocation() }
     }
 
-    @ViewBuilder
-    private func mapHeader(compact: Bool) -> some View {
-        if compact {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        nodeSelectionButton
-                        IOSUserLocationControl().environmentObject(location)
+    private func mapHeader(showStatus: Bool, showStateOnly: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ViewThatFits(in: .horizontal) {
+                mapActions(abbreviated: false).fixedSize()
+                mapActions(abbreviated: true).fixedSize()
+                mapActions(abbreviated: true).labelStyle(.iconOnly)
+            }
+            if showStatus {
+                mapStatus
+            } else if showStateOnly {
+                Text(connectionStateTitle).font(.subheadline.bold()).fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .padding(.horizontal, 12).padding(.top, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func mapActions(abbreviated: Bool) -> some View {
+        let name = selectedProfile.map { $0.name.isEmpty ? $0.id : $0.name } ?? "Add a node"
+        return HStack(spacing: 7) {
+            Button { showingNodes = true } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(abbreviated ? "Nodes" : name).font(.subheadline.bold())
+                        if !abbreviated { Text(nodeSubtitle).font(.caption2) }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    mapUtilities
+                } icon: {
+                    Image(systemName: selectedProfile?.normalizedNodeKind == "external" ? "arrow.up.right.circle.fill" : "network")
                 }
-                connectionStatus(compact: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 7).frame(minWidth: 44, minHeight: 44)
+                .foregroundStyle(.white).background(Color.accentColor, in: RoundedRectangle(cornerRadius: 10))
             }
-            .padding(.horizontal, 12).padding(.vertical, 8)
-        } else {
-            HStack(alignment: .top, spacing: 8) {
-                nodeSelectionButton
-                IOSUserLocationControl().environmentObject(location)
-                Spacer(minLength: 0)
-                connectionStatus(compact: false)
-                mapUtilities
-            }
-            .padding(.horizontal, 12).padding(.vertical, 8)
-        }
-    }
-
-    private var nodeSelectionButton: some View {
-        Button { showingNodes = true } label: {
-            HStack(alignment: .top, spacing: 7) {
-                Image(systemName: selectedProfile?.normalizedNodeKind == "external" ? "arrow.up.right.circle.fill" : "network")
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(selectedProfile.map { $0.name.isEmpty ? $0.id : $0.name } ?? "Add a node")
-                        .font(.subheadline.bold()).lineLimit(2)
-                    Text(nodeSubtitle).font(.caption2).foregroundStyle(.secondary)
-                }
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .buttonStyle(.borderedProminent)
-        .disabled(model.profileMutationBlocked)
-    }
-
-    private func connectionStatus(compact: Bool) -> some View {
-        VStack(alignment: compact ? .leading : .trailing, spacing: 2) {
-            Text(connectionStateTitle).font(.subheadline.bold())
-            Text(IOSUnifiedSecureTransport.handshakeLabel(connected: model.connected && !model.iosCandidateTesting))
-                .font(.caption2).foregroundStyle(model.connected && !model.iosCandidateTesting ? .green : .secondary)
-            let metrics = compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout(spacing: 5))
-            metrics {
-                Text(model.activeRawProfile.isEmpty ? selectedModeTitle : model.activeRawProfile)
-                if let ms = livePathMilliseconds, model.connected && !model.iosCandidateTesting {
-                    Text(String(format: "• %.1f ms %@", ms, livePathLabel)).monospacedDigit()
-                }
-            }
-            .font(.caption2).foregroundStyle(.secondary)
-        }
-        .multilineTextAlignment(compact ? .leading : .trailing)
-        .fixedSize(horizontal: false, vertical: true)
-        .padding(.horizontal, 10).padding(.vertical, 7)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-    }
-
-    private var mapUtilities: some View {
-        VStack(spacing: 8) {
+            .accessibilityLabel(name)
+            .accessibilityValue(nodeSubtitle)
+            .disabled(model.profileMutationBlocked)
+            IOSUserLocationControl(abbreviated: abbreviated).environmentObject(location)
             Button(action: openSpeedLab) {
-                Image(systemName: "speedometer")
-                    .font(.system(size: 18, weight: .semibold))
-                    .frame(width: 42, height: 42)
+                Image(systemName: "speedometer").frame(width: 44, height: 44)
+                    .background(.regularMaterial, in: Circle())
             }
             .accessibilityLabel("Open Router VPN Speed Lab")
             Button(action: addExternalNode) {
-                Image(systemName: "plus.circle.fill")
-                    .font(.system(size: 18, weight: .semibold))
-                    .frame(width: 42, height: 42)
+                Image(systemName: "plus.circle.fill").frame(width: 44, height: 44)
+                    .background(.regularMaterial, in: Circle())
             }
             .accessibilityLabel("Add external VPN node")
             .disabled(model.profileMutationBlocked)
         }
-        .buttonStyle(.borderedProminent)
-        .buttonBorderShape(.circle)
-        .fixedSize()
+        .buttonStyle(.plain)
+    }
+
+    private var mapStatus: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(connectionStateTitle).font(.subheadline.bold())
+            Text(IOSUnifiedSecureTransport.handshakeLabel(connected: model.connected && !model.iosCandidateTesting))
+                .font(.caption2).foregroundStyle(model.connected && !model.iosCandidateTesting ? .green : .secondary)
+            Text(model.activeRawProfile.isEmpty ? selectedModeTitle : model.activeRawProfile)
+                .font(.caption2).foregroundStyle(.secondary)
+            if let ms = livePathMilliseconds, model.connected && !model.iosCandidateTesting {
+                Text(String(format: "%.1f ms %@", ms, livePathLabel)).font(.caption2).monospacedDigit()
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var selectedProfile: RouterProfile? { model.unifiedSelectedProfile }
@@ -571,7 +557,7 @@ struct IOSUnifiedProductView: View {
     }
 
     @ViewBuilder
-    private func controlSheet(height: CGFloat, stackControls: Bool) -> some View {
+    private func controlSheet(height: CGFloat, stackControls: Bool, showStatus: Bool) -> some View {
         VStack(spacing: 10) {
             Button { withAnimation(.spring()) { expanded.toggle() } } label: {
                 Capsule().fill(.secondary.opacity(0.45)).frame(width: 44, height: 5)
@@ -617,6 +603,8 @@ struct IOSUnifiedProductView: View {
                         if let ms = livePathMilliseconds, model.connected && !model.iosCandidateTesting { Text(String(format: "%.1f\nms %@", ms, livePathLabel)).font(.caption2.bold()).monospacedDigit().multilineTextAlignment(.center) }
                         IOSForwardingMasterButton().environmentObject(model)
                     }
+
+                    if showStatus { mapStatus.frame(maxWidth: .infinity, alignment: .leading) }
 
                     unifiedRow(icon: "point.3.connected.trianglepath.dotted", title: "Multihop", value: iosMultihopSummary) { showingMultihop = true }
                     unifiedRow(icon: "slider.horizontal.3", title: "Settings", value: settingsSummary) { showingSettings = true }

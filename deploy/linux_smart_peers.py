@@ -15,7 +15,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL = Path('/opt/router-vpn-client')
 ENGINE = INSTALL/'runtime/native/sing-box-routervpn'
-OUTER = '198.18.0.2'
+OUTER = '172.30.241.2'
 PRIVATE = '10.77.0.1'
 PORTS = {'wg': 51820, 'wg-pq': 51821, 'rosenpass': 51822,
          'naive-h3': 18443, 'naive-h2': 18444, 'hysteria2': 18445,
@@ -142,7 +142,7 @@ class Peers:
         self.wait_listening('router', 8787, True)
         self.spawn('dns', ['dnsmasq', '--no-daemon', '--conf-file=/dev/null', '--no-resolv', '--no-hosts',
              '--cache-size=0', '--bind-interfaces', '--listen-address='+PRIVATE, '--log-queries',
-             '--local=/#/', '--address=/#/'+OUTER])
+             '--local=/#/', '--host-record=example.com,93.184.216.34', '--address=/#/'+OUTER])
         self.wait_listening('dns', 53, False)
         self.capture('http', ['-A', '-s', '2048', '-i', 'any', f'src host {PRIVATE} and tcp src port 8787'])
 

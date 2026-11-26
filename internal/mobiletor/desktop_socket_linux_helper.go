@@ -771,12 +771,12 @@ func (g *desktopLinuxGuardian) grant(ctx context.Context, grant DesktopSocketGra
 	delete(owned.receipts, key)
 	var receipt DesktopSocketReceipt
 	if associated {
-		receipt, err = g.nft.grantSOCKS(ctx, grant, control, controlUntil)
+		receipt, err = g.nft.grantSOCKS(ctx, grant, previous, control, controlUntil)
 		if err == nil {
 			_, _, err = g.socksControlSocket(association)
 		}
 	} else {
-		receipt, err = g.nft.grant(ctx, grant)
+		receipt, err = g.nft.grant(ctx, grant, previous)
 	}
 	if err == nil {
 		if owned.receipts == nil {

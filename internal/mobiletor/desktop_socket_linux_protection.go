@@ -171,8 +171,14 @@ func desktopLinuxProtectionRows(n *desktopLinuxNFT, rows []map[string]any, prepa
 // The creator uses this inventory check without adopting a guardian UID or
 // permission. No permit rule or set is allowed in its closed baseline.
 func desktopLinuxProtectionInventoryRows(n *desktopLinuxNFT, rows []map[string]any, prepared bool) error {
+	return desktopLinuxInspectProtectionInventory(n, rows, prepared, false)
+}
+
+// A retiring guardian may see fewer than four original empty sets and rules.
+// The structural and ownership checks for each remaining object still apply.
+func desktopLinuxInspectProtectionInventory(n *desktopLinuxNFT, rows []map[string]any, prepared, partial bool) error {
 	tables, chains, metadata, rules, sets := 0, 0, 0, 0, 0
-	if err := n.verifyOffDeny(rows, prepared); err != nil {
+	if err := n.verifyOffDeny(rows, prepared && !partial); err != nil {
 		return err
 	}
 	baseline := make(map[uint64]bool)
@@ -254,7 +260,7 @@ func desktopLinuxProtectionInventoryRows(n *desktopLinuxNFT, rows []map[string]a
 	if prepared {
 		wantPermits = 4
 	}
-	if tables != 1 || chains != 1 || len(baseline) != len(n.Baseline) || rules != wantPermits || sets != wantPermits {
+	if tables != 1 || chains != 1 || len(baseline) != len(n.Baseline) || rules > wantPermits || sets > wantPermits || !partial && (rules != wantPermits || sets != wantPermits) {
 		return errors.New("Linux closed protection has a missing or duplicate captured object")
 	}
 	return nil

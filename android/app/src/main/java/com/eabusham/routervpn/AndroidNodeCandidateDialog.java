@@ -25,7 +25,7 @@ final class AndroidNodeCandidateDialog {
         AndroidNodeChainSession session=AndroidNodeChainSession.retained();
         if(session==null){message("Connect an ordered Router path first. Candidate measurements use its retained original prefix.");return;}
         List<Integer> positions=new ArrayList<>();List<String> names=new ArrayList<>();
-        for(int i=0;i<session.source.modes.size();i++){
+        for(int i=0;i<session.source.modes.size()-1;i++){
             String mode=session.source.modes.get(i);
             boolean response=false;
             try {

@@ -11,6 +11,9 @@ func nodeChainFinalCapture(node *NodeProfile) bool {
 		return false
 	}
 	switch node.mode {
+	case "wg", "awg2-fast", "awg2-strong":
+		layer := predecessorText(node.profile, "start_layer")
+		return layer == "" || layer == "off"
 	case "shadowsocks":
 		return true
 	case "hysteria2":
@@ -28,6 +31,11 @@ func nodeChainFinalCapture(node *NodeProfile) bool {
 func nodeChainFinalClosure(node *NodeProfile, closure *externalPredecessor) bool {
 	if !nodeChainFinalCapture(node) || closure == nil || closure.final == nil {
 		return false
+	}
+	if NodeChainPrefixMode(node.mode) {
+		peers, ok := closure.final["peers"].([]any)
+		return ok && len(peers) == 1 && closure.final["type"] == nodeChainPrefixType(node.mode) &&
+			closure.final["detour"] == nil && closure.final["domain_resolver"] == nil
 	}
 	if node.mode == "shadowsocks" {
 		if closure.final["method"] == NativeStartLayerMethod {

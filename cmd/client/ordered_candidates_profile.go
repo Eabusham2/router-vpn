@@ -185,7 +185,7 @@ func (a *app) saveOrderedCandidateProfile(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if job.view.candidateMode != "" && desktopConnectedCandidateMode(job.catalog.launch, job.view.position) != job.view.candidateMode {
-		http.Error(w, "original authenticated candidate owner changed", 409)
+		http.Error(w, "original final-candidate connection changed", 409)
 		return
 	}
 	control, nodes, err := orderedCandidateProposalForExecutionWithMode(job.view.identity.Ordered.launch.chain.selection.Nodes, job.view.position, candidate, profiles, requested, job.view.candidateMode)
@@ -262,7 +262,7 @@ func (a *app) saveOrderedCandidateProfile(w http.ResponseWriter, r *http.Request
 		response["request_id"], response["candidate_id"], response["view_token"] = q.RequestID, q.CandidateID, job.view.token
 		response["prefix_position"], response["measurement"] = job.view.position, hopmeasure.CandidatePrivateResponseMeasurement
 		response["proposal_action"] = "save-final-profile"
-		if mobilemultihop.NodeChainPrefixMode(job.view.candidateMode) {
+		if job.view.originalFinal == nil && mobilemultihop.NodeChainPrefixMode(job.view.candidateMode) {
 			response["proposal_action"] = "save-intermediate-profile"
 		}
 	}

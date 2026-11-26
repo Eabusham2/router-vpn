@@ -204,7 +204,7 @@ func (b *desktopLinuxRetainedProtection) Release(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	acknowledged, sent, err := b.netlink.delete(ctx, generation, b.record.TableHandle)
+	acknowledged, sent, err := b.netlink.delete(ctx, generation, b.source.nft.table(), b.record.TableHandle)
 	if acknowledged {
 		b.removed = true
 	}

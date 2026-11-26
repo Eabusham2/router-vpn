@@ -80,12 +80,6 @@ func RouterNodeChainCandidatePreparationLaunch(input string) (*RouterNodeChainCa
 	return &RouterNodeChainCandidatePreparation{prep: prep, inventorySHA: hex.EncodeToString(digest[:])}, nil
 }
 func (m *RouterNodeChainCandidatePreparation) Config() string { return m.prep.Config() }
-func (m *RouterNodeChainCandidatePreparation) CandidateMode() string {
-	if m == nil || m.prep == nil {
-		return ""
-	}
-	return m.prep.CandidateMode()
-}
 
 // Private launch bytes are for the original process-owned session file only.
 // They contain source capabilities and must never be used as public metadata.
@@ -266,8 +260,8 @@ func (m *RouterNodeChainCandidatePreparation) ObservePreparationContext(ctx cont
 	}
 	return engine.ObservePreparationContext(ctx)
 }
-func (m *RouterNodeChainCandidatePreparation) CandidatePreparationPacketEngineContext(ctx context.Context, preparation *mobilemultihop.NodeChainCandidatePreparation) (mobilemultihop.NodeChainCandidatePreparationPacketEngine, error) {
-	if m == nil || m.prep == nil || m.prep != preparation || preparation.CandidateMode() == "" {
+func (m *RouterNodeChainCandidatePreparation) PreparedPacketEngineContext(ctx context.Context, prep *mobilemultihop.NodeChainCandidatePreparation) (mobilemultihop.NodeChainPreparedPacketEngine, error) {
+	if m == nil || prep == nil || m.prep != prep {
 		return nil, errRouterCandidatePreparation()
 	}
 	state := m.state.Load()
@@ -276,12 +270,6 @@ func (m *RouterNodeChainCandidatePreparation) CandidatePreparationPacketEngineCo
 	}
 	engine := state.engine.Load()
 	if engine == nil {
-		return nil, errRouterCandidatePreparation()
-	}
-	if _, err := engine.ObservePreparationContext(ctx); err != nil {
-		return nil, err
-	}
-	if state.engine.Load() != engine || m.nativeCurrent(ctx, state) != nil {
 		return nil, errRouterCandidatePreparation()
 	}
 	return engine, nil

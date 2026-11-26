@@ -71,7 +71,7 @@ static gboolean linux_ordered_custom_entry_shape_v1(JsonArray *nodes) {
 }
 
 static gboolean linux_ordered_final_v1(const char *mode) {
-    return g_strcmp0(mode, "shadowsocks") == 0 || g_strcmp0(mode, "hysteria2") == 0;
+    return g_strcmp0(mode, "shadowsocks") == 0 || g_strcmp0(mode, "hysteria2") == 0 || linux_ordered_prefix_v1(mode);
 }
 
 static const char *linux_ordered_mode_name_v1(const char *mode) {
@@ -215,6 +215,8 @@ static gboolean linux_ordered_multiple_imported_shape_v1(JsonArray *nodes) {
 
 static gboolean linux_ordered_execution_v1(LinuxOrderedSelectionV1 *selection, const char *execution) {
     if (selection == NULL || (g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0 && g_strcmp0(execution, "auto") != 0)) return FALSE;
+    guint count = json_array_get_length(selection->nodes);
+    if (strcmp(execution, "local") && linux_ordered_prefix_v1(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, count-1), "mode"))) return FALSE;
     if (json_array_get_length(selection->nodes) > 8 && !linux_ordered_extended_selected_shape_v1(selection->nodes) &&
         ((!linux_ordered_extended_paired_shape_v1(selection->nodes) && !linux_ordered_extended_mixed_shape_v1(selection->nodes)) || strcmp(execution, "local") != 0)) return FALSE;
     if (strcmp(execution, "local") != 0 && !linux_ordered_multiple_imported_shape_v1(selection->nodes)) for (guint i = 0; i + 1 < json_array_get_length(selection->nodes); i++) {
@@ -271,6 +273,7 @@ static gboolean linux_ordered_extended_paired_path_v1(const LinuxOrderedSelectio
 static gboolean linux_ordered_final_profile_v1(JsonObject *profile, const char *mode) {
     if (!linux_ordered_router_v1(profile) || !linux_ordered_final_v1(mode)) return FALSE;
     if (strcmp(mode, "shadowsocks") == 0) return TRUE;
+    if (linux_ordered_prefix_v1(mode)) return linux_ordered_paired_off_v1(profile);
     if (!json_object_has_member(profile, "start_layer")) return TRUE;
     JsonNode *layer = json_object_get_member(profile, "start_layer");
     if (layer == NULL || !JSON_NODE_HOLDS_VALUE(layer) || json_node_get_value_type(layer) != G_TYPE_STRING) return FALSE;
@@ -430,6 +433,10 @@ static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selectio
         }
         return TRUE;
     }
+    guint count = json_array_get_length(selection->nodes);
+    if (count < 2) return FALSE;
+    gboolean packet_final = linux_ordered_prefix_v1(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, count-1), "mode"));
+    if (packet_final && (strcmp(selection->execution, "local") || count > 8)) return FALSE;
     gboolean local_imported = linux_ordered_local_imported_path_v1(selection, catalog);
     gboolean paired_extended = linux_ordered_extended_paired_path_v1(selection, catalog);
     gboolean multiple_imported = strcmp(selection->execution, "local") != 0 && linux_ordered_multiple_imported_shape_v1(selection->nodes);
@@ -438,6 +445,7 @@ static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selectio
         const char *id = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, i), "id");
         JsonObject *profile = external_source_profile_v24(catalog, id);
         const char *mode = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, i), "mode");
+        if (packet_final && (!linux_ordered_prefix_v1(mode) || !linux_ordered_paired_off_v1(profile))) return FALSE;
         gboolean imported = linux_ordered_imported_v1(profile);
         gboolean connect_execution = strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0;
         gboolean socks_execution = strcmp(mode, "socks5") == 0;
@@ -495,7 +503,8 @@ static const char *linux_ordered_prepared_candidate_mode_v1(const LinuxOrderedSe
     guint count=json_array_get_length(selection->nodes);
     if (count<2 || count>ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH || (guint)position+1>=count) return "";
     const char *final=linux_ordered_string_v1(json_array_get_object_element(selection->nodes,count-1),"mode");
-    if (strcmp(final,"shadowsocks") && strcmp(final,"hysteria2")) return "";
+    if (strcmp(final,"shadowsocks") && strcmp(final,"hysteria2") &&
+        !((guint)position+2==count && count<=8 && linux_ordered_prefix_v1(final))) return "";
     for (guint i=0;i<count;i++) {
         JsonObject *node=json_array_get_object_element(selection->nodes,i);
         const char *mode=linux_ordered_string_v1(node,"mode");
@@ -503,7 +512,7 @@ static const char *linux_ordered_prepared_candidate_mode_v1(const LinuxOrderedSe
             (i+1<count && !linux_ordered_prefix_v1(mode)) || (count>8 && strcmp(mode,i+1==count?"shadowsocks":"wg"))) return "";
     }
     if ((guint)position+2<count) return linux_ordered_string_v1(json_array_get_object_element(selection->nodes,position+1),"mode");
-    return count<=8 && !strcmp(final,"hysteria2") ? "hysteria2":"";
+    return count<=8 && strcmp(final,"shadowsocks") ? final:"";
 }
 
 static gboolean linux_ordered_measurement_prefix_v1(const LinuxOrderedSelectionV1 *selection, JsonObject *catalog, int position) {
@@ -914,6 +923,15 @@ static const char *linux_ordered_editor_exit_v1(const LinuxOrderedEditorV1 *edit
 static gboolean linux_ordered_editor_final_allowed_v1(LinuxOrderedEditorV1 *editor, const char *mode) {
     if (editor->external_exit) return !strcmp(mode, "shadowsocks");
     if (!linux_ordered_final_profile_v1(external_source_profile_v24(json_node_get_object(editor->catalog), editor->control), mode)) return FALSE;
+    if (linux_ordered_prefix_v1(mode)) {
+        const char *execution = editor->execution ? gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->execution)) : NULL;
+        if (g_strcmp0(execution, "local") || editor->ids->len < 1 || editor->ids->len > 7) return FALSE;
+        JsonObject *catalog = json_node_get_object(editor->catalog);
+        for (guint i = 0; i < editor->ids->len; i++) {
+            if (!linux_ordered_prefix_v1(g_ptr_array_index(editor->modes, i)) ||
+                !linux_ordered_paired_off_v1(external_source_profile_v24(catalog, g_ptr_array_index(editor->ids, i)))) return FALSE;
+        }
+    }
     if (g_strcmp0(mode, "hysteria2") == 0) for (guint i = 0; i < editor->modes->len; i++)
         if (g_strcmp0(g_ptr_array_index(editor->modes, i), "shadowsocks") == 0 || g_strcmp0(g_ptr_array_index(editor->modes, i), "socks5") == 0 || g_strcmp0(g_ptr_array_index(editor->modes, i), "http-connect") == 0 || g_strcmp0(g_ptr_array_index(editor->modes, i), "https-connect") == 0 || g_strcmp0(g_ptr_array_index(editor->modes, i), "openvpn") == 0) return FALSE;
     return TRUE;
@@ -1099,7 +1117,7 @@ static void linux_ordered_mode_v1(GtkComboBox *combo, gpointer data) {
     if (index >= 0 && (guint)index == editor->ids->len) {
         if (!linux_ordered_editor_final_allowed_v1(editor, mode)) {
             linux_ordered_selected_v1(NULL, NULL, editor);
-            gtk_label_set_text(GTK_LABEL(editor->status), "Choose Shadowsocks 2022, or Hysteria2 with its own Start Layer and paired packet prefixes."); return;
+            gtk_label_set_text(GTK_LABEL(editor->status), "WireGuard and AWG2 exits require two to eight paired Local packet nodes with Start Layer Off throughout. Hysteria2 retains its own Start Layer after paired packet prefixes."); return;
         }
         char *copy = g_strdup(mode); g_free(editor->final_mode); editor->final_mode = copy;
         linux_ordered_render_v1(editor, index); return;
@@ -1109,7 +1127,7 @@ static void linux_ordered_mode_v1(GtkComboBox *combo, gpointer data) {
         (guint)index < editor->ids->len && linux_ordered_editor_stream_v1(editor, (guint)index, g_ptr_array_index(editor->ids, index));
     if (index < 0 || (guint)index >= editor->ids->len || (imported ? g_strcmp0(mode, linux_ordered_imported_mode_v1(external_source_profile_v24(json_node_get_object(editor->catalog), g_ptr_array_index(editor->ids, index)))) != 0 : !linux_ordered_prefix_v1(mode) && !selected_stream)) {
         linux_ordered_selected_v1(NULL, NULL, editor);
-        gtk_label_set_text(GTK_LABEL(editor->status), "Paired prefixes use WireGuard, AWG2 Fast or AWG2 Strong. An imported middle keeps its saved transport. The paired final uses Shadowsocks 2022 or Hysteria2 with its own Start Layer.");
+        gtk_label_set_text(GTK_LABEL(editor->status), "Paired prefixes use WireGuard, AWG2 Fast or AWG2 Strong. An imported middle keeps its saved transport. A WireGuard or AWG2 final requires Local execution and Start Layer Off throughout.");
         return;
     }
     char *copy = g_strdup(mode); g_free(editor->modes->pdata[index]); editor->modes->pdata[index] = copy;
@@ -1313,7 +1331,7 @@ static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
     g_signal_connect(editor.dialog, "destroy", G_CALLBACK(linux_ordered_closed_v1), &editor);
     gtk_window_set_default_size(GTK_WINDOW(editor.dialog), 660, 480);
     GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(editor.dialog)); gtk_container_set_border_width(GTK_CONTAINER(box), 12);
-    GtkWidget *note = gtk_label_new("A Local route to an imported exit uses the paired entry’s saved Start Layer. Keep the imported hops and exit set to Off. Paired entries can use supported Shadowsocks 2022 imports at any interior position. Server and Compare require support from every import and the native controller. A custom entry uses Local with two distinct Shadowsocks imports and a paired Shadowsocks exit. SOCKS5, CONNECT and OpenVPN keep their single position immediately before a Shadowsocks final. A paired Hysteria2 final retains its selected Start Layer after paired WireGuard or AWG2 prefixes. Apply saves the choices; Connect proves the complete path.");
+    GtkWidget *note = gtk_label_new("A Local route to an imported exit uses the paired entry’s saved Start Layer. Keep the imported hops and exit set to Off. Paired entries can use supported Shadowsocks 2022 imports at any interior position. Server and Compare require support from every import and the native controller. A custom entry uses Local with two distinct Shadowsocks imports and a paired Shadowsocks exit. SOCKS5, CONNECT and OpenVPN keep their single position immediately before a Shadowsocks final. A paired Hysteria2 final retains its selected Start Layer after paired WireGuard or AWG2 prefixes. WireGuard and AWG2 exits require two to eight paired Local packet nodes with Start Layer Off throughout. Apply saves the choices; Connect proves the complete path.");
     gtk_label_set_line_wrap(GTK_LABEL(note), TRUE); gtk_box_pack_start(GTK_BOX(box), note, FALSE, FALSE, 6);
     GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL); gtk_widget_set_size_request(scroll, -1, 190);
     editor.list = gtk_list_box_new(); gtk_container_add(GTK_CONTAINER(scroll), editor.list); gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 6);

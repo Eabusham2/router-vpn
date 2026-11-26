@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"router-vpn/internal/common"
 	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilemultihop"
 )
@@ -35,9 +36,14 @@ func desktopPreparedCandidateMode(launch *desktopNodeLaunch, position int) strin
 	return launch.chain.policy.OriginalChain().PreparedCandidateResponseMode(position)
 }
 
-func publishPreparedCandidateResponseSource(response map[string]any, mode string, nodes []orderedCandidateResponseSourceNode) {
+func publishOrderedCandidateResponseSource(response map[string]any, mode string, nodes []orderedCandidateResponseSourceNode, final *common.MultihopNodeSelection) {
 	if mode != "" {
-		response["candidate_mode"], response["response_source_nodes"] = mode, nodes
+		response["candidate_mode"] = mode
+		if final != nil {
+			response["original_final"] = final
+		} else {
+			response["response_source_nodes"] = nodes
+		}
 	}
 }
 

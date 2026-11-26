@@ -589,8 +589,20 @@ final class AndroidNodeChainCapture implements AutoCloseable {
                 && List.of("wg", "awg2-fast", "awg2-strong").contains(modes.get(0)) && modes.subList(1, modes.size()).stream().allMatch("shadowsocks"::equals);
     }
 
+    static boolean pairedPacketWithoutStartLayer(AndroidNodeStore.ChainSource source,String mode) throws Exception {
+        if(source.imported||!NativeSingBoxController.nativeWireGuardFamily(mode))return false;
+        Object layer=source.profile().opt("start_layer");
+        return layer==null||"".equals(layer)||"off".equals(layer);
+    }
+
     static void requireCompleteShape(List<AndroidNodeStore.ChainSource> members,List<String> modes,String execution) throws Exception {
         int schema=sourceSchema(members,modes);
+        if(!modes.isEmpty()&&NativeSingBoxController.nativeWireGuardFamily(modes.get(modes.size()-1))) {
+            if(schema!=1||!"local".equals(execution)||modes.size()>8||members.size()!=modes.size())
+                throw new IllegalStateException("A packet final requires a Local route of up to eight paired nodes.");
+            for(int i=0;i<modes.size();i++)if(!pairedPacketWithoutStartLayer(members.get(i),modes.get(i)))
+                throw new IllegalStateException("Each node of this packet route needs its original WireGuard or AmneziaWG transport with Start Layer off.");
+        }
         if (schema == 8 && !List.of("local", "server", "auto").contains(execution))
             throw new IllegalStateException("An ordered imported final requires Local execution.");
         if (members.size()>8 && schema==1) {
@@ -616,12 +628,13 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         }
     }
 
-    /** Validate the complete staged Local imported proposal before any store
+    /** Validate the complete staged Local proposal before any store
      * writes. Per-member validation cannot establish ordered graph ownership. */
-    static void validateLocalImportedSources(List<AndroidNodeStore.ChainSource> members,List<String> modes) throws Exception {
+    static void validateLocalSources(List<AndroidNodeStore.ChainSource> members,List<String> modes) throws Exception {
         requireCompleteShape(members,modes,"local");
         int schema=sourceSchema(members,modes);
-        if(schema!=6 && schema!=7 && schema!=8)throw new IllegalStateException("The independent-import preview requires its complete Local imported source.");
+        boolean packetFinal=schema==1&&NativeSingBoxController.nativeWireGuardFamily(modes.get(modes.size()-1));
+        if(!packetFinal&&schema!=6 && schema!=7 && schema!=8)throw new IllegalStateException("A complete staged Local source is required.");
         JSONObject control=members.get(schema == 8 ? 0 : members.size()-1).profile();
         JSONArray selected=AndroidNodeStore.orderedSelection(control),inputs=new JSONArray(),identities=new JSONArray();
         if(!"local".equals(control.getString("multihop_execution"))||selected.length()!=members.size())
@@ -635,8 +648,10 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         if (schema == 8) inputs.put(inputs.length()-1, externalFinalInput(inputs.getString(0), inputs.getString(inputs.length()-1)));
         String source=bounded(new JSONObject().put("schema",schema).put("execution","local").put("nodes",inputs).put("identity_sources",identities).toString(),MAX_INPUT);
         RouterNodeChain preview=Libbox.newRouterNodeChain(source);
-        if(preview==null)throw new IllegalStateException("The native compiler returned no complete imported Local graph.");
+        if(preview==null)throw new IllegalStateException("The native compiler returned no complete Local graph.");
         try {
+            if(packetFinal&&!modes.get(modes.size()-1).equals(Libbox.routerNodeChainConnectedFinalCandidateResponseMode(preview,modes.size()-2)))
+                throw new IllegalStateException("The compiled Local path lost its original selected packet final.");
             String launch=bounded(preview.launchInput(),MAX_INPUT);
             JSONObject returned=new JSONObject(launch);
             String config=bounded(preview.config(),4*1024*1024);
@@ -652,7 +667,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
                     ||configSHA==null||!configSHA.equals(digest(config))||!configSHA.equals(returned.getString("config_sha256"))
                     ||!configSHA.equals(returned.getString("original_config_sha256"))
                     ||!returned.getString("metadata_sha256").matches("[0-9a-f]{64}"))
-                throw new IllegalStateException("The native Local preview changed its original imported set.");
+                throw new IllegalStateException("The native Local preview changed its original nodes.");
             // Reopen through the sealed native parser so a well-formed but
             // substituted metadata digest cannot survive the preview boundary.
             RouterNodeChain sealed=Libbox.routerNodeChainLaunch(launch);

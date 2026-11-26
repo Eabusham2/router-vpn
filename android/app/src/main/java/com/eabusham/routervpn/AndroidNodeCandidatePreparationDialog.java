@@ -27,6 +27,7 @@ final class AndroidNodeCandidatePreparationDialog {
     private AndroidNodeCandidatePreparation owner;
     private AlertDialog dialog,proposalDialog;
     private TextView output;
+    private Button useInDraft;
     private AndroidOrderedPathSelection editor;
     private final java.util.function.BiConsumer<AndroidOrderedPathSelection,Integer> continueDraft;
     private static WeakReference<AndroidNodeStore.ChainCapture> editorSource = new WeakReference<>(null);
@@ -87,7 +88,7 @@ final class AndroidNodeCandidatePreparationDialog {
                 }
                 List<Integer> positions=new ArrayList<>();List<String> names=new ArrayList<>();
                 if(!"local".equals(source.execution))throw new IllegalStateException("Choose Local execution for this saved path before testing candidates.");
-                for(int i=0;i<source.modes.size();i++){String mode=source.modes.get(i);if("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)||AndroidNodeChainCapture.responsePrefix(source.members,source.modes,i,source.execution)){positions.add(i);names.add("Through node "+(i+1)+" • "+mode+" • "+(AndroidNodeCandidatePreparation.packetPrefix(source,i)?"prefix only":"complete saved path"));}}
+                for(int i=0;i<source.modes.size()-1;i++){String mode=source.modes.get(i);if("wg".equals(mode)||"awg2-fast".equals(mode)||"awg2-strong".equals(mode)||AndroidNodeChainCapture.responsePrefix(source.members,source.modes,i,source.execution)){positions.add(i);names.add("Through node "+(i+1)+" • "+mode+" • "+(AndroidNodeCandidatePreparation.packetPrefix(source,i)?"prefix only":"complete saved path"));}}
                 if(positions.isEmpty())throw new IllegalStateException("The saved path has no qualified prefix for candidate measurement.");
                 activity.runOnUiThread(()->{
                     if(!visible())return;
@@ -104,7 +105,7 @@ final class AndroidNodeCandidatePreparationDialog {
         output=new TextView(activity);output.setPadding(32,24,32,24);output.setTextIsSelectable(true);output.setText("Testing saved path…");
         LinearLayout body=new LinearLayout(activity);body.setOrientation(LinearLayout.VERTICAL);body.addView(output);
         if (editor != null) {
-            Button use=new Button(activity);use.setText("Use in draft");use.setOnClickListener(v->chooseDraftInsertion());body.addView(use);
+            useInDraft=new Button(activity);useInDraft.setText("Use in draft");useInDraft.setVisibility(android.view.View.GONE);useInDraft.setOnClickListener(v->chooseDraftInsertion());body.addView(useInDraft);
         }
         Button save=new Button(activity);save.setText("Save as profile");save.setOnClickListener(v->chooseProfile());body.addView(save);
         ScrollView scroll=new ScrollView(activity);scroll.addView(body);
@@ -115,6 +116,7 @@ final class AndroidNodeCandidatePreparationDialog {
     private void update(String detail){activity.runOnUiThread(()->{if(!visible())return;if(owner==null)owner=capturedOwner();output.setText(detail);changed.run();});}
     private void completed(List<AndroidNodeCandidatePreparation.Choice> completed,Throwable failure){activity.runOnUiThread(()->{
         if(!visible() || waitingForReviewRelease)return;if(owner==null)owner=capturedOwner();choices=Collections.unmodifiableList(new ArrayList<>(completed));
+        if(useInDraft!=null)useInDraft.setVisibility(choices.stream().anyMatch(choice->choice.draftInsertion()!=null)?android.view.View.VISIBLE:android.view.View.GONE);
         boolean savable=false;for(var choice:choices)if(choice.profile!=null&&choice.saveReason.isEmpty()&&choice.result.current(System.currentTimeMillis()))savable=true;
         StringBuilder text=new StringBuilder(failure==null?(choices.isEmpty()?"Temporary VPN stopped. No complete current candidate scores are available.":savable?"Temporary VPN stopped. Complete proposals are ready to save.":"Temporary VPN stopped. Candidate measurements are available. Each row gives its Save reason."):"Candidate results unavailable: "+failure.getMessage());
         text.append("\n\nCandidates use the captured successor transport: eligible paired WireGuard, AmneziaWG, Hysteria2 and Shadowsocks candidates return authenticated private responses; other supported packet-prefix measurements time TCP handshakes. On a route with a paired entry and an imported exit, an eligible imported candidate returns its verified public address over HTTPS. Server measurements require that candidate to be registered. Each score requires 50 successful samples. Load and Connect remain separate choices.");

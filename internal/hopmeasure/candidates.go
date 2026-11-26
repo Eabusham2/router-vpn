@@ -97,29 +97,10 @@ type CandidateService struct {
 	prefix                   CandidatePrefix
 	targets                  []CandidateTarget
 	response                 func(context.Context, CandidateTarget, func() error) error
-	responseSession          func(context.Context, CandidateTarget) (CandidateResponseSession, error)
+	responseRun              func(context.Context, CandidateTarget) (CandidateResponseRun, error)
 	publicResponse           func(context.Context, CandidateTarget, func() error, func() error) error
 	registeredPublicResponse func(context.Context, CandidateTarget) (time.Duration, error)
 	completion               candidateCompletion // protected by service.mu
-}
-
-// CandidateResponseSession owns one protocol endpoint for the bounded worker.
-// Each Respond must open a fresh private stream and authenticate a new nonce.
-// Close must join every endpoint worker before a score can become publishable.
-type CandidateResponseSession interface {
-	Respond(context.Context, func() error) error
-	Close() error
-}
-
-func NewCapturedResponseSessionCandidatesContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, limit int, open func(context.Context, CandidateTarget) (CandidateResponseSession, error)) (*CandidateService, error) {
-	if open == nil {
-		return nil, errors.New("missing original candidate session owner")
-	}
-	service, err := NewCapturedPrefixCandidatesContext(ctx, engine, prefix, targets, limit)
-	if err == nil {
-		service.responseSession = open
-	}
-	return service, err
 }
 
 func candidateText(value string) bool {
@@ -159,8 +140,27 @@ func NewCapturedResponseCandidatesContext(ctx context.Context, engine CandidateE
 	return service, err
 }
 
-// ExtendedResponseCandidateAuthority binds a deep authenticated measurement
-// to its sealed original route, exact prefix, and candidate inventory.
+// CandidateResponseRun retains one authenticated transport for this request.
+// Each Respond opens a fresh stream and validates a fresh private challenge.
+// Close joins the transport before any score or drained state is published.
+type CandidateResponseRun interface {
+	Respond(context.Context, func() error) error
+	Close() error
+}
+
+func NewCapturedResponseRunContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, limit int, open func(context.Context, CandidateTarget) (CandidateResponseRun, error)) (*CandidateService, error) {
+	if open == nil {
+		return nil, ErrStale
+	}
+	service, err := NewCapturedPrefixCandidatesContext(ctx, engine, prefix, targets, limit)
+	if err == nil {
+		service.responseRun = open
+	}
+	return service, err
+}
+
+// ExtendedResponseCandidateAuthority binds a deep stream measurement to its
+// sealed original imported route, selected proof, and candidate inventory.
 type ExtendedResponseCandidateAuthority interface {
 	ResponseCandidateDepth(position int, id, tag string) int
 }
@@ -180,10 +180,10 @@ func NewExtendedResponseCandidatesContext(ctx context.Context, engine CandidateE
 	return service, err
 }
 
-// NewExtendedResponseSessionCandidatesContext retains one native endpoint
+// NewExtendedResponseRunContext retains one native endpoint
 // only when its original complete Local factory seals the deeper packet role.
 // Ordinary captures and the imported-stream constructors keep their bounds.
-func NewExtendedResponseSessionCandidatesContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, limit int, authority ExtendedResponseCandidateAuthority, open func(context.Context, CandidateTarget) (CandidateResponseSession, error)) (*CandidateService, error) {
+func NewExtendedResponseRunContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, limit int, authority ExtendedResponseCandidateAuthority, open func(context.Context, CandidateTarget) (CandidateResponseRun, error)) (*CandidateService, error) {
 	if authority == nil || open == nil || limit <= 0 || limit > 40<<20 {
 		return nil, ErrStale
 	}
@@ -193,7 +193,7 @@ func NewExtendedResponseSessionCandidatesContext(ctx context.Context, engine Can
 	}
 	service, err := newPrefixCandidatesContext(ctx, engine, prefix, targets, limit, count)
 	if err == nil {
-		service.responseSession = open
+		service.responseRun = open
 	}
 	return service, err
 }
@@ -241,7 +241,7 @@ func (s *CandidateService) measurement() string {
 	if s.publicResponse != nil || s.registeredPublicResponse != nil {
 		return CandidatePublicResponseMeasurement
 	}
-	if s.response != nil || s.responseSession != nil {
+	if s.response != nil || s.responseRun != nil {
 		return CandidatePrivateResponseMeasurement
 	}
 	return CandidateTCPMeasurement
@@ -330,7 +330,7 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 	result := Result{ID: target.ID, Role: "candidate", Kind: "tcp-connect", Label: fmt.Sprintf("TCP connection to candidate through node %d", s.prefix.Position+1)}
 	phase := "TCP connection"
 	public := s.measurement() == CandidatePublicResponseMeasurement
-	private := s.response != nil || s.responseSession != nil
+	private := s.measurement() == CandidatePrivateResponseMeasurement
 	if public {
 		phase = "public exit HTTPS response"
 		result.Kind = "public-exit-response"
@@ -343,11 +343,11 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 	samples := make([]float64, 0, LatencyBenchmarkSamples)
 	boundaryFailure := verify()
 	failure := boundaryFailure
-	var session CandidateResponseSession
-	if failure == nil && s.responseSession != nil {
-		session, failure = s.responseSession(ctx, target)
-		if session == nil && failure == nil {
-			failure = errors.New("candidate response session returned no original endpoint")
+	var run CandidateResponseRun
+	if failure == nil && s.responseRun != nil {
+		run, failure = s.responseRun(ctx, target)
+		if run == nil && failure == nil {
+			failure = ErrStale
 		}
 	}
 	if failure == nil {
@@ -381,8 +381,8 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 				}
 			} else if s.publicResponse != nil {
 				dialErr = s.publicResponse(probe, target, begin, complete)
-			} else if clockErr == nil && session != nil {
-				dialErr = session.Respond(probe, complete)
+			} else if clockErr == nil && run != nil {
+				dialErr = run.Respond(probe, complete)
 			} else if clockErr == nil && s.response != nil {
 				dialErr = s.response(probe, target, complete)
 			} else if clockErr == nil {
@@ -399,7 +399,7 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 			cancel()
 			failure = errors.Join(clockErr, dialErr, elapsedErr, closeErr, probeErr)
 			if failure != nil || connection == nil && !private && !public || elapsed <= 0 || math.IsNaN(elapsed) || math.IsInf(elapsed, 0) {
-				if (private || s.registeredPublicResponse != nil) && len(samples) == 0 && errors.Is(dialErr, ErrCandidateNotRegistered) && ctx.Err() == nil && probeErr == nil && clockErr == nil && closeErr == nil {
+				if (s.response != nil || s.registeredPublicResponse != nil) && len(samples) == 0 && errors.Is(dialErr, ErrCandidateNotRegistered) && ctx.Err() == nil && probeErr == nil && clockErr == nil && closeErr == nil {
 					result.CandidateDisposition = CandidateNotRegistered
 					failure = ErrCandidateNotRegistered
 				} else {
@@ -413,11 +413,8 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 			samples = append(samples, elapsed)
 		}
 	}
-	// Even a late endpoint returned with an admission error remains owned.
-	// Close is joined before final source verification and result publication;
-	// the enclosing worker retains its original MTU/activity hold throughout.
-	if session != nil {
-		failure = errors.Join(failure, session.Close())
+	if run != nil {
+		failure = errors.Join(failure, run.Close())
 	}
 	if boundaryFailure == nil {
 		boundaryFailure = verify()

@@ -69,7 +69,8 @@ func NewNodeProfile(mode, files, profileJSON, start, dnsBootstrap string) (*Node
 		return nil, errors.New("native node profile has no paired node identity")
 	}
 	api := predecessorText(profile, "router_api")
-	if _, err := privateAPI(api); err != nil {
+	endpoint, err := privateAPI(api)
+	if err != nil {
 		return nil, err
 	}
 	layer, err := externalOptionalString(profile, "start_layer")
@@ -252,6 +253,9 @@ func NewNodeProfile(mode, files, profileJSON, start, dnsBootstrap string) (*Node
 	}
 	rules = append(rules, map[string]any{"inbound": []any{tag}, "protocol": "dns", "action": "hijack-dns"}, map[string]any{"inbound": []any{tag}, "port": float64(53), "action": "hijack-dns"})
 	if len(blocked) != 0 {
+		if control := pairedNodeControlRoute(profile, endpoint, predecessorText(tun, "tag")); control != nil {
+			rules = append(rules, control)
+		}
 		rules = append(rules, map[string]any{"inbound": []any{tag}, "ip_cidr": blocked, "action": "reject"})
 	}
 	route["rules"], route["auto_detect_interface"] = rules, true

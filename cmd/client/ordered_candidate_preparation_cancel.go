@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/hopmeasure"
 )
@@ -24,6 +25,15 @@ type orderedCandidatePreparedAdmission struct {
 	created        time.Time
 	responseNodes  []orderedCandidateResponseSourceNode
 	responseOwners []string
+	originalFinal  *common.MultihopNodeSelection
+}
+
+func copyOrderedCandidateFinal(final *common.MultihopNodeSelection) *common.MultihopNodeSelection {
+	if final == nil {
+		return nil
+	}
+	copy := *final
+	return &copy
 }
 
 // Issued view identities also outlive the UI view's admission window. A
@@ -37,7 +47,7 @@ func rememberOrderedCandidatePreparedViewLocked(control *viaEntryControl, view *
 	if control.preparedViews == nil {
 		control.preparedViews = map[string]*orderedCandidatePreparedAdmission{}
 	}
-	control.preparedViews[view.token] = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, measurement: candidateViewMetric(view.prefixes, view.position), draft: view.draft != nil, created: time.Now(), candidateMode: view.candidateMode, responseOwners: slices.Clone(view.responseOwners), responseNodes: slices.Clone(view.responseNodes)}
+	control.preparedViews[view.token] = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, measurement: candidateViewMetric(view.prefixes, view.position), draft: view.draft != nil, created: time.Now(), candidateMode: view.candidateMode, originalFinal: copyOrderedCandidateFinal(view.originalFinal), responseOwners: slices.Clone(view.responseOwners), responseNodes: slices.Clone(view.responseNodes)}
 	return nil
 }
 
@@ -50,7 +60,7 @@ func reserveOrderedCandidatePreparedAdmissionLocked(control *viaEntryControl, id
 	if control.preparedAdmissions == nil {
 		control.preparedAdmissions = map[string]*orderedCandidatePreparedAdmission{}
 	}
-	control.preparedAdmissions[id] = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, measurement: candidateViewMetric(view.prefixes, view.position), draft: view.draft != nil, created: time.Now(), candidateMode: view.candidateMode, responseOwners: slices.Clone(view.responseOwners), responseNodes: slices.Clone(view.responseNodes)}
+	control.preparedAdmissions[id] = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, measurement: candidateViewMetric(view.prefixes, view.position), draft: view.draft != nil, created: time.Now(), candidateMode: view.candidateMode, originalFinal: copyOrderedCandidateFinal(view.originalFinal), responseOwners: slices.Clone(view.responseOwners), responseNodes: slices.Clone(view.responseNodes)}
 	return nil
 }
 
@@ -84,7 +94,7 @@ func (a *app) orderedCandidatePreparedCancel(w http.ResponseWriter, request *htt
 		recorded := control.preparedViews[q.ViewToken]
 		if recorded == nil && control.preparedView != nil && control.preparedView.token == q.ViewToken {
 			view := control.preparedView
-			recorded = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, measurement: candidateViewMetric(view.prefixes, view.position), draft: view.draft != nil, candidateMode: view.candidateMode, responseOwners: slices.Clone(view.responseOwners), responseNodes: slices.Clone(view.responseNodes)}
+			recorded = &orderedCandidatePreparedAdmission{token: view.token, scope: view.scopeValue(), requested: orderedCandidateDraftExecution(view.draft), position: view.position, measurement: candidateViewMetric(view.prefixes, view.position), draft: view.draft != nil, candidateMode: view.candidateMode, originalFinal: copyOrderedCandidateFinal(view.originalFinal), responseOwners: slices.Clone(view.responseOwners), responseNodes: slices.Clone(view.responseNodes)}
 		}
 		// A late cancel may outlive the catalog. Bind its nonce to the
 		// originally issued purpose before any worker can acquire it.
@@ -154,7 +164,7 @@ func orderedCandidatePreparedAdmissionCancelResponse(control *viaEntryControl, o
 		"cleanup_pending": !drained, "cleanup_error": cleanup, "failure": "",
 		"results": []hopmeasure.CandidateStatus{}, "errors": []viaEntryCandidateError{},
 		"saved_profile_id": "", "active_path_changed": false, "ok": failure == nil && drained}, admission.scope)
-	publishPreparedCandidateResponseSource(response, admission.candidateMode, admission.responseNodes)
+	publishOrderedCandidateResponseSource(response, admission.candidateMode, admission.responseNodes, admission.originalFinal)
 	if admission.draft {
 		response["requested_execution"] = admission.requested
 		response["origin"] = "editor-draft"

@@ -130,22 +130,28 @@ final class IOSUserLocationController: ObservableObject {
 
 @MainActor
 struct IOSUserLocationControl: View {
+    let abbreviated: Bool
     @EnvironmentObject private var controller: IOSUserLocationController
+
+    init(abbreviated: Bool = false) { self.abbreviated = abbreviated }
 
     var body: some View {
         Button { controller.toggleFromUserTap() } label: {
-            HStack(spacing: 5) {
-                Image(systemName: controller.state == "shown" ? "location.fill" : "location")
-                    .foregroundStyle(controller.state == "shown" ? .green : .primary)
-                Text(controller.detail)
+            Label {
+                Text(abbreviated ? (controller.state == "shown" ? "Hide" : controller.requestedByUser ? "Cancel" : "Locate") : controller.detail)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: controller.state == "shown" ? "location.fill" : "location")
+                    .foregroundStyle(controller.state == "shown" ? .green : .primary)
             }
             .font(.caption.bold())
             .padding(.horizontal, 9).padding(.vertical, 7)
+            .frame(minWidth: 44, minHeight: 44)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
         }
         .buttonStyle(.plain)
+        .accessibilityValue(controller.detail)
         .accessibilityLabel(controller.requestedByUser ? "Hide or cancel my real device location on the Router VPN map" : "Show my real device location on the Router VPN map")
     }
 }

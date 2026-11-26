@@ -20,9 +20,9 @@ import Libbox
     }
 
     static func compile(original: IOSNodeCandidateOriginalCapture, records: [String: Data], position: Int,
-                        candidateID: String, measuredInput: String, retainFinal: Bool = false, connectedLocal: Bool = false, preparedLocal: Bool = false) throws -> Self {
+                        candidateID: String, measuredInput: String, retainFinal: Bool = false, connectedLocal: Bool = false, preparedMode: String? = nil) throws -> Self {
         try compileCaptured(original: original, records: records, position: position,
-            candidateID: candidateID, measuredInput: measuredInput, selectedExecution: false, retainFinal: retainFinal, connectedLocal: connectedLocal, preparedLocal: preparedLocal)
+            candidateID: candidateID, measuredInput: measuredInput, selectedExecution: false, retainFinal: retainFinal, connectedLocal: connectedLocal, preparedMode: preparedMode)
     }
 
     static func selectedPositions(input: Data, bundle: Data, proofs: [IOSNodeCandidatePrefix],
@@ -66,22 +66,23 @@ import Libbox
     }
 
     private static func compileCaptured(original: IOSNodeCandidateOriginalCapture, records: [String: Data], position: Int,
-            candidateID: String, measuredInput: String, selectedExecution: Bool, multipleImported: Bool = false, selectedResponse: Bool = false, selectedPublic: Bool = false, selectedFinalResponse: Bool = false, retainFinal: Bool = false, connectedLocal: Bool = false, preparedLocal: Bool = false) throws -> Self {
-        guard !preparedLocal || !connectedLocal && !selectedExecution && original.selectionExecution == "local" else { throw IOSNodeCandidateCapture.issue() }
-        let prefixes = preparedLocal ? original.preparedCandidatePrefixes : connectedLocal ? original.connectedCandidatePrefixes : original.candidatePrefixes
-        if preparedLocal, prefixes.indices.contains(position), let mode = prefixes[position].candidate_mode {
-            guard case .ordinary(let captured) = original, prefixes[position].supported(in: prefixes),
-                  LibboxRouterNodeChainPreparedCandidateResponseMode(captured.plan, Int32(position)) == mode else { throw IOSNodeCandidateCapture.issue() }
+            candidateID: String, measuredInput: String, selectedExecution: Bool, multipleImported: Bool = false, selectedResponse: Bool = false, selectedPublic: Bool = false, selectedFinalResponse: Bool = false, retainFinal: Bool = false, connectedLocal: Bool = false, preparedMode: String? = nil) throws -> Self {
+        let prefixes = preparedMode != nil ? original.preparedCandidatePrefixes : connectedLocal ? original.connectedCandidatePrefixes : original.candidatePrefixes
+        if let preparedMode {
+            guard !connectedLocal, !selectedExecution, !retainFinal, original.selectionExecution == "local",
+                  prefixes.indices.contains(position), prefixes[position].candidate_mode == preparedMode,
+                  prefixes[position].pairedFinalResponse, prefixes[position].supported(in: prefixes),
+                  case .ordinary(let captured) = original,
+                  LibboxRouterNodeChainPreparedCandidateResponseMode(captured.plan, Int32(position)) == preparedMode else { throw IOSNodeCandidateCapture.issue() }
         }
-        let hysteria2Response = prefixes.indices.contains(position) && prefixes[position].hysteria2Response
         let finalResponse = selectedExecution && selectedResponse && selectedFinalResponse ||
-            connectedLocal && !selectedExecution && original.selectionExecution == "local" &&
-            prefixes.indices.contains(position) && prefixes[position].connectedFinalResponse(in: prefixes) ||
-            preparedLocal && hysteria2Response
-        let packetResponse = (connectedLocal || preparedLocal) && !selectedExecution && original.selectionExecution == "local" &&
-            prefixes.indices.contains(position) && prefixes[position].packetSuccessorResponse && prefixes[position].supported(in: prefixes)
-        guard !hysteria2Response || (connectedLocal || preparedLocal) && !selectedExecution && finalResponse else { throw IOSNodeCandidateCapture.issue() }
-        guard !packetResponse || !retainFinal && position < original.members.count - 2 else { throw IOSNodeCandidateCapture.issue() }
+            (connectedLocal || preparedMode != nil) && !selectedExecution && original.selectionExecution == "local" &&
+            prefixes.indices.contains(position) && prefixes[position].connectedFinalResponse(in: prefixes)
+        let pairedFinalResponse = prefixes.indices.contains(position) && prefixes[position].pairedFinalResponse
+        let packetResponse = (connectedLocal || preparedMode != nil) && !selectedExecution && original.selectionExecution == "local" && prefixes.indices.contains(position) &&
+            prefixes[position].packetSuccessorResponse(in: prefixes) && prefixes[position].supported(in: prefixes)
+        guard !pairedFinalResponse || (connectedLocal || preparedMode != nil) && !selectedExecution && (finalResponse || packetResponse),
+              !packetResponse || !retainFinal else { throw IOSNodeCandidateCapture.issue() }
         guard !selectedExecution || ["server", "auto"].contains(original.selectionExecution),
               selectedExecution || !original.requiresIndependentPrefix || original.selectionExecution == "local",
               original.members.indices.contains(position),
@@ -120,14 +121,14 @@ import Libbox
         }
         if !publicResponse && (selectedResponse || !selectedExecution && prefixes[position].metric == "routed-candidate-response") {
             let supported: Bool
-            if preparedLocal && (packetResponse || hysteria2Response), case .ordinary(let captured) = original {
+            if preparedMode != nil && pairedFinalResponse, case .ordinary(let captured) = original {
                 supported = pairedMode == original.members[position + 1].mode &&
                     LibboxRouterNodeChainPreparedCandidateInputFitsSource(captured.plan, Int32(position), measuredInput)
             } else if packetResponse, case .ordinary(let captured) = original {
                 supported = pairedMode == original.members[position + 1].mode &&
                     LibboxRouterNodeChainPacketSuccessorCandidateFitsSource(captured.plan, Int32(position), measuredInput)
             } else {
-                supported = hysteria2Response ? LibboxRouterNodeChainHysteria2CandidateInputSupported(measuredInput) :
+                supported = pairedFinalResponse ? LibboxRouterNodeChainResponseCandidateInputSupported(measuredInput, pairedMode) :
                     LibboxRouterNodeChainCandidateInputSupportedForMeasurement(measuredInput, "routed-candidate-response")
             }
             guard supported else {
@@ -194,6 +195,10 @@ import Libbox
                 preview = (captured.members, captured.source, { try captured.plan.close() })
             } else {
                 let captured = try IOSNodeChainCapture.compile(bundles: bundles)
+                if pairedFinalResponse && !packetResponse && (preparedMode == nil ? LibboxRouterNodeChainConnectedFinalCandidateResponseMode(captured.plan, Int32(position)) :
+                    LibboxRouterNodeChainPreparedFinalCandidateResponseMode(captured.plan, Int32(position))) != pairedMode {
+                    try captured.plan.close(); throw IOSNodeCandidateCapture.issue()
+                }
                 preview = (captured.members, captured.launchInput, { try captured.plan.close() })
             }
         }
@@ -260,6 +265,6 @@ import Libbox
                 guard priorNodes[originalIndex] == afterNodes[index] else { throw IOSNodeCandidateCapture.issue() }
             }
         }
-        return Self(description: selected.map { "\($0.id) (\($0.mode))" }.joined(separator: " → "), profiles: savedProfiles, launchInput: preview.launchInput, replacesPacketSuccessor: preparedLocal && packetResponse)
+        return Self(description: selected.map { "\($0.id) (\($0.mode))" }.joined(separator: " → "), profiles: savedProfiles, launchInput: preview.launchInput, replacesPacketSuccessor: preparedMode != nil && packetResponse)
     }
 }

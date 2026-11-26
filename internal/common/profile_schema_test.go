@@ -117,6 +117,26 @@ func TestMultihopRequiresCompleteDistinctNodes(t *testing.T) {
 	p = RouterProfile{MultihopEnabled: true, MultihopEntryID: " entry ", MultihopExitID: " exit "}
 	if err := NormalizeRouterProfile(&p); err != nil { t.Fatal(err) }
 	if p.MultihopEntryID != "entry" || p.MultihopExitID != "exit" { t.Fatalf("multihop IDs were not normalized: %+v", p) }
+
+	packet := []MultihopNodeSelection{{ID: "entry", Mode: "awg2-fast"}, {ID: "middle", Mode: "wg"}, {ID: "exit", Mode: "awg2-strong"}}
+	p = RouterProfile{NodeKind: "router-vpn", MultihopExecution: "local", MultihopNodes: packet}
+	if !PairedPacketLocalMultihopSelection(packet) || validateRouterProfileNodeChain(&p) != nil {
+		t.Fatal("original paired packet selection rejected")
+	}
+	for _, execution := range []string{"server", "auto"} {
+		p.MultihopExecution = execution
+		if validateRouterProfileNodeChain(&p) == nil {
+			t.Fatalf("accepted paired packet final for %s", execution)
+		}
+	}
+	packet[2].ID = packet[0].ID
+	if PairedPacketLocalMultihopSelection(packet) {
+		t.Fatal("accepted duplicate selected peer")
+	}
+	packet[2] = MultihopNodeSelection{ID: "exit", Mode: "hysteria2"}
+	if PairedPacketLocalMultihopSelection(packet) {
+		t.Fatal("classified an independent final family as a packet final")
+	}
 }
 
 func TestDAITALikeRateIsExplicitlyBounded(t *testing.T) {

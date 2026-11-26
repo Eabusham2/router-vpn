@@ -80,11 +80,11 @@ extension IOSRuntimeSelector {
                   (IOSMultihopNodeSelection.supportsImportedMiddle(member.mode, position: position, count: capture.members.count) && ["shadowsocks", "openvpn"].contains(member.mode) || IOSMultihopNodeSelection.supportsLocalImportedNode(member.mode, position: position, count: capture.members.count, importedEntry: importedEntry)) && member.profile["node_kind"] as? String == "external"
               }),
               let final = capture.members.last, final.profile["node_kind"] as? String == (capture.sourceSchema == 8 ? "external" : "router-vpn"),
-              final.mode == "shadowsocks" || final.mode == "hysteria2" &&
+              final.mode == "shadowsocks" || IOSMultihopNodeSelection.supportsNativePrefix(final.mode) && capture.sourceSchema == 1 || final.mode == "hysteria2" &&
                 (final.profile["start_layer"] == nil ||
                  (final.profile["start_layer"] as? String).map({ ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains($0) }) == true) &&
                 capture.members.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) && $0.profile["node_kind"] as? String == "router-vpn" }) else {
-            throw IOSMultihopNodeSelection.issue("This Local ordered path needs paired WireGuard or AWG2 nodes followed by Shadowsocks 2022 or Hysteria2 with its independent Off, AES or AES with XOR whitening layer. An imported middle requires a Shadowsocks 2022 final node.")
+            throw IOSMultihopNodeSelection.issue("Choose a Local packet route with Start Layer off, or paired packet nodes followed by Shadowsocks 2022 or Hysteria2. An imported middle requires a Shadowsocks 2022 final node.")
         }
         return IOSRuntimeSelection(engine: .multihop, logicalModeID: "multihop", rawProfileID: final.mode,
                                    files: [:], nodeChainInput: capture.launchInput)

@@ -91,7 +91,7 @@ func desktopLinuxBaselineMessage(kind, flags uint16, seq, port uint32, family by
 
 func desktopLinuxBaselineReply(data []byte, source syscall.Sockaddr, flags int, port uint32, expected ...uint32) (*syscall.NetlinkMessage, error) {
 	kernel, ok := source.(*syscall.SockaddrNetlink)
-	if !ok || kernel.Family != syscall.AF_NETLINK || kernel.Pid != 0 || kernel.Groups != 0 || flags != 0 || len(data) < 16 || port == 0 || len(expected) == 0 || len(expected) > 3 {
+	if !ok || kernel.Family != syscall.AF_NETLINK || kernel.Pid != 0 || kernel.Groups != 0 || flags != 0 || len(data) < 16 || port == 0 || len(expected) == 0 || len(expected) > 4 {
 		return nil, errors.New("Linux baseline did not receive a complete kernel reply")
 	}
 	length := int(binary.NativeEndian.Uint32(data[:4]))
@@ -114,15 +114,25 @@ func desktopLinuxBaselineReply(data []byte, source syscall.Sockaddr, flags int, 
 // deadline. Keep a complete receipt even if cancellation races with delivery;
 // an acknowledged mutation must never be replayed after a late failure.
 func (n *desktopLinuxBaselineNetlink) exchange(ctx context.Context, request []byte, expected ...uint32) (reply *syscall.NetlinkMessage, sent bool, failure error) {
+	sent, failure = n.exchangeUntil(ctx, request, func(data []byte, source syscall.Sockaddr, flags int) (bool, error) {
+		var err error
+		reply, err = desktopLinuxBaselineReply(data, source, flags, n.port, expected...)
+		return reply != nil, err
+	})
+	return reply, sent, failure
+}
+
+func (n *desktopLinuxBaselineNetlink) exchangeUntil(ctx context.Context, request []byte, receive func([]byte, syscall.Sockaddr, int) (bool, error)) (sent bool, failure error) {
+	var complete bool
 	if n.file == nil || n.port == 0 || n.uncertain != nil || n.bootstrap != nil || ctx == nil || ctx.Err() != nil || len(request) == 0 || len(request) > 4096 {
-		return nil, false, errors.Join(n.uncertain, errors.New("Linux baseline netlink operation lost its live original endpoint"))
+		return false, errors.Join(n.uncertain, errors.New("Linux baseline netlink operation lost its live original endpoint"))
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	if earlier, ok := ctx.Deadline(); ok && earlier.Before(deadline) {
 		deadline = earlier
 	}
 	if err := n.file.SetDeadline(deadline); err != nil {
-		return nil, false, err
+		return false, err
 	}
 	joined := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() { _ = n.file.SetDeadline(time.Now()); close(joined) })
@@ -132,13 +142,13 @@ func (n *desktopLinuxBaselineNetlink) exchange(ctx context.Context, request []by
 		}
 		reset := n.file.SetDeadline(time.Time{})
 		failure = errors.Join(failure, ctx.Err(), reset)
-		if sent && reply == nil || reset != nil {
+		if sent && !complete || reset != nil {
 			n.uncertain = errors.Join(failure, errors.New("Linux baseline retained an unacknowledged native operation"))
 		}
 	}()
 	raw, err := n.file.SyscallConn()
 	if err != nil {
-		return nil, false, err
+		return false, err
 	}
 	var nativeErr error
 	err = raw.Write(func(fd uintptr) bool {
@@ -153,20 +163,25 @@ func (n *desktopLinuxBaselineNetlink) exchange(ctx context.Context, request []by
 		return true
 	})
 	if err != nil || nativeErr != nil {
-		return nil, sent, errors.Join(err, nativeErr)
+		return sent, errors.Join(err, nativeErr)
 	}
 	buffer := make([]byte, 64<<10)
-	var size, flags int
-	var source syscall.Sockaddr
-	err = raw.Read(func(fd uintptr) bool {
-		size, _, flags, source, nativeErr = syscall.Recvmsg(int(fd), buffer, nil, 0)
-		return !errors.Is(nativeErr, syscall.EAGAIN) && !errors.Is(nativeErr, syscall.EINTR)
-	})
-	if err != nil || nativeErr != nil || size < 0 || size > len(buffer) {
-		return nil, sent, errors.Join(err, nativeErr, errors.New("Linux baseline has no complete native receipt"))
+	for frames := 0; frames < 32; frames++ {
+		var size, flags int
+		var source syscall.Sockaddr
+		err = raw.Read(func(fd uintptr) bool {
+			size, _, flags, source, nativeErr = syscall.Recvmsg(int(fd), buffer, nil, 0)
+			return !errors.Is(nativeErr, syscall.EAGAIN) && !errors.Is(nativeErr, syscall.EINTR)
+		})
+		if err != nil || nativeErr != nil || size < 0 || size > len(buffer) {
+			return sent, errors.Join(err, nativeErr, errors.New("Linux baseline has no complete native receipt"))
+		}
+		complete, err = receive(buffer[:size], source, flags)
+		if err != nil || complete {
+			return sent, err
+		}
 	}
-	reply, err = desktopLinuxBaselineReply(buffer[:size], source, flags, n.port, expected...)
-	return reply, sent, err
+	return sent, errors.New("Linux baseline exceeded its original native receipt bound")
 }
 
 func (n *desktopLinuxBaselineNetlink) nextSequence() (uint32, error) {
@@ -229,6 +244,13 @@ func desktopLinuxBaselineGeneration(message *syscall.NetlinkMessage) (uint32, er
 		return 0, errors.New("Linux baseline has no exact nonzero ruleset generation")
 	}
 	return generation, nil
+}
+
+func desktopLinuxNextGeneration(generation uint32) uint32 {
+	if generation == ^uint32(0) {
+		return 1 // nft skips zero on generation wrap.
+	}
+	return generation + 1
 }
 
 func (n *desktopLinuxBaselineNetlink) generation(ctx context.Context) (uint32, error) {
@@ -302,8 +324,8 @@ func (n *desktopLinuxBaselineNetlink) deleteReceipt(reply *syscall.NetlinkMessag
 	return acknowledged, err
 }
 
-func (n *desktopLinuxBaselineNetlink) delete(ctx context.Context, generation uint32, handle uint64) (acknowledged, sent bool, failure error) {
-	if n == nil || generation == 0 || handle == 0 || handle > 1<<53-1 {
+func (n *desktopLinuxBaselineNetlink) delete(ctx context.Context, generation uint32, table string, handle uint64) (acknowledged, sent bool, failure error) {
+	if n == nil || table != desktopLinuxNFTTable && !desktopLinuxOwnedTableName(table) || generation == 0 || handle == 0 || handle > 1<<53-1 {
 		return false, false, errors.New("Linux baseline deletion requires its original exact handle and generation")
 	}
 	n.mu.Lock()
@@ -318,16 +340,28 @@ func (n *desktopLinuxBaselineNetlink) delete(ctx context.Context, generation uin
 	binary.BigEndian.PutUint64(object[:], handle)
 	requests := [3][]byte{
 		desktopLinuxBaselineMessage(desktopLinuxNFTBatchBegin, syscall.NLM_F_REQUEST, seq, n.port, 0, desktopLinuxNFTSubsystem, desktopLinuxBaselineAttribute(1, gen[:])),
-		desktopLinuxBaselineMessage(desktopLinuxNFTDeleteTable, syscall.NLM_F_REQUEST, seq+1, n.port, desktopLinuxNFTInet, 0, desktopLinuxBaselineAttribute(4, object[:])),
-		desktopLinuxBaselineMessage(desktopLinuxNFTBatchEnd, syscall.NLM_F_REQUEST|syscall.NLM_F_ACK, seq+2, n.port, 0, desktopLinuxNFTSubsystem, nil),
+		desktopLinuxBaselineMessage(desktopLinuxNFTDeleteTable, syscall.NLM_F_REQUEST|syscall.NLM_F_ECHO, seq+1, n.port, desktopLinuxNFTInet, 0, desktopLinuxBaselineAttribute(4, object[:])),
+		desktopLinuxBaselineMessage(desktopLinuxNFTBatchEnd, syscall.NLM_F_REQUEST, seq+2, n.port, 0, desktopLinuxNFTSubsystem, nil),
 	}
-	request := append(append(append([]byte{}, requests[0]...), requests[1]...), requests[2]...)
-	reply, sent, err := n.exchange(ctx, request, seq, seq+1, seq+2)
-	if reply == nil {
-		return false, sent, err
-	}
-	acknowledged, receiptErr := n.deleteReceipt(reply, requests)
-	return acknowledged, sent, errors.Join(err, receiptErr)
+	proof := desktopLinuxTableRemoval{table: table, handle: handle, next: desktopLinuxNextGeneration(generation)}
+	request := bytes.Join(requests[:], nil)
+	sent, err = n.exchangeUntil(ctx, request, func(data []byte, source syscall.Sockaddr, flags int) (bool, error) {
+		kernel, ok := source.(*syscall.SockaddrNetlink)
+		if ok && kernel.Groups == 0 {
+			reply, err := desktopLinuxBaselineReply(data, source, flags, n.port, seq, seq+1, seq+2)
+			if err != nil {
+				return false, err
+			}
+			_, err = desktopLinuxBaselineDeleteReceipt(reply, requests)
+			var rejected syscall.Errno
+			if !proof.objectSeen && errors.As(err, &rejected) {
+				return true, err
+			}
+			return false, errors.New("Linux baseline deletion received a contradictory acknowledgement")
+		}
+		return proof.receive(data, source, flags, n.port, seq+1)
+	})
+	return proof.committed, sent, err
 }
 
 func (n *desktopLinuxBaselineNetlink) close() error {

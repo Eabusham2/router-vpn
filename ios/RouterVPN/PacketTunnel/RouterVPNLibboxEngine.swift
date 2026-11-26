@@ -2132,7 +2132,7 @@ final class RouterVPNLibboxEngine {
                 if temporaryMeasurement {
                     localPrefixes = localPrefixes.map { original in
                         var prefix = original
-                        if prefix.hysteria2Response || prefix.packetSuccessorResponse { prefix.measurement = nil; prefix.candidate_mode = nil }
+                        if prefix.pairedFinalResponse { prefix.measurement = nil; prefix.candidate_mode = nil }
                         return prefix
                     }
                 }
@@ -2152,7 +2152,7 @@ final class RouterVPNLibboxEngine {
             guard current else { return nil }
             var value: [String: Any] = ["session_id": settingsEpoch, "request_id": request, "mtu_session_id": mtuSession,
                 "source_sha256": sourceSHA256, "config_sha256": configSHA256, "proofs": safe]
-            if localPrefixes.contains(where: \.packetSuccessorResponse) {
+            if localPrefixes.contains(where: { $0.packetSuccessorResponse(in: localPrefixes) }) {
                 value["response_source_nodes"] = members.map { IOSNodeCandidateResponseNode(id: $0.id, mode: $0.mode).object }
             }
             value.merge(selectedFields) { _, selected in selected }
@@ -2185,11 +2185,12 @@ final class RouterVPNLibboxEngine {
             if let source = originalSource,
                let inventory = try? JSONSerialization.jsonObject(with: source.inventory.data) as? [String: Any],
                let mode = inventory["response_mode"] as? String, IOSMultihopNodeSelection.supportsNativePrefix(mode) {
-                guard !temporaryMeasurement, let plan,
-                      LibboxRouterNodeChainConnectedPacketSuccessorCandidateMode(plan, position) == mode,
-                      let original = try? IOSNodeChainCapture(plan: plan) else { return nil }
-                responseMode = mode
-                responseSourceNodes = original.members.map { IOSNodeCandidateResponseNode(id: $0.id, mode: $0.mode) }
+                guard !temporaryMeasurement, let plan else { return nil }
+                if LibboxRouterNodeChainConnectedPacketSuccessorCandidateMode(plan, position) == mode {
+                    guard let original = try? IOSNodeChainCapture(plan: plan), Int(position) < original.members.count - 2 else { return nil }
+                    responseMode = mode
+                    responseSourceNodes = original.members.map { IOSNodeCandidateResponseNode(id: $0.id, mode: $0.mode) }
+                } else if LibboxRouterNodeChainConnectedFinalCandidateResponseMode(plan, position) != mode { return nil }
             }
             ownershipLock.lock()
             var captured = nodeCandidate

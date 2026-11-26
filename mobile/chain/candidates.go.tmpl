@@ -340,6 +340,24 @@ func RouterNodeChainCandidateInputSupported(input string) bool {
 	return mobilemultihop.NodeChainCandidateInputSupported(input)
 }
 
+func RouterNodeChainPreparedFinalCandidateResponseMode(plan *RouterNodeChain, position int32) string {
+	if plan == nil || plan.self != plan || plan.chain == nil {
+		return ""
+	}
+	return plan.chain.PreparedFinalCandidateResponseMode(int(position))
+}
+
+func RouterNodeChainConnectedFinalCandidateResponseMode(plan *RouterNodeChain, position int32) string {
+	if plan == nil || plan.self != plan || plan.chain == nil {
+		return ""
+	}
+	return plan.chain.ConnectedFinalCandidateResponseMode(int(position))
+}
+
+func RouterNodeChainResponseCandidateInputSupported(input, mode string) bool {
+	return mobilemultihop.NodeChainResponseCandidateInputSupported(input, mode)
+}
+
 func RouterNodeChainHysteria2CandidateInputSupported(input string) bool {
 	return mobilemultihop.NodeChainHysteria2CandidateInputSupported(input)
 }

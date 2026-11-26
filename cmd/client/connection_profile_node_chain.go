@@ -86,6 +86,10 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 	if record.NodeChain[len(record.NodeChain)-1].NodeKind == "external" {
 		return validateSavedExternalFinalNodeChain(record)
 	}
+	packetFinal := mobilemultihop.NodeChainPrefixMode(record.Prefs.MultihopNodes[len(record.Prefs.MultihopNodes)-1].Mode)
+	if packetFinal && (record.Prefs.MultihopExecution != "local" || !common.PairedPacketLocalMultihopSelection(record.Prefs.MultihopNodes)) {
+		return errors.New("saved packet final requires its complete bounded paired Local selection")
+	}
 	privateStreams := savedPairedStreamPath(record)
 	paired := common.ExtendedPairedLocalMultihopSelection(record.Prefs.MultihopNodes)
 	mixed := common.ExtendedMixedLocalPacketCount(record.Prefs.MultihopNodes)
@@ -98,6 +102,10 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 	}
 	for i, captured := range record.NodeChain {
 		selected := record.Prefs.MultihopNodes[i]
+		if packetFinal && (captured.NodeKind != "" || captured.External != nil || captured.Preferences == nil ||
+			captured.Preferences.StartLayer != "" && captured.Preferences.StartLayer != "off") {
+			return errors.New("saved packet final lost an original paired member or its Off layer")
+		}
 		if mixed > 0 && !privateStreams && ((i >= mixed && i < len(record.NodeChain)-1) != (captured.NodeKind == "external")) {
 			return errors.New("saved mixed route changed an original paired or imported position")
 		}
@@ -157,7 +165,7 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 			return errors.New("saved paired member lost its original Router identity")
 		}
 		if i < len(record.NodeChain)-1 && !mobilemultihop.NodeChainPrefixMode(captured.Mode) && !(privateStreams && captured.Mode == "shadowsocks") || i == len(record.NodeChain)-1 && !desktopNodeChainFinalSupported(captured.Mode, captured.Preferences.StartLayer) {
-			return errors.New("saved ordered path requires WireGuard or AWG2 prefixes and an SS2022 or unlayered Hysteria2 final")
+			return errors.New("saved ordered path lost a supported prefix or its captured final transport")
 		}
 		modes, err := savedNodeChainSourceModes(captured.Mode, captured.Preferences.StartLayer)
 		if err != nil || len(captured.Sources) != len(modes) {

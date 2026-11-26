@@ -391,7 +391,7 @@ func (b *DesktopLinuxNodeBaseline) absence(ctx context.Context) error {
 }
 
 func (b *DesktopLinuxNodeBaseline) remove(ctx context.Context, generation uint32) error {
-	acknowledged, sent, err := b.netlink.delete(ctx, generation, b.nft.TableHandle)
+	acknowledged, sent, err := b.netlink.delete(ctx, generation, b.nft.table(), b.nft.TableHandle)
 	if acknowledged {
 		b.removed = true
 	}

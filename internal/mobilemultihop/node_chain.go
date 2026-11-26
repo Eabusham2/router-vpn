@@ -229,7 +229,7 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		pairedStream := source.Schema == 6 && position > 0 && position < len(source.Nodes)-1 && node.mode == "shadowsocks"
 		if position < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) && !pairedStream ||
 			position == len(source.Nodes)-1 && !nodeChainFinalCapture(node) {
-			return nil, errors.New("ordered Local chains require captured WG or AWG2 Fast/Strong prefixes and an SS2022 or paired Hysteria2 final with its original Start Layer")
+			return nil, errors.New("ordered Local chains require captured WG or AWG2 Fast/Strong prefixes and an eligible original paired final")
 		}
 		id, peer := predecessorText(node.profile, "id"), predecessorText(node.profile, "node_proof_id")
 		if ids[id] || peers[peer] {
@@ -237,26 +237,29 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		}
 		ids[id], peers[peer] = true, true
 		if NodeChainPrefixMode(node.mode) {
-			client, err := node.PacketClientPublicKey()
-			if err != nil || clients[client] {
-				return nil, errors.New("ordered chain requires independent canonical WG/AWG client identities")
+			client, server, err := nodeChainPacketKeys(node)
+			if err != nil || clients[client] || servers[server] {
+				return nil, errors.New("ordered chain requires independent canonical WG/AWG client and server identities")
 			}
 			clients[client] = true
-			closure, err := nodeMultihopPredecessor(node)
-			if err != nil {
-				return nil, nodeChainError
-			}
-			rows, ok := closure.final["peers"].([]any)
-			if !ok || len(rows) != 1 {
-				return nil, nodeChainError
-			}
-			server := predecessorText(rows[0].(map[string]any), "public_key")
-			if !nodeChainCanonicalPeer(server) || servers[server] {
-				return nil, errors.New("ordered chain requires independent canonical WG/AWG server identities")
-			}
 			servers[server] = true
 		}
 		c.nodes = append(c.nodes, node)
+	}
+	if final := c.nodes[len(c.nodes)-1]; final != nil && NodeChainPrefixMode(final.mode) {
+		if source.Schema != 1 || len(c.nodes) > NodeChainMaximumNodes {
+			return nil, nodeChainError
+		}
+		for key := range clients {
+			if servers[key] {
+				return nil, errors.New("paired packet nodes cannot share a client and server identity")
+			}
+		}
+		for _, member := range c.nodes {
+			if member == nil || !NodeChainPrefixMode(member.mode) || !nodeChainFinalCapture(member) {
+				return nil, nodeChainError
+			}
+		}
 	}
 	if c.importedNodes != nil {
 		c.config, c.proofs, c.dns, c.physical, err = c.importedNodes.compile(c.nodes)
@@ -325,6 +328,27 @@ func (c *NodeChain) refreshMetadata() error {
 	}
 	c.metadata = string(meta)
 	return nil
+}
+
+func nodeChainPacketKeys(node *NodeProfile) (string, string, error) {
+	client, err := node.PacketClientPublicKey()
+	if err != nil {
+		return "", "", err
+	}
+	closure, err := nodeMultihopPredecessor(node)
+	if err != nil {
+		return "", "", err
+	}
+	rows, ok := closure.final["peers"].([]any)
+	if !ok || len(rows) != 1 {
+		return "", "", nodeChainError
+	}
+	peer, ok := rows[0].(map[string]any)
+	server := predecessorText(peer, "public_key")
+	if !ok || !nodeChainCanonicalPeer(server) {
+		return "", "", nodeChainError
+	}
+	return client, server, nil
 }
 
 // Require the unique RFC 7748 u-coordinate representation. In particular a

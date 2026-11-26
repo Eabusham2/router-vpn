@@ -21,8 +21,9 @@ import (
 )
 
 type desktopLinuxNFT struct {
-	HostProtectionOff bool   `json:",omitempty"`
-	DenyHandle        uint64 `json:",omitempty"`
+	tupleNetlink      *desktopLinuxBaselineNetlink // Held only by the creating guardian; never serialized.
+	HostProtectionOff bool                         `json:",omitempty"`
+	DenyHandle        uint64                       `json:",omitempty"`
 	Capture           DesktopSocketCapture
 	TableName         string `json:",omitempty"`
 	UID               uint32
@@ -178,7 +179,11 @@ func desktopLinuxNFTReadTable(ctx context.Context, tableName string) ([]map[stri
 	}
 	raw, err := desktopLinuxNFTCommand(ctx, []string{"-j", "-n", "list", "table", "inet", tableName}, "")
 	if err == nil {
-		return desktopLinuxNFTRows(raw)
+		rows, readErr := desktopLinuxNFTRows(raw)
+		if readErr != nil || len(rows) == 0 {
+			return nil, errors.Join(readErr, errors.New("Linux physical table listing has no kernel objects"))
+		}
+		return rows, nil
 	}
 	// A command error alone is never proof of absence. Independently enumerate
 	// tables, and only accept an actual list that does not contain this table.
@@ -272,6 +277,15 @@ func desktopLinuxNewNFT(c DesktopSocketCapture, uid uint32, options DesktopLinux
 	n.UID, n.Prefix, n.Rules, n.Sets = uid, "rvpn_"+hex.EncodeToString(nonce[:]), make(map[string]uint64), make(map[string]uint64)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	var err error
+	n.tupleNetlink, err = desktopLinuxOpenBaselineNetlink()
+	if err != nil {
+		return n, err
+	}
+	before, err := n.tupleNetlink.generation(ctx)
+	if err != nil {
+		return n, err
+	}
 	if err := n.captureChain(ctx, options); err != nil {
 		return n, err
 	}
@@ -288,7 +302,7 @@ func desktopLinuxNewNFT(c DesktopSocketCapture, uid uint32, options DesktopLinux
 			family = "ip6"
 		}
 		name := n.Prefix + "_" + kind
-		fmt.Fprintf(&script, "add set inet %s %s { typeof meta oif . %s saddr . %s sport . %s daddr . %s dport; flags timeout; timeout 9s; size 4096; }\n", n.table(), name, family, network, family, network)
+		fmt.Fprintf(&script, "create set inet %s %s { typeof meta oif . %s saddr . %s sport . %s daddr . %s dport; flags timeout; timeout 9s; size 4096; }\n", n.table(), name, family, network, family, network)
 		fmt.Fprintf(&script, "insert rule inet %s output meta skuid %d meta l4proto %s meta oif . %s saddr . %s sport . %s daddr . %s dport @%s accept comment %s\n", n.table(), uid, network, family, network, family, network, name, strconv.Quote(n.comment(kind)))
 	}
 	if _, err := desktopLinuxNFTCommand(ctx, []string{"-f", "-"}, script.String()); err != nil {
@@ -297,6 +311,12 @@ func desktopLinuxNewNFT(c DesktopSocketCapture, uid uint32, options DesktopLinux
 	rows, err := desktopLinuxNFTReadTable(ctx, n.table())
 	if err != nil {
 		return n, err
+	}
+	// Accept the handles only from our one exclusive batch. An intervening
+	// generation (including a same-name replacement) leaves no child authority.
+	after, err := n.tupleNetlink.generation(ctx)
+	if err != nil || after != desktopLinuxNextGeneration(before) {
+		return n, errors.Join(err, errors.New("Linux physical creation changed before original child handles were captured"))
 	}
 	for _, row := range rows {
 		if set, ok := row["set"].(map[string]any); ok {
@@ -320,7 +340,10 @@ func desktopLinuxNewNFT(c DesktopSocketCapture, uid uint32, options DesktopLinux
 			}
 		}
 	}
-	return n, n.verifyRows(rows, true)
+	if err = n.verifyRows(rows, true); err != nil {
+		return n, err
+	}
+	return n, nil
 }
 
 func (n *desktopLinuxNFT) comment(kind string) string {
@@ -414,10 +437,6 @@ func (n *desktopLinuxNFT) kind(g DesktopSocketGrant) string {
 	return g.Network + family
 }
 
-func (n *desktopLinuxNFT) key(g DesktopSocketGrant) string {
-	return fmt.Sprintf("%d . %s . %d . %s . %d", g.Binding.InterfaceIndex, g.Local.Addr(), g.Local.Port(), g.Remote.Addr(), g.Remote.Port())
-}
-
 func (n *desktopLinuxNFT) findElement(rows []map[string]any, g DesktopSocketGrant) (map[string]any, bool, error) {
 	if g.Capture != n.Capture || g.Network != "tcp" && g.Network != "udp" || !g.Local.IsValid() || !g.Remote.IsValid() || g.Local.Port() == 0 || g.Remote.Port() == 0 || g.Local.Addr().Is4() != g.Remote.Addr().Is4() {
 		return nil, false, errors.New("Linux nft tuple is invalid")
@@ -444,15 +463,60 @@ func (n *desktopLinuxNFT) findElement(rows []map[string]any, g DesktopSocketGran
 	return nil, false, nil
 }
 
-func (n *desktopLinuxNFT) grant(ctx context.Context, g DesktopSocketGrant) (DesktopSocketReceipt, error) {
-	if err := n.verify(ctx, true); err != nil {
-		return DesktopSocketReceipt{}, err
-	}
+// Each guardian serializes mutations for its original socket. An empty tuple
+// is created exclusively. Renewal replaces only the previous observed socket
+// and sequence in one atomic transaction; expiration between read and delete
+// rejects that transaction without installing a fresh permit.
+func (n *desktopLinuxNFT) installElement(ctx context.Context, grant, previous DesktopSocketGrant, seconds int64, comment string, control *DesktopSocketGrant) error {
 	started := time.Now()
-	set := n.Prefix + "_" + n.kind(g)
+	rows, generation, err := n.tupleRows(ctx)
+	if err != nil {
+		return err
+	}
+	parent := ""
+	if control != nil {
+		parent = control.SocketID
+		controlUntil, err := n.socksControlExpiry(rows, *control, started)
+		deadline, bounded := ctx.Deadline()
+		if err != nil || !bounded || deadline.Add(time.Duration(seconds)*time.Second).After(controlUntil) {
+			return errors.Join(err, errors.New("Linux UDP permit lost its original TCP control before mutation"))
+		}
+	}
+	element, found, err := n.findElement(rows, grant)
+	if err != nil {
+		return err
+	}
+	if found {
+		old := grant
+		old.Sequence = previous.Sequence
+		if previous != old || previous.Sequence == 0 || previous.Sequence >= grant.Sequence || !desktopLinuxElementOwned(element, previous, parent, true) {
+			return errors.New("Linux physical tuple renewal lost its original socket and sequence")
+		}
+	}
+	return n.mutateElement(ctx, grant, generation, found, seconds, comment)
+}
+
+func desktopLinuxElementOwned(element map[string]any, grant DesktopSocketGrant, parent string, renewal bool) bool {
+	comment, ok := element["comment"].(string)
+	parts := strings.Split(comment, ":")
+	if !ok || len(parts) != 2 && len(parts) != 5 || parts[0] != grant.SocketID {
+		return false
+	}
+	seq, ok := desktopLinuxRunningSequence(parts[1])
+	if !ok || seq > grant.Sequence || renewal && seq != grant.Sequence {
+		return false
+	}
+	if len(parts) == 2 {
+		return !renewal || parent == ""
+	}
+	_, ok = desktopLinuxRunningSequence(parts[4])
+	return ok && parts[2] == "socks" && desktopSocketHex(parts[3], 32) && (!renewal || parent == parts[3])
+}
+
+func (n *desktopLinuxNFT) grant(ctx context.Context, g, previous DesktopSocketGrant) (DesktopSocketReceipt, error) {
+	started := time.Now()
 	comment := g.SocketID + ":" + strconv.FormatUint(g.Sequence, 10)
-	script := fmt.Sprintf("destroy element inet %s %s { %s }\nadd element inet %s %s { %s timeout 9s comment %s }\n", n.table(), set, n.key(g), n.table(), set, n.key(g), strconv.Quote(comment))
-	if _, err := desktopLinuxNFTCommand(ctx, []string{"-f", "-"}, script); err != nil {
+	if err := n.installElement(ctx, g, previous, 9, comment, nil); err != nil {
 		return DesktopSocketReceipt{}, err
 	}
 	rows, err := desktopLinuxNFTReadTable(ctx, n.table())
@@ -485,21 +549,23 @@ func (n *desktopLinuxNFT) absent(ctx context.Context, g DesktopSocketGrant) erro
 }
 
 func (n *desktopLinuxNFT) revoke(ctx context.Context, g DesktopSocketGrant) error {
-	rows, err := desktopLinuxNFTReadTable(ctx, n.table())
-	if err != nil {
+	element, found, generation, err := n.observeElement(ctx, g)
+	if err != nil || !found {
 		return err
 	}
-	_, found, err := n.findElement(rows, g)
-	if err != nil {
-		return err
+
+	// The immediately preceding sequence can remain when an atomic renewal
+	// was refused. Only a tuple stamped by the same still-owned socket may be
+	// revoked. A concurrent natural expiry is accepted by independent absence.
+	if !desktopLinuxElementOwned(element, g, "", false) {
+		return errors.New("Linux physical revocation found a different tuple owner")
 	}
-	if found {
-		_, err = desktopLinuxNFTCommand(ctx, []string{"-f", "-"}, fmt.Sprintf("destroy element inet %s %s { %s }\n", n.table(), n.Prefix+"_"+n.kind(g), n.key(g)))
-		if err != nil {
-			return err
-		}
+	removal := n.mutateElement(ctx, g, generation, true, 0, "")
+	_, remains, _, observed := n.observeElement(ctx, g)
+	if observed != nil || remains {
+		return errors.Join(removal, observed, errors.New("Linux original physical permit was not proved absent"))
 	}
-	return n.absent(ctx, g)
+	return nil
 }
 
 func (n *desktopLinuxNFT) allAbsent(ctx context.Context) error {
@@ -511,30 +577,64 @@ func (n *desktopLinuxNFT) allAbsentKeepingOffDeny(ctx context.Context, keep bool
 	if err != nil {
 		return err
 	}
-	if keep {
-		if !n.HostProtectionOff {
-			return errors.New("unselected UID deny retention")
-		}
-		if err := n.verifyOffDeny(rows, true); err != nil {
-			return err
-		}
+	return n.childrenAbsent(rows, keep)
+}
+
+func (n *desktopLinuxNFT) childrenAbsent(rows []map[string]any, keep bool) error {
+	children, err := n.retiringChildren(rows, keep)
+	if err != nil {
+		return err
 	}
-	for _, row := range rows {
-		if set, ok := row["set"].(map[string]any); ok {
-			if name, _ := set["name"].(string); strings.HasPrefix(name, n.Prefix+"_") {
-				return errors.New("Linux owned socket set remains")
-			}
-		}
-		if rule, ok := row["rule"].(map[string]any); ok {
-			if comment, _ := rule["comment"].(string); strings.Contains(comment, ":"+n.Prefix+":") {
-				if keep && comment == n.comment("deny") {
-					continue
-				}
-				return errors.New("Linux owned socket rule remains")
-			}
-		}
+	if len(children) != 0 {
+		return errors.New("Linux original socket policy still has unretired rules or sets")
 	}
 	return nil
+}
+
+type desktopLinuxNFTChild struct {
+	kind   uint16
+	name   string
+	handle uint64
+}
+
+func (n *desktopLinuxNFT) retiringChildren(rows []map[string]any, keep bool) ([]desktopLinuxNFTChild, error) {
+	if keep && !n.HostProtectionOff {
+		return nil, errors.New("unselected Linux UID deny retention")
+	}
+	// A missing table is established by an independent table enumeration.
+	if len(rows) == 0 && !keep {
+		return nil, nil
+	}
+	if n.TableHandle == 0 || n.ChainHandle == 0 {
+		return nil, errors.New("Linux socket cleanup has no original table and output chain")
+	}
+	if err := n.verifyRows(rows, false); err != nil {
+		return nil, err
+	}
+	// Missing original children are permitted. Replacements, unrecognized
+	// objects and nonempty sets (including foreign tuples) block the batch.
+	if err := desktopLinuxInspectProtectionInventory(n, rows, true, true); err != nil {
+		return nil, err
+	}
+	if keep {
+		if err := n.verifyOffDeny(rows, true); err != nil {
+			return nil, err
+		}
+	}
+	var rules, sets []desktopLinuxNFTChild
+	for _, row := range rows {
+		if rule, ok := row["rule"].(map[string]any); ok {
+			handle := desktopLinuxNumber(rule["handle"])
+			if _, baseline := n.Baseline[handle]; !baseline && !(keep && handle == n.DenyHandle) {
+				rules = append(rules, desktopLinuxNFTChild{desktopLinuxNFTDeleteRule, "output", handle})
+			}
+		}
+		if set, ok := row["set"].(map[string]any); ok {
+			sets = append(sets, desktopLinuxNFTChild{desktopLinuxNFTDeleteSet, set["name"].(string), desktopLinuxNumber(set["handle"])})
+		}
+	}
+	// Detach every original reference before retiring its empty set.
+	return append(rules, sets...), nil
 }
 
 func (n *desktopLinuxNFT) close(ctx context.Context) error {
@@ -542,37 +642,31 @@ func (n *desktopLinuxNFT) close(ctx context.Context) error {
 }
 
 func (n *desktopLinuxNFT) closeKeepingOffDeny(ctx context.Context, keep bool) error {
-	rows, err := desktopLinuxNFTReadTable(ctx, n.table())
+	if n.tupleNetlink == nil {
+		// The parent receives comparison data over the original guardian
+		// channel. Once joined, it can witness absence but cannot send.
+		return n.allAbsentKeepingOffDeny(ctx, keep)
+	}
+	rows, generation, err := n.observedRows(ctx)
 	if err != nil {
 		return err
 	}
-	if err = n.verifyRows(rows, false); err != nil {
+	children, err := n.retiringChildren(rows, keep)
+	if err != nil {
 		return err
 	}
-	var script strings.Builder
-	for _, row := range rows {
-		rule, _ := row["rule"].(map[string]any)
-		if n.HostProtectionOff && !keep && rule["comment"] == n.comment("deny") {
-			fmt.Fprintf(&script, "delete rule inet %s output handle %d\n", n.table(), n.DenyHandle)
+	if len(children) > 0 {
+		if err = n.retireChildren(ctx, generation, children); err != nil {
+			return err
 		}
-		for _, kind := range []string{"tcp4", "udp4", "tcp6", "udp6"} {
-			if rule["comment"] == n.comment(kind) {
-				fmt.Fprintf(&script, "delete rule inet %s output handle %d\n", n.table(), n.Rules[kind])
-			}
-		}
-	}
-	for _, row := range rows {
-		set, _ := row["set"].(map[string]any)
-		for _, kind := range []string{"tcp4", "udp4", "tcp6", "udp6"} {
-			if set["name"] == n.Prefix+"_"+kind {
-				fmt.Fprintf(&script, "delete set inet %s %s\n", n.table(), n.Prefix+"_"+kind)
-			}
-		}
-	}
-	if script.Len() > 0 {
-		if _, err = desktopLinuxNFTCommand(ctx, []string{"-f", "-"}, script.String()); err != nil {
+		// Re-read the exact terminal inventory even after kernel commit.
+		rows, _, err = n.observedRows(ctx)
+		if err != nil {
 			return err
 		}
 	}
-	return n.allAbsentKeepingOffDeny(ctx, keep)
+	if err = n.childrenAbsent(rows, keep); err != nil {
+		return err
+	}
+	return n.tupleNetlink.close()
 }

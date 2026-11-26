@@ -44,11 +44,12 @@ private final class IOSCandidateReply: @unchecked Sendable {
             Set(responseNodes.map(\.id)).count == responseNodes.count
         let completeSource = !responseNodes.isEmpty && responseNodes.allSatisfy({ !$0.id.isEmpty && $0.kind == "router-vpn" }) &&
             Set(responseNodes.map(\.id)).count == responseNodes.count &&
-            responseNodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) &&
-            ["shadowsocks", "hysteria2"].contains(responseNodes.last?.mode ?? "")
+            responseNodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) })
         let packetResponse = IOSMultihopNodeSelection.supportsNativePrefix(responseMode ?? "") &&
+            ["shadowsocks", "hysteria2"].contains(responseNodes.last?.mode ?? "") &&
             ((3...IOSMultihopNodeSelection.maximumNodes).contains(responseNodes.count) || extendedPacket)
-        let preparedFinal = preparedResponse && responseMode == "hysteria2" && responseNodes.last?.mode == "hysteria2" &&
+        let preparedFinal = preparedResponse && (responseMode == "hysteria2" || IOSMultihopNodeSelection.supportsNativePrefix(responseMode ?? "")) &&
+            responseNodes.last?.mode == responseMode &&
             (2...IOSMultihopNodeSelection.maximumNodes).contains(responseNodes.count)
         guard UUID(uuidString: epoch) != nil, IOSCandidateCatalogPublication.validRequest(owner),
               (responseMode == nil && responseSourceNodes == nil) || completeSource && (packetResponse || preparedFinal) else { throw IOSNodeCandidateResult.issue() }
@@ -209,7 +210,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         guard info.request_id == request, UUID(uuidString: info.session_id) != nil, info.mtu_session_id == binding.session,
               IOSCandidateCatalogPublication.isDigest(info.source_sha256), IOSCandidateCatalogPublication.isDigest(info.config_sha256),
               (2...8).contains(info.proofs.count) || info.proofs.count == binding.identity.hopMeasurementRows && IOSMultihopNodeSelection.extendedOriginalModes(info.proofs.map(\.mode), execution: info.requested_execution ?? "local"), info.proofs.enumerated().allSatisfy({ $0.offset == $0.element.position }) else { throw IOSNodeCandidateResult.issue() }
-        let packetPrefixes = info.proofs.filter(\.packetSuccessorResponse)
+        let packetPrefixes = info.proofs.filter { $0.packetSuccessorResponse(in: info.proofs) }
         if !packetPrefixes.isEmpty {
             guard info.requested_execution == nil, info.execution == nil,
                   packetPrefixes.allSatisfy({ $0.supported(in: info.proofs) }),
@@ -274,8 +275,9 @@ private final class IOSCandidateReply: @unchecked Sendable {
         guard !running, Self.supported(model), prefixes.contains(where: { $0.position == selectedPrefix }),
               !prefixOnly || (!model.connected && canTestIndependentPrefix) else { return }
         let position = selectedPrefix, owner = Self.nonce()
+        let independent = prefixOnly || !model.connected && prefixes.first(where: { $0.position == position })?.pairedFinalResponse == true
         let temporary: IOSNodeCandidatePreparation?
-        do { temporary = model.connected ? nil : try IOSNodeCandidatePreparation.reserve(model: model, prefixPosition: prefixOnly ? position : nil, request: prefixOnly ? owner : nil) { [weak self] in self?.cancel() } }
+        do { temporary = model.connected ? nil : try IOSNodeCandidatePreparation.reserve(model: model, prefixPosition: independent ? position : nil, request: independent ? owner : nil) { [weak self] in self?.cancel() } }
         catch { text = "The saved Local path could not acquire its temporary test owner."; return }
         begin(model: model, temporary: temporary, position: position, owner: owner)
     }
@@ -329,7 +331,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                     }
                     let capture = try IOSNodeCandidateCapture.make(request: owner, prefixPosition: position, proofs: info.proofs,
                         chainSource: info.source_sha256, chainConfig: info.config_sha256, selectedResponse: selectedResponse, originalLaunch: filterLaunch)
-                    let packetResponse = capture.prefix.packetSuccessorResponse
+                    let packetResponse = capture.prefix.packetSuccessorResponse(in: info.proofs)
                     let owned = try IOSNodeCandidateTransaction(epoch: info.session_id, owner: owner,
                         responseMode: packetResponse ? capture.prefix.candidate_mode : nil,
                         responseSourceNodes: packetResponse ? info.response_source_nodes : nil,
@@ -562,16 +564,16 @@ private final class IOSCandidateReply: @unchecked Sendable {
                 defer { try? original.close() }
                 guard original.sourceSHA256 == temporary.sourceSHA256, original.configSHA256 == temporary.configSHA256 else { throw IOSNodeCandidateResult.issue() }
                 do { proposals[score.token] = try IOSNodeCandidateProposal.compile(original: original, records: capture.records,
-                    position: position, candidateID: score.id, measuredInput: row.input, preparedLocal: true) }
+                    position: position, candidateID: score.id, measuredInput: row.input, preparedMode: metadata.candidate_mode) }
                 catch { try current(); failures[score.token] = error.localizedDescription }
                 if editor && ["routed-candidate-response", "routed-public-candidate-response"].contains(metadata.metric) {
-                    if capture.prefix.hysteria2Response {
+                    if metadata.candidate_mode != nil && position == temporary.prefixes.count - 2 {
                         insertions[score.token] = .failure(IOSMultihopNodeSelection.issue("Save this measured final as a named profile; the draft keeps its selected final node."))
                     } else if position < temporary.prefixes.count - 2, let named = proposals[score.token] {
                         insertions[score.token] = .success(named)
                     } else {
                         insertions[score.token] = Result { try IOSNodeCandidateProposal.compile(original: original, records: capture.records,
-                            position: position, candidateID: score.id, measuredInput: row.input, retainFinal: true, preparedLocal: true) }
+                            position: position, candidateID: score.id, measuredInput: row.input, retainFinal: true) }
                     }
                 }
             }
@@ -608,7 +610,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
                     guard selected == self.proposalGeneration, self.prepared?.score.token == score.token else { throw IOSNodeCandidateResult.issue() }
                 }
             }
-            text = editor ? "Disconnected. Use a measured candidate in this draft or prepare a named profile." : "Disconnected. Prefix-only results expire 120 seconds after completion. Save explicitly to create a future profile."
+            text = editor && (metadata.candidate_mode == nil || position < temporary.prefixes.count - 2) ? "Disconnected. Use a measured candidate in this draft or prepare a named profile." : "Disconnected. Prefix-only results expire 120 seconds after completion. Save explicitly to create a future profile."
         }
         while !scores.isEmpty {
             prune()
@@ -686,7 +688,7 @@ struct IOSNodeCandidatesCard: View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Candidate measurements", systemImage: "point.3.connected.trianglepath.dotted").font(.headline)
             Text(model.connected && !model.iosCandidateTesting ?
-                 "WireGuard and AWG prefixes measure TCP connection time, or authenticated Hysteria2 responses when replacing a connected Hysteria2 final node. Shadowsocks 2022 prefixes measure private-agent responses for paired candidates or verified HTTPS exit responses for imported candidates. Server measurements require a registered candidate. Each score is the 10% trimmed mean of 50 samples." :
+                 "WireGuard and AmneziaWG prefixes measure TCP connection time. A connected Local packet or Hysteria2 final instead measures authenticated responses from candidates using that same transport. Shadowsocks 2022 prefixes measure private-agent responses for paired candidates or verified HTTPS exit responses for imported candidates. Server measurements require a registered candidate. Each score is the 10% trimmed mean of 50 samples." :
                  "Choose a selected-prefix test or a complete saved Local path test. Each measures 50 TCP connections, private-agent responses or verified public HTTPS responses, according to the captured prefix. The VPN returns to Disconnected before you choose a future profile.")
                 .font(.caption).foregroundStyle(.secondary)
             Picker("Retained prefix", selection: $probe.selectedPrefix) {
@@ -752,11 +754,11 @@ struct IOSCandidateProfileChoices: View {
         await task?.value
     }
 
-    func startEditorPrefix(model: RouterVPNModel, bundle: ClientBundle, position: Int) throws {
+    func startEditorPrefix(model: RouterVPNModel, bundle: ClientBundle, nodes: [IOSMultihopNodeSelection], position: Int) throws {
         guard !running else { throw CancellationError() }
         let request = Self.nonce()
         let temporary = try IOSNodeCandidatePreparation.reserve(model: model, prefixPosition: position,
-            request: request, editorBundle: bundle) { [weak self] in self?.cancel() }
+            request: request, editorBundle: bundle, editorNodes: nodes) { [weak self] in self?.cancel() }
         selectedPrefix = position
         begin(model: model, temporary: temporary, position: position, owner: request, editor: true)
     }

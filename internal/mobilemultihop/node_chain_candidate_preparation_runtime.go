@@ -23,83 +23,6 @@ type NodeChainCandidatePreparationOwner interface {
 	CandidateInventoryCurrentContext(context.Context, string) error
 }
 
-// This optional capability is separate from ordinary TCP prefix proof. Only
-// the retained native preparation reader can open a sealed candidate UDP path;
-// it must continue to observe the same closed application and DNS ingress.
-type NodeChainCandidatePreparationPacketEngine interface {
-	ObservePreparationContext(context.Context) (NodeChainIdentity, error)
-	NodeChainCandidatePacketEngine
-}
-type NodeChainCandidatePreparationPacketOwner interface {
-	CandidatePreparationPacketEngineContext(context.Context, *NodeChainCandidatePreparation) (NodeChainCandidatePreparationPacketEngine, error)
-}
-
-type nodeChainCandidatePreparationPacketCapability struct {
-	self     *nodeChainCandidatePreparationPacketCapability
-	runtime  *NodeChainCandidatePreparationRuntime
-	plan     *NodeChainCandidatePlan
-	reader   NodeChainCandidatePreparationPacketEngine
-	identity NodeChainIdentity
-}
-
-func (r *NodeChainCandidatePreparationRuntime) packetCapability(ctx context.Context, plan *NodeChainCandidatePlan) (*nodeChainCandidatePreparationPacketCapability, error) {
-	if r == nil || plan == nil || r.preparation == nil || r.preparation.candidates != plan ||
-		!plan.preparedPacket.matches(plan) {
-		return nil, nodeChainCandidatePreparationError
-	}
-	if err := r.VerifyMeasurement(ctx); err != nil {
-		return nil, err
-	}
-	owner, ok := r.owner.(NodeChainCandidatePreparationPacketOwner)
-	if !ok {
-		return nil, nodeChainCandidatePreparationError
-	}
-	reader, err := owner.CandidatePreparationPacketEngineContext(ctx, r.preparation)
-	if err != nil || reader == nil || !reflect.TypeOf(reader).Comparable() {
-		return nil, errors.Join(err, nodeChainCandidatePreparationError)
-	}
-	if err := externalObservationLock(ctx, &r.mu); err != nil {
-		return nil, err
-	}
-	identity := r.identity
-	r.mu.Unlock()
-	capability := &nodeChainCandidatePreparationPacketCapability{runtime: r, plan: plan, reader: reader, identity: identity}
-	capability.self = capability
-	return capability, capability.current(ctx)
-}
-func (c *nodeChainCandidatePreparationPacketCapability) current(ctx context.Context) error {
-	if c == nil || c.self != c || c.runtime == nil || c.runtime.preparation == nil ||
-		c.plan == nil || c.runtime.preparation.candidates != c.plan || !c.plan.preparedPacket.matches(c.plan) ||
-		c.reader == nil || !reflect.TypeOf(c.reader).Comparable() {
-		return nodeChainCandidatePreparationError
-	}
-	r := c.runtime
-	if err := r.VerifyMeasurement(ctx); err != nil {
-		return err
-	}
-	owner, ok := r.owner.(NodeChainCandidatePreparationPacketOwner)
-	if !ok {
-		return nodeChainCandidatePreparationError
-	}
-	reader, err := owner.CandidatePreparationPacketEngineContext(ctx, r.preparation)
-	if err != nil || reader == nil || !reflect.TypeOf(reader).Comparable() || reader != c.reader {
-		return errors.Join(err, nodeChainCandidatePreparationError)
-	}
-	identity, err := reader.ObservePreparationContext(ctx)
-	if err != nil || identity != c.identity {
-		return errors.Join(err, nodeChainCandidatePreparationError)
-	}
-	if err := externalObservationLock(ctx, &r.mu); err != nil {
-		return err
-	}
-	alive := r.started && !r.retired && r.lifetime != nil && r.lifetime.Err() == nil && r.identity == c.identity
-	r.mu.Unlock()
-	if !alive {
-		return nodeChainCandidatePreparationError
-	}
-	return ctx.Err()
-}
-
 type NodeChainCandidatePreparationProgress struct {
 	Stage           string                    `json:"stage"`
 	Prepared        bool                      `json:"prepared"`
@@ -115,6 +38,7 @@ type NodeChainCandidatePreparationRuntime struct {
 	preparation            *NodeChainCandidatePreparation
 	owner                  NodeChainCandidatePreparationOwner
 	mu                     sync.Mutex
+	candidatePacketKeys    map[string]*candidatePacketRun
 	identity               NodeChainIdentity
 	started, retired       bool
 	lifetime               context.Context
@@ -427,6 +351,24 @@ func (r *NodeChainCandidatePreparationRuntime) CloseContext(ctx context.Context)
 	}
 	return ctx.Err()
 }
+func (r *NodeChainCandidatePreparationRuntime) retainedPacketEngine(ctx context.Context) (NodeChainPreparedPacketEngine, error) {
+	if r == nil || r.preparation == nil || !r.preparation.candidates.preparedNativeResponse {
+		return nil, nodeChainCandidatePreparationError
+	}
+	if err := r.VerifyMeasurement(ctx); err != nil {
+		return nil, err
+	}
+	owner, ok := r.owner.(nodeChainPreparedPacketOwner)
+	if !ok {
+		return nil, nodeChainCandidatePreparationError
+	}
+	reader, err := owner.PreparedPacketEngineContext(ctx, r.preparation)
+	if err != nil || reader == nil || !reflect.TypeOf(reader).Comparable() {
+		return nil, errors.Join(err, nodeChainCandidatePreparationError)
+	}
+	return reader, ctx.Err()
+}
+
 func (r *NodeChainCandidatePreparationRuntime) NewMeasurementContext(ctx context.Context) (*hopmeasure.CandidateService, error) {
 	if err := r.VerifyMeasurement(ctx); err != nil {
 		return nil, err
@@ -485,9 +427,6 @@ func (r *NodeChainCandidatePreparationRuntime) Dial(ctx context.Context, tag, ad
 		return nil, err
 	}
 	p := r.preparation
-	if p.candidates.responseMode != "" {
-		return nil, nodeChainCandidatePreparationError
-	}
 	allowed := false
 	for _, target := range p.candidates.targets {
 		if target.Address == address {

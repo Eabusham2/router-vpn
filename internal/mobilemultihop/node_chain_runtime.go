@@ -62,19 +62,20 @@ type NodeChainProgress struct {
 }
 
 type nodeChainRuntime struct {
-	openVPN      *nativeopenvpn.PacketObservation
-	mu           sync.Mutex
-	generation   atomic.Uint64
-	engine       NodeChainEngine
-	identity     NodeChainIdentity
-	cancel       context.CancelFunc
-	startDone    chan struct{}
-	observeDone  chan struct{}
-	closed       bool
-	progress     NodeChainProgress
-	checkedAt    time.Time
-	testTLS      *tls.Config                         // Private package-test roots; never exposed to a host.
-	testInterval func() (hopmeasure.Interval, error) // Private clock-failure fixture; never exposed to a host.
+	openVPN             *nativeopenvpn.PacketObservation
+	mu                  sync.Mutex
+	candidatePacketKeys map[string]*candidatePacketRun // guarded by mu through joined transport closure
+	generation          atomic.Uint64
+	engine              NodeChainEngine
+	identity            NodeChainIdentity
+	cancel              context.CancelFunc
+	startDone           chan struct{}
+	observeDone         chan struct{}
+	closed              bool
+	progress            NodeChainProgress
+	checkedAt           time.Time
+	testTLS             *tls.Config                         // Private package-test roots; never exposed to a host.
+	testInterval        func() (hopmeasure.Interval, error) // Private clock-failure fixture; never exposed to a host.
 }
 
 func (c *NodeChain) Progress() NodeChainProgress {

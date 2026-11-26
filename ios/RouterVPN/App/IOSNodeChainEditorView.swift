@@ -33,14 +33,16 @@ struct IOSNodeChainEditorView: View {
     }
 
     private var finalModes: [String] {
-        IOSNodeChainEditorVisible.finalModes(available.first(where: { $0.id == draft.nodes.last?.id }), nodes: draft.nodes)
+        let linked = available
+        return IOSNodeChainEditorVisible.finalModes(linked.first(where: { $0.id == draft.nodes.last?.id }), nodes: draft.nodes,
+                                                    execution: execution, linked: linked, bundle: model.bundle)
     }
 
     var body: some View {
         let firstScores = firstHopScores
         Form {
             Section("Nodes in connection order") {
-                Text("A packet prefix measures 50 TCP connections to each saved candidate. A qualified Shadowsocks prefix measures 50 authenticated responses from a paired candidate, or 50 verified HTTPS responses from an imported candidate on a Local public-exit route. Use in draft inserts the candidate after the measured hop. Save future profile creates a named route that you can Load separately.")
+                Text("Each candidate needs 50 routed samples. A qualified paired successor returns authenticated responses using its captured transport. Other eligible packet prefixes measure TCP connections. A Local public-exit route can measure verified HTTPS responses. Use in draft replaces a measured intermediate packet hop or inserts a qualified stream hop. Save a final replacement as a named profile and Load it separately.")
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(Array(draft.nodes.enumerated()), id: \.offset) { position, node in
                     VStack(alignment: .leading, spacing: 8) {
@@ -72,8 +74,9 @@ struct IOSNodeChainEditorView: View {
                                 get: { draft.nodes[position].mode },
                                 set: { mode in change {
                                     try IOSNodeChainEditorVisible.requireFinalMode(mode,
-                                        profile: available.first(where: { $0.id == node.id }), nodes: draft.nodes)
-                                    try draft.chooseFinalMode(mode)
+                                        profile: available.first(where: { $0.id == node.id }), nodes: draft.nodes,
+                                        execution: execution, linked: available, bundle: model.bundle)
+                                    try draft.chooseFinalMode(mode, execution: execution)
                                 } }
                             )) {
                                 ForEach(finalModes, id: \.self) { mode in
@@ -221,7 +224,7 @@ struct IOSNodeChainEditorView: View {
                     return
                 }
                 let source = try model.iosNodeChainMeasurementBundle(draft, through: request.position, owner: owner, execution: execution)
-                try candidates.startEditorPrefix(model: model, bundle: source, position: request.position)
+                try candidates.startEditorPrefix(model: model, bundle: source, nodes: draft.nodes, position: request.position)
             } catch {
                 self.request = nil
                 detail = error.localizedDescription

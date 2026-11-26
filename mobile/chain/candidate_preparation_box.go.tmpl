@@ -16,14 +16,14 @@ import (
 	G "github.com/sagernet/sing-box/protocol/routervpnchaingate"
 	"github.com/sagernet/sing-box/route"
 	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
 )
 
 var errRouterVPNCandidatePreparation = errors.New("original candidate prefix preparation changed or retired")
 
-// This separate purpose can only prove private prefixes and dial captured
-// candidate endpoints through separately sealed TCP or UDP requests. There is
-// deliberately no application-open, selected
-// connection, discovery/adoption, DNS proof or saved-final dial method.
+// This owner retains closed application and DNS ingress during prefix proof
+// and candidate measurement. Native packet candidates reach their one captured
+// UDP peer only through the separately sealed prepared request.
 type RouterVPNNodeChainCandidatePreparationEngine struct {
 	instance  *Box
 	prep      *mobilemultihop.NodeChainCandidatePreparation
@@ -232,39 +232,35 @@ func (e *RouterVPNNodeChainCandidatePreparationEngine) Dial(ctx context.Context,
 	return conn, dialErr
 }
 
-// Generic proof Dial remains TCP-only. This separate method can reach only
-// the literal UDP endpoint and retained prefix in the preparation request.
-func (e *RouterVPNNodeChainCandidatePreparationEngine) DialCandidatePacketContext(ctx context.Context, request *mobilemultihop.NodeChainCandidatePacketRequest) (net.Conn, error) {
-	if e == nil || e.prep == nil {
+// The sealed request only permits the candidate's one literal UDP peer
+// through the retained packet prefix. Gate, ingress and original physical
+// owner are observed independently from any private TCP proof permission.
+func (e *RouterVPNNodeChainCandidatePreparationEngine) DialPreparedCandidatePacketContext(ctx context.Context, request *mobilemultihop.NodeChainCandidatePacketRequest) (net.Conn, error) {
+	if e == nil {
 		return nil, errRouterVPNCandidatePreparation
 	}
-	identity, tag, address, err := request.ReadPreparation(ctx, e, e.prep)
-	if err != nil || identity != e.identity {
+	identity, tag, address, err := request.ReadPrepared(ctx, e, e.prep)
+	if err != nil || identity != e.identity || tag != e.selected {
 		return nil, errors.Join(err, errRouterVPNCandidatePreparation)
 	}
+	target := M.ParseSocksaddr(address)
 	retained := e.prefixes[tag]
-	destination, err := routerVPNExecutionDestination(address)
-	if err != nil || retained == nil || !destination.IsIP() || destination.Port == 0 {
-		return nil, errors.Join(err, errRouterVPNCandidatePreparation)
-	}
-	connection, dialErr := retained.DialContext(ctx, "udp", destination)
-	observed, actualTag, actualAddress, observeErr := request.ReadPreparation(ctx, e, e.prep)
-	if observed != identity || actualTag != tag || actualAddress != address || connection == nil {
-		observeErr = errors.Join(observeErr, errRouterVPNCandidatePreparation)
-	}
-	// Return a late nonnil socket even with an error. The retained candidate
-	// scope owns and joins Close before its preparation lease can release.
-	return connection, errors.Join(dialErr, observeErr, ctx.Err())
-}
-func (e *RouterVPNNodeChainCandidatePreparationEngine) OpenCandidatePacketEndpointContext(ctx context.Context, request *mobilemultihop.NodeChainCandidatePacketRequest) (mobilemultihop.NodeChainCandidatePacketEndpoint, error) {
-	if e == nil || e.prep == nil {
+	if retained == nil || !target.IsIP() || target.Port == 0 {
 		return nil, errRouterVPNCandidatePreparation
 	}
-	identity, _, _, err := request.ReadPreparation(ctx, e, e.prep)
-	if err != nil || identity != e.identity {
-		return nil, errors.Join(err, errRouterVPNCandidatePreparation)
+	conn, dialErr := retained.DialContext(ctx, "udp", target)
+	after, actualTag, actualAddress, observed := request.ReadPrepared(ctx, e, e.prep)
+	if conn == nil || after != identity || actualTag != tag || actualAddress != address {
+		observed = errors.Join(observed, errRouterVPNCandidatePreparation)
 	}
-	return RouterVPNOpenPreparedCandidatePacketEndpoint(ctx, request, e, e.prep)
+	return conn, errors.Join(dialErr, observed, ctx.Err())
+}
+
+func (e *RouterVPNNodeChainCandidatePreparationEngine) OpenPreparedCandidateEndpointContext(ctx context.Context, request *mobilemultihop.NodeChainCandidatePacketRequest) (mobilemultihop.NodeChainCandidateEndpoint, error) {
+	if e == nil {
+		return nil, errRouterVPNCandidatePreparation
+	}
+	return request.OpenPreparedNativeEndpoint(ctx, e, e.prep, routerVPNNewCandidateAWG)
 }
 
 // The enclosing owner first joins candidates and private proof workers. This

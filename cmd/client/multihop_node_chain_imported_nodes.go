@@ -105,6 +105,12 @@ func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error)
 	if len(members) < 2 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes {
 		return 0, bad
 	}
+	if mobilemultihop.NodeChainPrefixMode(members[len(members)-1].Mode) {
+		if !desktopPacketFinalMembersSupported(members, "local") {
+			return 0, bad
+		}
+		return 1, nil
+	}
 	if final := members[len(members)-1].Profile; final.NodeKind == "external" || final.External != nil {
 		return desktopNodeChainExternalFinalSchema(members)
 	}

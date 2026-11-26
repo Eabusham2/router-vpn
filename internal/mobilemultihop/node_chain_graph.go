@@ -195,7 +195,7 @@ func compileNodeChainGraphWithHome(nodes []nodeChainGraphMember, closures []*ext
 		proofs = append(proofs, proof)
 	}
 	dns["servers"] = servers
-	if err := applyNodeChainRestrictions(graph, closures); err != nil {
+	if err := applyNodeChainRestrictions(graph, nodes, closures); err != nil {
 		return fail(err)
 	}
 	finalTag := proofs[len(proofs)-1].Tag

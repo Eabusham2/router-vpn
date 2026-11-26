@@ -51,13 +51,13 @@ import Foundation
     }
 
     private init(model: RouterVPNModel, bundle: ClientBundle, purpose: Purpose,
-                 prefixPosition: Int?, request: String?, onCancelled: @escaping @MainActor () -> Void) throws {
+                 prefixPosition: Int?, request: String?, completeFinalSource: Bool = false, onCancelled: @escaping @MainActor () -> Void) throws {
         self.model = model; self.bundle = bundle; self.onCancelled = onCancelled
         switch purpose {
         case .local(let capture):
             selectedDraft = nil
             launchInput = capture.launchInput; sourceSHA256 = capture.sourceSHA256; configSHA256 = capture.configSHA256
-            prefixes = prefixPosition == nil ? capture.candidatePrefixes : capture.preparedCandidatePrefixes
+            prefixes = prefixPosition != nil && completeFinalSource ? capture.preparedCandidatePrefixes : capture.candidatePrefixes
         case .selected(let draft):
             selectedDraft = draft
             launchInput = draft.launchInput; sourceSHA256 = draft.sourceSHA256; configSHA256 = draft.configSHA256
@@ -86,7 +86,7 @@ import Foundation
         }
     }
 
-    static func reserve(model: RouterVPNModel, prefixPosition: Int? = nil, request: String? = nil, editorBundle: ClientBundle? = nil, onCancelled: @escaping @MainActor () -> Void) throws -> IOSNodeCandidatePreparation {
+    static func reserve(model: RouterVPNModel, prefixPosition: Int? = nil, request: String? = nil, editorBundle: ClientBundle? = nil, editorNodes: [IOSMultihopNodeSelection]? = nil, onCancelled: @escaping @MainActor () -> Void) throws -> IOSNodeCandidatePreparation {
         guard retained == nil, !model.connected, !model.tunnelTransitioning,
               !model.iosUserDisconnectInProgress, !model.iosSpeedLabOwnership.active,
               !IOSMTUMeasurementGate.held, let selection = model.bundle,
@@ -99,7 +99,8 @@ import Foundation
             let capture = try model.captureIOSCandidateOriginal(bundle)
             defer { try? capture.close() }
             guard !capture.requiresIndependentPrefix || prefixPosition != nil && request != nil else { throw CancellationError() }
-            value = try Self(model: model, bundle: bundle, purpose: .local(capture), prefixPosition: prefixPosition, request: request, onCancelled: onCancelled)
+            value = try Self(model: model, bundle: bundle, purpose: .local(capture), prefixPosition: prefixPosition, request: request,
+                completeFinalSource: editorBundle == nil || selected.multihopNodes == editorNodes, onCancelled: onCancelled)
         } else {
             guard editorBundle != nil, ["server", "auto"].contains(selected.multihopExecution ?? ""),
                   let position = prefixPosition, let request else { throw CancellationError() }

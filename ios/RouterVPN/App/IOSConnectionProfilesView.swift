@@ -508,7 +508,8 @@ private enum IOSConnectionProfileStore {
                 replacements[replacementIndex].updated.adGuardIPv6 = restored.adGuardIPv6
             }
         }
-        if independentImports || publicExit {
+        let packetFinal = saved.preferences?.multihopExecution == "local" && IOSMultihopNodeSelection.supportsNativePrefix(nodes.last?.mode ?? "")
+        if independentImports || publicExit || packetFinal {
             // A complete staged graph is compiled before any durable write.
             // Read each member by its captured ID, including several members
             // that share one linked record. The store rechecks originals and

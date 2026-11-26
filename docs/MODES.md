@@ -106,6 +106,10 @@ The native product surfaces also expose the selected Router VPN DNS policy rathe
 
 Resolver benchmark values are real **A/AAAA DNS query RTTs measured from the selected home node**, not ICMP ping. Saving a DNS policy is not active-runtime proof; reconnect/session proof remains authoritative.
 
+## Paired packet modes in ordered Local routes
+
+An ordered Local route can use `wg`, `awg2-fast` or `awg2-strong` for each of two to eight paired nodes, including the final node. Every Start Layer must be Off. Each packet interface must fit the preceding hop's configured MTU after its protocol overhead. Timing a replacement preserves the exact final mode. A connected route keeps its selected path active. A dormant profile or complete unsaved draft can prove its retained prefix with application traffic and DNS closed, even when the saved final is offline. The benchmark opens fifty fresh private-agent challenge streams through one independently keyed candidate device. Save creates a separately named profile for a future connection.
+
 ## DAITA-like / Jumbo / SOCKS5
 
 - **DAITA-like traffic padding:** bounded Router VPN cover traffic; not exact Mullvad DAITA/Maybenot.

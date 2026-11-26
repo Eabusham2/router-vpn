@@ -295,6 +295,14 @@ struct IOSNodeChainCapture {
                 throw Self.issue("The original member order or selected transport changed.")
             }
         }
+        if let packet = members.last, IOSMultihopNodeSelection.supportsNativePrefix(packet.mode) {
+            guard schema == 1, selectionExecution == "local", (2...IOSMultihopNodeSelection.maximumNodes).contains(members.count),
+                  members.allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) && $0.profile["node_kind"] as? String == "router-vpn" &&
+                    ($0.profile["start_layer"] == nil || ($0.profile["start_layer"] as? String).map { ["", "off"].contains($0) } == true) }),
+                  LibboxRouterNodeChainConnectedFinalCandidateResponseMode(plan, Int32(members.count - 2)) == packet.mode else {
+                throw Self.issue("A packet final requires two to eight original paired Local WireGuard or AmneziaWG nodes with Start Layer off.")
+            }
+        }
         let selectedPrivate = multipleExecution && members.dropFirst().dropLast().contains { $0.mode == "shadowsocks" && $0.profile["node_kind"] as? String == "router-vpn" }
         if hostnamePosition != nil || selectedPrivate {
             let selected = members.map { IOSMultihopNodeSelection(id: $0.id, mode: $0.mode) }

@@ -76,6 +76,8 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
         long observationDeadline=AndroidNodeCandidateMetadata.observationDeadline();String first=plan.metadata();
         JSONObject meta=AndroidNodeCandidateMetadata.read(first,plan::metadataPage,originalCount,observationDeadline);
         boolean paged=new JSONObject(first).getInt("schema")==2;
+        if(!responseMode.isEmpty()&&(original.plan==null
+                ||!responseMode.equals(Libbox.routerNodeChainPreparedCandidateResponseMode(original.plan,prefix))))throw invalid();
         metadata=meta.toString();
         sourceSHA256=plan.sourceSHA256();configSHA256=plan.configSHA256();captureSHA256=plan.captureSHA256();
         JSONObject source=new JSONObject(launchInput),graph=new JSONObject(config);

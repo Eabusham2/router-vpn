@@ -43,7 +43,7 @@ final class AndroidNodeCandidateProfile {
         if (!catalog.originalSource.measurementOnly() || !java.util.List.of("routed-candidate-response","routed-public-candidate-response").contains(catalog.measurement)) return null;
         catalog.originalSource.requireCandidatePurpose(catalog.prefix);
         if (catalog.preparedResponse()) {
-            if ("hysteria2".equals(catalog.responseMode))
+            if (catalog.prefix == catalog.originalSource.members.size() - 2)
                 throw new ProposalUnavailable("Save this measured final as a named profile; the draft keeps its selected final node.");
             if (named != null && named.preparedPacketReplacement && named.sources.size() == catalog.originalSource.members.size()) return named;
             throw new ProposalUnavailable("The complete measured successor replacement is unavailable.");
@@ -71,23 +71,23 @@ final class AndroidNodeCandidateProfile {
             throw new IllegalStateException("The measured prefix has no original next-hop position.");
         execution=original.execution;
         boolean preparedResponse=authority!=null&&catalog.preparedResponse();
-        boolean finalResponse=authority==null&&catalog.connectedFinalResponse()||preparedResponse&&"hysteria2".equals(catalog.responseMode);
-        boolean packetResponse=authority==null&&catalog.connectedPacketResponse()||preparedResponse&&AndroidNodeCandidateCatalog.packetMode(catalog.responseMode);
+        boolean finalResponse=authority==null&&catalog.connectedFinalResponse()||preparedResponse&&replacement==original.members.size()-1;
+        boolean packetResponse=authority==null&&catalog.connectedPacketResponse()||preparedResponse&&replacement<original.members.size()-1;
+        boolean typedFinal=!catalog.responseMode.isEmpty()&&!packetResponse;
         preparedPacketReplacement=preparedResponse&&packetResponse;
-        if(AndroidNodeCandidateCatalog.packetMode(catalog.responseMode)&&(!packetResponse||retainFinal||!"local".equals(execution)
-                ||replacement>=original.members.size()-1||!candidateMode.equals(original.modes.get(replacement))
-                ||!(preparedResponse?Libbox.routerNodeChainPreparedCandidateInputFitsSource(catalog.session.capture.plan,catalog.prefix,actual)
-                    :Libbox.routerNodeChainPacketSuccessorCandidateFitsSource(catalog.session.capture.plan,catalog.prefix,actual))))
-            throw new IllegalStateException("The packet response requires its original intermediate replacement.");
-        boolean hysteria2="hysteria2".equals(catalog.responseMode);
-        if(hysteria2&&(!finalResponse||!"local".equals(execution)||!Libbox.routerNodeChainHysteria2CandidateInputSupported(actual)
-                ||preparedResponse&&!Libbox.routerNodeChainPreparedCandidateInputFitsSource(catalog.session.capture.plan,catalog.prefix,actual)))
-            throw new IllegalStateException("The Hysteria2 response requires its original final replacement.");
+        if(!catalog.responseMode.isEmpty()){
+            if(retainFinal||!"local".equals(execution)||!candidateMode.equals(original.modes.get(replacement))
+                    ||!(packetResponse||finalResponse))throw new IllegalStateException("The response carrier lost its original successor.");
+            boolean fits=preparedResponse?Libbox.routerNodeChainPreparedCandidateInputFitsSource(catalog.session.capture.plan,catalog.prefix,actual):
+                    packetResponse?Libbox.routerNodeChainPacketSuccessorCandidateFitsSource(catalog.session.capture.plan,catalog.prefix,actual):
+                    Libbox.routerNodeChainResponseCandidateInputSupported(actual,catalog.responseMode);
+            if(!fits)throw new IllegalStateException("This candidate cannot replace the original measured successor.");
+        }
         if(finalResponse&&(retainFinal||replacement!=original.members.size()-1))
             throw new IllegalStateException("The captured prefix must remain immediately before the replacement final node.");
         boolean insert=response&&!packetResponse&&(publicResponse || retainFinal || replacement<original.members.size()-1);
         if(response){
-            if(candidate.imported!=publicResponse || original.members.get(original.members.size()-1).imported!=publicResponse || !(packetResponse?catalog.responseMode:hysteria2?"hysteria2":"shadowsocks").equals(candidateMode)
+            if(candidate.imported!=publicResponse || original.members.get(original.members.size()-1).imported!=publicResponse || !((typedFinal||packetResponse)?catalog.responseMode:"shadowsocks").equals(candidateMode)
                     ||!(packetResponse||finalResponse||AndroidNodeChainCapture.responsePrefix(original.members,original.modes,catalog.prefix,execution)))
                 throw new IllegalStateException("The authenticated response lost its original stream or paired candidate.");
             if(publicResponse) AndroidNodeChainCapture.requireLiteralImportedSS(candidate);
@@ -180,6 +180,9 @@ final class AndroidNodeCandidateProfile {
             if(!"routervpn-node-chain-launch-input".equals(returned.getString("kind"))||returned.getInt("schema")!=schema||!"local".equals(returned.getString("execution"))
                     ||!inputs.toString().equals(returned.getJSONArray("nodes").toString())||!identities.toString().equals(returned.getJSONArray("identity_sources").toString()))
                 throw new IllegalStateException("The native proposal replaced a captured member or paired identity.");
+            if(typedFinal&&!candidateMode.equals(catalog.session.candidatePrefix==null?Libbox.routerNodeChainConnectedFinalCandidateResponseMode(compiled,catalog.prefix):
+                    Libbox.routerNodeChainPreparedFinalCandidateResponseMode(compiled,catalog.prefix)))
+                throw new IllegalStateException("The compiled replacement lost its original final transport.");
             if(!"local".equals(execution))AndroidNodeChainCapture.validateExecutionPlan(compiled,execution);
             requireCurrent();}
         finally {compiled.close();}

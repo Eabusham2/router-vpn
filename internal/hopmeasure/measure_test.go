@@ -268,7 +268,93 @@ func TestFailedTransfersNeverBecomeZeroSpeed(t *testing.T) {
 		})
 	}
 }
+
+type heldCandidateTestEngine struct {
+	*testEngine
+	held atomic.Bool
+}
+
+func (e *heldCandidateTestEngine) IdentityContext(ctx context.Context) (string, error) {
+	return e.Identity(), ctx.Err()
+}
+func (e *heldCandidateTestEngine) VerifyMeasurement(ctx context.Context) error { return ctx.Err() }
+func (e *heldCandidateTestEngine) BeginMeasurementContext(ctx context.Context) (func(), error) {
+	if !e.held.CompareAndSwap(false, true) {
+		return nil, ErrStale
+	}
+	return func() { e.held.Store(false) }, nil
+}
+
+type heldCandidateResponse struct {
+	attempts         int
+	entered, release chan struct{}
+	closeErr         error
+}
+
+func (r *heldCandidateResponse) Respond(ctx context.Context, complete func() error) error {
+	r.attempts++
+	return errors.Join(ctx.Err(), complete())
+}
+func (r *heldCandidateResponse) Close() error {
+	close(r.entered)
+	<-r.release
+	return r.closeErr
+}
+
+func testCandidateResponseDrain(t *testing.T) {
+	for _, outcome := range []string{"success", "close-error", "cancel"} {
+		t.Run(outcome, func(t *testing.T) {
+			engine := &heldCandidateTestEngine{testEngine: &testEngine{generation: "original"}}
+			run := &heldCandidateResponse{entered: make(chan struct{}), release: make(chan struct{})}
+			if outcome == "close-error" {
+				run.closeErr = errors.New("original transport close failed")
+			}
+			target := CandidateTarget{ID: "replacement", SourceSHA256: strings.Repeat("1", 64), Address: "192.0.2.17:51820"}
+			prefix := CandidatePrefix{ID: "entry", Tag: "routervpn-chain-0-123456789abc-node-123456789abc", CaptureSHA256: strings.Repeat("2", 64)}
+			service, err := NewCapturedResponseRunContext(context.Background(), engine, prefix, []CandidateTarget{target}, CandidateInventoryBytes, func(_ context.Context, selected CandidateTarget) (CandidateResponseRun, error) {
+				if selected != target {
+					return nil, ErrStale
+				}
+				return run, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := strings.Repeat("3", 32)
+			if err := service.Start(id, target.ID); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-run.entered:
+			case <-time.After(3 * time.Second):
+				close(run.release)
+				t.Fatal("candidate transport never reached cleanup")
+			}
+			if outcome == "cancel" {
+				service.Cancel(id)
+			}
+			var state CandidateStatus
+			err = json.Unmarshal([]byte(service.StatusJSON()), &state)
+			blocked := err == nil && engine.held.Load() && !state.Drained && len(state.Results) == 0
+			close(run.release)
+			if err := service.Drain(id); err != nil {
+				t.Fatal(err)
+			}
+			if !blocked || engine.held.Load() || run.attempts != LatencyBenchmarkSamples {
+				t.Fatal("candidate released its original scope early or missed responses", run.attempts)
+			}
+			if err := json.Unmarshal([]byte(service.StatusJSON()), &state); err != nil {
+				t.Fatal(err)
+			}
+			if !state.Drained || outcome == "cancel" && len(state.Results) != 0 || outcome != "cancel" && (len(state.Results) != 1 || state.Results[0].Ready != (outcome == "success") || (state.Results[0].Benchmark != nil) != (outcome == "success")) {
+				t.Fatalf("wrong drained result for %s: %+v", outcome, state)
+			}
+		})
+	}
+}
+
 func TestCancellationOwnershipAndStaleSelector(t *testing.T) {
+	t.Run("candidate response transport", testCandidateResponseDrain)
 	s, e := fixture(t)
 	id := strings.Repeat("3", 32)
 	e.mu.Lock()

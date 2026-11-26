@@ -769,6 +769,10 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
     static let nativePrefixModes = ["wg", "awg2-fast", "awg2-strong"]
     static let nativeFinalModes = ["shadowsocks", "hysteria2"]
 
+    static func supportsLocalPacketRoute(_ nodes: [Self], execution: String?) -> Bool {
+        execution == "local" && (2...maximumNodes).contains(nodes.count) && nodes.allSatisfy { supportsNativePrefix($0.mode) }
+    }
+
     static func supportsNativePrefix(_ mode: String) -> Bool {
         nativePrefixModes.contains(mode)
     }
