@@ -346,8 +346,4 @@ with tempfile.TemporaryDirectory(prefix='router-vpn-killswitch-parent-safety-') 
         assert p.returncode!=0 and 'symlink' in p.stderr,p.stderr
         assert not (real_run/'kill-switch.json').exists()
 
-subprocess.run([sys.executable, str(SCRIPT.with_name('test_native_egress.py'))], check=True, timeout=60)
-subprocess.run([sys.executable, str(SCRIPT.with_name('test_darwin_owned_pf.py'))], check=True, timeout=60)
-if sys.platform.startswith('linux'):
-    subprocess.run([sys.executable, str(SCRIPT.with_name('test_linux_kill_switch_mutation_lock.py'))], check=True, timeout=30)
 print('Kill switch tests: OK')

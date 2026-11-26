@@ -39,7 +39,7 @@ MAX_FILES = 20000
 
 
 def inputs():
-    return [Path(__file__).resolve(), ROOT / 'deploy/test_gvisor_scheduler_preparation.py'] + FORWARDER.inputs()
+    return [Path(__file__).resolve()] + FORWARDER.inputs()
 
 
 def git_blob(data):

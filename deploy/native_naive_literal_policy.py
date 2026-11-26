@@ -268,23 +268,13 @@ STREAM_PATCHES = (
 		return cronet.BidirectionalStreamStart(c.ptr, url, int32(priority), method, uintptr(unsafe.Pointer(&headerArray)), endOfStream) == 0
 '''),
 )
-TEMPLATES = {'cronet_literal.go.tmpl':'routervpn_naive_literal.go',
-             'cronet_literal_test.go.tmpl':'routervpn_naive_literal_test.go',
-             'cronet_stream_owner.go.tmpl':'routervpn_naive_stream_owner.go',
-             'cronet_stream_owner_test.go.tmpl':'routervpn_naive_stream_owner_test.go',
-             'cronet_client_lifecycle.go.tmpl':'routervpn_naive_client_lifecycle.go',
-             'cronet_client_owner_test.go.tmpl':'routervpn_naive_client_owner_test.go'}
-CLIENT_TEST_FIXTURES = {
-    'cronet_engine_bindings.go.tmpl': 'internal/cronet/routervpn_lifecycle_fixture.go',
-    'cronet_engine_lifecycle_test.go.tmpl': 'routervpn_engine_lifecycle_fixture_test.go',
-}
+TEMPLATES = {'cronet_literal.go.tmpl': 'routervpn_naive_literal.go', 'cronet_stream_owner.go.tmpl': 'routervpn_naive_stream_owner.go', 'cronet_client_lifecycle.go.tmpl': 'routervpn_naive_client_lifecycle.go'}
+CLIENT_TEST_FIXTURES = {'cronet_engine_bindings.go.tmpl': 'internal/cronet/routervpn_lifecycle_fixture.go'}
 MAX_BYTES = 32*1024*1024
 
 
 def inputs():
-    return [Path(__file__).resolve(), ROOT/'deploy/test_native_naive_literal_policy.py',
-            *(ROOT/'mobile/naive'/name for name in TEMPLATES),
-            *(ROOT/'mobile/naive/testdata'/name for name in CLIENT_TEST_FIXTURES)]
+    return [Path(__file__).resolve(), *(ROOT / 'mobile/naive' / name for name in TEMPLATES), *(ROOT / 'mobile/naive/testdata' / name for name in CLIENT_TEST_FIXTURES)]
 
 
 def transform(relative, raw, *, reverse=False):

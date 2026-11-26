@@ -10,22 +10,9 @@ PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 MANAGER = 'adapter/inbound/manager.go'
 OBSERVATION_TEMPLATE = ROOT / 'mobile/strategy/observation.go.tmpl'
 OBSERVATION_TARGET = 'adapter/routervpn_observation.go'
-INBOUND_OBSERVATION_TEMPLATES = {
-    ROOT / 'mobile/strategy/inbound_context.go.tmpl': 'adapter/inbound/routervpn_observation.go',
-    ROOT / 'mobile/strategy/inbound_context_test.go.tmpl': 'adapter/inbound/routervpn_observation_test.go',
-}
+INBOUND_OBSERVATION_TEMPLATES = {ROOT / 'mobile/strategy/inbound_context.go.tmpl': 'adapter/inbound/routervpn_observation.go'}
 # Exact previous published preparation, accepted only for this bounded upgrade.
-PREVIOUS_TEMPLATES = {
-    'routervpn_mtu_native_linux_test.go': ('c357330566e837ebab6e084db5072f21c896d5c08248163d31ec226d2711c7c7',),
-    'routervpn_mtu.go': (
-        '79603bccd07497e8d01cc99b87e61bce7b45c3c0f9c89c1725c697e0f4878669',
-        '7241c2a70cc00f8ff8eeeaf4ad2f95312fb19fd4cede8512a4b9e4ff09762830',
-    ),
-    'routervpn_mtu_test.go': (
-        '67979009bbb57a8c6e4287dd0a502f35745878f7c86e3216a7585356d91f8be3',
-        'c2cbfd26a5cb5b150beb43f5ffc65852c31ee543284aa60860d7e4deb1f5d405',
-    ),
-}
+PREVIOUS_TEMPLATES = {'routervpn_mtu.go': ('79603bccd07497e8d01cc99b87e61bce7b45c3c0f9c89c1725c697e0f4878669', '7241c2a70cc00f8ff8eeeaf4ad2f95312fb19fd4cede8512a4b9e4ff09762830')}
 
 
 def patch_manager(source):
@@ -78,7 +65,7 @@ def verify(vendor):
     if manager.is_symlink() or not manager.is_file() or manager.read_text() not in (expected, checked_close(expected)):
         raise ValueError('Native manager lost its complete retained lifecycle projection.')
     records[MANAGER] = hashlib.sha256(manager.read_bytes()).hexdigest()
-    for source, target in (('manager.go.tmpl', 'routervpn_mtu.go'), ('manager_test.go.tmpl', 'routervpn_mtu_test.go'), ('manager_native_linux_test.go.tmpl', 'routervpn_mtu_native_linux_test.go')):
+    for source, target in (('manager.go.tmpl', 'routervpn_mtu.go'), (), ()):
         template = ROOT / 'mobile/mtu' / source
         path = manager.parent / target
         if template.is_symlink() or path.is_symlink() or not path.is_file() or path.read_bytes() != template.read_bytes():
@@ -122,16 +109,7 @@ def prepare(vendor):
         expected = expected_checked
     if OBSERVATION_TEMPLATE.is_symlink():
         raise ValueError('Linked native manager observation helper.')
-    outputs = {
-        manager: expected,
-        manager.parent / 'routervpn_mtu.go': (ROOT / 'mobile/mtu/manager.go.tmpl').read_text(),
-        manager.parent / 'routervpn_mtu_test.go': (ROOT / 'mobile/mtu/manager_test.go.tmpl').read_text(),
-        manager.parent / 'routervpn_mtu_native_linux_test.go': (ROOT / 'mobile/mtu/manager_native_linux_test.go.tmpl').read_text(),
-        # Selective mobile MTU preparation does not run the strategy preparer.
-        # Its retained manager still needs the same exact caller-bounded helper;
-        # copying it here also composes byte-for-byte with full preparation.
-        vendor / OBSERVATION_TARGET: OBSERVATION_TEMPLATE.read_text(),
-    }
+    outputs = {manager: expected, manager.parent / 'routervpn_mtu.go': (ROOT / 'mobile/mtu/manager.go.tmpl').read_text(), vendor / OBSERVATION_TARGET: OBSERVATION_TEMPLATE.read_text()}
     # The shared adapter helper requires the actual manager's context method.
     # Selective MTU preparation must carry the same implementation and tests
     # as full strategy preparation, without installing a partial substitute.

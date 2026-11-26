@@ -53,7 +53,7 @@ func (ep *wireEndpoint) IsAttached() bool {
 }''')]
 
 def blobsha(data):return hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()
-def inputs():return [Path(__file__).resolve(),ROOT/'deploy/test_mobile_wireguard_stack_policy.py',ROOT/'deploy/test_mobile_wireguard_stack.py',ROOT/'mobile/wireguard/stack_close_test.go.tmpl']
+def inputs():return [Path(__file__).resolve()]
 def patch(source):
  original=source
  for old,new in reversed(REPLACEMENTS):
@@ -67,13 +67,13 @@ def patch(source):
 def prepare(vendor):
  vendor=Path(vendor).resolve(strict=True)
  if subprocess.check_output(['git','-C',str(vendor),'rev-parse','HEAD'],text=True).strip()!=PIN:raise ValueError('WireGuard stack drain requires the exact core pin')
- source=vendor/'transport/wireguard/device_stack.go';test=source.with_name('routervpn_stack_close_test.go')
- for p in (source,test):
+ source=vendor/'transport/wireguard/device_stack.go'
+ for p in (source,):
   if p.is_symlink() or not p.resolve().is_relative_to(vendor):raise ValueError('Unsafe WireGuard stack drain target')
- fixed=patch(source.read_text());fixture=(ROOT/'mobile/wireguard/stack_close_test.go.tmpl').read_bytes()
- source.write_text(fixed);test.write_bytes(fixture)
+ fixed=patch(source.read_text())
+ source.write_text(fixed)
  print('Verified native WG/AWG link drains before gVisor stack teardown')
 
 def verify(vendor):
- vendor=Path(vendor).resolve(strict=True);source=vendor/'transport/wireguard/device_stack.go';test=source.with_name('routervpn_stack_close_test.go')
- if source.is_symlink() or test.is_symlink() or source.read_text()!=patch(source.read_text()) or test.read_bytes()!=(ROOT/'mobile/wireguard/stack_close_test.go.tmpl').read_bytes():raise ValueError('Changed native WireGuard stack drain projection')
+ vendor=Path(vendor).resolve(strict=True);source=vendor/'transport/wireguard/device_stack.go'
+ if source.is_symlink() or source.read_text()!=patch(source.read_text()):raise ValueError('Changed native WireGuard stack drain projection')

@@ -15,6 +15,7 @@ typedef struct {
     GtkWidget *status;
     GtkWidget *settings_summary;
     gboolean syncing;
+    LinuxShellReadings readings;
 } LinuxUnifiedV8; static gboolean linux_protection_mutation_busy_v26(App *app, gboolean enabled);
 
 // Forward declaration: callbacks above the refresh implementation may request an
@@ -35,9 +36,11 @@ static char *linux_protection_payload_v21(JsonObject *captured, const char *disp
     json_node_free(root); g_object_unref(generator); g_object_unref(builder); return body;
 }
 
-static void linux_unified_refresh_protection_v21(LinuxUnifiedV8 *state) {
+static gboolean linux_protection_readings_busy_v1(App *, gboolean, const LinuxShellReadings *);
+
+static void linux_unified_refresh_protection_v21(LinuxUnifiedV8 *state, const LinuxShellReadings *round) {
     Buffer out = {0}; char *err = NULL; gboolean valid = FALSE, enabled = FALSE;
-    if (api_request("/api/profile/protection", "GET", NULL, 3500, &out, &err)) {
+    if (linux_shell_read_v1(round, "/api/profile/protection", "GET", NULL, 3500, &out, &err)) {
         JsonNode *root = parse_json(out.data);
         if (root != NULL && JSON_NODE_HOLDS_OBJECT(root)) {
             JsonObject *captured = json_node_get_object(root);
@@ -51,7 +54,7 @@ static void linux_unified_refresh_protection_v21(LinuxUnifiedV8 *state) {
     }
     g_free(err); free(out.data);
     gtk_toggle_button_set_inconsistent(GTK_TOGGLE_BUTTON(state->kill_switch), !valid);
-    gtk_widget_set_sensitive(state->kill_switch, valid && !linux_protection_mutation_busy_v26(state->app, !enabled));
+    gtk_widget_set_sensitive(state->kill_switch, valid && !linux_protection_readings_busy_v1(state->app, !enabled, round));
     if (valid) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->kill_switch), enabled);
 }
 
@@ -93,13 +96,10 @@ static GKeyFile *linux_unified_load_keyfile_v8(void) {
     g_free(path);
     return key;
 }
+#include "routervpn-profile-load-store-v1.inc"
 static void linux_unified_save_keyfile_v8(GKeyFile *key) {
-    char *path = linux_unified_preset_path_v8();
-    gsize length = 0; GError *error = NULL;
-    char *data = g_key_file_to_data(key, &length, NULL);
-    if (data != NULL && !g_file_set_contents(path, data, (gssize)length, &error) && error != NULL) g_error_free(error);
-    if (data != NULL) { chmod(path, 0600); g_free(data); }
-    g_free(path);
+    g_autoptr(GError) error = NULL;
+    if (!linux_load_save_ordinary(key, &error)) g_warning("Router VPN settings: %s", error->message);
 }
 static char *linux_unified_selected_mode_v8(void) {
     GKeyFile *key = linux_unified_load_keyfile_v8();
@@ -185,36 +185,18 @@ static void linux_unified_refresh_mode_combo_v8(LinuxUnifiedV8 *state) {
     g_free(wanted);
 }
 
+#include "routervpn-custom-builder-v18.inc"
+
 static void linux_unified_custom_builder_v8(LinuxUnifiedV8 *state) {
     if (state == NULL) return;
-    const char *selected = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->mode));
-    char *editing = selected != NULL && g_str_has_prefix(selected, "custom:") ? g_strdup(selected + 7) : NULL;
-    char *old_layers = editing != NULL ? linux_unified_custom_layers_for_mode_v8(selected) : NULL;
-    GHashTable *old = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
-    if (old_layers != NULL) { gchar **parts = g_strsplit(old_layers, ",", -1); for (guint i=0; parts != NULL && parts[i] != NULL; i++) { g_strstrip(parts[i]); if (parts[i][0]) g_hash_table_add(old, g_strdup(parts[i])); } g_strfreev(parts); }
-    GtkWidget *dialog = gtk_dialog_new_with_buttons("CUSTOM preset builder", GTK_WINDOW(state->app->window), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "Cancel", GTK_RESPONSE_CANCEL, editing != NULL ? "Delete" : "", GTK_RESPONSE_REJECT, "Save", GTK_RESPONSE_ACCEPT, NULL);
-    gtk_window_set_default_size(GTK_WINDOW(dialog), 620, 620);
-    GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dialog)); GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8); gtk_container_set_border_width(GTK_CONTAINER(box), 14);
-    GtkWidget *note = gtk_label_new("Choose exact required layers. Router VPN only tries validated compatible Linux stacks containing every selected layer, prefers fewer unnecessary layers/overhead, and fails closed if none passes selected-node proof."); gtk_label_set_line_wrap(GTK_LABEL(note), TRUE); gtk_label_set_xalign(GTK_LABEL(note), 0.0f); gtk_box_pack_start(GTK_BOX(box), note, FALSE, FALSE, 0);
-    GtkWidget *name = gtk_entry_new(); gtk_entry_set_placeholder_text(GTK_ENTRY(name), "Preset name"); if (editing != NULL) gtk_entry_set_text(GTK_ENTRY(name), editing); gtk_box_pack_start(GTK_BOX(box), name, FALSE, FALSE, 0);
-    GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL); gtk_widget_set_size_request(scroll, -1, 390); GtkWidget *flow = gtk_flow_box_new(); gtk_flow_box_set_selection_mode(GTK_FLOW_BOX(flow), GTK_SELECTION_NONE); gtk_flow_box_set_max_children_per_line(GTK_FLOW_BOX(flow), 3); gtk_container_add(GTK_CONTAINER(scroll), flow);
-    GPtrArray *checks = g_ptr_array_new();
-    for (int i=0; linux_custom_layers_v8[i] != NULL; i++) { GtkWidget *check = gtk_check_button_new_with_label(linux_custom_layers_v8[i]); if (g_hash_table_contains(old, linux_custom_layers_v8[i])) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(check), TRUE); g_object_set_data(G_OBJECT(check), "layer", (gpointer)linux_custom_layers_v8[i]); g_ptr_array_add(checks, check); gtk_container_add(GTK_CONTAINER(flow), check); }
-    gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 0); gtk_box_pack_start(GTK_BOX(content), box, TRUE,TRUE,0); gtk_widget_show_all(dialog);
-    int response = gtk_dialog_run(GTK_DIALOG(dialog));
-    if (response == GTK_RESPONSE_REJECT && editing != NULL) {
-        GKeyFile *key = linux_unified_load_keyfile_v8(); char *group = g_strdup_printf("preset:%s", editing); g_key_file_remove_group(key, group, NULL); g_free(group); g_key_file_set_string(key, "state", "selected_mode", "smart-auto"); linux_unified_save_keyfile_v8(key); g_key_file_unref(key);
-    } else if (response == GTK_RESPONSE_ACCEPT) {
-        const char *raw_name = gtk_entry_get_text(GTK_ENTRY(name)); char *clean = g_strdup(raw_name); g_strstrip(clean);
-        GString *layers = g_string_new(""); for (guint i=0;i<checks->len;i++){GtkWidget *check=g_ptr_array_index(checks,i);if(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(check))){if(layers->len)g_string_append_c(layers,',');g_string_append(layers,(const char*)g_object_get_data(G_OBJECT(check),"layer"));}}
-        if (clean[0] == '\0' || strlen(clean) > 64 || layers->len == 0 || strchr(clean, ':') != NULL || strchr(clean, '\n') != NULL) append_diag(state->app, "CUSTOM preset requires a safe 1–64 character name and at least one exact layer.");
-        else { GKeyFile *key=linux_unified_load_keyfile_v8(); if(editing!=NULL&&g_strcmp0(editing,clean)!=0){char *old_group=g_strdup_printf("preset:%s",editing);g_key_file_remove_group(key,old_group,NULL);g_free(old_group);}char *group=g_strdup_printf("preset:%s",clean);g_key_file_set_string(key,group,"layers",layers->str);char *mode=g_strdup_printf("custom:%s",clean);g_key_file_set_string(key,"state","selected_mode",mode);linux_unified_save_keyfile_v8(key);g_free(mode);g_free(group);g_key_file_unref(key);append_diag(state->app,"CUSTOM preset saved; it contains choices only, never private node credentials."); }
-        g_string_free(layers, TRUE); g_free(clean);
+    if (!routervpn_require_mutation_idle(state->app, "editing CUSTOM presets")) {
+        linux_unified_refresh_mode_combo_v8(state); return;
     }
-    gtk_widget_destroy(dialog); g_ptr_array_unref(checks); g_hash_table_unref(old); g_free(editing); g_free(old_layers); linux_unified_refresh_mode_combo_v8(state);
+    linux_custom_builder_v18(state);
 }
 static void linux_unified_mode_changed_v8(GtkComboBox *combo, gpointer data) {
     LinuxUnifiedV8 *state = data; if (state == NULL || state->syncing) return; const char *id = gtk_combo_box_get_active_id(combo); if (id == NULL) return;
+    if (!routervpn_require_mutation_idle(state->app, "changing the selected mode")) { linux_unified_refresh_mode_combo_v8(state); return; }
     if (strcmp(id, "action:create-custom") == 0) { linux_unified_custom_builder_v8(state); return; }
     linux_unified_store_mode_v8(id);
 }
@@ -249,20 +231,25 @@ static const char *linux_stop_retry_token_v26(JsonObject *status, gboolean *vali
     for(size_t i=0;i<32;i++)if(!((token[i]>='0'&&token[i]<='9')||(token[i]>='a'&&token[i]<='f')))return NULL;
     *valid=TRUE;return token;
 }
-static gboolean linux_protection_mutation_busy_v26(App *app, gboolean enabled) {
-    if(enabled)return routervpn_mutation_busy(app);
+static gboolean linux_protection_readings_busy_v1(App *app, gboolean enabled, const LinuxShellReadings *round) {
+    if(enabled && round==NULL)return routervpn_mutation_busy(app);
     if(linux_async_busy_v16(app))return TRUE;
     Buffer out={0};char *err=NULL;gboolean busy=TRUE;
-    if(api_request("/api/status","GET",NULL,3500,&out,&err)){
+    if(linux_shell_read_v1(round, "/api/status","GET",NULL,3500,&out,&err)){
         JsonNode *root=parse_json(out.data);
         if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){
             JsonObject *obj=json_node_get_object(root);gboolean valid=FALSE;
             (void)linux_stop_retry_token_v26(obj,&valid);
+            if(enabled){gboolean blocked=!valid || routervpn_mutation_busy_from_status(obj) || g_object_get_data(G_OBJECT(app->window),"linux-ordered-candidates-pending")!=NULL;json_node_free(root);g_free(err);free(out.data);return blocked;}
             busy=!valid || (json_object_has_member(obj,"connected")&&json_object_get_boolean_member(obj,"connected")) || routervpn_phase_busy(obj_string(obj,"phase"));
         }
         if(root!=NULL)json_node_free(root);
     }
     g_free(err);free(out.data);return busy;
+}
+
+static gboolean linux_protection_mutation_busy_v26(App *app, gboolean enabled) {
+    return linux_protection_readings_busy_v1(app, enabled, NULL);
 }
 static void linux_unified_retry_stop_v26(LinuxUnifiedV8 *state, const char *token) {
     /* This request deliberately uses the non-preempting async lane. A stale
@@ -273,12 +260,24 @@ static void linux_unified_retry_stop_v26(LinuxUnifiedV8 *state, const char *toke
     g_free(body);
 }
 static void linux_unified_connect_v8(GtkButton *button, gpointer data) {
-    (void)button; LinuxUnifiedV8 *state=data; Buffer out={0};char *err=NULL;gboolean active=FALSE;
-    if(api_request("/api/status","GET",NULL,4000,&out,&err)){JsonNode *root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject *obj=json_node_get_object(root);gboolean connected=json_object_has_member(obj,"connected")&&json_object_get_boolean_member(obj,"connected");const char *phase=obj_string(obj,"phase");active=connected||g_str_has_prefix(phase,"starting")||g_str_has_prefix(phase,"checking")||strstr(phase,"trying")!=NULL||strstr(phase,"proving")!=NULL;json_node_free(root);}}g_free(err);free(out.data);
+    (void)button; LinuxUnifiedV8 *state=data; Buffer out={0}; char *err=NULL; gboolean status_ok=FALSE, active=FALSE, disconnecting=FALSE; g_autofree char *retry_token=NULL;
+    const char *captured_retry=g_object_get_data(G_OBJECT(state->connect),"routervpn-stop-retry-token");
+    if(captured_retry!=NULL){g_autofree char *token=g_strdup(captured_retry);linux_unified_retry_stop_v26(state,token);return;}
+    if (linux_async_stopping_v16(state->app)) return;
+    if (linux_async_connecting_v16(state->app)) {
+        post_and_log(state->app, "/api/disconnect", "{}", 30000, "Disconnect");
+        return;
+    }
+    if(api_request("/api/status","GET",NULL,4000,&out,&err)){JsonNode *root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject *obj=json_node_get_object(root);const char *phase=obj_string(obj,"phase");const char *retry=linux_stop_retry_token_v26(obj,&status_ok);retry_token=g_strdup(retry);active=routervpn_mutation_busy_from_status(obj)||g_object_get_data(G_OBJECT(state->app->window),"linux-ordered-candidates-pending")!=NULL;disconnecting=routervpn_phase_disconnecting(phase);json_node_free(root);}}g_free(err);free(out.data);
+    if(!status_ok){append_diag(state->app,"Status unavailable; refusing to change the live session.");return;}
+    if(disconnecting){append_diag(state->app,"Disconnect already in progress.");return;}
+    if(retry_token!=NULL){linux_unified_retry_stop_v26(state,retry_token);return;}
     if(active){post_and_log(state->app,"/api/disconnect","{}",30000,"Disconnect");return;}
-    char *external_body=NULL;int selected_kind=linux_unified_selected_external_v8(state->app,gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->node)),&external_body);if(selected_kind<0){append_diag(state->app,"The selected node or captured revision is unavailable. Refresh the node list and local controller.");return;}if(selected_kind==1){post_and_log(state->app,"/api/external-profile/connect",external_body,180000,"Custom/external exit");g_free(external_body);return;}g_free(external_body);
+    if(!routervpn_require_mutation_idle(state->app,"starting a new connection"))return;
+    char *external_body=NULL;int selected_kind=linux_unified_selected_external_v8(state->app,gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->node)),&external_body);if(selected_kind<0){append_diag(state->app,"The selected node or captured revision is unavailable. Refresh the node list and local controller.");return;}if(selected_kind==1){if(!routervpn_require_mutation_idle(state->app,"starting a Custom/external exit")){g_free(external_body);return;}post_and_log(state->app,"/api/external-profile/connect",external_body,180000,"Custom/external exit");g_free(external_body);return;}g_free(external_body);
     if(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->multihop))){on_linux_multihop_v7(NULL,state->app);return;}
     const char *mode=gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->mode));if(mode==NULL||mode[0]=='\0')mode="smart-auto";
+    if(!routervpn_require_mutation_idle(state->app,"starting the selected mode"))return;
     if(strcmp(mode,"smart-auto")==0)post_and_log(state->app,"/api/strategy/smart-auto","{}",240000,"SMART AUTO");
     else if(strcmp(mode,"auto")==0)post_and_log(state->app,"/api/strategy/auto","{}",200000,"AUTO");
     else if(g_str_has_prefix(mode,"custom:")){char *layers=linux_unified_custom_layers_for_mode_v8(mode);char *body=strategy_custom_body_v7(layers,gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->node)));if(body==NULL)append_diag(state->app,"Restore this CUSTOM preset or choose a preset with saved layers.");else{post_and_log(state->app,"/api/strategy/custom",body,240000,"CUSTOM preset");g_free(body);}g_free(layers);}
@@ -319,20 +318,40 @@ static void linux_unified_dns_changed_v8(GtkComboBox *combo, gpointer data) {
     g_free(mode);g_free(displayed);g_free(err);free(out.data);refresh_dns_page_v5(state->app);linux_unified_refresh_v8(state);
 }
 static void linux_unified_node_changed_v8(GtkComboBox *combo, gpointer data) {
-    LinuxUnifiedV8 *state=data;if(state==NULL||state->syncing)return;const char *id=gtk_combo_box_get_active_id(combo);if(id==NULL||id[0]=='\0')return;char *body=json_string_body("id",id);post_and_log(state->app,"/api/profile/select",body,12000,"Node selection");g_free(body);refresh_all(state->app);
+    LinuxUnifiedV8 *state=data;if(state==NULL||state->syncing)return;if(!routervpn_require_mutation_idle(state->app,"selecting another Router VPN node")){linux_unified_refresh_v8(state);return;}const char *id=gtk_combo_box_get_active_id(combo);if(id==NULL||id[0]=='\0')return;char *body=json_string_body("id",id);post_and_log(state->app,"/api/profile/select",body,12000,"Node selection");g_free(body);refresh_all(state->app);
 }
-static gboolean linux_unified_refresh_v8(gpointer data) {
-    LinuxUnifiedV8 *state=data;if(state==NULL)return G_SOURCE_REMOVE;state->syncing=TRUE;
-    Buffer out={0};char *err=NULL;if(api_request("/api/status","GET",NULL,3500,&out,&err)){JsonNode *root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject *obj=json_node_get_object(root);gboolean connected=json_object_has_member(obj,"connected")&&json_object_get_boolean_member(obj,"connected");const char *phase=obj_string(obj,"phase");gboolean transition=g_str_has_prefix(phase,"starting")||g_str_has_prefix(phase,"checking")||strstr(phase,"trying")!=NULL||strstr(phase,"proving")!=NULL;gtk_button_set_label(GTK_BUTTON(state->connect),(connected||transition)?"Disconnect":"Connect");char *text=g_strdup_printf("%s • logical %s • runtime %s • base %s",phase[0]?phase:"disconnected",obj_string(obj,"logical_mode"),obj_string(obj,"runtime_mode"),obj_string(obj,"base"));gtk_label_set_text(GTK_LABEL(state->status),text);g_free(text);json_node_free(root);}}g_free(err);free(out.data);
-    out=(Buffer){0};err=NULL;if(api_request("/api/profile/settings","GET",NULL,3500,&out,&err)){JsonNode *root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject *obj=json_node_get_object(root);gboolean encrypted=json_object_has_member(obj,"auto_require_encrypted")&&json_object_get_boolean_member(obj,"auto_require_encrypted");gboolean obfuscated=json_object_has_member(obj,"auto_require_obfuscation")&&json_object_get_boolean_member(obj,"auto_require_obfuscation");const char *requirements=encrypted&&obfuscated?"Encrypted + Obfuscation":encrypted?"Encrypted":obfuscated?"Obfuscation":"Off";char *summary=g_strdup_printf("AUTO requirements: %s • Off by default • SMART never simplifies below enabled requirements",requirements);if(state->settings_summary!=NULL)gtk_label_set_text(GTK_LABEL(state->settings_summary),summary);g_free(summary);json_node_free(root);}}g_free(err);free(out.data);
+static gboolean linux_unified_render_v1(gpointer data, const LinuxShellReadings *round) {
+    LinuxUnifiedV8 *state=data;if(state==NULL)return G_SOURCE_REMOVE;if(linux_async_busy_v16(state->app))return G_SOURCE_CONTINUE;state->syncing=TRUE;
+    gboolean status_ok=FALSE,busy=TRUE,disconnecting=FALSE;Buffer out={0};char *err=NULL;if(linux_shell_read_v1(round, "/api/status","GET",NULL,3500,&out,&err)){JsonNode *root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject *obj=json_node_get_object(root);const char *phase=obj_string(obj,"phase");const char *retry=linux_stop_retry_token_v26(obj,&status_ok);g_object_set_data_full(G_OBJECT(state->connect),"routervpn-stop-retry-token",g_strdup(retry),g_free);busy=routervpn_mutation_busy_from_status(obj)||retry!=NULL||!status_ok||g_object_get_data(G_OBJECT(state->app->window),"linux-ordered-candidates-pending")!=NULL;disconnecting=routervpn_phase_disconnecting(phase);gtk_button_set_label(GTK_BUTTON(state->connect),disconnecting?"Disconnecting…":retry!=NULL?"Retry Disconnect":busy?"Disconnect":"Connect");char *text=g_strdup_printf("%s • logical %s • runtime %s • base %s",g_str_has_prefix(phase,"candidate:")?"Testing saved path":phase[0]?phase:"disconnected",obj_string(obj,"logical_mode"),obj_string(obj,"runtime_mode"),obj_string(obj,"base"));gtk_label_set_text(GTK_LABEL(state->status),text);g_free(text);json_node_free(root);}}g_free(err);free(out.data);if(!status_ok){g_object_set_data(G_OBJECT(state->connect),"routervpn-stop-retry-token",NULL);gtk_button_set_label(GTK_BUTTON(state->connect),"Checking…");gtk_label_set_text(GTK_LABEL(state->status),"Controller/status unavailable • session mutation locked");busy=TRUE;}gboolean pending=linux_async_busy_v16(state->app), local_connect=linux_async_connecting_v16(state->app), local_stop=linux_async_stopping_v16(state->app);
+    if(local_stop)gtk_button_set_label(GTK_BUTTON(state->connect),"Disconnecting…");
+    else if(local_connect)gtk_button_set_label(GTK_BUTTON(state->connect),"Disconnect");
+    gtk_widget_set_sensitive(state->connect,!local_stop&&!disconnecting&&(local_connect||(status_ok&&(!pending||busy))));
+    busy=busy||pending;gtk_widget_set_sensitive(state->node,!busy);gtk_widget_set_sensitive(state->kill_switch,!busy);gtk_widget_set_sensitive(state->multihop,!busy);gtk_widget_set_sensitive(state->mode,!busy);gtk_widget_set_sensitive(state->dns,!busy);
+    out=(Buffer){0};err=NULL;if(linux_shell_read_v1(round, "/api/profile/settings","GET",NULL,3500,&out,&err)){JsonNode *root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject *obj=json_node_get_object(root);gboolean encrypted=json_object_has_member(obj,"auto_require_encrypted")&&json_object_get_boolean_member(obj,"auto_require_encrypted");gboolean obfuscated=json_object_has_member(obj,"auto_require_obfuscation")&&json_object_get_boolean_member(obj,"auto_require_obfuscation");const char *requirements=encrypted&&obfuscated?"Encrypted + Obfuscation":encrypted?"Encrypted":obfuscated?"Obfuscation":"Off";char *summary=g_strdup_printf("AUTO requirements: %s • Off by default • SMART never simplifies below enabled requirements",requirements);if(state->settings_summary!=NULL)gtk_label_set_text(GTK_LABEL(state->settings_summary),summary);g_free(summary);json_node_free(root);}}g_free(err);free(out.data);
     gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(state->node));for(guint i=0;i<state->app->router_ids->len;i++){const char *id=g_ptr_array_index(state->app->router_ids,i);gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->node),id,id);}const char *active=active_router_id(state->app);if(active!=NULL)gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->node),active);
-    linux_unified_refresh_protection_v21(state);
-    state->syncing=FALSE;refresh_home_summary_v6(state->app);if(state->app->map!=NULL)gtk_widget_queue_draw(state->app->map);return G_SOURCE_CONTINUE;
+    linux_unified_refresh_protection_v21(state,round);
+    state->syncing=FALSE;refresh_home_summary_readings_v1(state->app,round);if(state->app->map!=NULL)gtk_widget_queue_draw(state->app->map);return G_SOURCE_CONTINUE;
 }
+
+#include "routervpn-shell-poll-v1.inc"
 
 static GtkWidget *linux_unified_row_v8(const char *label, GtkWidget *control) {
     GtkWidget *row=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);GtkWidget *title=gtk_label_new(label);gtk_widget_set_size_request(title,72,-1);gtk_label_set_xalign(GTK_LABEL(title),1.0f);gtk_box_pack_start(GTK_BOX(row),title,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(row),control,TRUE,TRUE,0);return row;
 }
+static void linux_async_controls_v16(App *app) {
+    LinuxUnifiedV8 *state=g_object_get_data(G_OBJECT(app->window),"linux-unified-v8");
+    if(state==NULL)return;
+    if(linux_async_busy_v16(app)) {
+        GtkWidget *controls[]={state->node,state->mode,state->dns,state->kill_switch,state->multihop};
+        for(guint i=0;i<G_N_ELEMENTS(controls);i++)gtk_widget_set_sensitive(controls[i],FALSE);
+        if(linux_async_stopping_v16(app)) {gtk_button_set_label(GTK_BUTTON(state->connect),"Disconnecting…");gtk_widget_set_sensitive(state->connect,FALSE);}
+        else if(linux_async_connecting_v16(app)) {gtk_button_set_label(GTK_BUTTON(state->connect),"Disconnect");gtk_widget_set_sensitive(state->connect,TRUE);}
+        else gtk_widget_set_sensitive(state->connect, g_strcmp0(gtk_button_get_label(GTK_BUTTON(state->connect)), "Disconnect") == 0);
+        const char *comparison = g_object_get_data(G_OBJECT(app->window), "linux-multihop-progress");
+        gtk_label_set_text(GTK_LABEL(state->status), comparison != NULL ? comparison : "Operation pending • configuration locked • live status refresh paused");
+    } else linux_unified_refresh_v8(state);
+}
+
 static void build_ui_v5(App *app) {
     build_ui_legacy_v5(app);
     GList *children=gtk_container_get_children(GTK_CONTAINER(app->window));if(children==NULL)return;GtkWidget *notebook=GTK_WIDGET(children->data);g_object_ref(notebook);g_list_free(children);gtk_container_remove(GTK_CONTAINER(app->window),notebook);
@@ -350,7 +369,7 @@ static void build_ui_v5(App *app) {
     state->dns=gtk_combo_box_text_new();gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->dns),"home","Home AdGuard");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->dns),"fastest","Fastest measured");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->dns),"custom","Custom…");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->dns),"dot","DoT…");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->dns),"doh","DoH…");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->dns),"doh3","DoH3…");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->dns),"rescue","Rescue");gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->dns),"home");GtkWidget *dns_row=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,6);gtk_box_pack_start(GTK_BOX(dns_row),state->dns,TRUE,TRUE,0);gtk_box_pack_start(GTK_BOX(dns_row),make_button("DNS details",G_CALLBACK(linux_unified_dns_detail_v8),state),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(dock_box),linux_unified_row_v8("DNS",dns_row),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(main),dock,FALSE,FALSE,0);
     GtkWidget *details=gtk_box_new(GTK_ORIENTATION_VERTICAL,6);gtk_box_pack_start(GTK_BOX(details),make_button("← Back to map",G_CALLBACK(linux_unified_back_v8),state),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(details),notebook,TRUE,TRUE,0);g_object_unref(notebook);
     gtk_stack_add_named(GTK_STACK(state->stack),main,"map");gtk_stack_add_named(GTK_STACK(state->stack),details,"details");gtk_stack_set_visible_child_name(GTK_STACK(state->stack),"map");gtk_container_add(GTK_CONTAINER(app->window),state->stack);
-    linux_unified_refresh_mode_combo_v8(state);g_signal_connect(state->mode,"changed",G_CALLBACK(linux_unified_mode_changed_v8),state);g_signal_connect(state->dns,"changed",G_CALLBACK(linux_unified_dns_changed_v8),state);g_signal_connect(state->node,"changed",G_CALLBACK(linux_unified_node_changed_v8),state);g_object_set_data_full(G_OBJECT(app->window),"linux-unified-v8",state,g_free);g_timeout_add(1500,linux_unified_refresh_v8,state);linux_unified_refresh_v8(state);
+    linux_unified_refresh_mode_combo_v8(state);g_signal_connect(state->mode,"changed",G_CALLBACK(linux_unified_mode_changed_v8),state);g_signal_connect(state->dns,"changed",G_CALLBACK(linux_unified_dns_changed_v8),state);g_signal_connect(state->node,"changed",G_CALLBACK(linux_unified_node_changed_v8),state);g_object_set_data_full(G_OBJECT(app->window),"linux-unified-v8",state,g_free);linux_async_ensure_v16(app)->changed=linux_async_controls_v16;g_signal_connect(app->window,"destroy",G_CALLBACK(linux_shell_destroy_v1),state);state->readings.timer=g_timeout_add(100,linux_shell_tick_v1,state);linux_unified_refresh_v8(state);
 }
 
 /* Unified Linux shipping contract:

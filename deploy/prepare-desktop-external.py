@@ -32,17 +32,9 @@ MTU = load('prepare-mobile-mtu')
 STRATEGY = load('prepare-mobile-strategy')
 NODE_CHAIN = load('prepare-mobile-node-chain')
 CONNECT = load('prepare-mobile-connect')
-IMPORTED_EXECUTION_TEST = load('prepare-desktop-imported-execution-test')
-SELECTED_LATENCY_TEST = load('prepare-desktop-selected-latency-test')
-SELECTED_CANDIDATE_TEST = load('prepare-desktop-selected-candidate-test')
 NODE_EXECUTION = tuple(load(name) for name in ('prepare-node-chain-execution-gate', 'prepare-node-chain-execution', 'prepare-node-chain-execution-owner'))
 DAEMON_CAPTURE = load('prepare-mobile-node-chain-execution')
-DAEMON_CAPTURE_TEMPLATES = {
-    'instance_close.go.tmpl': 'daemon/routervpn_instance_close.go',
-    'instance_close_test.go.tmpl': 'daemon/routervpn_instance_close_test.go',
-    'instance_capture.go.tmpl': 'daemon/routervpn_instance_capture.go',
-    'instance_capture_test.go.tmpl': 'daemon/routervpn_instance_capture_test.go',
-}
+DAEMON_CAPTURE_TEMPLATES = {'instance_close.go.tmpl': 'daemon/routervpn_instance_close.go', 'instance_capture.go.tmpl': 'daemon/routervpn_instance_capture.go'}
 RELAY = load('prepare-relay-core')
 DESKTOP_MTU = load('prepare-desktop-mtu')
 TOR = load('prepare-mobile-tor')
@@ -51,251 +43,12 @@ SHARED = tuple(dict.fromkeys((*RELAY.PACKAGES, 'dnsmeasure', 'mobilemtu', 'mtupr
 PURE = ('standardengine', 'desktopnetwork', 'common', 'mobiletor', 'awgpolicy', 'nativeopenvpn', 'windowsbootstrap', 'windowscontroller', 'windowsprotection', 'linuxprocess', 'linuxprotection', 'macosprocess')
 PT_OWNER = 'routervpn-desktop-tor-source.json'
 PT_NAMESPACES = ('routervpn/torpt/', 'routervpn/desktoppt/')
-PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_test.go.tmpl',
-                'tor_pt_entry_traffic_test.go.tmpl', 'tor_network.go.tmpl', 'tor_network_test.go.tmpl',
-                'tor_server.go.tmpl', 'tor_plain_test.go.tmpl', 'tor_local.go.tmpl', 'tor_local_test.go.tmpl',
-                'tor_physical.go.tmpl', 'tor_physical_test.go.tmpl',
-                'tor_physical_factory_test.go.tmpl',
-                'tor_physical_linux.go.tmpl', 'tor_physical_darwin.go.tmpl', 'tor_physical_windows.go.tmpl', 'tor_physical_other.go.tmpl',
-                'tor_physical_tunnel.go.tmpl', 'tor_physical_tunnel_test.go.tmpl',
-                'tor_physical_linux_test.go.tmpl', 'tor_physical_darwin_test.go.tmpl', 'tor_physical_windows_test.go.tmpl',
-                'tor_physical_source_unix_test.go.tmpl',
-                'external_network.go.tmpl', 'external_admission.go.tmpl', 'external_admission_test.go.tmpl',
-                'external_physical.go.tmpl', 'external_physical_test.go.tmpl',
-                'external_socks.go.tmpl', 'external_socks_association_test.go.tmpl', 'external_socks_linux_lifecycle_test.go.tmpl',
-                'external_physical_linux.go.tmpl', 'external_physical_darwin.go.tmpl',
-                'external_physical_windows.go.tmpl', 'external_physical_other.go.tmpl',
-                'external_physical_linux_test.go.tmpl', 'external_physical_layer_entry_linux_test.go.tmpl', 'external_physical_ss_entry_linux_test.go.tmpl', 'external_physical_ss_connect_linux_test.go.tmpl', 'external_physical_darwin_test.go.tmpl',
-                'external_physical_windows_test.go.tmpl',
-                'linux_physical_lifecycle.go.tmpl', 'external_linux_lifecycle.go.tmpl', 'external_linux_lifecycle_test.go.tmpl',
-                'external_linux_lifecycle_native_test.go.tmpl',
-                'node_network.go.tmpl', 'node_network_test.go.tmpl', 'node_physical.go.tmpl', 'node_admission.go.tmpl', 'node_admission_test.go.tmpl',
-                'node_imported_socks.go.tmpl', 'node_imported_socks_test.go.tmpl', 'node_imported_physical_other.go.tmpl',
-                'node_chain_physical_linux.go.tmpl', 'node_chain_physical_windows.go.tmpl', 'node_chain_physical_other.go.tmpl',
-                'node_chain_physical_darwin.go.tmpl', 'node_chain_physical_darwin_test.go.tmpl',
-                'node_chain_socks_physical_linux.go.tmpl', 'node_chain_connect_physical_linux.go.tmpl', 'node_chain_socks_physical_windows.go.tmpl', 'node_chain_connect_physical_windows.go.tmpl', 'node_chain_socks_physical_darwin.go.tmpl', 'node_chain_connect_physical_darwin.go.tmpl', 'node_chain_socks_physical_other.go.tmpl', 'node_chain_connect_physical_other.go.tmpl',
-                'node_chain_openvpn_execution_physical_linux.go.tmpl', 'node_chain_multiple_imported_execution_physical_linux.go.tmpl', 'node_chain_openvpn_execution_physical_windows.go.tmpl', 'node_chain_multiple_imported_execution_physical_windows.go.tmpl',
-                'node_chain_openvpn_execution_physical_darwin.go.tmpl', 'node_chain_multiple_imported_execution_physical_darwin.go.tmpl', 'node_chain_openvpn_execution_physical_other.go.tmpl', 'node_chain_multiple_imported_execution_physical_other.go.tmpl',
-                'node_candidate_prefix_physical_linux.go.tmpl', 'node_candidate_prefix_physical_windows.go.tmpl', 'node_candidate_prefix_physical_other.go.tmpl',
-                'node_candidate_prefix_physical_darwin.go.tmpl', 'node_candidate_prefix_physical_darwin_test.go.tmpl',
-                'node_physical_linux.go.tmpl', 'node_physical_darwin.go.tmpl', 'node_paired_physical_darwin.go.tmpl',
-                'node_physical_linux_test.go.tmpl', 'node_physical_darwin_test.go.tmpl', 'node_physical_unix_test.go.tmpl',
-                'node_linux_lifecycle.go.tmpl', 'node_linux_lifecycle_test.go.tmpl',
-                'node_linux_source_join.go.tmpl', 'node_linux_source_join_test.go.tmpl',
-                'node_physical_windows.go.tmpl', 'node_physical_windows_test.go.tmpl', 'node_physical_other.go.tmpl')
-BOX_TEMPLATES = {
-    'node_box_darwin.go.tmpl': 'routervpn_desktop_node_box_darwin.go',
-    'node_box_darwin_test.go.tmpl': 'routervpn_desktop_node_box_darwin_test.go',
-    'node_box_paired_mtu_darwin_test.go.tmpl': 'routervpn_desktop_node_box_paired_mtu_darwin_test.go',
-    'external_box_openvpn_entry_test.go.tmpl': 'routervpn_desktop_external_box_openvpn_entry_test.go',
-    'external_hysteria_layer_peer_test.go.tmpl': 'routervpn_desktop_external_hysteria_layer_peer_test.go',
-    'external_box_windows_hysteria2_layer_test.go.tmpl': 'routervpn_desktop_external_box_windows_hysteria2_layer_test.go',
-    'network_box.go.tmpl': 'routervpn_desktop_network_box.go',
-    'node_box_physical.go.tmpl': 'routervpn_desktop_node_box_physical.go',
-    'node_box_tunnel_control.go.tmpl': 'routervpn_desktop_node_box_tunnel_control.go',
-    'node_box_tunnel_control_darwin_test.go.tmpl': 'routervpn_desktop_node_box_tunnel_control_darwin_test.go',
-    'node_box_imported.go.tmpl': 'routervpn_desktop_node_box_imported.go',
-    'node_chain_box_physical.go.tmpl': 'routervpn_desktop_node_chain_box_physical.go',
-    'node_chain_imported_prefix_physical_test.go.tmpl': 'routervpn_desktop_node_chain_imported_prefix_physical_test.go',
-    'node_chain_socks_box_physical.go.tmpl': 'routervpn_desktop_node_chain_socks_box_physical.go',
-    'node_chain_socks_execution_box_physical.go.tmpl': 'routervpn_desktop_node_chain_socks_execution_box_physical.go',
-    'node_chain_openvpn_execution_box_physical.go.tmpl': 'routervpn_desktop_node_chain_openvpn_execution_box_physical.go',
-    'node_chain_multiple_imported_execution_box_physical.go.tmpl': 'routervpn_desktop_node_chain_multiple_imported_execution_box_physical.go',
-    'node_chain_socks_execution_box_test.go.tmpl': 'routervpn_desktop_node_chain_socks_execution_box_test.go',
-    'node_chain_openvpn_execution_box_test.go.tmpl': 'routervpn_desktop_node_chain_openvpn_execution_box_test.go',
-    'node_chain_multiple_imported_execution_box_test.go.tmpl': 'routervpn_desktop_node_chain_multiple_imported_execution_box_test.go',
-    'node_chain_connect_box_physical.go.tmpl': 'routervpn_desktop_node_chain_connect_box_physical.go',
-    'node_chain_socks_box_physical_test.go.tmpl': 'routervpn_desktop_node_chain_socks_box_physical_test.go',
-    'node_chain_connect_box_physical_test.go.tmpl': 'routervpn_desktop_node_chain_connect_box_physical_test.go',
-    'node_typed_mtu_reader_test.go.tmpl': 'routervpn_desktop_node_typed_mtu_reader_test.go',
-    'node_chain_socks_box_linux.go.tmpl': 'routervpn_desktop_node_chain_socks_box_linux.go',
-    'node_chain_socks_execution_box_linux.go.tmpl': 'routervpn_desktop_node_chain_socks_execution_box_linux.go',
-    'node_chain_openvpn_execution_box_linux.go.tmpl': 'routervpn_desktop_node_chain_openvpn_execution_box_linux.go',
-    'node_chain_multiple_imported_execution_box_linux.go.tmpl': 'routervpn_desktop_node_chain_multiple_imported_execution_box_linux.go',
-    'node_chain_connect_box_linux.go.tmpl': 'routervpn_desktop_node_chain_connect_box_linux.go',
-    'node_chain_socks_box_darwin.go.tmpl': 'routervpn_desktop_node_chain_socks_box_darwin.go',
-    'node_chain_socks_execution_box_darwin.go.tmpl': 'routervpn_desktop_node_chain_socks_execution_box_darwin.go',
-    'node_chain_openvpn_execution_box_darwin.go.tmpl': 'routervpn_desktop_node_chain_openvpn_execution_box_darwin.go',
-    'node_chain_multiple_imported_execution_box_darwin.go.tmpl': 'routervpn_desktop_node_chain_multiple_imported_execution_box_darwin.go',
-    'node_chain_connect_box_darwin.go.tmpl': 'routervpn_desktop_node_chain_connect_box_darwin.go',
-    'node_candidate_prefix_box_physical.go.tmpl': 'routervpn_desktop_node_candidate_prefix_box_physical.go',
-    'node_candidate_prefix_box_linux.go.tmpl': 'routervpn_desktop_node_candidate_prefix_box_linux.go',
-    'node_candidate_prefix_box_darwin.go.tmpl': 'routervpn_desktop_node_candidate_prefix_box_darwin.go',
-    'node_candidate_prefix_box_physical_test.go.tmpl': 'routervpn_desktop_node_candidate_prefix_box_physical_test.go',
-    'node_chain_execution_box_mtu.go.tmpl': 'routervpn_desktop_node_chain_execution_box_mtu.go',
-    'node_chain_box_physical_test.go.tmpl': 'routervpn_desktop_node_chain_box_physical_test.go',
-    'node_chain_openvpn_box_physical_test.go.tmpl': 'routervpn_desktop_node_chain_openvpn_box_physical_test.go',
-    'node_chain_execution_physical_test.go.tmpl': 'routervpn_desktop_node_chain_execution_physical_test.go',
-    'node_chain_execution_imported_test.go.tmpl': 'routervpn_desktop_node_chain_execution_imported_test.go',
-    'node_chain_box_linux.go.tmpl': 'routervpn_desktop_node_chain_box_linux.go',
-    'node_chain_box_darwin.go.tmpl': 'routervpn_desktop_node_chain_box_darwin.go',
-    'node_box_imported_test.go.tmpl': 'routervpn_desktop_node_box_imported_test.go',
-    'node_imported_naive_h3_windows_test.go.tmpl': 'routervpn_desktop_node_imported_naive_h3_windows_test.go',
-    'node_imported_naive_h3_windows_peer_test.go.tmpl': 'routervpn_desktop_node_imported_naive_h3_windows_peer_test.go',
-    'node_box_physical_test.go.tmpl': 'routervpn_desktop_node_box_physical_test.go',
-    'node_box_dns.go.tmpl': 'routervpn_desktop_node_box_dns.go',
-    'node_box_dns_test.go.tmpl': 'routervpn_desktop_node_box_dns_test.go',
-    'node_box_imported_linux_lifecycle.go.tmpl': 'routervpn_desktop_node_box_imported_linux_lifecycle.go',
-    'node_box_linux_lifecycle.go.tmpl': 'routervpn_desktop_node_box_linux_lifecycle.go',
-    'node_box_linux_cover.go.tmpl': 'routervpn_desktop_node_box_linux_cover.go',
-    'node_box_linux_cover_test.go.tmpl': 'routervpn_desktop_node_box_linux_cover_test.go',
-    'external_box_physical.go.tmpl': 'routervpn_desktop_external_box_physical.go',
-    'external_box_linux_lifecycle.go.tmpl': 'routervpn_desktop_external_box_linux_lifecycle.go',
-    'external_box_physical_test.go.tmpl': 'routervpn_desktop_external_box_physical_test.go',
-    'external_box_darwin_control_test.go.tmpl': 'routervpn_desktop_external_box_darwin_control_test.go',
-    'external_box_integration_test.go.tmpl': 'routervpn_desktop_external_box_integration_test.go',
-    'external_box_latency_test.go.tmpl': 'routervpn_desktop_external_box_latency_test.go',
-    'external_box_socks_test.go.tmpl': 'routervpn_desktop_external_box_socks_test.go',
-    'external_box_openvpn_test.go.tmpl': 'routervpn_desktop_external_box_openvpn_test.go',
-    'external_box_openvpn_reference_test.go.tmpl': 'routervpn_desktop_external_box_openvpn_reference_test.go',
-    'external_box_packet_reference_test.go.tmpl': 'routervpn_desktop_external_box_packet_reference_test.go',
-    'external_box_windows_packet_test.go.tmpl': 'routervpn_desktop_external_box_windows_packet_test.go',
-    'external_box_windows_server_test.go.tmpl': 'routervpn_desktop_external_box_windows_server_test.go',
-    'external_box_windows_compare_test.go.tmpl': 'routervpn_desktop_external_box_windows_compare_test.go',
-    'external_box_windows_alias_test.go.tmpl': 'routervpn_desktop_external_box_windows_alias_test.go',
-    'external_box_windows_ss_entry_test.go.tmpl': 'routervpn_desktop_external_box_windows_ss_entry_test.go',
-    'external_box_windows_openvpn_test.go.tmpl': 'routervpn_desktop_external_box_windows_openvpn_test.go',
-    'external_box_windows_openvpn_entry_test.go.tmpl': 'routervpn_desktop_external_box_windows_openvpn_entry_test.go',
-    'external_box_windows_hysteria2_test.go.tmpl': 'routervpn_desktop_external_box_windows_hysteria2_test.go',
-    'external_box_windows_socks_test.go.tmpl': 'routervpn_desktop_external_box_windows_socks_test.go',
-    'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
-    'tor_box_latency.go.tmpl': 'routervpn_desktop_tor_box_latency.go',
-    'tor_box_latency_test.go.tmpl': 'routervpn_desktop_tor_box_latency_test.go',
-    'tor_box_physical.go.tmpl': 'routervpn_desktop_tor_box_physical.go',
-    'tor_box_tunnel_control.go.tmpl': 'routervpn_desktop_tor_box_tunnel_control.go',
-    'tor_box_physical_test.go.tmpl': 'routervpn_desktop_tor_box_physical_test.go',
-    'tor_box_lastrelay.go.tmpl': 'routervpn_desktop_tor_box_lastrelay.go',
-    'tor_box_lastrelay_test.go.tmpl': 'routervpn_desktop_tor_box_lastrelay_test.go',
-    'tor_box_lastrelay_server_test.go.tmpl': 'routervpn_desktop_tor_box_lastrelay_server_test.go',
-    'tor_box_padding.go.tmpl': 'routervpn_desktop_tor_box_padding.go',
-    'tor_box_padding_test.go.tmpl': 'routervpn_desktop_tor_box_padding_test.go',
-    'tor_box_test.go.tmpl': 'routervpn_desktop_tor_box_test.go',
-    'tor_box_integration_test.go.tmpl': 'routervpn_desktop_tor_box_integration_test.go',
-    'tor_box_external_test.go.tmpl': 'routervpn_desktop_tor_box_external_test.go',
-    'tor_box_mtu.go.tmpl': 'routervpn_desktop_tor_box_mtu.go',
-    'tor_box_mtu_test.go.tmpl': 'routervpn_desktop_tor_box_mtu_test.go',
-    'tor_server_box_test.go.tmpl': 'routervpn_desktop_tor_server_box_test.go',
-    'tor_server_cover_box_test.go.tmpl': 'routervpn_desktop_tor_server_cover_box_test.go',
-    'tor_proof_dns_test.go.tmpl': 'routervpn_desktop_tor_proof_dns_test.go',
-    'tor_plain_box_test.go.tmpl': 'routervpn_desktop_tor_plain_box_test.go',
-}
-PEER_TEMPLATES = {
-    'node_chain_hysteria_final_layer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_hysteria_final_layer_test.go',
-    'node_chain_hysteria_server_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_hysteria_server_peer_test.go',
-    'node_chain_openvpn_server_direct_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_openvpn_server_direct_peer_test.go',
-    'node_chain_connect_prefix_native_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_connect_prefix_native_linux_test.go',
-    'node_chain_socks_prefix_native_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_socks_prefix_native_linux_test.go',
-    'node_chain_imported_execution_native_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_execution_native_linux_test.go',
-    'node_chain_paired_ss_execution_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_paired_ss_execution_peer_test.go',
-    'node_chain_imported_execution_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_execution_peer_test.go',
-    'node_chain_connect_execution_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_connect_execution_peer_test.go',
-    'node_chain_connect_execution_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_connect_execution_peer_linux_test.go',
-    'node_chain_socks_execution_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_socks_execution_peer_test.go',
-    'node_chain_socks_execution_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_socks_execution_peer_linux_test.go',
-    'node_chain_connect_execution_peer_darwin_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_connect_execution_peer_darwin_test.go',
-    'node_chain_imported_execution_layers_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_execution_layers_peer_test.go',
-    'node_peer_network_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_network_test.go',
-    'node_external_amnezia_installed_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_amnezia_installed_test.go',
-    'node_imported_router_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_router_entry_test.go',
-    'node_imported_connect_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_connect_entry_test.go',
-    'node_imported_socks_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_socks_entry_test.go',
-    'node_imported_socks_xray_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_socks_xray_test.go',
-    'node_imported_proxy_xray_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_proxy_xray_test.go',
-    'node_imported_connect_xray_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_connect_xray_test.go',
-    'node_imported_connect_xray_dns_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_connect_xray_dns_test.go',
-    'node_imported_packet_xray_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_packet_xray_test.go',
-    'node_imported_packet_xray_dns_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_packet_xray_dns_test.go',
-    'node_imported_socks_packet_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_socks_packet_test.go',
-    'node_imported_hysteria_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_hysteria_entry_test.go',
-    'node_imported_nested_packet_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_nested_packet_test.go',
-    'node_imported_packet_final_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_packet_final_test.go',
-    'node_imported_packet_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_packet_test.go',
-    'node_imported_hysteria_final_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_hysteria_final_test.go',
-    'node_external_ss_entry_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_ss_entry_test.go',
-    'node_external_ss_layers_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_external_ss_layers_test.go',
-    'node_external_ss_entry_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_ss_entry_linux_test.go',
-    'node_external_ss_hysteria_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_ss_hysteria_test.go',
-    'node_external_ss_connect_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_ss_connect_test.go',
-    'node_external_openvpn_installed_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_openvpn_installed_test.go',
-    'node_openvpn_capacity_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_openvpn_capacity_test.go',
-    'node_imported_openvpn_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_imported_openvpn_test.go',
-    'node_external_wireguard_installed_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_wireguard_installed_test.go',
-    'node_darwin_external_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_darwin_external_peer_test.go',
-    'node_external_latency_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_latency_peer_test.go',
-    'node_external_hysteria_layer_installed_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_external_hysteria_layer_installed_test.go',
-    'node_wg_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_wg_peer_test.go',
-    'node_imported_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_imported_peer_linux_test.go',
-    'node_chain_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_peer_linux_test.go',
-    'node_chain_fifty_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_fifty_peer_test.go',
-    'node_chain_fifty_remaining_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_fifty_remaining_peer_test.go',
-    'node_chain_candidates_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_candidates_peer_test.go',
-    'node_chain_imported_candidates_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_candidates_peer_test.go',
-    'node_chain_candidate_layers_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_candidate_layers_peer_test.go',
-    'node_chain_imported_mtu_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_mtu_test.go',
-    'node_chain_imported_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_test.go',
-    'node_chain_connect_server_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_connect_server_peer_test.go',
-    'node_chain_imported_server_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_server_peer_test.go',
-    'node_chain_socks_server_prefix_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_socks_server_prefix_test.go',
-    'node_chain_socks_server_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_socks_server_test.go',
-    'node_chain_socks_middle_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_socks_middle_test.go',
-    'node_chain_socks_process_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_socks_process_test.go',
-    'node_chain_socks_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_socks_peer_test.go',
-    'node_chain_connect_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_connect_peer_test.go',
-    'node_chain_imported_hostname_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_hostname_test.go',
-    'node_chain_imported_prefix_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_imported_prefix_test.go',
-    'node_chain_hysteria_final_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_hysteria_final_test.go',
-    'node_chain_openvpn_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_openvpn_peer_test.go',
-    'node_chain_openvpn_prefix_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_chain_openvpn_prefix_test.go',
-    'node_awg_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_awg_peer_test.go',
-    'node_linux_peer_test.go.tmpl': 'protocol/routervpnamnezia/node_linux_peer_test.go',
-    'node_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_test.go',
-    'node_peer_dns_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_dns_test.go',
-    'node_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_windows_test.go',
-    'node_resolved_private_tld_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_resolved_private_tld_test.go',
-    'node_resolved_broker_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_resolved_broker_test.go',
-    'node_private_benchmark_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_private_benchmark_test.go',
-    'node_layer_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_layer_peer_test.go',
-    'node_router_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_router_peer_test.go',
-    'node_router_cover_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_router_cover_peer_test.go',
-    'node_router_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_router_peer_linux_test.go',
-    'node_hysteria2_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_hysteria2_peer_test.go',
-    'node_naive_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_peer_test.go',
-    'node_naive_literal_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_literal_test.go',
-    'node_naive_dns_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_dns_test.go',
-    'node_naive_h3_literal_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_h3_literal_test.go',
-    'node_imported_naive_h2_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_imported_naive_h2_test.go',
-    'node_imported_naive_h3_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_imported_naive_h3_test.go',
-    'node_naive_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_peer_windows_test.go',
-    'node_naive_loader_purego_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_loader_purego_test.go',
-    'node_pq_peer_test.go.tmpl': 'protocol/routervpnpq/node_pq_peer_test.go',
-    'node_max_peer_test.go.tmpl': 'protocol/routervpnpq/node_max_peer_test.go',
-    'node_max_stream_test.go.tmpl': 'protocol/routervpnpq/node_max_stream_test.go',
-    'node_max_tls_reference_test.go.tmpl': 'protocol/routervpnpq/node_max_tls_reference_test.go',
-    'node_max_credentials_test.go.tmpl': 'protocol/routervpnpq/node_max_credentials_test.go',
-    'node_pq_peer_windows_test.go.tmpl': 'protocol/routervpnpq/node_pq_peer_windows_test.go',
-    'node_max_peer_windows_test.go.tmpl': 'protocol/routervpnpq/node_max_peer_windows_test.go',
-    'node_xray_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_xray_peer_test.go',
-    'node_reality_private_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_reality_private_peer_test.go',
-    'node_composite_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_composite_peer_test.go',
-    'node_sip003_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_sip003_peer_test.go',
-    'node_composite_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_composite_peer_windows_test.go',
-    'node_xray_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_xray_peer_windows_test.go',
-    'node_layer_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_layer_peer_windows_test.go',
-}
-ROUTE_TEMPLATES = {
-    'tor_network_startup.go.tmpl': 'route/routervpn_desktop_tor_network_startup.go',
-    'tor_network_startup_test.go.tmpl': 'route/routervpn_desktop_tor_network_startup_test.go',
-}
-INBOUND_TEMPLATES = {
-    'inbound_node_chain_retirement_darwin_test.go.tmpl': 'adapter/inbound/routervpn_node_chain_retirement_darwin_test.go',
-}
-TUN_TEMPLATES = {
-    'tun_darwin_control.go.tmpl': 'protocol/tun/routervpn_desktop_control_darwin.go',
-    'tun_node_chain_retirement_darwin.go.tmpl': 'protocol/tun/routervpn_node_chain_retirement_darwin.go',
-    'tun_node_chain_retirement_darwin_test.go.tmpl': 'protocol/tun/routervpn_node_chain_retirement_darwin_test.go',
-    'tun_network.go.tmpl': 'protocol/tun/routervpn_desktop_network.go',
-    'tun_network_test.go.tmpl': 'protocol/tun/routervpn_desktop_network_test.go',
-}
+PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_network.go.tmpl', 'tor_server.go.tmpl', 'tor_local.go.tmpl', 'tor_physical.go.tmpl', 'tor_physical_linux.go.tmpl', 'tor_physical_darwin.go.tmpl', 'tor_physical_windows.go.tmpl', 'tor_physical_other.go.tmpl', 'tor_physical_tunnel.go.tmpl', 'external_network.go.tmpl', 'external_admission.go.tmpl', 'external_physical.go.tmpl', 'external_socks.go.tmpl', 'external_physical_linux.go.tmpl', 'external_physical_darwin.go.tmpl', 'external_physical_windows.go.tmpl', 'external_physical_other.go.tmpl', 'linux_physical_lifecycle.go.tmpl', 'external_linux_lifecycle.go.tmpl', 'node_network.go.tmpl', 'node_physical.go.tmpl', 'node_admission.go.tmpl', 'node_imported_socks.go.tmpl', 'node_imported_physical_other.go.tmpl', 'node_chain_physical_linux.go.tmpl', 'node_chain_physical_windows.go.tmpl', 'node_chain_physical_other.go.tmpl', 'node_chain_physical_darwin.go.tmpl', 'node_chain_socks_physical_linux.go.tmpl', 'node_chain_connect_physical_linux.go.tmpl', 'node_chain_socks_physical_windows.go.tmpl', 'node_chain_connect_physical_windows.go.tmpl', 'node_chain_socks_physical_darwin.go.tmpl', 'node_chain_connect_physical_darwin.go.tmpl', 'node_chain_socks_physical_other.go.tmpl', 'node_chain_connect_physical_other.go.tmpl', 'node_chain_openvpn_execution_physical_linux.go.tmpl', 'node_chain_multiple_imported_execution_physical_linux.go.tmpl', 'node_chain_openvpn_execution_physical_windows.go.tmpl', 'node_chain_multiple_imported_execution_physical_windows.go.tmpl', 'node_chain_openvpn_execution_physical_darwin.go.tmpl', 'node_chain_multiple_imported_execution_physical_darwin.go.tmpl', 'node_chain_openvpn_execution_physical_other.go.tmpl', 'node_chain_multiple_imported_execution_physical_other.go.tmpl', 'node_candidate_prefix_physical_linux.go.tmpl', 'node_candidate_prefix_physical_windows.go.tmpl', 'node_candidate_prefix_physical_other.go.tmpl', 'node_candidate_prefix_physical_darwin.go.tmpl', 'node_physical_linux.go.tmpl', 'node_physical_darwin.go.tmpl', 'node_paired_physical_darwin.go.tmpl', 'node_linux_lifecycle.go.tmpl', 'node_linux_source_join.go.tmpl', 'node_physical_windows.go.tmpl', 'node_physical_other.go.tmpl')
+BOX_TEMPLATES = {'node_box_darwin.go.tmpl': 'routervpn_desktop_node_box_darwin.go', 'network_box.go.tmpl': 'routervpn_desktop_network_box.go', 'node_box_physical.go.tmpl': 'routervpn_desktop_node_box_physical.go', 'node_box_tunnel_control.go.tmpl': 'routervpn_desktop_node_box_tunnel_control.go', 'node_box_imported.go.tmpl': 'routervpn_desktop_node_box_imported.go', 'node_chain_box_physical.go.tmpl': 'routervpn_desktop_node_chain_box_physical.go', 'node_chain_socks_box_physical.go.tmpl': 'routervpn_desktop_node_chain_socks_box_physical.go', 'node_chain_socks_execution_box_physical.go.tmpl': 'routervpn_desktop_node_chain_socks_execution_box_physical.go', 'node_chain_openvpn_execution_box_physical.go.tmpl': 'routervpn_desktop_node_chain_openvpn_execution_box_physical.go', 'node_chain_multiple_imported_execution_box_physical.go.tmpl': 'routervpn_desktop_node_chain_multiple_imported_execution_box_physical.go', 'node_chain_connect_box_physical.go.tmpl': 'routervpn_desktop_node_chain_connect_box_physical.go', 'node_chain_socks_box_linux.go.tmpl': 'routervpn_desktop_node_chain_socks_box_linux.go', 'node_chain_socks_execution_box_linux.go.tmpl': 'routervpn_desktop_node_chain_socks_execution_box_linux.go', 'node_chain_openvpn_execution_box_linux.go.tmpl': 'routervpn_desktop_node_chain_openvpn_execution_box_linux.go', 'node_chain_multiple_imported_execution_box_linux.go.tmpl': 'routervpn_desktop_node_chain_multiple_imported_execution_box_linux.go', 'node_chain_connect_box_linux.go.tmpl': 'routervpn_desktop_node_chain_connect_box_linux.go', 'node_chain_socks_box_darwin.go.tmpl': 'routervpn_desktop_node_chain_socks_box_darwin.go', 'node_chain_socks_execution_box_darwin.go.tmpl': 'routervpn_desktop_node_chain_socks_execution_box_darwin.go', 'node_chain_openvpn_execution_box_darwin.go.tmpl': 'routervpn_desktop_node_chain_openvpn_execution_box_darwin.go', 'node_chain_multiple_imported_execution_box_darwin.go.tmpl': 'routervpn_desktop_node_chain_multiple_imported_execution_box_darwin.go', 'node_chain_connect_box_darwin.go.tmpl': 'routervpn_desktop_node_chain_connect_box_darwin.go', 'node_candidate_prefix_box_physical.go.tmpl': 'routervpn_desktop_node_candidate_prefix_box_physical.go', 'node_candidate_prefix_box_linux.go.tmpl': 'routervpn_desktop_node_candidate_prefix_box_linux.go', 'node_candidate_prefix_box_darwin.go.tmpl': 'routervpn_desktop_node_candidate_prefix_box_darwin.go', 'node_chain_execution_box_mtu.go.tmpl': 'routervpn_desktop_node_chain_execution_box_mtu.go', 'node_chain_box_linux.go.tmpl': 'routervpn_desktop_node_chain_box_linux.go', 'node_chain_box_darwin.go.tmpl': 'routervpn_desktop_node_chain_box_darwin.go', 'node_box_dns.go.tmpl': 'routervpn_desktop_node_box_dns.go', 'node_box_imported_linux_lifecycle.go.tmpl': 'routervpn_desktop_node_box_imported_linux_lifecycle.go', 'node_box_linux_lifecycle.go.tmpl': 'routervpn_desktop_node_box_linux_lifecycle.go', 'node_box_linux_cover.go.tmpl': 'routervpn_desktop_node_box_linux_cover.go', 'external_box_physical.go.tmpl': 'routervpn_desktop_external_box_physical.go', 'external_box_linux_lifecycle.go.tmpl': 'routervpn_desktop_external_box_linux_lifecycle.go', 'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go', 'tor_box_latency.go.tmpl': 'routervpn_desktop_tor_box_latency.go', 'tor_box_physical.go.tmpl': 'routervpn_desktop_tor_box_physical.go', 'tor_box_tunnel_control.go.tmpl': 'routervpn_desktop_tor_box_tunnel_control.go', 'tor_box_lastrelay.go.tmpl': 'routervpn_desktop_tor_box_lastrelay.go', 'tor_box_padding.go.tmpl': 'routervpn_desktop_tor_box_padding.go', 'tor_box_mtu.go.tmpl': 'routervpn_desktop_tor_box_mtu.go'}
+PEER_TEMPLATES = {}
+ROUTE_TEMPLATES = {'tor_network_startup.go.tmpl': 'route/routervpn_desktop_tor_network_startup.go'}
+INBOUND_TEMPLATES = {}
+TUN_TEMPLATES = {'tun_darwin_control.go.tmpl': 'protocol/tun/routervpn_desktop_control_darwin.go', 'tun_node_chain_retirement_darwin.go.tmpl': 'protocol/tun/routervpn_node_chain_retirement_darwin.go', 'tun_network.go.tmpl': 'protocol/tun/routervpn_desktop_network.go'}
 NETWORK_DISPATCH = '''\t// Invalidate native performance proofs before endpoints rebind.
 \tif manager := service.FromContext[adapter.ServiceManager](r.ctx); manager != nil {
 \t\tfor _, owned := range manager.Services() {
@@ -334,57 +87,16 @@ def desktop_pt_notices():
     return (json.dumps(notices, indent=2, sort_keys=True)+'\n').encode()
 
 
-DARWIN_NODE_CHAIN_PEERS = {
-    'node_wg_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_wg_darwin_test.go',
-    'node_awg_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_awg_darwin_test.go',
-    'node_imported_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_imported_darwin_test.go',
-    'node_chain_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_reference_darwin_test.go',
-    'node_chain_imported_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_imported_middle_darwin_test.go',
-    'node_chain_hysteria_final_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_hysteria_final_darwin_test.go',
-    'node_chain_hysteria_server_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_hysteria_server_peer_darwin_test.go',
-    'node_chain_hysteria_final_layer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_hysteria_final_layer_darwin_test.go',
-    'node_chain_imported_hostname_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_imported_hostname_darwin_test.go',
-    'node_chain_imported_prefix_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_imported_prefix_darwin_test.go',
-    'node_chain_socks_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_socks_peer_darwin_test.go',
-    'node_chain_connect_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_connect_peer_darwin_test.go',
-    'node_chain_socks_process_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_socks_process_darwin_test.go',
-}
+DARWIN_NODE_CHAIN_PEERS = {}
 
 
-DARWIN_NODE_CHAIN_CONNECT_PEERS = {
-    'mobile/chain/connect_reference_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_node_chain_connect_reference_darwin_test.go',
-}
+DARWIN_NODE_CHAIN_CONNECT_PEERS = {}
 
 
-def darwin_node_chain_peer_copies():
-    """Same real encrypted peer core; only its explicit native test selector changes."""
-    result = {}
-    before = b'//go:build linux && !android\n\npackage routervpnamnezia\n'
-    after = b'//go:build darwin && routervpn_darwin_node_chain && routervpn_darwin_external_host\n\npackage routervpnamnezia\n'
-    sources = [(ROOT/'mobile/desktop'/name, target) for name, target in DARWIN_NODE_CHAIN_PEERS.items()]
-    sources += [(ROOT/name, target) for name, target in DARWIN_NODE_CHAIN_CONNECT_PEERS.items()]
-    for source, target in sources:
-        if source.is_symlink() or not source.is_file():
-            raise ValueError('Darwin ordered peer lost its original encrypted source')
-        raw = source.read_bytes()
-        if not raw.startswith(before):
-            raise ValueError('Darwin ordered peer changed its original test-only package selector')
-        result[target] = after + raw[len(before):]
-    return result
 
 
 def inputs():
-    files = [Path(__file__).resolve(), Path(DAEMON_CAPTURE.__file__).resolve(), *IMPORTED_EXECUTION_TEST.inputs(), *SELECTED_LATENCY_TEST.inputs(), *SELECTED_CANDIDATE_TEST.inputs(),
-             *(ROOT/'mobile/chain_execution'/name for name in DAEMON_CAPTURE_TEMPLATES),
-             *(path for module in NODE_EXECUTION for path in module.inputs()), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *NODE_CHAIN.inputs(), *CONNECT.inputs(), *RELAY.OPENVPN_REMOTE.inputs(), *RELAY.NAIVE.inputs(),
-             ROOT/'mobile/toroutbound/box.go.tmpl', ROOT/'mobile/toroutbound/box_test.go.tmpl',
-             ROOT/'mobile/toroutbound/padding_box.go.tmpl', ROOT/'mobile/toroutbound/padding_box_test.go.tmpl',
-             ROOT/'deploy/prepare-desktop-mtu.py', ROOT/'deploy/prepare-desktop-command-retirement.py', ROOT/'deploy/prepare-desktop-dbus.py', ROOT/'deploy/test_desktop_tun_retirement_projection.py', ROOT/'deploy/prepare-mobile-tor.py',
-             ROOT/'deploy/test_desktop_tor_preparation.py', ROOT/'deploy/darwin-pf-abi.py',
-             ROOT/'cmd/client/desktop_tor_comparison_native.go', ROOT/'cmd/client/multihop_exact_json.go',
-             ROOT/'mobile/toroutbound/network.go.tmpl', ROOT/'mobile/toroutbound/upstream.go.tmpl',
-             ROOT/'mobile/toroutbound/dns_adapter.go.tmpl', *pt_inputs(),
-             *sorted((ROOT/'mobile/desktop').glob('*.tmpl'))]
+    files = [Path(__file__).resolve(), Path(DAEMON_CAPTURE.__file__).resolve(), *(ROOT / 'mobile/chain_execution' / name for name in DAEMON_CAPTURE_TEMPLATES), *(path for module in NODE_EXECUTION for path in module.inputs()), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *NODE_CHAIN.inputs(), *CONNECT.inputs(), *RELAY.OPENVPN_REMOTE.inputs(), *RELAY.NAIVE.inputs(), ROOT / 'mobile/toroutbound/box.go.tmpl', ROOT / 'mobile/toroutbound/padding_box.go.tmpl', ROOT / 'deploy/prepare-desktop-mtu.py', ROOT / 'deploy/prepare-desktop-command-retirement.py', ROOT / 'deploy/prepare-desktop-dbus.py', ROOT / 'deploy/prepare-mobile-tor.py', ROOT / 'deploy/darwin-pf-abi.py', ROOT / 'cmd/client/desktop_tor_comparison_native.go', ROOT / 'cmd/client/multihop_exact_json.go', ROOT / 'mobile/toroutbound/network.go.tmpl', ROOT / 'mobile/toroutbound/upstream.go.tmpl', ROOT / 'mobile/toroutbound/dns_adapter.go.tmpl', *pt_inputs(), *sorted((ROOT / 'mobile/desktop').glob('*.tmpl'))]
     for package in (*PURE, 'dnsmeasure'):
         files += sorted((ROOT/'internal'/package).glob('*.go'))
     files += [ROOT/'internal/mobiletor'/name for name in PFABI.checked_files(ROOT/'internal/mobiletor')]
@@ -425,7 +137,7 @@ def checked_vendor(vendor):
 def pt_copies():
     content = {}
     for path in pt_inputs():
-        if path.name in ('go.mod', 'go.sum'):
+        if path.name in ('go.mod', 'go.sum') or path.name.endswith('_test.go'):
             continue
         relative = 'routervpn/torpt/'+path.relative_to(ROOT/'mobile/torpt').as_posix()
         raw = path.read_bytes()
@@ -439,116 +151,14 @@ def pt_copies():
     for name in PT_TEMPLATES:
         path = ROOT/'mobile/desktop'/name
         raw = path.read_bytes()
-        prefix = { 'tor_physical_source_unix_test.go.tmpl': b'//go:build linux || darwin\n\n',
-                   'tor_physical_linux.go.tmpl': b'//go:build linux\n\n',
-                   'tor_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
-                   'tor_physical_windows.go.tmpl': b'//go:build windows\n\n',
-                   'tor_physical_linux_test.go.tmpl': b'//go:build linux\n\n',
-                   'tor_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
-                   'tor_physical_windows_test.go.tmpl': b'//go:build windows\n\n',
-                   'tor_physical_other.go.tmpl': b'//go:build !linux && !darwin && !windows\n\n',
-                   'external_physical_linux.go.tmpl': b'//go:build linux\n\n',
-                   'external_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
-                   'external_physical_windows.go.tmpl': b'//go:build windows\n\n',
-                   'external_physical_linux_test.go.tmpl': b'//go:build linux\n\n',
-                   'external_physical_layer_entry_linux_test.go.tmpl': b'//go:build linux\n\n',
-                   'external_physical_ss_entry_linux_test.go.tmpl': b'//go:build linux\n\n',
-                   'external_physical_ss_connect_linux_test.go.tmpl': b'//go:build linux\n\n',
-                   'external_socks_association_test.go.tmpl': b'//go:build linux || windows || darwin\n\n',
-                   'external_socks_linux_lifecycle_test.go.tmpl': b'//go:build linux && routervpn_linux_external_lifecycle\n\n',
-                   'external_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
-                   'external_physical_windows_test.go.tmpl': b'//go:build windows\n\n',
-                   'linux_physical_lifecycle.go.tmpl': b'//go:build linux\n\n',
-                   'external_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
-                   'external_linux_lifecycle_test.go.tmpl': b'//go:build linux\n\n',
-                   'external_linux_lifecycle_native_test.go.tmpl': b'//go:build linux && routervpn_linux_external_lifecycle\n\n',
-                   'node_physical_windows.go.tmpl': b'//go:build windows\n\n',
-                   'node_physical_windows_test.go.tmpl': b'//go:build windows\n\n',
-                   'node_imported_socks_test.go.tmpl': b'//go:build linux || windows || darwin\n\n',
-                   'node_imported_physical_other.go.tmpl': b'//go:build !windows\n\n',
-                   'node_chain_physical_linux.go.tmpl': b'//go:build linux\n\n',
-                   'node_chain_physical_windows.go.tmpl': b'//go:build windows\n\n',
-                   'node_chain_physical_other.go.tmpl': b'//go:build !linux && !windows && !darwin\n\n',
-                   'node_chain_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
-                   'node_chain_socks_physical_linux.go.tmpl': b'//go:build linux\n\n',
-                   'node_chain_openvpn_execution_physical_linux.go.tmpl': b'//go:build linux\n\n',
-                   'node_chain_multiple_imported_execution_physical_linux.go.tmpl': b'//go:build linux\n\n',
-                   'node_chain_connect_physical_linux.go.tmpl': b'//go:build linux\n\n',
-                   'node_chain_socks_physical_windows.go.tmpl': b'//go:build windows\n\n',
-                   'node_chain_openvpn_execution_physical_windows.go.tmpl': b'//go:build windows\n\n',
-                   'node_chain_multiple_imported_execution_physical_windows.go.tmpl': b'//go:build windows\n\n',
-                   'node_chain_connect_physical_windows.go.tmpl': b'//go:build windows\n\n',
-                   'node_chain_socks_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
-                   'node_chain_openvpn_execution_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
-                   'node_chain_multiple_imported_execution_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
-                   'node_chain_connect_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
-                   'node_chain_socks_physical_other.go.tmpl': b'//go:build !linux && !windows && !darwin\n\n',
-                   'node_chain_openvpn_execution_physical_other.go.tmpl': b'//go:build !linux && !windows && !darwin\n\n',
-                   'node_chain_multiple_imported_execution_physical_other.go.tmpl': b'//go:build !linux && !windows && !darwin\n\n',
-                   'node_chain_connect_physical_other.go.tmpl': b'//go:build !linux && !windows && !darwin\n\n',
-                   'node_chain_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
-                   'node_candidate_prefix_physical_linux.go.tmpl': b'//go:build linux\n\n',
-                   'node_candidate_prefix_physical_windows.go.tmpl': b'//go:build windows\n\n',
-                   'node_candidate_prefix_physical_other.go.tmpl': b'//go:build !linux && !windows && !darwin\n\n',
-                   'node_candidate_prefix_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
-                   'node_candidate_prefix_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
-                   'node_physical_linux.go.tmpl': b'//go:build linux\n\n',
-                   'node_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
-                   'node_paired_physical_darwin.go.tmpl': b'//go:build darwin && !ios\n\n',
-                   'node_physical_linux_test.go.tmpl': b'//go:build linux\n\n',
-                   'node_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
-                   'node_physical_unix_test.go.tmpl': b'//go:build linux || darwin\n\n',
-                   'node_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
-                   'node_linux_lifecycle_test.go.tmpl': b'//go:build linux\n\n',
-                   'node_linux_source_join.go.tmpl': b'//go:build linux\n\n',
-                   'node_linux_source_join_test.go.tmpl': b'//go:build linux\n\n',
-                   'node_physical_other.go.tmpl': b'//go:build !linux && !darwin && !windows\n\n',
-                   'external_physical_other.go.tmpl': b'//go:build !linux && !darwin && !windows\n\n' }.get(name, b'')
+        prefix = {'tor_physical_linux.go.tmpl': b'//go:build linux\n\n', 'tor_physical_darwin.go.tmpl': b'//go:build darwin\n\n', 'tor_physical_windows.go.tmpl': b'//go:build windows\n\n', 'tor_physical_other.go.tmpl': b'//go:build !linux && !darwin && !windows\n\n', 'external_physical_linux.go.tmpl': b'//go:build linux\n\n', 'external_physical_darwin.go.tmpl': b'//go:build darwin\n\n', 'external_physical_windows.go.tmpl': b'//go:build windows\n\n', 'linux_physical_lifecycle.go.tmpl': b'//go:build linux\n\n', 'external_linux_lifecycle.go.tmpl': b'//go:build linux\n\n', 'node_physical_windows.go.tmpl': b'//go:build windows\n\n', 'node_imported_physical_other.go.tmpl': b'//go:build !windows\n\n', 'node_chain_physical_linux.go.tmpl': b'//go:build linux\n\n', 'node_chain_physical_windows.go.tmpl': b'//go:build windows\n\n', 'node_chain_physical_other.go.tmpl': b'//go:build !linux && !windows && !darwin\n\n', 'node_chain_physical_darwin.go.tmpl': b'//go:build darwin\n\n', 'node_chain_socks_physical_linux.go.tmpl': b'//go:build linux\n\n', 'node_chain_openvpn_execution_physical_linux.go.tmpl': b'//go:build linux\n\n', 'node_chain_multiple_imported_execution_physical_linux.go.tmpl': b'//go:build linux\n\n', 'node_chain_connect_physical_linux.go.tmpl': b'//go:build linux\n\n', 'node_chain_socks_physical_windows.go.tmpl': b'//go:build windows\n\n', 'node_chain_openvpn_execution_physical_windows.go.tmpl': b'//go:build windows\n\n', 'node_chain_multiple_imported_execution_physical_windows.go.tmpl': b'//go:build windows\n\n', 'node_chain_connect_physical_windows.go.tmpl': b'//go:build windows\n\n', 'node_chain_socks_physical_darwin.go.tmpl': b'//go:build darwin\n\n', 'node_chain_openvpn_execution_physical_darwin.go.tmpl': b'//go:build darwin\n\n', 'node_chain_multiple_imported_execution_physical_darwin.go.tmpl': b'//go:build darwin\n\n', 'node_chain_connect_physical_darwin.go.tmpl': b'//go:build darwin\n\n', 'node_chain_socks_physical_other.go.tmpl': b'//go:build !linux && !windows && !darwin\n\n', 'node_chain_openvpn_execution_physical_other.go.tmpl': b'//go:build !linux && !windows && !darwin\n\n', 'node_chain_multiple_imported_execution_physical_other.go.tmpl': b'//go:build !linux && !windows && !darwin\n\n', 'node_chain_connect_physical_other.go.tmpl': b'//go:build !linux && !windows && !darwin\n\n', 'node_candidate_prefix_physical_linux.go.tmpl': b'//go:build linux\n\n', 'node_candidate_prefix_physical_windows.go.tmpl': b'//go:build windows\n\n', 'node_candidate_prefix_physical_other.go.tmpl': b'//go:build !linux && !windows && !darwin\n\n', 'node_candidate_prefix_physical_darwin.go.tmpl': b'//go:build darwin\n\n', 'node_physical_linux.go.tmpl': b'//go:build linux\n\n', 'node_physical_darwin.go.tmpl': b'//go:build darwin\n\n', 'node_paired_physical_darwin.go.tmpl': b'//go:build darwin && !ios\n\n', 'node_linux_lifecycle.go.tmpl': b'//go:build linux\n\n', 'node_linux_source_join.go.tmpl': b'//go:build linux\n\n', 'node_physical_other.go.tmpl': b'//go:build !linux && !darwin && !windows\n\n', 'external_physical_other.go.tmpl': b'//go:build !linux && !darwin && !windows\n\n'}.get(name, b'')
         if path.is_symlink() or not raw.startswith(prefix+b'package routervpndesktoppt\n'):
             raise ValueError('Desktop PT adapter package boundary changed')
         content['routervpn/desktoppt/'+name.removesuffix('.tmpl')] = raw
     for name, relative in BOX_TEMPLATES.items():
         path = ROOT/'mobile/desktop'/name
         raw = path.read_bytes()
-        prefix = {'node_box_darwin.go.tmpl': b'//go:build darwin && !ios\n\n',
-                  'node_box_darwin_test.go.tmpl': b'//go:build darwin && !ios\n\n',
-                  'node_box_paired_mtu_darwin_test.go.tmpl': b'//go:build darwin && !ios\n\n',
-                  'node_box_imported_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
-                  'node_chain_box_linux.go.tmpl': b'//go:build linux\n\n',
-                  'node_candidate_prefix_box_linux.go.tmpl': b'//go:build linux\n\n',
-                  'node_candidate_prefix_box_darwin.go.tmpl': b'//go:build darwin\n\n',
-                  'node_chain_box_darwin.go.tmpl': b'//go:build darwin\n\n',
-                  'node_chain_socks_box_linux.go.tmpl': b'//go:build linux\n\n',
-                  'node_chain_socks_execution_box_linux.go.tmpl': b'//go:build linux\n\n',
-                  'node_chain_openvpn_execution_box_test.go.tmpl': b'//go:build with_openvpn\n\n',
-                  'node_chain_openvpn_execution_box_linux.go.tmpl': b'//go:build linux\n\n',
-                  'node_chain_multiple_imported_execution_box_linux.go.tmpl': b'//go:build linux\n\n',
-                  'node_chain_connect_box_linux.go.tmpl': b'//go:build linux\n\n',
-                  'node_chain_socks_box_darwin.go.tmpl': b'//go:build darwin\n\n',
-                  'node_chain_socks_execution_box_darwin.go.tmpl': b'//go:build darwin\n\n',
-                  'node_chain_openvpn_execution_box_darwin.go.tmpl': b'//go:build darwin\n\n',
-                  'node_chain_multiple_imported_execution_box_darwin.go.tmpl': b'//go:build darwin\n\n',
-                  'node_chain_connect_box_darwin.go.tmpl': b'//go:build darwin\n\n',
-                  'node_box_tunnel_control_darwin_test.go.tmpl': b'//go:build darwin\n\n',
-                  'node_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
-                  'node_imported_naive_h3_windows_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition && with_purego\n\n',
-                  'node_imported_naive_h3_windows_peer_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition && with_purego\n\n',
-                  'external_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
-                  'external_box_darwin_control_test.go.tmpl': b'//go:build darwin\n\n',
-                  'external_box_openvpn_test.go.tmpl': b'//go:build linux\n\n',
-                  'external_box_openvpn_entry_test.go.tmpl': b'//go:build linux\n\n',
-                  'external_box_windows_packet_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition\n\n',
-                  'external_box_windows_server_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition\n\n',
-                  'external_box_windows_compare_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition\n\n',
-                  'external_box_windows_alias_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition\n\n',
-                  'external_box_windows_ss_entry_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition\n\n',
-                  'external_box_windows_openvpn_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition\n\n',
-                  'external_box_windows_openvpn_entry_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition\n\n',
-                  'external_box_windows_hysteria2_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition\n\n',
-                  'external_box_windows_hysteria2_layer_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition\n\n',
-                  'external_box_windows_socks_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition\n\n',
-                  'node_box_linux_cover.go.tmpl': b'//go:build linux\n\n',
-                  'node_box_linux_cover_test.go.tmpl': b'//go:build linux\n\n'}.get(name, b'')
+        prefix = {'node_box_darwin.go.tmpl': b'//go:build darwin && !ios\n\n', 'node_box_imported_linux_lifecycle.go.tmpl': b'//go:build linux\n\n', 'node_chain_box_linux.go.tmpl': b'//go:build linux\n\n', 'node_candidate_prefix_box_linux.go.tmpl': b'//go:build linux\n\n', 'node_candidate_prefix_box_darwin.go.tmpl': b'//go:build darwin\n\n', 'node_chain_box_darwin.go.tmpl': b'//go:build darwin\n\n', 'node_chain_socks_box_linux.go.tmpl': b'//go:build linux\n\n', 'node_chain_socks_execution_box_linux.go.tmpl': b'//go:build linux\n\n', 'node_chain_openvpn_execution_box_linux.go.tmpl': b'//go:build linux\n\n', 'node_chain_multiple_imported_execution_box_linux.go.tmpl': b'//go:build linux\n\n', 'node_chain_connect_box_linux.go.tmpl': b'//go:build linux\n\n', 'node_chain_socks_box_darwin.go.tmpl': b'//go:build darwin\n\n', 'node_chain_socks_execution_box_darwin.go.tmpl': b'//go:build darwin\n\n', 'node_chain_openvpn_execution_box_darwin.go.tmpl': b'//go:build darwin\n\n', 'node_chain_multiple_imported_execution_box_darwin.go.tmpl': b'//go:build darwin\n\n', 'node_chain_connect_box_darwin.go.tmpl': b'//go:build darwin\n\n', 'node_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n', 'external_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n', 'node_box_linux_cover.go.tmpl': b'//go:build linux\n\n'}.get(name, b'')
         if path.is_symlink() or not raw.startswith(prefix+b'package box\n'):
             raise ValueError('Desktop Tor Box package boundary changed')
         content[relative] = raw
@@ -561,7 +171,7 @@ def pt_copies():
     for name, relative in TUN_TEMPLATES.items():
         tunnel = ROOT/'mobile/desktop'/name
         raw = tunnel.read_bytes()
-        prefix = b'package tun\n' if name in ('tun_network.go.tmpl', 'tun_network_test.go.tmpl') else b'//go:build darwin\n\npackage tun\n'
+        prefix = b'package tun\n' if name in ('tun_network.go.tmpl',) else b'//go:build darwin\n\npackage tun\n'
         if tunnel.is_symlink() or not raw.startswith(prefix):
             raise ValueError('Desktop Darwin tunnel control package boundary changed')
         content[relative] = raw
@@ -822,26 +432,6 @@ def prepare_daemon_capture(vendor):
         write(vendor, relative, raw)
 
 
-def comparison_client_contract():
-    """Compile the actual controller receipt decoder beside native IPC tests.
-
-    These are test-only files. No second validator or permissive boundary is
-    maintained: changes to either shipping source enter native provenance and
-    every emitted fixture receipt is checked by the actual client function.
-    """
-    source = (ROOT/'cmd/client/desktop_tor_comparison_native.go').read_text()
-    start = 'func desktopTorComparisonStatus(raw []byte) (mobiletor.DesktopTorCompareStatus, error) {'
-    end = 'func (c *desktopTorComparisonClient) read(cleanup bool) (mobiletor.DesktopTorCompareStatus, error) {'
-    if source.count(start) != 1 or source.count(end) != 1:
-        raise ValueError('Desktop Tor controller receipt contract seam changed')
-    begin, finish = source.index(start), source.index(end)
-    if finish <= begin:
-        raise ValueError('Desktop Tor controller receipt contract order changed')
-    status = ('package main\n\nimport (\n "encoding/hex"\n "errors"\n "'+MODULE+'/routervpn/mobiletor"\n)\n\n'+source[begin:finish]).encode()
-    exact = (ROOT/'cmd/client/multihop_exact_json.go').read_bytes().replace(
-        b'"router-vpn/internal/multihoprelay"', ('"'+MODULE+'/experimental/libbox/routervpn/multihoprelay"').encode())
-    return {'cmd/sing-box/routervpn_tor_controller_status_test.go': status,
-            'cmd/sing-box/routervpn_tor_controller_json_test.go': exact}
 
 
 def relocated_shared_source(raw: bytes) -> bytes:
@@ -885,57 +475,13 @@ def prepare(vendor, go='go', *, env=None):
     vendor = checked_vendor(vendor)
     RELAY.NAIVE.prepare(vendor)
     pfabi = PFABI.checked_files(ROOT/'internal/mobiletor')
-    controller_contract = comparison_client_contract()
     prepare_desktop_pt(vendor, go, env=env)
     # These pure policy types are shared by the Box's external and Tor proof
     # ownership code. The selective PT owner above shares this one Go runtime;
     # no embedded Tor implementation or C package is installed here.
     for package in PURE:
         for path in sorted((ROOT/'internal'/package).glob('*.go')):
-            if path.name.endswith('_test.go') and not (package == 'mobiletor' and (
-                    path.name.startswith('desktop_standard_') or path.name in (
-                    'desktop_socket_broker_test.go', 'desktop_socket_retirement_test.go', 'desktop_socket_socks_test.go', 'desktop_socket_account_readback_test.go', 'desktop_socket_source_unix_test.go', 'desktop_socket_native_windows_test.go',
-                    'desktop_socket_context_test.go', 'desktop_socket_observation_test.go', 'desktop_socket_windows_identity_current_test.go',
-                    'server_client_context_test.go', 'observation_context_test.go',
-                    'padding_receipt_context_test.go', 'padding_lease_fixture_test.go', 'padding_control_test.go', 'control_test.go',
-                    'desktop_socket_tcp_completion_test.go',
-                    'desktop_socket_grant_admission_test.go',
-                    'desktop_socket_renewal_test.go', 'desktop_socket_renewal_control_test.go',
-                    'desktop_socket_identity_readback_test.go',
-                    'desktop_socket_windows_identity_test.go', 'desktop_socket_windows_wfp_test.go',
-                    'desktop_socket_protection_target_test.go', 'desktop_socket_windows_transfer_test.go', 'desktop_protection_transfer_record_test.go',
-                    'desktop_socket_protection_commit_test.go', 'desktop_socket_ownership_toolchain_test.go',
-                    'desktop_socket_windows_commit_test.go',
-                    'desktop_socket_protection_observation_test.go', 'desktop_socket_windows_observation_test.go',
-                    'desktop_socket_windows_probe_test.go', 'desktop_socket_windows_probe_process_test.go',
-                    'desktop_socket_windows_probe_worker_test.go',
-                    'desktop_socket_windows_network_test.go', 'desktop_socket_windows_wfp_traffic_test.go',
-                    'desktop_socket_source_privileged_test.go', 'desktop_socket_linux_guardian_test.go',
-                    'desktop_socket_linux_flags_parser_test.go', 'desktop_socket_linux_flags_test.go',
-                    'desktop_socket_linux_socks_test.go', 'desktop_socket_linux_socks_native_test.go',
-                    'desktop_socket_linux_protection_native_test.go', 'desktop_socket_linux_protection_record_test.go',
-                    'desktop_socket_linux_protection_test.go', 'desktop_socket_linux_off_test.go', 'desktop_socket_linux_off_native_test.go',
-                    'desktop_socket_linux_baseline_netlink_test.go', 'desktop_socket_linux_baseline_netlink_native_test.go',
-                    'desktop_socket_linux_baseline_owner_test.go', 'desktop_socket_linux_baseline_owner_native_test.go',
-                    'desktop_socket_linux_node_baseline_test.go', 'desktop_socket_linux_node_baseline_native_test.go',
-                    'desktop_standard_linux_protection_test.go', 'desktop_standard_linux_protection_native_test.go',
-                    'desktop_socket_linux_node_running_test.go', 'desktop_socket_linux_node_running_native_test.go',
-                    'desktop_socket_linux_node_succession_retired_native_test.go',
-                    'desktop_socket_linux_guardian_record_test.go', 'desktop_socket_linux_guardian_process_test.go',
-                    'desktop_socket_linux_guardian_process_native_test.go',
-                    'desktop_socket_linux_node_creation_record_test.go', 'desktop_socket_linux_node_creation_native_test.go',
-                    'desktop_socket_linux_source_join_test.go', 'desktop_socket_linux_source_join_native_test.go',
-                    'desktop_socket_darwin_guardian_test.go', 'desktop_socket_darwin_frame_test.go', 'desktop_socket_darwin_descriptor_test.go', 'desktop_socket_darwin_renewal_test.go',
-                    'desktop_socket_darwin_off_test.go', 'desktop_socket_darwin_authority_test.go',
-                    'desktop_socket_pf_inventory_test.go', 'desktop_socket_pf_inventory_readback_test.go',
-                    'desktop_socket_pf_readback_test.go', 'desktop_socket_pf_readback_toolchain_test.go',
-                    'desktop_socket_pf_foreign_test.go',
-                    'desktop_socket_pf_system_children_test.go',
-                    'desktop_socket_pf_filter_test.go', 'desktop_socket_pf_abi_test.go',
-                    'desktop_socket_pf_filter_native_test.go', 'desktop_socket_darwin_filter_test.go',
-                    'desktop_socket_pf_baseline_test.go', 'desktop_socket_pf_baseline_transition_test.go', 'desktop_socket_pf_scoped_test.go',
-                    'desktop_socket_darwin_baseline_test.go', 'desktop_socket_pf_reference_test.go',
-                    'desktop_socket_darwin_reference_test.go'))):
+            if path.name.endswith('_test.go'):
                 continue
             raw = relocated_shared_source(path.read_bytes())
             write(vendor, 'routervpn/'+package+'/'+path.name, raw)
@@ -943,10 +489,10 @@ def prepare(vendor, go='go', *, env=None):
         write(vendor, 'routervpn/mobiletor/'+name, raw)
     for path in sorted((ROOT/'internal/dnsmeasure').glob('*.go')):
         write(vendor, 'experimental/libbox/routervpn/dnsmeasure/'+path.name, relocated_shared_source(path.read_bytes()))
-    for name in ('box.go', 'box_test.go'):
+    for name in ('box.go',):
         write(vendor, 'routervpn_tor'+('_test' if name.endswith('_test.go') else '')+'.go',
               (ROOT/'mobile/toroutbound'/(name+'.tmpl')).read_bytes())
-    for name in ('padding_box.go', 'padding_box_test.go'):
+    for name in ('padding_box.go',):
         write(vendor, 'routervpn_tor_padding'+('_test' if name.endswith('_test.go') else '')+'.go',
               (ROOT/'mobile/toroutbound'/(name+'.tmpl')).read_bytes())
     MTU.prepare(vendor, mobile=False)
@@ -961,72 +507,16 @@ def prepare(vendor, go='go', *, env=None):
     CONNECT.prepare(vendor, mobile=False)
     prepare_daemon_capture(vendor)
     RELAY.OPENVPN_REMOTE.prepare(vendor)
-    templates = [*sorted((ROOT/'mobile/desktop').glob('standard*.go.tmpl')), *sorted((ROOT/'mobile/desktop').glob('external*.go.tmpl')), *sorted((ROOT/'mobile/desktop').glob('mtu*.go.tmpl')),
-                 *sorted((ROOT/'mobile/desktop').glob('node*.go.tmpl')), ROOT/'mobile/desktop/network_command.go.tmpl',
-                 ROOT/'mobile/desktop/network_command_test.go.tmpl']
+    templates = [*sorted((ROOT / 'mobile/desktop').glob('standard*.go.tmpl')), *sorted((ROOT / 'mobile/desktop').glob('external*.go.tmpl')), *sorted((ROOT / 'mobile/desktop').glob('mtu*.go.tmpl')), *sorted((ROOT / 'mobile/desktop').glob('node*.go.tmpl')), ROOT / 'mobile/desktop/network_command.go.tmpl']
     for template in templates:
         if template.name in PT_TEMPLATES or template.name in BOX_TEMPLATES or template.name in PEER_TEMPLATES:
             continue
         if b'\npackage main\n' not in b'\n'+template.read_bytes():
             raise ValueError('Desktop command template has another native package')
         write(vendor, 'cmd/sing-box/routervpn_'+template.name.removesuffix('.tmpl'), template.read_bytes())
-    for relative, raw in controller_contract.items():
-        write(vendor, relative, raw)
-    copy_encrypted_peer_templates(vendor)
     print('Desktop native external proof source:', digest())
 
 
-def copy_encrypted_peer_templates(vendor):
-    """Keep each independent peer in its exact test-only package and platform."""
-    for name, relative in PEER_TEMPLATES.items():
-        path = ROOT/'mobile/desktop'/name
-        prefix = b'package routervpnamnezia\n'
-        if name in ('node_chain_paired_ss_execution_peer_test.go.tmpl', 'node_chain_imported_execution_peer_test.go.tmpl', 'node_chain_imported_execution_layers_peer_test.go.tmpl', 'node_chain_connect_execution_peer_test.go.tmpl'):
-            prefix = b'//go:build (linux && !android) || (darwin && routervpn_darwin_node_chain)\n\n' + prefix
-        elif name in ('node_chain_connect_execution_peer_linux_test.go.tmpl', 'node_chain_socks_execution_peer_test.go.tmpl', 'node_chain_socks_execution_peer_linux_test.go.tmpl'):
-            prefix = b'//go:build linux && !android\n\n' + prefix
-        elif name == 'node_chain_connect_execution_peer_darwin_test.go.tmpl':
-            prefix = b'//go:build darwin && routervpn_darwin_node_chain\n\n' + prefix
-        elif name in ('node_peer_windows_test.go.tmpl', 'node_layer_peer_windows_test.go.tmpl', 'node_xray_peer_windows_test.go.tmpl', 'node_naive_peer_windows_test.go.tmpl', 'node_composite_peer_windows_test.go.tmpl'):
-            prefix = b'//go:build windows && routervpn_windows_node_composition\n\n' + prefix
-        elif name == 'node_naive_h3_literal_test.go.tmpl':
-            prefix = b'//go:build with_naive_outbound\n\n' + prefix
-        elif name == 'node_naive_loader_purego_test.go.tmpl':
-            prefix = b'//go:build with_purego\n\n' + prefix
-        elif name in ('node_resolved_broker_test.go.tmpl', 'node_resolved_private_tld_test.go.tmpl'):
-            prefix = b'//go:build linux\n\n' + prefix
-        elif name in ('node_pq_peer_windows_test.go.tmpl', 'node_max_peer_windows_test.go.tmpl'):
-            prefix = b'//go:build windows && cgo && routervpn_native_pq && routervpn_pq_traffic_test && routervpn_windows_node_composition\n\npackage routervpnpq\n'
-        elif name in ('node_pq_peer_test.go.tmpl', 'node_max_peer_test.go.tmpl', 'node_max_stream_test.go.tmpl',
-                      'node_max_tls_reference_test.go.tmpl', 'node_max_credentials_test.go.tmpl'):
-            prefix = b'//go:build cgo && routervpn_native_pq && routervpn_pq_traffic_test\n\npackage routervpnpq\n'
-        elif name == 'node_darwin_external_peer_test.go.tmpl':
-            prefix = b'//go:build darwin && routervpn_darwin_external_host\n\n' + prefix
-        elif name == 'node_linux_peer_test.go.tmpl':
-            prefix = b'//go:build linux && routervpn_linux_node_composition\n\n' + prefix
-        elif name == 'node_router_peer_linux_test.go.tmpl':
-            prefix = b'//go:build linux && !android && routervpn_linux_node_composition\n\n' + prefix
-        elif name in ('node_chain_hysteria_final_layer_test.go.tmpl', 'node_chain_hysteria_server_peer_test.go.tmpl', 'node_chain_openvpn_server_direct_peer_test.go.tmpl', 'node_chain_openvpn_peer_test.go.tmpl', 'node_chain_openvpn_prefix_test.go.tmpl', 'node_chain_imported_prefix_test.go.tmpl', 'node_chain_imported_execution_native_linux_test.go.tmpl', 'node_chain_connect_prefix_native_linux_test.go.tmpl', 'node_chain_socks_prefix_native_linux_test.go.tmpl'):
-            prefix = b'//go:build linux && !android\n\n' + prefix
-        elif name in ('node_openvpn_capacity_test.go.tmpl', 'node_imported_openvpn_test.go.tmpl', 'node_imported_packet_xray_test.go.tmpl', 'node_imported_packet_xray_dns_test.go.tmpl', 'node_imported_naive_h2_test.go.tmpl', 'node_imported_naive_h3_test.go.tmpl'):
-            prefix = b'//go:build linux && !android && routervpn_openvpn_remote_test\n\n' + prefix
-        elif name in ('node_external_hysteria_layer_installed_test.go.tmpl', 'node_external_wireguard_installed_test.go.tmpl', 'node_external_amnezia_installed_test.go.tmpl', 'node_external_openvpn_installed_test.go.tmpl'):
-            prefix = b'//go:build (linux && !android) || (darwin && routervpn_darwin_external_host)\n\n' + prefix
-        elif name in ('node_wg_peer_test.go.tmpl', 'node_imported_peer_linux_test.go.tmpl', 'node_chain_peer_linux_test.go.tmpl', 'node_chain_fifty_peer_test.go.tmpl', 'node_chain_fifty_remaining_peer_test.go.tmpl', 'node_chain_imported_test.go.tmpl', 'node_chain_imported_server_peer_test.go.tmpl', 'node_chain_connect_server_peer_test.go.tmpl', 'node_chain_socks_middle_test.go.tmpl', 'node_chain_socks_server_test.go.tmpl', 'node_chain_socks_server_prefix_test.go.tmpl', 'node_chain_socks_peer_test.go.tmpl', 'node_chain_connect_peer_test.go.tmpl', 'node_chain_socks_process_test.go.tmpl', 'node_chain_imported_hostname_test.go.tmpl', 'node_chain_hysteria_final_test.go.tmpl', 'node_chain_imported_mtu_test.go.tmpl', 'node_chain_candidates_peer_test.go.tmpl', 'node_chain_imported_candidates_peer_test.go.tmpl', 'node_chain_candidate_layers_peer_test.go.tmpl', 'node_awg_peer_test.go.tmpl', 'node_external_ss_entry_linux_test.go.tmpl', 'node_imported_packet_test.go.tmpl', 'node_imported_packet_final_test.go.tmpl', 'node_imported_nested_packet_test.go.tmpl', 'node_imported_socks_packet_test.go.tmpl'):
-            prefix = b'//go:build linux && !android\n\n' + prefix
-        if path.is_symlink():
-            raise ValueError('Desktop encrypted peer test is a symlink: ' + name)
-        raw = path.read_bytes()
-        if not raw.startswith(prefix):
-            raise ValueError('Desktop encrypted peer test changed its test-only package or platform: ' + name)
-        write(vendor, relative, raw)
-
-    for relative, raw in IMPORTED_EXECUTION_TEST.copies().items():
-        write(vendor, relative, raw)
-    for relative, raw in {**SELECTED_LATENCY_TEST.copies(), **SELECTED_CANDIDATE_TEST.copies()}.items():
-        write(vendor, relative, raw)
-    for relative, raw in darwin_node_chain_peer_copies().items():
-        write(vendor, relative, raw)
 
 
 if __name__ == '__main__':

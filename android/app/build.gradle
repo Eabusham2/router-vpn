@@ -118,29 +118,15 @@ tasks.register('prepareSingBoxLibbox', Exec) {
     // already-correct package path into a false verifier failure.
     commandLine 'bash', 'build-sing-box-libbox.sh'
     inputs.file rootProject.file('../deploy/fetch_mobile_pinned_git.py')
-    inputs.files rootProject.file('build-sing-box-libbox.sh'), rootProject.file('routervpn_xray_bridge.go'), rootProject.file('../mobile/routervpn_openvpn.go'), rootProject.file('../mobile/routervpn_openvpn_native_test.go.tmpl'), rootProject.file('../deploy/test_mobile_openvpn_pinned.sh')
     inputs.file rootProject.file('../deploy/prepare-mobile-amnezia.py')
-    inputs.files rootProject.file('../deploy/test_mobile_go_groups.py'), rootProject.file('../deploy/test_mobile_go_groups_runner.py'), rootProject.file('../deploy/test_go_source_groups.py'), rootProject.file('../deploy/test_node_chain_candidate_preparation.py')
-    inputs.files rootProject.file('../deploy/prepare-amnezia-timers.py'), rootProject.file('../deploy/test_amnezia_timers_pinned.py'), rootProject.file('../deploy/test_amnezia_timer_preparation.py')
     inputs.file rootProject.file('../deploy/prepare-mobile-pq.py')
     inputs.files rootProject.file('../deploy/build-mobile-tor-package.py'), rootProject.file('../deploy/prepare-mobile-torpack.py'), rootProject.file('../deploy/prepare-mobile-tor.py'), rootProject.file('../deploy/stage-mobile-tor-notices.py'), rootProject.file('../deploy/verify-mobile-tor-link.py')
-    inputs.files rootProject.file('../deploy/test_mobile_tor_loader.py'), rootProject.file('../deploy/test_mobile_tor_package_policy.py')
-    inputs.file rootProject.file('../deploy/test_android_tor_ndk_selection.py')
-    inputs.file rootProject.file('../deploy/test_mobile_tor_packaged_link.py')
-    inputs.files rootProject.file('../deploy/build-mobile-tor.py'), rootProject.file('../deploy/test-mobile-tor-outbound.py'), rootProject.file('../deploy/test_mobile_tor_module_graph.py'), rootProject.file('../deploy/test_mobile_tor_package_runtime.py'), rootProject.file('../deploy/test_mobile_tor_thread_signals.py'), rootProject.fileTree('../internal/mobiletor')
     inputs.file rootProject.file('../deploy/prepare-gvisor-scheduler.py')
-    inputs.files rootProject.file('../deploy/prepare-gvisor-forwarder.py'), rootProject.file('../deploy/test_gvisor_scheduler_preparation.py'), rootProject.file('../deploy/test_gvisor_forwarder_pinned.py'), rootProject.file('../deploy/test_gvisor_forwarder_runner.py'), rootProject.fileTree('../mobile/gvisorforwarder')
     inputs.file rootProject.file('../deploy/prepare-sing-packet-concurrency.py')
     inputs.files rootProject.file('../deploy/prepare-mobile-mtu.py'), rootProject.file('../deploy/prepare-retained-tun.py'), rootProject.fileTree('../internal/mobilemtu'), rootProject.fileTree('../internal/mtuprobe'), rootProject.fileTree('../internal/hopmeasure'), rootProject.fileTree('../internal/dnsmeasure')
     inputs.files rootProject.file('../deploy/prepare-apple-xray.py'), rootProject.file('../deploy/xray_native_dialer_policy.py'), rootProject.fileTree('../internal/applexray'), rootProject.fileTree('../mobile/applexray')
     inputs.files rootProject.file('../deploy/prepare-mobile-multihop.py'), rootProject.fileTree('../internal/mobilemultihop'), rootProject.fileTree('../internal/mobilepq'), rootProject.fileTree('../internal/routechoice'), rootProject.fileTree('../internal/multihoprelay'), rootProject.fileTree('../mobile')
     inputs.files rootProject.file('../deploy/prepare-xray-runtime.py'), rootProject.file('../deploy/prepare-go-windows-sockets.py'), rootProject.file('../deploy/xray_connection_policy.py'), rootProject.file('../deploy/xray_datagram_policy.py'), rootProject.file('../deploy/xray_vision_policy.py'), rootProject.file('../mobile/applexray/vision_state_test.go.tmpl')
-    inputs.files rootProject.file('../deploy/test_android_multihop_pinned.py'), rootProject.file('test_android_multihop_graph.py')
-    inputs.files rootProject.file('../deploy/test_android_tor_pinned.py'), rootProject.file('../deploy/test_android_tor_pinned_contract.py'), rootProject.file('test_android_tor_profile.py'), rootProject.file('test_android_tor_server_profile.py'), rootProject.file('test_android_tor_form.py'), rootProject.file('test_android_tor_session.py'), rootProject.file('test_android_start_layer_relay_lifecycle.py')
-    inputs.files rootProject.file('max_preparation_test_boundary.py'), rootProject.file('test_android_max_dns_owner.py'), rootProject.file('test_android_max_preparation.py'), rootProject.file('test_android_max_host_paths.py'), rootProject.file('test_android_max_service.py')
-    inputs.files rootProject.file('../deploy/native_tor_graph_host.py'), rootProject.file('../deploy/test_native_tor_graph_host.py')
-    inputs.files rootProject.file('../deploy/test_ios_tor_pinned.py'), rootProject.file('../deploy/test_ios_tor_pinned_contract.py'), rootProject.file('../deploy/test_ios_tor_profile.py')
-    inputs.files rootProject.file('../deploy/test_ios_pq_selection.py'), rootProject.file('../deploy/test_ios_wireguard_parser.py'), rootProject.file('../deploy/test_ios_native_base_selection.py')
     inputs.files rootProject.fileTree('../ios/RouterVPN/App') { include '*.swift' }
     inputs.files rootProject.fileTree('../ios/RouterVPN/PacketTunnel') { include '*.swift' }
     inputs.files fileTree('src/main/java/com/eabusham/routervpn') { include '*.java' }

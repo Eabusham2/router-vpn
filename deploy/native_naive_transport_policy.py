@@ -12,18 +12,14 @@ SOURCE_SHA256 = '9e01f79402408a0325b7e14334c0c8e72183f7963ca5efcc80bf201ea14c59f
 OUTBOUND = 'protocol/naive/outbound.go'
 OLD = b'\t\tDialer:                   outboundDialer,'
 NEW = b'\t\tDialer:                   routerVPNNaiveTransport(outboundDialer, options.QUIC, options.ServerOptions.Build()),'
-TEMPLATES = {
-    'transport.go.tmpl': 'protocol/naive/routervpn_transport.go',
-    'transport_test.go.tmpl': 'protocol/naive/routervpn_transport_test.go',
-}
+TEMPLATES = {'transport.go.tmpl': 'protocol/naive/routervpn_transport.go'}
 _literal_spec = importlib.util.spec_from_file_location('native_naive_literal', ROOT/'deploy/native_naive_literal_policy.py')
 LITERAL = importlib.util.module_from_spec(_literal_spec)
 _literal_spec.loader.exec_module(LITERAL)
 
 
 def inputs():
-    return [Path(__file__).resolve(), ROOT/'deploy/test_native_naive_transport_policy.py',
-            *(ROOT/'mobile/naive'/name for name in TEMPLATES), *LITERAL.inputs()]
+    return [Path(__file__).resolve(), *(ROOT / 'mobile/naive' / name for name in TEMPLATES), *LITERAL.inputs()]
 
 
 def patch(raw):

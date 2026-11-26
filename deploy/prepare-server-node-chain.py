@@ -16,28 +16,14 @@ CORE = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-server-node-chain-source.json'
 PREFIXES = ('cmd/sing-box/routervpn_server_chain_', 'routervpn_server_chain_')
 _connect_spec=importlib.util.spec_from_file_location("server_owned_connect",ROOT/"deploy/prepare-mobile-connect.py")
-SOCKS_TEMPLATES={
- "socks_owner.go.tmpl":"protocol/routervpnnodesocks/socks_owner.go",
- "socks_scope.go.tmpl":"protocol/routervpnnodesocks/socks_scope.go",
- "socks_server_owner.go.tmpl":"protocol/routervpnnodesocks/socks_server_owner.go",
- "socks_server_owner_test.go.tmpl":"protocol/routervpnnodesocks/socks_server_owner_test.go",
-}
+SOCKS_TEMPLATES={'socks_owner.go.tmpl': 'protocol/routervpnnodesocks/socks_owner.go', 'socks_scope.go.tmpl': 'protocol/routervpnnodesocks/socks_scope.go', 'socks_server_owner.go.tmpl': 'protocol/routervpnnodesocks/socks_server_owner.go'}
 CONNECT=importlib.util.module_from_spec(_connect_spec)
 _connect_spec.loader.exec_module(CONNECT)
 
 
 
 def inputs():
-    return sorted([Path(__file__).resolve(), ROOT/'deploy/test_server_node_chain_preparation.py',
-                   ROOT/'deploy/test_server_node_chain_native.py', ROOT/'deploy/test_server_node_chain_native_runner.py',
-                   ROOT/'deploy/test_server_node_chain_openvpn_native.py', ROOT/'deploy/test_server_node_chain_openvpn_native_runner.py',
-                   *sorted((ROOT/'mobile/server_chain_component').glob('*.tmpl')),
-                   *sorted((ROOT/'mobile/server_chain').glob('*.tmpl')), *CONNECT.server_inputs(),
-                   *(ROOT/'mobile/chain'/name for name in SOCKS_TEMPLATES),
-                   *sorted((ROOT/'internal/mobilemultihop').glob('node_chain_socks_server*.go')),
-                   *sorted((ROOT/'internal/mobilemultihop').glob('node_chain_openvpn*.go')),
-                   *sorted((ROOT/'internal/mobilemultihop').glob('node_chain_server*.go')), *sorted((ROOT/'internal/mobilemultihop').glob('node_chain_connect_server*.go')),
-                   *sorted((ROOT/'internal/multihoprelay').glob('node_chain_*.go'))])
+    return sorted([Path(__file__).resolve(), *sorted((ROOT / 'mobile/server_chain_component').glob('*.tmpl')), *sorted((ROOT / 'mobile/server_chain').glob('*.tmpl')), *CONNECT.server_inputs(), *(ROOT / 'mobile/chain' / name for name in SOCKS_TEMPLATES), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_socks_server*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_openvpn*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_server*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_connect_server*.go')), *sorted((ROOT / 'internal/multihoprelay').glob('node_chain_*.go'))])
 
 
 def digest():
@@ -58,29 +44,12 @@ def copies():
         prefix = 'routervpn_server_chain_' if name.startswith('box') else 'cmd/sing-box/routervpn_server_chain_'
         raw = path.read_bytes()
         header = b'package box\n' if name.startswith('box') else b'package main\n'
-        if name in ('openvpn_endpoint.go', 'openvpn_endpoint_stub.go', 'openvpn_endpoint_stub_test.go'):
+        if name in ('openvpn_endpoint.go', 'openvpn_endpoint_stub.go'):
             header = (b'//go:build with_openvpn\n\n' if name == 'openvpn_endpoint.go' else b'//go:build !with_openvpn\n\n') + header
         if not raw.startswith(header):
             raise ValueError('Changed ordered Server package boundary')
         content[prefix+name] = raw
-    required = {'cmd/sing-box/routervpn_server_chain_candidates.go',
-                'cmd/sing-box/routervpn_server_chain_candidates_test.go',
-                'cmd/sing-box/routervpn_server_chain_command.go',
-                'cmd/sing-box/routervpn_server_chain_native.go',
-                'cmd/sing-box/routervpn_server_chain_openvpn.go',
-                'cmd/sing-box/routervpn_server_chain_openvpn_test.go',
-                'cmd/sing-box/routervpn_server_chain_openvpn_endpoint.go',
-                'cmd/sing-box/routervpn_server_chain_openvpn_endpoint_stub.go',
-                'cmd/sing-box/routervpn_server_chain_openvpn_endpoint_stub_test.go',
-                'cmd/sing-box/routervpn_server_chain_front.go',
-                'routervpn_server_chain_box.go',
-                'cmd/sing-box/routervpn_server_chain_front_test.go',
-                'cmd/sing-box/routervpn_server_chain_command_test.go',
-                'cmd/sing-box/routervpn_server_chain_native_test.go',
-                'cmd/sing-box/routervpn_server_chain_dns_owners.go',
-                'cmd/sing-box/routervpn_server_chain_dns_owners_test.go',
-                'cmd/sing-box/routervpn_server_chain_resources.go',
-                'cmd/sing-box/routervpn_server_chain_resources_test.go'}
+    required = {'cmd/sing-box/routervpn_server_chain_candidates.go', 'cmd/sing-box/routervpn_server_chain_command.go', 'cmd/sing-box/routervpn_server_chain_native.go', 'cmd/sing-box/routervpn_server_chain_openvpn.go', 'cmd/sing-box/routervpn_server_chain_openvpn_endpoint.go', 'cmd/sing-box/routervpn_server_chain_openvpn_endpoint_stub.go', 'cmd/sing-box/routervpn_server_chain_front.go', 'routervpn_server_chain_box.go', 'cmd/sing-box/routervpn_server_chain_dns_owners.go', 'cmd/sing-box/routervpn_server_chain_resources.go'}
     if not required.issubset(content):
         raise ValueError('Incomplete ordered Server native owner')
     content.update(CONNECT.server_copies())

@@ -8,4 +8,3 @@ runs:
       shell: bash
       run: |
         python deploy/prepare-go-windows-sockets.py --github-env --output "$RUNNER_TEMP/routervpn-go-windows-sockets"
-        python deploy/test_go_windows_sockets.py

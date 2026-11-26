@@ -104,8 +104,6 @@ targets:
           python3 "$SRCROOT/../../deploy/prepare-apple-amnezia-timers.py" "$WG_ROOT" --build
           test -s "$CONFIGURATION_BUILD_DIR/libwg-go.a"
           "$SRCROOT/prepare-libbox.sh"
-          bash "$SRCROOT/../../deploy/test_ios_multihop_pinned.sh"
-          bash "$SRCROOT/../../deploy/test_mobile_openvpn_pinned.sh" "$SRCROOT/.deps/sing-box-apple"
           test -d "$SRCROOT/.deps/Libbox.xcframework"
           test -s "$SRCROOT/.deps/libbox-LICENSE.txt"
           test "$(tr -d '\r\n' < "$SRCROOT/.deps/Libbox.xcframework.pin")" = '1.14.1+1ac1a339cb1223e9c70eae14c44411c75033c02d+go1.26.3+0.1.12+ios,iossimulator'

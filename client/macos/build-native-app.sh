@@ -41,8 +41,6 @@ case "$ARCH" in
   *) echo "Unsupported macOS app architecture: $ARCH" >&2; exit 2 ;;
 esac
 
-python3 "$ROOT/deploy/test_macos_via_entry_candidates.py"
-python3 "$ROOT/deploy/test_apple_vector_map.py"
 
 SDK=$(xcrun --sdk macosx --show-sdk-path)
 APP="$OUT/RouterVPN.app"

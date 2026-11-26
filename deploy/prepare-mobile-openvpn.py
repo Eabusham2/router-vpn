@@ -14,9 +14,7 @@ _remote_spec.loader.exec_module(REMOTE)
 
 
 def inputs():
-    return [Path(__file__).resolve(), ROOT/'deploy/test_mobile_openvpn_source.py', ROOT/'mobile/routervpn_openvpn.go',
-            ROOT/'mobile/routervpn_openvpn_test.go', ROOT/'mobile/routervpn_openvpn_parser_test.go',
-            *sorted((ROOT/'internal/nativeopenvpn').glob('*.go'))] + REMOTE.inputs()
+    return [Path(__file__).resolve(), ROOT / 'mobile/routervpn_openvpn.go', *sorted((ROOT / 'internal/nativeopenvpn').glob('*.go'))] + REMOTE.inputs()
 
 
 def digest():

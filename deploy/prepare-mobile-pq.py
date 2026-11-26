@@ -94,14 +94,7 @@ def prepare(vendor):
     registration=insert(registration,'\troutervpnamnezia.RegisterEndpoint(registry)','\n\troutervpnpq.RegisterEndpoint(registry)')
     wireguard=patch_wireguard(wg.read_text())
     # Validate all boundaries before creating any endpoint file.
-    copies={
-        'mobile/pq/endpoint.go.tmpl':'protocol/routervpnpq/endpoint.go',
-        'mobile/pq/wireguard_protocol.go.tmpl':'protocol/wireguard/routervpn_pq.go',
-        'mobile/pq/wireguard_transport.go.tmpl':'transport/wireguard/routervpn_pq.go',
-        'mobile/pq/wireguard_lifecycle_test.go.tmpl':'protocol/wireguard/routervpn_lifecycle_test.go',
-        'mobile/routervpn_pq_bridge.go.tmpl':'experimental/libbox/routervpn_pq_bridge.go',
-        'mobile/routervpn_max_resolve_bridge.go.tmpl':'experimental/libbox/routervpn_max_resolve_bridge.go',
-    }
+    copies={'mobile/pq/endpoint.go.tmpl': 'protocol/routervpnpq/endpoint.go', 'mobile/pq/wireguard_protocol.go.tmpl': 'protocol/wireguard/routervpn_pq.go', 'mobile/pq/wireguard_transport.go.tmpl': 'transport/wireguard/routervpn_pq.go', 'mobile/routervpn_pq_bridge.go.tmpl': 'experimental/libbox/routervpn_pq_bridge.go', 'mobile/routervpn_max_resolve_bridge.go.tmpl': 'experimental/libbox/routervpn_max_resolve_bridge.go'}
     for src,dst in copies.items():write(vendor,dst,(ROOT/src).read_bytes())
     write(vendor,'include/registry.go',registration.encode())
     write(vendor,'protocol/wireguard/endpoint.go',wireguard.encode())

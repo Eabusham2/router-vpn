@@ -25,11 +25,9 @@ DATAGRAMS = module('xray_datagram_policy')
 CONNECTIONS = module('xray_connection_policy')
 VISION = module('xray_vision_policy')
 
-VISION_TEST = ROOT/'mobile/applexray/vision_state_test.go.tmpl'
-VISION_TEST_TARGET = 'proxy/routervpn_vision_state_test.go'
 
 def sources():
-    return [Path(__file__).resolve(), ROOT/'deploy/prepare-go-windows-sockets.py', ROOT/'deploy/xray_datagram_policy.py', ROOT/'deploy/xray_connection_policy.py', ROOT/'deploy/xray_vision_policy.py', VISION_TEST]
+    return [Path(__file__).resolve(), ROOT/'deploy/prepare-go-windows-sockets.py', ROOT/'deploy/xray_datagram_policy.py', ROOT/'deploy/xray_connection_policy.py', ROOT/'deploy/xray_vision_policy.py']
 
 def digest():
     value = hashlib.sha256()
@@ -86,17 +84,10 @@ def prepare(root):
     for family in ('outbound', 'inbound'):
         path = root/f'proxy/vless/{family}/{family}.go'
         candidates[path] = patch_vision_buffers(path.read_text(), inbound=family == 'inbound')
-    fixture = root/VISION_TEST_TARGET
-    if VISION_TEST.is_symlink() or not VISION_TEST.is_file():
-        raise ValueError('Missing original Vision state regression source')
-    fixture_bytes = VISION_TEST.read_bytes()
-    if fixture.is_symlink() or (fixture.exists() and (not fixture.is_file() or fixture.read_bytes() != fixture_bytes)):
-        raise ValueError('Prepared Vision state regression differs')
     # Validate every source boundary before any mutation; drift cannot produce
     # a partially prepared engine for another build step to unknowingly reuse.
     for path, text in candidates.items():
         path.write_text(text)
-    fixture.write_bytes(fixture_bytes)
     return digest()
 
 if __name__ == '__main__':

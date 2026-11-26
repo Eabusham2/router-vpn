@@ -13,42 +13,8 @@ CONNECT_BINDING=importlib.util.module_from_spec(_binding_spec)
 _binding_spec.loader.exec_module(CONNECT_BINDING)
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-connect-source.json'
-DESKTOP_ONLY = {"connect_reference_test.go.tmpl"}
-TEMPLATES = {
-    "connect_latency_native_test.go.tmpl": "experimental/libbox/routervpn_node_chain_connect_latency_native_test.go",
- "connect_latency.go.tmpl": "experimental/libbox/routervpn_node_chain_connect_latency.go",
- "connect_mtu.go.tmpl": "experimental/libbox/routervpn_node_chain_connect_mtu.go",
- "connect_mtu_test.go.tmpl": "experimental/libbox/routervpn_node_chain_connect_mtu_test.go",
- "connect_mtu_box.go.tmpl": "routervpn_node_chain_connect_mtu.go",
- "connect_mtu_box_test.go.tmpl": "routervpn_node_chain_connect_mtu_test.go",
- "connect_run_test.go.tmpl": "experimental/libbox/routervpn_node_chain_connect_run_test.go",
- "connect_prefix_run_test.go.tmpl": "experimental/libbox/routervpn_node_chain_connect_prefix_run_test.go",
- "connect_prefix_policy_test.go.tmpl": "experimental/libbox/routervpn_node_chain_connect_prefix_policy_test.go",
- "connect_prefix_mtu_test.go.tmpl": "routervpn_node_chain_connect_prefix_mtu_test.go",
- "connect_socket.go.tmpl": "protocol/routervpnnodeconnect/connect_socket.go",
- "connect_tls_test.go.tmpl": "experimental/libbox/routervpn_node_chain_connect_tls_test.go",
- "connect_reference_test.go.tmpl": "protocol/routervpnamnezia/routervpn_connect_reference_test.go",
- "connect_close_test.go.tmpl": "protocol/routervpnnodeconnect/connect_close_test.go",
- "connect_bridge_test.go.tmpl": "experimental/libbox/routervpn_node_chain_connect_test.go",
- "connect_native_test.go.tmpl": "experimental/libbox/routervpn_node_chain_connect_native_test.go",
- 'connect_server_owner.go.tmpl': 'protocol/routervpnnodeconnect/connect_server_owner.go',
- 'connect_owner.go.tmpl': 'protocol/routervpnnodeconnect/connect_owner.go',
- 'connect_scope.go.tmpl': 'protocol/routervpnnodeconnect/connect_scope.go',
- 'connect_final_owner.go.tmpl': 'protocol/routervpnnodeconnect/connect_final.go',
- 'connect_final.go.tmpl': 'protocol/shadowsocks/routervpn_connect_final.go',
- 'connect_whitening_final.go.tmpl': 'protocol/routervpnwhitening/routervpn_connect_final.go',
- 'connect_whitening_final_test.go.tmpl': 'protocol/routervpnwhitening/routervpn_connect_final_test.go',
- 'connect_whitening_uot_test.go.tmpl': 'protocol/routervpnwhitening/routervpn_connect_uot_test.go',
- 'connect_final_layers_box_test.go.tmpl': 'routervpn_connect_final_layers_test.go',
- 'connect_final_layers_server_test.go.tmpl': 'routervpn_connect_final_layers_server_test.go',
- 'connect_execution_box_test.go.tmpl': 'routervpn_node_chain_connect_execution_test.go',
- 'connect_execution_box.go.tmpl': 'routervpn_node_chain_connect_execution.go',
- 'connect_box.go.tmpl': 'routervpn_node_chain_connect.go',
- 'connect_server.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect_server.go',
- 'connect_bridge.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect.go',
- 'connect_lifecycle.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect_lifecycle.go',
- 'connect_measurement.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect_measurement.go',
-}
+DESKTOP_ONLY = set()
+TEMPLATES = {'connect_latency.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect_latency.go', 'connect_mtu.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect_mtu.go', 'connect_mtu_box.go.tmpl': 'routervpn_node_chain_connect_mtu.go', 'connect_socket.go.tmpl': 'protocol/routervpnnodeconnect/connect_socket.go', 'connect_server_owner.go.tmpl': 'protocol/routervpnnodeconnect/connect_server_owner.go', 'connect_owner.go.tmpl': 'protocol/routervpnnodeconnect/connect_owner.go', 'connect_scope.go.tmpl': 'protocol/routervpnnodeconnect/connect_scope.go', 'connect_final_owner.go.tmpl': 'protocol/routervpnnodeconnect/connect_final.go', 'connect_final.go.tmpl': 'protocol/shadowsocks/routervpn_connect_final.go', 'connect_whitening_final.go.tmpl': 'protocol/routervpnwhitening/routervpn_connect_final.go', 'connect_execution_box.go.tmpl': 'routervpn_node_chain_connect_execution.go', 'connect_box.go.tmpl': 'routervpn_node_chain_connect.go', 'connect_server.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect_server.go', 'connect_bridge.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect.go', 'connect_lifecycle.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect_lifecycle.go', 'connect_measurement.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect_measurement.go'}
 
 # The portable remote worker needs the owned CONNECT protocol and actual SS
 # UoT readback, not a client TUN/Box/mobile launch context.
@@ -63,7 +29,7 @@ def server_inputs():
  return [Path(__file__).resolve(), *(ROOT/"mobile/chain"/name for name in sorted(SERVER_TEMPLATES))]
 
 def inputs():
- return [*CONNECT_BINDING.inputs(), Path(__file__).resolve(), ROOT/"deploy/test_connect_preparation.py", *(ROOT/'mobile/chain'/name for name in sorted(TEMPLATES))]
+ return [*CONNECT_BINDING.inputs(), Path(__file__).resolve(), *(ROOT / 'mobile/chain' / name for name in sorted(TEMPLATES))]
 
 def digest():
  value = hashlib.sha256()

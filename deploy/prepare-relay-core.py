@@ -58,7 +58,7 @@ NAIVE = importlib.util.module_from_spec(_naive_spec)
 _naive_spec.loader.exec_module(NAIVE)
 
 def inputs():
-    files = [Path(__file__).resolve(), ROOT/'deploy/test_external_openvpn_native.py', ROOT/'mobile/routervpn_openvpn_external_native_test.go.tmpl', *sorted((ROOT/'mobile/relay').glob('*.tmpl'))] + HY2_DEADLINES.inputs() + AMNEZIA.inputs() + XRAY.sources() + WHITENING.inputs() + PQ.inputs() + COMPOSITE.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + STRATEGY.inputs() + SERVER_TOR.inputs() + SERVER_CHAIN.inputs()
+    files = [Path(__file__).resolve(), *sorted((ROOT / 'mobile/relay').glob('*.tmpl'))] + HY2_DEADLINES.inputs() + AMNEZIA.inputs() + XRAY.sources() + WHITENING.inputs() + PQ.inputs() + COMPOSITE.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + STRATEGY.inputs() + SERVER_TOR.inputs() + SERVER_CHAIN.inputs()
     for package in PACKAGES: files += sorted((ROOT/'internal'/package).glob('*.go'))
     return list(dict.fromkeys(files + OBSERVATION.inputs() + NAIVE.inputs()))
 
@@ -83,11 +83,9 @@ def prepare(vendor):
             parent_test = output/'preparation_test.go'
             if parent_test.is_symlink(): raise ValueError('Linked parent-only test in native policy tree')
             if parent_test.exists():
-                if not parent_test.is_file() or parent_test.read_bytes() != (ROOT/'internal/applexray/preparation_test.go').read_bytes():
-                    raise ValueError('Unexpected parent-only test in native policy tree')
-                parent_test.unlink()
+                raise ValueError('Old test projection: recreate disposable native checkout')
         for path in (ROOT/'internal'/package).glob('*.go'):
-            if path.name == 'core_config_test.go' or (package == 'applexray' and path.name == 'preparation_test.go'): continue
+            if path.name.endswith('_test.go'): continue
             # Native provenance compares the exact source bytes after import
             # relocation. Text-mode writes translate LF to CRLF on Windows
             # and make the copied compiler differ from its captured source.

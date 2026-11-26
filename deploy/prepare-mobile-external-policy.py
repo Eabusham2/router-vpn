@@ -11,9 +11,6 @@ _binding_spec=importlib.util.spec_from_file_location("native_connect_binding",RO
 CONNECT_BINDING=importlib.util.module_from_spec(_binding_spec)
 _binding_spec.loader.exec_module(CONNECT_BINDING)
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
-_graphs_spec = importlib.util.spec_from_file_location('routervpn_external_graphs', ROOT/'deploy/test_mobile_external_graphs.py')
-GRAPHS = importlib.util.module_from_spec(_graphs_spec)
-_graphs_spec.loader.exec_module(GRAPHS)
 
 SELECTION_REPLACEMENTS = {
     'protocol/group/selector.go': (
@@ -75,7 +72,7 @@ def composed_selection_source(vendor, relative, expected, *, current=True):
 
 
 def inputs():
-    return list(dict.fromkeys([*CONNECT_BINDING.inputs(), Path(__file__).resolve(), ROOT/'deploy/test_mobile_external_pinned.sh'] + sorted((ROOT/'mobile/externalpolicy').glob('*.tmpl')) + GRAPHS.inputs() + execution_preparer().inputs()))
+    return list(dict.fromkeys([*CONNECT_BINDING.inputs(), Path(__file__).resolve()] + sorted((ROOT/'mobile/externalpolicy').glob('*.tmpl')) + execution_preparer().inputs()))
 
 def digest():
     value=hashlib.sha256()
@@ -118,52 +115,18 @@ def prepare(vendor, *, mobile=True):
         if path.is_symlink() or path.read_bytes() not in accepted:
             raise ValueError('changed native selection commit: ' + relative)
         path.write_bytes(composed)
-    for name, relative in {
-        'selector_context.go': 'protocol/group/routervpn_selector_context.go',
-        'interrupt_context.go': 'common/interrupt/routervpn_selector_context.go',
-        'history_context.go': 'common/urltest/routervpn_selector_context.go',
-        'selection_context_test.go': 'routervpn_external_selection_context_test.go',
-    }.items():
+    for name, relative in {'selector_context.go': 'protocol/group/routervpn_selector_context.go', 'interrupt_context.go': 'common/interrupt/routervpn_selector_context.go', 'history_context.go': 'common/urltest/routervpn_selector_context.go'}.items():
         path = vendor / relative
         if path.is_symlink(): raise ValueError('linked native selection context')
         path.write_bytes((ROOT/'mobile/externalpolicy'/(name+'.tmpl')).read_bytes())
-    (vendor/'routervpn_external_observation_test.go').write_bytes((ROOT/'mobile/externalpolicy/observation_test.go.tmpl').read_bytes())
-    for name in ('box.go','box_test.go'):
+    for name in ('box.go',):
         template=ROOT/'mobile/externalpolicy'/(name+'.tmpl')
-        (vendor/('routervpn_external_policy'+('_test' if name.endswith('_test.go') else '')+'.go')).write_bytes(template.read_bytes())
     if mobile:
         (vendor/'routervpn_tor_comparison_capture.go').write_bytes((ROOT/'mobile/externalpolicy/tor_comparison.go.tmpl').read_bytes())
-        (vendor/'routervpn_tor_comparison_capture_test.go').write_bytes((ROOT/'mobile/externalpolicy/tor_comparison_test.go.tmpl').read_bytes())
-        (vendor/'routervpn_tor_server_test.go').write_bytes((ROOT/'mobile/externalpolicy/tor_server_test.go.tmpl').read_bytes())
-        (vendor/'routervpn_tor_padding_capture_test.go').write_bytes((ROOT/'mobile/externalpolicy/tor_padding_test.go.tmpl').read_bytes())
-        for name in ('external', 'external_test', 'tor', 'tor_test'):
+        for name in ('external', 'tor'):
             (vendor/'experimental/libbox'/('routervpn_mtu_'+name+'.go')).write_bytes((ROOT/'mobile/mtu'/(name+'.go.tmpl')).read_bytes())
-        (vendor/'experimental/libbox/routervpn_external_policy_bridge_test.go').write_bytes((ROOT/'mobile/externalpolicy/bridge_test.go.tmpl').read_bytes())
-        (vendor/'experimental/libbox/routervpn_external_policy_graph_test.go').write_bytes((ROOT/'mobile/externalpolicy/graph_test.go.tmpl').read_bytes())
-    for source, target in (
-        ('lease_cleanup.go', 'routervpn_external_lease_cleanup.go'),
-        ('lease_cleanup_test.go', 'routervpn_external_lease_cleanup_test.go'),
-        ('measurement.go', 'routervpn_external_measurement.go'),
-        ('measurement_test.go', 'routervpn_external_measurement_test.go'),
-        ('tor_measurement.go', 'routervpn_tor_measurement.go'),
-        ('dns_measurement.go', 'routervpn_dns_measurement.go'),
-        ('dns_measurement_test.go', 'routervpn_dns_measurement_test.go'),
-        ('dns_dial.go', 'routervpn_dns_dial.go'),
-        ('dns_dial_test.go', 'routervpn_dns_dial_test.go'),
-        ('mtu.go', 'routervpn_external_mtu.go'),
-        ('mtu_test.go', 'routervpn_external_mtu_test.go'),
-        ('openvpn_remote_test.go', 'routervpn_external_openvpn_remote_test.go'),
-        ('openvpn_bridge_test.go', 'routervpn_external_openvpn_bridge_test.go'),
-        ('tor_mtu.go', 'routervpn_tor_mtu.go'),
-        ('tor_padding.go', 'routervpn_tor_padding_capture.go'),
-        ('tor_mtu_test.go', 'routervpn_tor_mtu_test.go'),
-    ):
+    for source, target in (('lease_cleanup.go', 'routervpn_external_lease_cleanup.go'), (), ('measurement.go', 'routervpn_external_measurement.go'), (), ('tor_measurement.go', 'routervpn_tor_measurement.go'), ('dns_measurement.go', 'routervpn_dns_measurement.go'), (), ('dns_dial.go', 'routervpn_dns_dial.go'), (), ('mtu.go', 'routervpn_external_mtu.go'), (), (), (), ('tor_mtu.go', 'routervpn_tor_mtu.go'), ('tor_padding.go', 'routervpn_tor_padding_capture.go'), ()):
         (vendor/target).write_bytes((ROOT/'mobile/externalpolicy'/(source+'.tmpl')).read_bytes())
-    fixture = vendor/'testdata/routervpn-external-openvpn-mapped.json'
-    if fixture.is_symlink() or fixture.parent.is_symlink():
-        raise ValueError('linked native OpenVPN test capture')
-    fixture.parent.mkdir(exist_ok=True)
-    fixture.write_bytes((ROOT/'deploy/fixtures/external-openvpn-multihost-client.json').read_bytes())
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)

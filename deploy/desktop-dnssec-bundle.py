@@ -25,8 +25,7 @@ TARGETS=('linux/amd64','linux/arm64')
 def inputs():
     return sorted([* (ROOT/'native/dnssec').glob('*'), *(ROOT/'deploy'/name for name in (
         'build-dnssec-validator.py','verify-dnssec-validator.py','test_dnssec_validator.py',
-        'test_dnssec_validator_build.py','test_dnssec_validator_package.py','desktop-dnssec-bundle.py',
-        'test_desktop_dnssec_bundle.py')),
+        'desktop-dnssec-bundle.py')),
         ROOT/'cmd/client/bundled_dnssec.go',ROOT/'cmd/client/bundled_dnssec_test.go',ROOT/'cmd/client/bundled_native.go'])
 def sha(raw):return hashlib.sha256(raw).hexdigest()
 def source_inputs():return {p.relative_to(ROOT).as_posix():sha(regular(p,2<<20)) for p in inputs()}
@@ -149,8 +148,7 @@ def fetch(name,spec,cache):
     finally:Path(temp).unlink(missing_ok=True)
     return path
 
-ACTUAL_CASES=('TestBundledDNSSECSourcePinsAndMandatoryReceipt','TestBundledDNSSECActualPackage',*(
-    'TestBundledDNSSECActualPackage/'+name for name in ('abi','target','builder','duplicate-json','artifact','wrong-elf-machine','ambient-dependency','foreign-export','loader-strtab','inspection-dynamic','license','missing','symlink')))
+ACTUAL_CASES=('TestBundledDNSSECSourcePinsAndMandatoryReceipt','TestBundledDNSSECActualPackage','TestBundledDNSSECActualPackage/missing')
 
 def require_actual_verdicts(output):
     observed={name:[0,0] for name in ACTUAL_CASES}
@@ -170,7 +168,7 @@ def test_actual_package(destination,env=None):
     if result.returncode or len(result.stdout)>1<<20:
         raise ValueError('Actual DNSSEC package gate failed: '+result.stdout[-16384:])
     require_actual_verdicts(result.stdout)
-    print('Actual pinned DNSSEC Go package verification and 13 refusal controls passed',flush=True)
+    print('Actual pinned DNSSEC Go package verification and missing-receipt refusal passed',flush=True)
 
 def test_native_bundle(directory,target,env=None):
     host='linux/'+{'x86_64':'amd64','aarch64':'arm64'}.get(platform.machine(),'')

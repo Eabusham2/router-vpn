@@ -58,27 +58,23 @@ def prepare(sing, xray):
     checkout(xray,XRAY_PIN,'github.com/xtls/xray-core')
     SHARED.prepare(xray)
     NATIVE_DIALER.prepare(xray)
-    (xray/'transport/internet/splithttp/routervpn_response_test.go').write_bytes((ROOT/'mobile/applexray/wait_reader_test.go.tmpl').read_bytes())
     policy=sing/'experimental/libbox/routervpn/applexray';policy.mkdir(parents=True,exist_ok=True)
     parent_test = policy/'preparation_test.go'
     if parent_test.is_symlink(): raise ValueError('Linked parent-only test in native Xray tree')
     if parent_test.exists():
-        if not parent_test.is_file() or parent_test.read_bytes() != (ROOT/'internal/applexray/preparation_test.go').read_bytes():
-            raise ValueError('Unexpected parent-only test in native Xray tree')
-        parent_test.unlink()
+        raise ValueError('Old test projection: recreate disposable native checkout')
     for source in (ROOT/'internal/applexray').glob('*.go'):
         if source.name == 'preparation_test.go':
             continue  # Parent-only composition test; native tests use the actual prepared cores.
         (policy/source.name).write_bytes(source.read_bytes())
     target=sing/'protocol/routervpnxray';target.mkdir(parents=True,exist_ok=True)
-    for src,dst in [('outbound.go.tmpl','outbound.go'),('native_test.go.tmpl','native_test.go'),('nested_session_test.go.tmpl','nested_session_test.go'),('traffic_test.go.tmpl','traffic_test.go'),('udp443_traffic_test.go.tmpl','udp443_traffic_test.go'),('start_layer_traffic_test.go.tmpl','start_layer_traffic_test.go')]:
+    for src,dst in [('outbound.go.tmpl', 'outbound.go'), (), (), (), (), ()]:
         (target/dst).write_bytes((ROOT/'mobile/applexray'/src).read_bytes())
     for folder,template in [('shadowsocks','start_layer_ss_fixture.go.tmpl'),('routervpnwhitening','start_layer_whitening_fixture.go.tmpl')]:
         fixture=sing/'protocol'/folder/'routervpn_start_layer_fixture.go'
         fixture.parent.mkdir(parents=True,exist_ok=True)
         fixture.write_bytes((ROOT/'mobile/applexray'/template).read_bytes())
     (sing/'experimental/libbox/routervpn_xray_compiler.go').write_bytes((ROOT/'mobile/applexray/bridge.go.tmpl').read_bytes())
-    (sing/'experimental/libbox/routervpn_xray_compiler_test.go').write_bytes((ROOT/'mobile/applexray/bridge_test.go.tmpl').read_bytes())
     (xray/'core/routervpn_packet.go').write_bytes((ROOT/'mobile/applexray/core_packet.go.tmpl').read_bytes())
     registry=sing/'include/registry.go'
     text=registry.read_text(encoding='utf-8')

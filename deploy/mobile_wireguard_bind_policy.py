@@ -481,7 +481,7 @@ func (c *ClientBind) Send(bufs [][]byte, ep conn.Endpoint, offset int) error {
 '''
 
 def blobsha(data):return hashlib.sha1(b"blob "+str(len(data)).encode()+b"\0"+data).hexdigest()
-def inputs():return [Path(__file__).resolve(),ROOT/"mobile/wireguard/client_bind_test.go.tmpl"]+STACK.inputs()
+def inputs():return [Path(__file__).resolve()]+STACK.inputs()
 def patch(source):
     original=source
     if source.count(NEW)==1:
@@ -525,8 +525,6 @@ def prepare(vendor):
     if endpoint.is_symlink():raise ValueError("WireGuard endpoint source is a symlink")
     endpoint_result=patch_endpoint(endpoint.read_text())
     result=patch(file.read_text())
-    test=(ROOT/"mobile/wireguard/client_bind_test.go.tmpl").read_bytes()
     file.write_text(result)
     endpoint.write_text(endpoint_result)
-    (file.parent/"routervpn_client_bind_test.go").write_bytes(test)
     print("Verified WireGuard original bind lifecycle and connection publication")

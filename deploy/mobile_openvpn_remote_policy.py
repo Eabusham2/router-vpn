@@ -22,8 +22,7 @@ CLOSE_NEW='err := E.Errors(routerVPNOpenVPNCloseError(c.client.Close()), c.devic
 
 
 def inputs():
-    return [Path(__file__).resolve(), ROOT/'deploy/test_external_openvpn_remote_native.py', ROOT/'deploy/test_mobile_openvpn_remote_policy.py', ROOT/'mobile/routervpn_openvpn_remote.go.tmpl',
-            ROOT/'mobile/routervpn_openvpn_remote_fixture.go.tmpl', *MODULE.inputs(), *LAYERS.inputs(), *STACK.inputs()]
+    return [Path(__file__).resolve(), ROOT / 'mobile/routervpn_openvpn_remote.go.tmpl', ROOT / 'mobile/routervpn_openvpn_remote_fixture.go.tmpl', *MODULE.inputs(), *LAYERS.inputs(), *STACK.inputs()]
 
 
 def digest():

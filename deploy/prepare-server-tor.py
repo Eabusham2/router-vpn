@@ -27,7 +27,6 @@ NETWORK_SOURCES = (
 
 def inputs():
     return sorted(set([Path(__file__).resolve(), ROOT/'deploy/prepare-mobile-tor.py',
-        ROOT/'deploy/test_server_tor_preparation.py',
         *[ROOT/'internal/desktopnetwork'/name for name in NETWORK_SOURCES],
         ROOT/'mobile/toroutbound/network.go.tmpl', ROOT/'mobile/toroutbound/upstream.go.tmpl',
         ROOT/'mobile/toroutbound/dns_adapter.go.tmpl',

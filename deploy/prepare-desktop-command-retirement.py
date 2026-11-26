@@ -3,9 +3,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATES = ('command_retirement_linux.go.tmpl', 'command_run_linux.go.tmpl',
-             'command_run_other.go.tmpl', 'command_retirement_linux_test.go.tmpl',
-             'command_run_linux_test.go.tmpl')
+TEMPLATES = ('command_retirement_linux.go.tmpl', 'command_run_linux.go.tmpl', 'command_run_other.go.tmpl')
 ANCHOR = b'func run() error {\n'
 DISPATCH = ANCHOR + b'\tif handled, err := routerVPNRunOwnedCommand(); handled {\n\t\treturn err\n\t}\n'
 

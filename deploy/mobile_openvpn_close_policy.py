@@ -22,10 +22,7 @@ def blobsha(data):
 
 
 def inputs():
-    return [Path(__file__).resolve(), ROOT/'deploy/test_mobile_openvpn_close_policy.py',
-            ROOT/'deploy/test_mobile_openvpn_pinned.sh',
-            *REMOTE.inputs(),
-            *sorted((ROOT / 'mobile/openvpn').glob('*.tmpl'))]
+    return [Path(__file__).resolve(), *REMOTE.inputs(), *sorted((ROOT / 'mobile/openvpn').glob('*.tmpl'))]
 
 
 def patch(text):

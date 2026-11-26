@@ -224,9 +224,7 @@ func (p *protocol) Close() {
 
 
 def inputs():
-    return [Path(__file__).resolve(), TEMPLATE,
-            ROOT / 'deploy/test_gvisor_forwarder_pinned.py',
-            ROOT / 'deploy/test_gvisor_forwarder_runner.py']
+    return [Path(__file__).resolve(), TEMPLATE]
 
 
 def git_blob(data):

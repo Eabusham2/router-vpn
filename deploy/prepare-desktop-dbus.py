@@ -14,7 +14,7 @@ SOURCE = {
     'decoder.go': '685d1a896e5a8e78e7db087f8dfb6c1bcbaa88da102d6d96f808d1fccf5fa9ac',
     'transport_unix.go': '9bb67dbc366358493ee8d4786d0154e99ccd8f9b5c275e4a5c2ef8c6abc45371',
 }
-TEMPLATES = ('godbus_fd_types.go.tmpl', 'godbus_unix_fd_owner.go.tmpl', 'godbus_unix_fd_owner_test.go.tmpl')
+TEMPLATES = ('godbus_fd_types.go.tmpl', 'godbus_unix_fd_owner.go.tmpl')
 
 def once(raw, before, after):
     if raw.count(before) != 1:

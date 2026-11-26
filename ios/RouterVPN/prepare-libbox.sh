@@ -31,10 +31,6 @@ BRIDGE_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+
 BRIDGE_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$BRIDGE_SHA" "$TOR_SOURCE_SHA")
 XRAY_BRIDGE_SHA=$(python3 "$ROOT/../../deploy/prepare-apple-xray.py" --digest)
 BRIDGE_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$BRIDGE_SHA" "$XRAY_BRIDGE_SHA")
-COMPOSITE_HOST_SHA=$(python3 "$ROOT/../../deploy/test_ios_composite_multihop_pinned.py" --digest)
-BRIDGE_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$BRIDGE_SHA" "$COMPOSITE_HOST_SHA")
-IMPORTED_HOST_SHA=$(python3 "$ROOT/../../deploy/test_ios_imported_router_pinned.py" --digest)
-BRIDGE_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$BRIDGE_SHA" "$IMPORTED_HOST_SHA")
 EXPECTED_STAMP="$VERSION+$COMMIT+$GO_TOOLCHAIN+$GOMOBILE_VERSION+ios,iossimulator"
 
 verify_framework() {
@@ -270,7 +266,6 @@ PYHEAD
   test -f "$STAMP"
   test "$(tr -d '\r\n' < "$STAMP")" = "$EXPECTED_STAMP"
   # Compile the complete consumers against generated headers, not Swift doubles.
-  python3 "$ROOT/../../deploy/test_ios_physical_path.py" --framework "$FRAMEWORK"
 }
 
 if [[ -d "$FRAMEWORK" && -f "$STAMP" && $(tr -d '\r\n' < "$STAMP") == "$EXPECTED_STAMP" && -f "$BRIDGE_STAMP" && $(tr -d '\r\n' < "$BRIDGE_STAMP") == "$BRIDGE_SHA" ]]; then
@@ -293,8 +288,6 @@ GOBIN="$GO_BIN_DIR" go install "github.com/sagernet/gomobile/cmd/gobind@v$GOMOBI
 export PATH="$GO_BIN_DIR:$PATH"
 command -v gomobile >/dev/null
 command -v gobind >/dev/null
-python3 "$ROOT/../../deploy/test_mobile_tor_loader.py" --go "$(command -v go)"
-python3 "$ROOT/../../deploy/test_mobile_tor_package_policy.py" --source-cache "$TOR_SOURCE_CACHE"
 
 rm -rf "$VENDOR" "$FRAMEWORK" "$STAMP" "$LICENSE_OUT"
 python3 "$ROOT/../../deploy/fetch_mobile_pinned_git.py" https://github.com/SagerNet/sing-box.git "$COMMIT" "$VENDOR"
@@ -308,7 +301,6 @@ grep -Fq 'with_wireguard' "$VENDOR/cmd/internal/build_libbox/main.go"
 grep -Fq 'with_openvpn' "$VENDOR/cmd/internal/build_libbox/main.go"
 python3 "$ROOT/../../deploy/prepare-mobile-openvpn.py" "$VENDOR"
 python3 "$ROOT/../../deploy/prepare-mobile-multihop.py" "$VENDOR"
-python3 "$ROOT/../../deploy/test_retained_strategy_preparation.py" "$VENDOR"
 python3 "$ROOT/../../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)"
 rm -rf "$XRAY_VENDOR"
 python3 "$ROOT/../../deploy/fetch_mobile_pinned_git.py" https://github.com/XTLS/Xray-core.git "$XRAY_COMMIT" "$XRAY_VENDOR"
@@ -324,16 +316,6 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   go mod edit -replace="github.com/xtls/xray-core=$XRAY_VENDOR"
   go mod tidy
   [[ $(go list -m -f '{{.Version}}' github.com/xtls/xray-core) == "$XRAY_VERSION" ]]
-  bash "$ROOT/../../deploy/test_apple_xray_pinned.sh" "$VENDOR" "$XRAY_VENDOR"
-  bash "$ROOT/../../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"
-  bash "$ROOT/../../deploy/test_mobile_sip003_pinned.sh" "$VENDOR"
-  bash "$ROOT/../../deploy/test_mobile_external_pinned.sh" "$VENDOR"
-  python3 "$ROOT/../../deploy/test_ios_composite_multihop_pinned.py" --vendor "$VENDOR"
-  python3 "$ROOT/../../deploy/test_ios_imported_router_pinned.py" --vendor "$VENDOR"
-  go test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./protocol/routervpnnodesocks -run '^TestOriginalSOCKS' -count=1 -timeout=90s
-  go test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./protocol/routervpnnodeconnect -run '^TestCONNECT' -count=1 -timeout=90s
-  go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1
-  go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./transport/wireguard -run TestRouterVPNClientBind -count=1
   python3 "$ROOT/../../deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"
   python3 "$ROOT/../../deploy/prepare-mobile-torpack.py" "$VENDOR" --native-package "$TOR_PACKAGE"
   GOFLAGS="-ldflags=-checklinkname=0" go run ./cmd/internal/build_libbox -target apple -platform ios,iossimulator

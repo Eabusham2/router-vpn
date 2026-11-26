@@ -15,7 +15,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-node-chain-execution-gate-source.json'
-TEMPLATES = {name: 'protocol/routervpnchaingate/'+name.removesuffix('.tmpl') for name in ('gate.go.tmpl', 'flow.go.tmpl', 'gate_test.go.tmpl')}
+TEMPLATES = {name: 'protocol/routervpnchaingate/'+name.removesuffix('.tmpl') for name in ('gate.go.tmpl', 'flow.go.tmpl')}
 PREREQUISITES = {
     'adapter/routervpn_observation.go': 'mobile/strategy/observation.go.tmpl',
     'adapter/outbound/routervpn_observation.go': 'mobile/strategy/outbound_context.go.tmpl',

@@ -34,9 +34,7 @@ MAX_FILES = 5000
 
 
 def inputs():
-    return [Path(__file__).resolve(), TEMPLATE,
-            ROOT / 'deploy/test_amnezia_timers_pinned.py',
-            ROOT / 'deploy/test_amnezia_timer_preparation.py']
+    return [Path(__file__).resolve(), TEMPLATE]
 
 
 def git_blob(data):

@@ -79,9 +79,7 @@ MODULES = (QUIC, HY2)
 
 
 def inputs():
-    return [Path(__file__).resolve(), ROOT/'deploy/test_hysteria2_deadlines.py',
-            ROOT/'deploy/test_hysteria2_deadlines_pinned.py',
-            *sorted((ROOT/'mobile/hysteria2').glob('*.tmpl'))]
+    return [Path(__file__).resolve(), *sorted((ROOT/'mobile/hysteria2').glob('*.tmpl'))]
 
 
 def git_blob(data):

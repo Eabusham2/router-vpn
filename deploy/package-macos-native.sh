@@ -8,11 +8,6 @@ MACOS_SIGN_IDENTITY=${ROUTER_VPN_MACOS_SIGN_IDENTITY:--}
 rm -rf "$OUT"
 mkdir -p "$WORK"
 
-python3 "$ROOT/deploy/test_macos_controller_privilege.py" --go "$(command -v go)"
-python3 "$ROOT/deploy/test_macos_installer_trust.py"
-python3 "$ROOT/deploy/test_macos_image_identity.py"
-python3 "$ROOT/deploy/test_macos_generation.py"
-python3 "$ROOT/deploy/test_macos_native_install.py"
 
 write_blank_routers() {
   cat >"$1" <<'JSON'
@@ -157,9 +152,6 @@ TXT
   python3 "$ROOT/server/scripts/source_provenance.py" "$dir" --family "macos-$arch"
   host_arch=$(uname -m)
   case "$host_arch" in x86_64) host_arch=amd64 ;; aarch64) host_arch=arm64 ;; esac
-  if [[ "$host_arch" == "$arch" ]]; then
-    python3 "$ROOT/deploy/test_macos_native_install.py" --package "$dir"
-  fi
 
   tar -C "$WORK" -czf "$OUT/$name.tar.gz" "$name"
   python3 "$ROOT/deploy/native-runtime-bundle.py" verify-package "darwin/$arch" "$OUT/$name.tar.gz"

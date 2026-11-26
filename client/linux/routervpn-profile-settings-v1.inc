@@ -16,9 +16,13 @@ typedef struct {
     GtkWidget *entry;
     GtkWidget *exit;
     GtkWidget *mode;
+    GtkWidget *execution;
+    GtkWidget *entry_mode;
+    guint progress_poll;
     GtkWidget *summary;
     GtkWidget *connect;
     JsonArray *exit_modes;
+    JsonArray *entry_modes;
     gboolean platform_supported;
     GPtrArray *nodes;
     int pick_role;
@@ -52,7 +56,9 @@ static gboolean linux_multihop_can_connect_v22(LinuxMultihopDialogV7 *state) {
     const char *mode = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->mode));
     return state->platform_supported && linux_multihop_find_v7(state, entry) != NULL &&
         linux_multihop_find_v7(state, exit) != NULL && g_strcmp0(entry, exit) != 0 &&
-        linux_multihop_exit_advertised_v22(state->exit_modes, mode);
+        linux_multihop_exit_advertised_v22(state->exit_modes, mode) &&
+        linux_multihop_execution_supported_v22(gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->execution))) &&
+        linux_multihop_entry_advertised_v23(state->entry_modes, gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->entry_mode)));
 }
 
 static gboolean linux_multihop_draw_v7(GtkWidget *widget, cairo_t *cr, gpointer data) {
@@ -184,6 +190,87 @@ static void linux_multihop_pick_exit_v7(GtkButton *button, gpointer data) {
     gtk_label_set_text(GTK_LABEL(state->summary), "Click a real-coordinate marker to use it as the multihop Exit.");
 }
 
+static char *linux_multihop_progress_text_v1(const char *json) {
+    JsonNode *root = parse_json(json);
+    if (root == NULL || !JSON_NODE_HOLDS_OBJECT(root)) { if (root != NULL) json_node_free(root); return NULL; }
+    JsonObject *top = json_node_get_object(root);
+    JsonNode *node = json_object_get_member(top, "comparison");
+    if (node == NULL || !JSON_NODE_HOLDS_OBJECT(node)) { json_node_free(root); return NULL; }
+    JsonObject *progress = json_node_get_object(node);
+    gboolean tor = g_strcmp0(obj_string(progress, "last_node_measurement"), "tor-last-relay-http") == 0 &&
+        g_strcmp0(obj_string(progress, "external_measurement"), "same-captured-endpoint-http") == 0;
+    GString *out = g_string_new(tor ? "Tor comparison: " : "Comparison: ");
+    g_string_append(out, obj_string(progress, "stage"));
+    if (tor) g_string_append(out, "\nTor last-relay HTTP + same external-server HTTP response; each valid average is rechecked.");
+    node = json_object_get_member(progress, "measurements");
+    if (node != NULL && JSON_NODE_HOLDS_ARRAY(node)) {
+        JsonArray *measurements = json_node_get_array(node);
+        for (guint i = 0; i < MIN(json_array_get_length(measurements), 64u); i++) {
+            JsonNode *item = json_array_get_element(measurements, i);
+            if (item == NULL || !JSON_NODE_HOLDS_OBJECT(item)) continue;
+            JsonObject *m = json_node_get_object(item);
+            JsonNode *candidate_node = json_object_get_member(m, "candidate");
+            if (candidate_node == NULL || !JSON_NODE_HOLDS_OBJECT(candidate_node)) continue;
+            JsonObject *candidate = json_node_get_object(candidate_node);
+            gboolean has_last = FALSE, has_external = FALSE, has_score = FALSE;
+            double last = obj_double(m, "last_node_ms", &has_last);
+            double external = obj_double(m, "external_ms", &has_external);
+            double score = obj_double(m, "score_ms", &has_score);
+            g_string_append_printf(out, "\n%s / %s: ", obj_string(candidate, "execution"), obj_string(candidate, "transport"));
+            if (json_object_has_member(m, "eligible") && json_object_get_boolean_member(m, "eligible") && has_last && has_external && has_score && isfinite(last) && isfinite(external) && isfinite(score) && last > 0 && external > 0 && score > 0)
+                g_string_append_printf(out, "(%.2f + %.2f) / 2 = %.2f ms", last, external, score);
+            else g_string_append_printf(out, "rejected — %s", obj_string(m, "failure"));
+        }
+    }
+    const char *failure = obj_string(progress, "failure");
+    if (failure[0]) g_string_append_printf(out, "\n%s", failure);
+    json_node_free(root);
+    return g_string_free(out, FALSE);
+}
+static void linux_multihop_entry_changed_v23(GtkComboBox *combo, gpointer data) {
+    LinuxMultihopDialogV7 *state = data;
+    if (!routervpn_require_mutation_idle(state->app, "changing multihop entry transport")) {
+        char *previous = linux_multihop_entry_choice_v23();
+        g_signal_handlers_block_by_func(combo, G_CALLBACK(linux_multihop_entry_changed_v23), data);
+        linux_multihop_select_preserving_v22(GTK_WIDGET(combo), previous);
+        g_signal_handlers_unblock_by_func(combo, G_CALLBACK(linux_multihop_entry_changed_v23), data);
+        g_free(previous); return;
+    }
+    linux_multihop_store_entry_v23(gtk_combo_box_get_active_id(combo));
+    linux_multihop_update_summary_v7(state, NULL);
+}
+
+static void linux_multihop_execution_changed_v1(GtkComboBox *combo, gpointer data) {
+    LinuxMultihopDialogV7 *state = data;
+    if (!routervpn_require_mutation_idle(state->app, "changing multihop execution")) {
+        char *previous = linux_multihop_execution_choice_v1();
+        g_signal_handlers_block_by_func(combo, G_CALLBACK(linux_multihop_execution_changed_v1), data);
+        gtk_combo_box_set_active_id(combo, previous);
+        g_signal_handlers_unblock_by_func(combo, G_CALLBACK(linux_multihop_execution_changed_v1), data);
+        g_free(previous); return;
+    }
+    linux_multihop_store_execution_v1(gtk_combo_box_get_active_id(combo));
+    linux_multihop_update_summary_v7(state, NULL);
+}
+static gboolean linux_multihop_progress_poll_v1(gpointer data) {
+    LinuxMultihopDialogV7 *state = data;
+    const char *progress = g_object_get_data(G_OBJECT(state->app->window), "linux-multihop-progress");
+    if (progress != NULL) linux_multihop_update_summary_v7(state, progress);
+    gboolean busy = linux_async_busy_v16(state->app);
+    gtk_widget_set_sensitive(state->entry, !busy);
+    gtk_widget_set_sensitive(state->exit, !busy);
+    gtk_widget_set_sensitive(state->mode, !busy);
+    gtk_widget_set_sensitive(state->execution, !busy);
+    gtk_widget_set_sensitive(state->entry_mode, !busy);
+    gtk_widget_set_sensitive(state->connect, !busy && linux_multihop_can_connect_v22(state));
+    return G_SOURCE_CONTINUE;
+}
+static void linux_multihop_dialog_destroy_v1(GtkWidget *widget, gpointer data) {
+    (void)widget;
+    LinuxMultihopDialogV7 *state = data;
+    if (state->progress_poll != 0) { g_source_remove(state->progress_poll); state->progress_poll = 0; }
+    state->dialog = NULL;
+}
 static void linux_multihop_refresh_v7(LinuxMultihopDialogV7 *state) {
     Buffer out = {0};
     char *err = NULL;
@@ -200,6 +287,14 @@ static void linux_multihop_refresh_v7(LinuxMultihopDialogV7 *state) {
         g_free(err); free(out.data); return;
     }
     JsonObject *obj = json_node_get_object(root);
+    g_clear_pointer(&state->entry_modes, json_array_unref);
+    JsonNode *entry_modes = json_object_get_member(obj, "supported_entry_modes");
+    if (entry_modes != NULL && JSON_NODE_HOLDS_ARRAY(entry_modes)) state->entry_modes = json_array_ref(json_node_get_array(entry_modes));
+    char *selected_entry_mode = g_strdup(gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->entry_mode)));
+    g_signal_handlers_block_by_func(state->entry_mode, G_CALLBACK(linux_multihop_entry_changed_v23), state);
+    linux_multihop_entry_choices_v23(state->entry_mode, state->entry_modes, selected_entry_mode);
+    g_signal_handlers_unblock_by_func(state->entry_mode, G_CALLBACK(linux_multihop_entry_changed_v23), state);
+    g_free(selected_entry_mode);
     g_clear_pointer(&state->exit_modes, json_array_unref);
     JsonNode *exit_modes = json_object_get_member(obj, "supported_exit_modes");
     if (exit_modes != NULL && JSON_NODE_HOLDS_ARRAY(exit_modes)) state->exit_modes = json_array_ref(json_node_get_array(exit_modes));
@@ -249,7 +344,12 @@ static void linux_multihop_refresh_v7(LinuxMultihopDialogV7 *state) {
         supported ? "yes" : "no", connected ? "yes" : "no",
         actual_exit[0] ? " • actual exit: " : "", actual_exit,
         runtime_mode[0] ? " • runtime: " : "", runtime_mode);
-    linux_multihop_update_summary_v7(state, runtime);
+    char *comparison = linux_multihop_progress_text_v1(out.data);
+    if (comparison != NULL) {
+        char *combined = g_strdup_printf("%s\n%s", runtime, comparison);
+        linux_multihop_update_summary_v7(state, combined);
+        g_free(combined); g_free(comparison);
+    } else linux_multihop_update_summary_v7(state, runtime);
     g_free(runtime); g_free(old_entry); g_free(old_exit);
     json_node_free(root); g_free(err); free(out.data);
 }
@@ -262,6 +362,7 @@ static void linux_multihop_refresh_button_v7(GtkButton *button, gpointer data) {
 static void linux_multihop_connect_v7(GtkButton *button, gpointer data) {
     (void)button;
     LinuxMultihopDialogV7 *state = data;
+    if (!routervpn_require_mutation_idle(state->app, "starting multihop")) { linux_multihop_update_summary_v7(state, "Disconnect Router VPN or let the active transition finish before changing the live route graph."); return; }
     const char *entry = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->entry));
     const char *exit = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->exit));
     const char *mode = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->mode));
@@ -272,29 +373,36 @@ static void linux_multihop_connect_v7(GtkButton *button, gpointer data) {
         linux_multihop_update_summary_v7(state, "Entry and exit must be different nodes."); return;
     }
     if (!linux_multihop_can_connect_v22(state)) {
-        linux_multihop_update_summary_v7(state, "Select a supported exit transport and two currently linked nodes; refresh if capabilities changed."); return;
+        linux_multihop_update_summary_v7(state, "Select supported entry and exit transports and two currently linked nodes; refresh if capabilities changed."); return;
     }
     JsonBuilder *builder = json_builder_new();
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "entry_id"); json_builder_add_string_value(builder, entry);
     json_builder_set_member_name(builder, "exit_id"); json_builder_add_string_value(builder, exit);
     json_builder_set_member_name(builder, "exit_mode"); json_builder_add_string_value(builder, mode);
+    const char *entry_mode = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->entry_mode));
+    json_builder_set_member_name(builder, "entry_mode"); json_builder_add_string_value(builder, entry_mode);
+    const char *execution = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->execution));
+    if (!linux_multihop_execution_supported_v22(execution)) { g_object_unref(builder); linux_multihop_update_summary_v7(state, "Choose Local, Server or Compare both; the saved execution is unavailable."); return; }
+    json_builder_set_member_name(builder, "execution");
+    json_builder_add_string_value(builder, execution);
     json_builder_end_object(builder);
     JsonNode *payload_root = json_builder_get_root(builder);
     JsonGenerator *gen = json_generator_new();
     json_generator_set_root(gen, payload_root);
     char *payload = json_generator_to_data(gen, NULL);
-    Buffer out = {0}; char *err = NULL;
-    if (api_request("/api/multihop/connect", "POST", payload, 180000, &out, &err)) {
-        append_diag(state->app, "Real Linux multihop connected only after exact exit-node path proof.");
-        linux_multihop_update_summary_v7(state, "Multihop connect completed; refreshing exact runtime/exit status…");
-        linux_multihop_refresh_v7(state);
-    } else {
-        append_diag(state->app, err != NULL ? err : "Multihop connect failed.");
-        linux_multihop_update_summary_v7(state, err != NULL ? err : "Multihop connect failed closed.");
+    if (!routervpn_require_mutation_idle(state->app, "starting multihop")) {
+        g_free(payload); json_node_free(payload_root); g_object_unref(gen); g_object_unref(builder); return;
     }
-    free(out.data); g_free(err); g_free(payload); json_node_free(payload_root); g_object_unref(gen); g_object_unref(builder);
+    guint64 request = linux_async_request_v17(state->app, "/api/multihop/connect", payload, linux_multihop_startup_timeout_v23(entry_mode, mode, execution), "Multihop exact exit-node path proof", FALSE);
+    if (request != 0) {
+        append_diag(state->app, "Multihop request queued; Connected still requires exact exit-node path proof. Use Disconnect on the map to stop.");
+        gtk_dialog_response(GTK_DIALOG(state->dialog), GTK_RESPONSE_CLOSE);
+    } else linux_multihop_update_summary_v7(state, "Multihop request refused; another owned operation is pending.");
+    g_free(payload); json_node_free(payload_root); g_object_unref(gen); g_object_unref(builder);
 }
+
+#include "routervpn-via-entry-candidates-v1.inc"
 
 static void on_linux_multihop_v7(GtkButton *button, gpointer data) {
     (void)button;
@@ -310,16 +418,29 @@ static void on_linux_multihop_v7(GtkButton *button, gpointer data) {
     GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(state.dialog));
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
     gtk_container_set_border_width(GTK_CONTAINER(box), 14);
-    GtkWidget *note = gtk_label_new("Real path: client TUN -> exit transport -> entry WireGuard -> exit node -> Internet. Choose two different nodes. Map click selection is available only for stored real coordinates; coordinate-less nodes remain selectable in the lists. Connected still requires exact exit-node proof.");
+    GtkWidget *note = gtk_label_new("Local runs the exit tunnel on this device. Server trusts the entry node to run the exit. Compare tests both with the same external target; lowest (last-node + external) / 2 wins, and either timeout disqualifies that candidate. Choose two different nodes. Map click selection is available only for stored real coordinates; coordinate-less nodes remain selectable in the lists. Connected still requires exact exit-node proof.");
     gtk_label_set_xalign(GTK_LABEL(note), 0.0f); gtk_label_set_line_wrap(GTK_LABEL(note), TRUE);
     gtk_box_pack_start(GTK_BOX(box), note, FALSE, FALSE, 0);
 
     GtkWidget *grid = gtk_grid_new(); gtk_grid_set_row_spacing(GTK_GRID(grid), 7); gtk_grid_set_column_spacing(GTK_GRID(grid), 10);
     state.entry = gtk_combo_box_text_new(); state.exit = gtk_combo_box_text_new(); state.mode = gtk_combo_box_text_new();
+    state.entry_mode = gtk_combo_box_text_new();
+    char *saved_entry_mode = linux_multihop_entry_choice_v23();
+    linux_multihop_entry_choices_v23(state.entry_mode, NULL, saved_entry_mode); g_free(saved_entry_mode);
+    g_signal_connect(state.entry_mode, "changed", G_CALLBACK(linux_multihop_entry_changed_v23), &state);
+    state.execution = gtk_combo_box_text_new();
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.execution), "local", "Local — device-owned exit");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.execution), "server", "Server — entry-owned exit");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.execution), "auto", "Compare both — lowest valid average");
+    char *saved_execution = linux_multihop_execution_choice_v1();
+    linux_multihop_select_preserving_v22(state.execution, saved_execution); g_free(saved_execution);
+    g_signal_connect(state.execution, "changed", G_CALLBACK(linux_multihop_execution_changed_v1), &state);
     linux_multihop_exit_choices_v22(state.mode, "shadowsocks");
     profile_settings_grid_row_v7(grid, 0, "Entry node", state.entry);
     profile_settings_grid_row_v7(grid, 1, "Exit node", state.exit);
     profile_settings_grid_row_v7(grid, 2, "Exit transport", state.mode);
+    profile_settings_grid_row_v7(grid, 3, "Execution", state.execution);
+    profile_settings_grid_row_v7(grid, 4, "Entry transport", state.entry_mode);
     gtk_box_pack_start(GTK_BOX(box), grid, FALSE, FALSE, 0);
 
     GtkWidget *pick = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
@@ -329,6 +450,7 @@ static void on_linux_multihop_v7(GtkButton *button, gpointer data) {
     state.connect = make_button("Connect real multihop", G_CALLBACK(linux_multihop_connect_v7), &state);
     gtk_box_pack_start(GTK_BOX(pick), state.connect, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), pick, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(box), make_button("Measure exits via entry…", G_CALLBACK(on_linux_candidates_v1), &state), FALSE, FALSE, 0);
 
     state.map = gtk_drawing_area_new(); gtk_widget_set_size_request(state.map, -1, 300);
     gtk_widget_add_events(state.map, GDK_BUTTON_PRESS_MASK);
@@ -343,11 +465,16 @@ static void on_linux_multihop_v7(GtkButton *button, gpointer data) {
     g_signal_connect(state.mode, "changed", G_CALLBACK(linux_multihop_combo_changed_v7), &state);
     gtk_box_pack_start(GTK_BOX(content), box, TRUE, TRUE, 0);
     linux_multihop_refresh_v7(&state);
+    linux_candidates_bind_entry_v1(&state);
+    g_signal_connect(state.dialog, "destroy", G_CALLBACK(linux_multihop_dialog_destroy_v1), &state);
+    state.progress_poll = g_timeout_add(250, linux_multihop_progress_poll_v1, &state);
     gtk_widget_show_all(state.dialog);
     gtk_dialog_run(GTK_DIALOG(state.dialog));
-    gtk_widget_destroy(state.dialog);
+    if (state.progress_poll != 0) { g_source_remove(state.progress_poll); state.progress_poll = 0; }
+    if (state.dialog != NULL) gtk_widget_destroy(state.dialog);
     g_ptr_array_unref(state.nodes);
     g_clear_pointer(&state.exit_modes, json_array_unref);
+    g_clear_pointer(&state.entry_modes, json_array_unref);
 }
 
 static GtkWidget *profile_settings_combo_v7(const char *const labels[], const char *const ids[], guint count, const char *selected) {
@@ -474,6 +601,7 @@ static void on_profile_settings_v7(GtkButton *button, gpointer data) {
         append_diag(app, "The selected node changed while opening Settings. Reopen Settings.");
         json_node_free(root); g_free(err); free(out.data); return;
     }
+    gboolean mutation_busy = routervpn_mutation_busy(app);
 
     GtkWidget *dialog = gtk_dialog_new_with_buttons(
         "Router VPN profile settings", GTK_WINDOW(app->window),
@@ -509,6 +637,8 @@ static void on_profile_settings_v7(GtkButton *button, gpointer data) {
     static const char *const ipv6_ids[] = {"auto", "on", "off"};
     static const char *const base_labels[] = {"Auto", "WireGuard", "AmneziaWG"};
     static const char *const base_ids[] = {"auto", "wg", "awg"};
+    static const char *const start_layer_labels[] = {"Off — default", "AES-256-GCM — authenticated", "AES-256-GCM + XOR whitening"};
+    static const char *const start_layer_ids[] = {"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"};
     static const char *const mtu_labels[] = {"Default", "Auto measured", "Manual"};
     static const char *const mtu_ids[] = {"default", "auto", "manual"};
     static const char *const startup_labels[] = {"Manual", "AUTO", "SMART AUTO", "Last mode"};
@@ -525,8 +655,15 @@ static void on_profile_settings_v7(GtkButton *button, gpointer data) {
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(fallback), json_object_has_member(settings, "base_fallback") && json_object_get_boolean_member(settings, "base_fallback"));
     gtk_box_pack_start(GTK_BOX(box), fallback, FALSE, FALSE, 0);
 
+    GtkWidget *start_layer = profile_settings_combo_v7(start_layer_labels, start_layer_ids, G_N_ELEMENTS(start_layer_ids), obj_string(settings, "start_layer"));
+    profile_settings_grid_row_v7(grid, 3, "Start Layer", start_layer);
+    GtkWidget *start_layer_note = gtk_label_new("AES uses vetted Shadowsocks 2022 BLAKE3 AES-256-GCM. AES+XOR keeps AES as the authenticated security boundary and only whitens the already-encrypted stream; XOR is never counted as encryption. Unsupported direct/multihop graphs fail closed rather than dropping the saved layer.");
+    gtk_label_set_xalign(GTK_LABEL(start_layer_note), 0.0f);
+    gtk_label_set_line_wrap(GTK_LABEL(start_layer_note), TRUE);
+    gtk_box_pack_start(GTK_BOX(box), start_layer_note, FALSE, FALSE, 0);
+
     GtkWidget *mtu = profile_settings_combo_v7(mtu_labels, mtu_ids, G_N_ELEMENTS(mtu_ids), obj_string(settings, "mtu_policy"));
-    profile_settings_grid_row_v7(grid, 3, "MTU policy", mtu);
+    profile_settings_grid_row_v7(grid, 4, "MTU policy", mtu);
     GtkWidget *manual = gtk_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(manual), "Manual MTU 576–9000");
     if (json_object_has_member(settings, "manual_mtu")) {
@@ -537,7 +674,8 @@ static void on_profile_settings_v7(GtkButton *button, gpointer data) {
             gtk_entry_set_text(GTK_ENTRY(manual), tmp);
         }
     }
-    profile_settings_grid_row_v7(grid, 4, "Manual MTU", manual);
+    profile_settings_grid_row_v7(grid, 5, "Manual MTU", manual);
+    linux_device_wide_mtu_button_v1(app, box);
 
     GtkWidget *daita = gtk_check_button_new_with_label("DAITA-like bounded cover traffic (supported modes only)");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(daita), json_object_has_member(settings, "daita_enabled") && json_object_get_boolean_member(settings, "daita_enabled"));
@@ -550,7 +688,7 @@ static void on_profile_settings_v7(GtkButton *button, gpointer data) {
     gtk_box_pack_start(GTK_BOX(box), socks, FALSE, FALSE, 0);
 
     GtkWidget *startup = profile_settings_combo_v7(startup_labels, startup_ids, G_N_ELEMENTS(startup_ids), obj_string(settings, "startup_mode"));
-    profile_settings_grid_row_v7(grid, 5, "Startup behavior", startup);
+    profile_settings_grid_row_v7(grid, 6, "Startup behavior", startup);
     GtkWidget *autoconnect = gtk_check_button_new_with_label("Auto-connect when Router VPN starts");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(autoconnect), json_object_has_member(settings, "auto_connect") && json_object_get_boolean_member(settings, "auto_connect"));
     gtk_box_pack_start(GTK_BOX(box), autoconnect, FALSE, FALSE, 0);
@@ -565,11 +703,18 @@ static void on_profile_settings_v7(GtkButton *button, gpointer data) {
     gtk_label_set_xalign(GTK_LABEL(effective), 0.0f);
     gtk_box_pack_start(GTK_BOX(box), effective, FALSE, FALSE, 0);
 
+    GtkWidget *save_button = gtk_dialog_get_widget_for_response(GTK_DIALOG(dialog), GTK_RESPONSE_OK);
+    GtkWidget *mutable_widgets[] = {multihop, lan, kill, ipv6, base, fallback, mtu, manual, daita, jumbo, socks, startup, autoconnect};
+    for (guint i = 0; i < G_N_ELEMENTS(mutable_widgets); i++) gtk_widget_set_sensitive(mutable_widgets[i], !mutation_busy);
+    if (save_button != NULL) gtk_widget_set_sensitive(save_button, !mutation_busy);
+    if (mutation_busy) gtk_label_set_text(GTK_LABEL(note), "Connected/transitioning: settings are read-only. Disconnect Router VPN or let the active transition finish before saving persistent node policy.");
+
     gtk_container_add(GTK_CONTAINER(scroll), box);
     gtk_box_pack_start(GTK_BOX(content), scroll, TRUE, TRUE, 0);
     gtk_widget_show_all(dialog);
 
     if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_OK) {
+        if (!routervpn_require_mutation_idle(app, "saving persistent node settings")) { gtk_widget_destroy(dialog); json_node_free(root); g_free(err); free(out.data); refresh_home_summary_v6(app); return; }
         const char *mtu_policy = gtk_combo_box_get_active_id(GTK_COMBO_BOX(mtu));
         int manual_mtu = (int)g_ascii_strtoll(gtk_entry_get_text(GTK_ENTRY(manual)), NULL, 10);
         if (g_strcmp0(mtu_policy, "manual") == 0 && (manual_mtu < 576 || manual_mtu > 9000)) {
@@ -589,6 +734,7 @@ static void on_profile_settings_v7(GtkButton *button, gpointer data) {
             ADD_STR("ipv6_mode", gtk_combo_box_get_active_id(GTK_COMBO_BOX(ipv6)));
             ADD_STR("base_tunnel", gtk_combo_box_get_active_id(GTK_COMBO_BOX(base)));
             ADD_BOOL("base_fallback", gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(fallback)));
+            ADD_STR("start_layer", gtk_combo_box_get_active_id(GTK_COMBO_BOX(start_layer)));
             ADD_STR("mtu_policy", mtu_policy);
             json_builder_set_member_name(builder, "manual_mtu");
             json_builder_add_int_value(builder, manual_mtu);
@@ -629,8 +775,8 @@ static void on_profile_settings_v7(GtkButton *button, gpointer data) {
 }
 
 /* Safe settings contract: /api/profile/settings only; never redacted full-profile POST.
- * LAN Off / kill switch / IPv6 / WG-AWG base+fallback / default-auto-manual MTU /
- * DAITA-like / Jumbo TUN / SOCKS5 / startup/autoconnect.
+ * LAN Off / kill switch / IPv6 / WG-AWG base+fallback / authenticated AES/XOR-whitening Start Layer /
+ * default-auto-manual MTU / DAITA-like / Jumbo TUN / SOCKS5 / startup/autoconnect.
  * Linux Advanced also exposes real /api/multihop/status + /api/multihop/connect with
  * stored-coordinate map selection/path drawing; absent coordinates are never invented.
  */

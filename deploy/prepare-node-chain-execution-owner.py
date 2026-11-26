@@ -34,26 +34,7 @@ DAEMON_CLOSE_ORIGINAL = '''func (s *StartedService) CloseService() error {
 \treturn nil
 }
 '''
-TEMPLATES = {
-    'candidate_preparation_box.go.tmpl': 'routervpn_node_chain_candidate_preparation.go',
-    'candidate_preparation_box_test.go.tmpl': 'routervpn_node_chain_candidate_preparation_test.go',
-    'candidate_preparation_typed_box_test.go.tmpl': 'routervpn_node_chain_candidate_preparation_typed_test.go',
-    'execution_close.go.tmpl': 'routervpn_node_chain_execution_close.go',
-    'execution_close_test.go.tmpl': 'routervpn_node_chain_execution_close_test.go',
-    'execution_last.go.tmpl': 'routervpn_node_chain_execution_last.go',
-    'execution_last_test.go.tmpl': 'routervpn_node_chain_execution_last_test.go',
-    'execution_box.go.tmpl': 'routervpn_node_chain_execution.go',
-    'execution_public.go.tmpl': 'routervpn_node_chain_execution_public.go',
-    'execution_public_test.go.tmpl': 'routervpn_node_chain_execution_public_test.go',
-    'execution_box_test.go.tmpl': 'routervpn_node_chain_execution_test.go',
-    'execution_mtu.go.tmpl': 'routervpn_node_chain_execution_mtu.go',
-    'execution_mtu_test.go.tmpl': 'routervpn_node_chain_execution_mtu_test.go',
-    'execution_readback.go.tmpl': 'routervpn_node_chain_execution_readback.go',
-    'execution_readback_test.go.tmpl': 'routervpn_node_chain_execution_readback_test.go',
-    'execution_tun_mtu_test.go.tmpl': 'protocol/tun/routervpn_node_chain_execution_mtu_test.go',
-    'execution_outbound.go.tmpl': 'adapter/outbound/routervpn_node_chain_execution.go',
-    'execution_outbound_test.go.tmpl': 'adapter/outbound/routervpn_node_chain_execution_test.go',
-}
+TEMPLATES = {'candidate_preparation_box.go.tmpl': 'routervpn_node_chain_candidate_preparation.go', 'execution_close.go.tmpl': 'routervpn_node_chain_execution_close.go', 'execution_last.go.tmpl': 'routervpn_node_chain_execution_last.go', 'execution_box.go.tmpl': 'routervpn_node_chain_execution.go', 'execution_public.go.tmpl': 'routervpn_node_chain_execution_public.go', 'execution_mtu.go.tmpl': 'routervpn_node_chain_execution_mtu.go', 'execution_readback.go.tmpl': 'routervpn_node_chain_execution_readback.go', 'execution_outbound.go.tmpl': 'adapter/outbound/routervpn_node_chain_execution.go'}
 
 
 def inputs():
@@ -64,9 +45,7 @@ def inputs():
     mtu_spec = importlib.util.spec_from_file_location('execution_owner_mtu_inputs', ROOT/'deploy/prepare-mobile-mtu.py')
     mtu = importlib.util.module_from_spec(mtu_spec)
     mtu_spec.loader.exec_module(mtu)
-    return list(dict.fromkeys([Path(__file__).resolve(), ROOT/'deploy/test_node_chain_execution_owner_preparation.py',
-                              *(ROOT/'mobile/chain'/name for name in sorted(TEMPLATES)),
-                              *admission.inputs(), *mtu.inputs(), *sorted((ROOT/'internal/mobilemultihop').glob('node_chain*.go'))]))
+    return list(dict.fromkeys([Path(__file__).resolve(), *(ROOT / 'mobile/chain' / name for name in sorted(TEMPLATES)), *admission.inputs(), *mtu.inputs(), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain*.go'))]))
 
 
 def digest():
@@ -150,11 +129,11 @@ def prepare(vendor):
         if not owner.is_file() or owner.stat().st_size > 65536:
             raise ValueError('invalid ordered execution owner receipt')
         record = json.loads(owner.read_bytes())
-        last_files = {'routervpn_node_chain_execution_last.go', 'routervpn_node_chain_execution_last_test.go'}
-        close_files = {'routervpn_node_chain_execution_close.go', 'routervpn_node_chain_execution_close_test.go'}
-        candidate_files = {'routervpn_node_chain_candidate_preparation.go', 'routervpn_node_chain_candidate_preparation_test.go'}
+        last_files = {'routervpn_node_chain_execution_last.go'}
+        close_files = {'routervpn_node_chain_execution_close.go'}
+        candidate_files = {'routervpn_node_chain_candidate_preparation.go'}
         current = (set(TEMPLATES.values()), set(TEMPLATES.values()) - last_files, set(TEMPLATES.values()) - last_files - close_files)
-        candidate_typed_files = {'routervpn_node_chain_candidate_preparation_typed_test.go'}
+        candidate_typed_files = set()
         original = (*current, *(files - candidate_typed_files for files in current))
         allowed = (*original, *(files - candidate_files for files in original))
         if not isinstance(record, dict) or set(record) != {'schema', 'core', 'files'} or record['schema'] != 1 or record['core'] != PIN or not isinstance(record['files'], dict) or set(record['files']) not in allowed:

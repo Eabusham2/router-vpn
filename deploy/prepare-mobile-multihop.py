@@ -63,24 +63,11 @@ for _name in ('prepare-node-chain-execution-gate', 'prepare-node-chain-execution
     _execution_modules.append(_module)
 
 def inputs():
-    paths = [ROOT/'ios/RouterVPN/App/IOSHomeDNSPolicy.swift', ROOT/'deploy/test_ios_xray_exits.py', ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift', ROOT/'deploy/testfixtures/xray-entry/main.go', ROOT/'deploy/test_ios_multihop_graph.py', ROOT/'mobile/routervpn_hop_measurement.go.tmpl', ROOT/'mobile/routervpn_multihop_bridge.go.tmpl', ROOT/'mobile/routervpn_external_policy_bridge.go.tmpl', ROOT/'mobile/routervpn_multihop_native_test.go.tmpl', ROOT/'mobile/routervpn_sip003_bridge.go.tmpl', ROOT/'mobile/sip003/traffic_test.go.tmpl']
+    paths = [ROOT / 'ios/RouterVPN/App/IOSHomeDNSPolicy.swift', ROOT / 'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift', ROOT / 'deploy/testfixtures/xray-entry/main.go', ROOT / 'mobile/routervpn_hop_measurement.go.tmpl', ROOT / 'mobile/routervpn_multihop_bridge.go.tmpl', ROOT / 'mobile/routervpn_external_policy_bridge.go.tmpl', ROOT / 'mobile/routervpn_sip003_bridge.go.tmpl']
     paths.append(ROOT/'mobile/routervpn_external_measurement_bridge.go.tmpl')
-    paths.append(ROOT/'mobile/routervpn_external_measurement_context_test.go.tmpl')
     paths.append(ROOT/'mobile/routervpn_dns_measurement.go.tmpl')
-    paths.extend(ROOT/'deploy'/name for name in ('test_mobile_go_groups.py', 'test_mobile_go_groups_runner.py', 'test_go_source_groups.py'))
     paths.append(ROOT/'mobile/routervpn_imported_entry.go.tmpl')
     paths.append(ROOT/'mobile/daemon/instance_context.go.tmpl')
-    paths.append(ROOT/'mobile/daemon/instance_context_test.go.tmpl')
-    paths.append(ROOT/'mobile/routervpn_imported_entry_native_test.go.tmpl')
-    paths.append(ROOT/'mobile/routervpn_imported_openvpn_native_test.go.tmpl')
-    paths.append(ROOT/'mobile/routervpn_imported_packet_xray_native_test.go.tmpl')
-    paths.append(ROOT/'mobile/routervpn_imported_pq_xray_native_test.go.tmpl')
-    paths.append(ROOT/'mobile/routervpn_imported_xhttp_xray_native_test.go.tmpl')
-    paths.append(ROOT/'mobile/routervpn_imported_naive_h2_native_test.go.tmpl')
-    paths.append(ROOT/'mobile/routervpn_imported_naive_h3_native_test.go.tmpl')
-    paths.append(ROOT/'mobile/routervpn_imported_naive_h2_loader_purego_test.go.tmpl')
-    paths.append(ROOT/'mobile/routervpn_imported_naive_h3_loader_purego_test.go.tmpl')
-    paths.append(ROOT/'mobile/routervpn_multihop_context_test.go.tmpl')
     for package in PACKAGES:
         paths += sorted((ROOT/'internal'/package).glob('*.go'))
     return paths + [path for module in _execution_modules for path in module.inputs()] + CONNECT.inputs() + NODE_CHAIN.inputs() + NAIVE.inputs() + OBSERVATION.inputs() + HY2_DEADLINES.inputs() + PQ.inputs() + WIREGUARD_BIND.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + EXTERNAL_POLICY.inputs() + COMPOSITE.inputs() + [Path(__file__).resolve()]
@@ -106,46 +93,26 @@ def prepare(vendor):
             parent_test = output/'preparation_test.go'
             if parent_test.is_symlink(): raise ValueError('Linked parent-only test in native policy tree')
             if parent_test.exists():
-                if not parent_test.is_file() or parent_test.read_bytes() != (ROOT/'internal/applexray/preparation_test.go').read_bytes():
-                    raise ValueError('Unexpected parent-only test in native policy tree')
-                parent_test.unlink()
+                raise ValueError('Old test projection: recreate disposable native checkout')
         for source in (ROOT/'internal'/package).glob('*.go'):
-            if source.name=='core_config_test.go' or (package=='applexray' and source.name=='preparation_test.go'):continue
+            if source.name.endswith('_test.go'):continue
             # Preserve source bytes across hosts. Text-mode writes expand LF
             # to CRLF on Windows and invalidate the copied policy identity.
             content=OBSERVATION.rewrite(source.read_bytes())
             for name in PACKAGES:
                 content=content.replace(('"router-vpn/internal/'+name+'"').encode(),('"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+name+'"').encode())
             (output/source.name).write_bytes(content)
-    (root/'routervpn_imported_entry_native_test.go').write_bytes((ROOT/'mobile/routervpn_imported_entry_native_test.go.tmpl').read_bytes())
-    (root/'routervpn_imported_openvpn_native_test.go').write_bytes((ROOT/'mobile/routervpn_imported_openvpn_native_test.go.tmpl').read_bytes())
-    (root/'routervpn_imported_packet_xray_native_test.go').write_bytes((ROOT/'mobile/routervpn_imported_packet_xray_native_test.go.tmpl').read_bytes())
-    (root/'routervpn_imported_pq_xray_native_test.go').write_bytes((ROOT/'mobile/routervpn_imported_pq_xray_native_test.go.tmpl').read_bytes())
-    (root/'routervpn_imported_xhttp_xray_native_test.go').write_bytes((ROOT/'mobile/routervpn_imported_xhttp_xray_native_test.go.tmpl').read_bytes())
-    (root/'routervpn_imported_naive_h2_native_test.go').write_bytes((ROOT/'mobile/routervpn_imported_naive_h2_native_test.go.tmpl').read_bytes())
-    (root/'routervpn_imported_naive_h3_native_test.go').write_bytes((ROOT/'mobile/routervpn_imported_naive_h3_native_test.go.tmpl').read_bytes())
-    (root/'routervpn_imported_naive_h2_loader_purego_test.go').write_bytes((ROOT/'mobile/routervpn_imported_naive_h2_loader_purego_test.go.tmpl').read_bytes())
-    (root/'routervpn_imported_naive_h3_loader_purego_test.go').write_bytes((ROOT/'mobile/routervpn_imported_naive_h3_loader_purego_test.go.tmpl').read_bytes())
-    (root/'routervpn_multihop_context_test.go').write_bytes((ROOT/'mobile/routervpn_multihop_context_test.go.tmpl').read_bytes())
     (root/'routervpn_imported_entry.go').write_bytes((ROOT/'mobile/routervpn_imported_entry.go.tmpl').read_bytes())
     instance_context = vendor/'daemon/routervpn_instance_context.go'
     if instance_context.is_symlink() or not instance_context.resolve().is_relative_to(vendor.resolve()):
         raise ValueError('Linked native instance observation target')
     instance_context.write_bytes((ROOT/'mobile/daemon/instance_context.go.tmpl').read_bytes())
-    instance_test = instance_context.with_name('routervpn_instance_context_test.go')
-    if instance_test.is_symlink(): raise ValueError('Linked native instance observation fixture')
-    instance_test.write_bytes((ROOT/'mobile/daemon/instance_context_test.go.tmpl').read_bytes())
     (root/'routervpn_multihop_bridge.go').write_bytes((ROOT/'mobile/routervpn_multihop_bridge.go.tmpl').read_bytes())
     (root/'routervpn_external_policy_bridge.go').write_bytes((ROOT/'mobile/routervpn_external_policy_bridge.go.tmpl').read_bytes())
     (root/'routervpn_external_measurement_bridge.go').write_bytes((ROOT/'mobile/routervpn_external_measurement_bridge.go.tmpl').read_bytes())
-    (root/'routervpn_external_measurement_context_test.go').write_bytes((ROOT/'mobile/routervpn_external_measurement_context_test.go.tmpl').read_bytes())
     (root/'routervpn_hop_measurement.go').write_bytes((ROOT/'mobile/routervpn_hop_measurement.go.tmpl').read_bytes())
     (root/'routervpn_dns_measurement.go').write_bytes((ROOT/'mobile/routervpn_dns_measurement.go.tmpl').read_bytes())
-    (root/'routervpn_multihop_native_test.go').write_bytes((ROOT/'mobile/routervpn_multihop_native_test.go.tmpl').read_bytes())
     (root/'routervpn_sip003_bridge.go').write_bytes((ROOT/'mobile/routervpn_sip003_bridge.go.tmpl').read_bytes())
-    tests = vendor/'protocol/routervpnsip003test'
-    tests.mkdir(parents=True, exist_ok=True)
-    (tests/'traffic_test.go').write_bytes((ROOT/'mobile/sip003/traffic_test.go.tmpl').read_bytes())
     AMNEZIA.prepare(vendor)
     PQ.prepare(vendor)
     PERFORMANCE.prepare(vendor)

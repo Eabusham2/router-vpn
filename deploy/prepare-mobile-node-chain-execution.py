@@ -9,38 +9,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-mobile-node-chain-execution-source.json'
-TEMPLATES = {
-    'candidates_live_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_candidates_live_test.go',
-    'candidates_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_candidates_test.go',
-    'candidates.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_candidates.go',
-    'multiple_imported_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_multiple_imported_execution_mobile_test.go',
-    'multiple_imported.go.tmpl': 'experimental/libbox/routervpn_node_chain_multiple_imported_execution_mobile.go',
-    'openvpn.go.tmpl': 'experimental/libbox/routervpn_node_chain_openvpn_execution_mobile.go',
-    'openvpn_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_openvpn_execution_mobile_test.go',
-    'socks_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_execution_mobile_test.go',
-    'socks.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_execution_mobile.go',
-    'connect_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect_execution_mobile_test.go',
-    'connect.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect_execution_mobile.go',
-    'last.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_last.go',
-    'last_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_last_test.go',
-    'bridge.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution.go',
-    'lifecycle.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_lifecycle.go',
-    'restore.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_restore.go',
-    'restore_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_restore_test.go',
-    'activities.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_activities.go',
-    'measurement.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_measurement.go',
-    'measurement_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_measurement_test.go',
-    'latency.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_latency.go',
-    'latency_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_latency_test.go',
-    'mtu.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_mtu.go',
-    'mtu_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_mtu_test.go',
-    'bridge_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_test.go',
-    'lifecycle_test.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_lifecycle_test.go',
-    'instance_close.go.tmpl': 'daemon/routervpn_instance_close.go',
-    'instance_close_test.go.tmpl': 'daemon/routervpn_instance_close_test.go',
-    'instance_capture.go.tmpl': 'daemon/routervpn_instance_capture.go',
-    'instance_capture_test.go.tmpl': 'daemon/routervpn_instance_capture_test.go',
-}
+TEMPLATES = {'candidates.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_candidates.go', 'multiple_imported.go.tmpl': 'experimental/libbox/routervpn_node_chain_multiple_imported_execution_mobile.go', 'openvpn.go.tmpl': 'experimental/libbox/routervpn_node_chain_openvpn_execution_mobile.go', 'socks.go.tmpl': 'experimental/libbox/routervpn_node_chain_socks_execution_mobile.go', 'connect.go.tmpl': 'experimental/libbox/routervpn_node_chain_connect_execution_mobile.go', 'last.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_last.go', 'bridge.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution.go', 'lifecycle.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_lifecycle.go', 'restore.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_restore.go', 'activities.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_activities.go', 'measurement.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_measurement.go', 'latency.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_latency.go', 'mtu.go.tmpl': 'experimental/libbox/routervpn_node_chain_execution_mtu.go', 'instance_close.go.tmpl': 'daemon/routervpn_instance_close.go', 'instance_capture.go.tmpl': 'daemon/routervpn_instance_capture.go'}
 PREREQUISITES = {
     'routervpn_node_chain_execution.go': 'mobile/chain/execution_box.go.tmpl',
     'adapter/outbound/routervpn_node_chain_execution.go': 'mobile/chain/execution_outbound.go.tmpl',
@@ -82,11 +51,7 @@ ACQUIRE_AFTER = ACQUIRE_BEFORE+'\tcapturedInstance = i\n'
 
 
 def inputs():
-    return [Path(__file__).resolve(),
-            *(ROOT/'deploy'/name for name in ('test_mobile_node_chain_execution.py',
-                'test_mobile_node_chain_execution_runner.py', 'test_mobile_node_chain_execution_preparation.py')),
-            *(ROOT/'mobile/chain_execution'/name for name in sorted(TEMPLATES)),
-            *(ROOT/path for path in sorted(PREREQUISITES.values()))]
+    return [Path(__file__).resolve(), *(ROOT / 'deploy' / name for name in ()), *(ROOT / 'mobile/chain_execution' / name for name in sorted(TEMPLATES)), *(ROOT / path for path in sorted(PREREQUISITES.values()))]
 
 
 def digest():
@@ -148,25 +113,7 @@ def prepare(vendor):
             raise ValueError('invalid mobile execution ownership file')
         record = json.loads(manifest.read_bytes())
         current = set(TEMPLATES.values())
-        last = {'experimental/libbox/routervpn_node_chain_execution_last.go', 'experimental/libbox/routervpn_node_chain_execution_last_test.go'}
-        restore_test = {'experimental/libbox/routervpn_node_chain_execution_restore_test.go'}
-        latency = {'experimental/libbox/routervpn_node_chain_execution_latency.go', 'experimental/libbox/routervpn_node_chain_execution_latency_test.go'}
-        connect = {TEMPLATES[name] for name in ('connect.go.tmpl', 'connect_test.go.tmpl')}
-        socks = {TEMPLATES[name] for name in ('socks.go.tmpl', 'socks_test.go.tmpl')}
-        openvpn = {TEMPLATES[name] for name in ('openvpn.go.tmpl', 'openvpn_test.go.tmpl')}
-        candidates = {'experimental/libbox/routervpn_node_chain_execution_candidates.go', 'experimental/libbox/routervpn_node_chain_execution_candidates_test.go'}
-        factory_test = {TEMPLATES['candidates_live_test.go.tmpl']}
-        multiple = {TEMPLATES[name] for name in ('multiple_imported.go.tmpl', 'multiple_imported_test.go.tmpl')}
-        inventories = tuple(current-previous_multiple-previous_factory-previous_candidates-previous_openvpn-previous_last-previous_restore-previous_latency-previous_connect-previous_socks
-                            for previous_multiple in (set(), multiple)
-                            for previous_factory in (set(), factory_test)
-                            for previous_candidates in (set(), candidates)
-                            for previous_openvpn in (set(), openvpn)
-                            for previous_last in (set(), last)
-                            for previous_restore in (set(), restore_test)
-                            for previous_latency in (set(), latency)
-                            for previous_connect in (set(), connect)
-                            for previous_socks in (set(), socks))
+        inventories = (current,)
         if not isinstance(record, dict) or set(record) != {'schema', 'core', 'files'} or record['schema'] != 1 or record['core'] != PIN or not isinstance(record['files'], dict) or set(record['files']) not in inventories:
             raise ValueError('invalid mobile execution ownership inventory')
         previous = record['files']

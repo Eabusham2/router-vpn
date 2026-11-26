@@ -56,9 +56,7 @@ PATCHES = {
 }
 
 def inputs():
-    return [Path(__file__).resolve(), ROOT/'mobile/routervpn_openvpn_generation_fixture.go.tmpl',
-            ROOT/'mobile/routervpn_openvpn_context.go.tmpl', ROOT/'mobile/routervpn_openvpn_context_test.go.tmpl',
-            ROOT/'internal/desktopnetwork/desktop_network_lock.go']
+    return [Path(__file__).resolve(), ROOT / 'mobile/routervpn_openvpn_generation_fixture.go.tmpl', ROOT / 'mobile/routervpn_openvpn_context.go.tmpl', ROOT / 'internal/desktopnetwork/desktop_network_lock.go']
 
 
 def patch(name, data, reverse=False):
@@ -80,9 +78,7 @@ def h1(rows):
 def context_sources():
     lock = (ROOT/'internal/desktopnetwork/desktop_network_lock.go').read_text().replace('package desktopnetwork', 'package openvpn', 1)
     lock = re.sub(r'\b(LockContext|RLockContext)\b', lambda match: 'RouterVPN'+match.group(1), lock)
-    return {'routervpn_context.go': (ROOT/'mobile/routervpn_openvpn_context.go.tmpl').read_bytes(),
-            'routervpn_context_test.go': (ROOT/'mobile/routervpn_openvpn_context_test.go.tmpl').read_bytes(),
-            'routervpn_context_lock.go': lock.encode()}
+    return {'routervpn_context.go': (ROOT / 'mobile/routervpn_openvpn_context.go.tmpl').read_bytes(), 'routervpn_context_lock.go': lock.encode()}
 
 
 def verify_tree(directory, *, allow_missing_context=False):

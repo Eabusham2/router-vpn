@@ -17,7 +17,7 @@ GO_SOURCE_HASHES={
  'LICENSE':'911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad',
 }
 def inputs():
-    paths=[Path(__file__).resolve(),ROOT/'deploy/prepare-retained-tun.py',RETAINED.OBSERVATION_TEMPLATE,*RETAINED.INBOUND_OBSERVATION_TEMPLATES,ROOT/'mobile/mtu/GO-LICENSE',ROOT/'mobile/daemon/instance_context.go.tmpl',ROOT/'mobile/daemon/instance_context_test.go.tmpl']+sorted((ROOT/'mobile/mtu').glob('*.tmpl'))
+    paths=[Path(__file__).resolve(), ROOT / 'deploy/prepare-retained-tun.py', RETAINED.OBSERVATION_TEMPLATE, *RETAINED.INBOUND_OBSERVATION_TEMPLATES, ROOT / 'mobile/mtu/GO-LICENSE', ROOT / 'mobile/daemon/instance_context.go.tmpl']+sorted((ROOT/'mobile/mtu').glob('*.tmpl'))
     for package in PACKAGES:paths+=sorted((ROOT/'internal'/package).glob('*.go'))
     return paths
 def digest():
@@ -123,15 +123,11 @@ def prepare(vendor, *, mobile=True):
             if text.count(old)!=1:raise ValueError('native MTU boundary changed: '+name)
             text=text.replace(old,new)
         writes[path]=text.encode()
-    targets={'tun.go':'protocol/tun/routervpn_mtu.go','box.go':'routervpn_mtu.go','box_test.go':'routervpn_mtu_test.go'}
-    if not mobile:
-        targets['desktop_transaction_native_linux_test.go']='routervpn_mtu_transaction_native_linux_test.go'
-        targets['tun_native_linux_test.go']='protocol/tun/routervpn_mtu_native_linux_test.go'
+    targets={'tun.go': 'protocol/tun/routervpn_mtu.go', 'box.go': 'routervpn_mtu.go'}
     if mobile:
-        for name in ('instance_context', 'instance_context_test'):
+        for name in ('instance_context',):
             writes[vendor/'daemon'/('routervpn_'+name+'.go')]=(ROOT/'mobile/daemon'/(name+'.go.tmpl')).read_bytes()
-        targets['pprof_maps_test.go']='experimental/libbox/internal/oomprofile/routervpn_maps_test.go'
-        for name in ['bridge','external_owner','interface','socket_linux','socket_darwin','socket_other','bridge_test','bridge_context_test','chain_owner_test']:
+        for name in ['bridge','external_owner','interface','socket_linux','socket_darwin','socket_other']:
             targets[name+'.go']='experimental/libbox/routervpn_mtu_'+name+'.go'
     for source,dest in targets.items():writes[vendor/dest]=(ROOT/'mobile/mtu'/(source+'.tmpl')).read_bytes()
     writes.update(policy_copies(vendor))

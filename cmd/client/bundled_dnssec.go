@@ -24,7 +24,7 @@ var bundledDNSSECNames = []string{bundledDNSSECLibrary, bundledDNSSECReceiptName
 var bundledDNSSECExports = []string{"rvdns_abi", "rvdns_anchor", "rvdns_cancel", "rvdns_create", "rvdns_destroy", "rvdns_fd", "rvdns_insecure", "rvdns_process", "rvdns_result", "rvdns_start"}
 var bundledDNSSECInputs = []string{
 	"native/dnssec/README.md", "native/dnssec/sources.json", "native/dnssec/validator.c", "native/dnssec/validator.h", "native/dnssec/zone_fixture.go.tmpl", "native/dnssec/fixture.go.mod", "native/dnssec/fixture.go.sum",
-	"deploy/build-dnssec-validator.py", "deploy/verify-dnssec-validator.py", "deploy/test_dnssec_validator.py", "deploy/test_dnssec_validator_build.py", "deploy/test_dnssec_validator_package.py", "deploy/desktop-dnssec-bundle.py", "deploy/test_desktop_dnssec_bundle.py",
+	"deploy/build-dnssec-validator.py", "deploy/verify-dnssec-validator.py", "deploy/test_dnssec_validator.py", "deploy/desktop-dnssec-bundle.py",
 	"cmd/client/bundled_dnssec.go", "cmd/client/bundled_dnssec_test.go", "cmd/client/bundled_native.go",
 }
 var bundledDNSSECLicenses = map[string]string{

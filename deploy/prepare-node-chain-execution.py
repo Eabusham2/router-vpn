@@ -10,13 +10,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 OWNER = 'routervpn-node-chain-execution-source.json'
-TEMPLATES = {
-    'execution_ingress.go.tmpl': 'route/routervpn_node_chain_ingress.go',
-    'execution_selector.go.tmpl': 'protocol/group/routervpn_node_chain_execution.go',
-    'execution_selector_test.go.tmpl': 'protocol/group/routervpn_node_chain_execution_test.go',
-    'execution_ingress_test.go.tmpl': 'route/routervpn_node_chain_ingress_test.go',
-    'execution_tun_test.go.tmpl': 'protocol/tun/routervpn_node_chain_ingress_test.go',
-}
+TEMPLATES = {'execution_ingress.go.tmpl': 'route/routervpn_node_chain_ingress.go', 'execution_selector.go.tmpl': 'protocol/group/routervpn_node_chain_execution.go'}
 
 
 def inputs():

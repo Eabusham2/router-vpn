@@ -37,14 +37,7 @@ OBSERVATION = importlib.util.module_from_spec(_observation_spec)
 _observation_spec.loader.exec_module(OBSERVATION)
 
 def inputs():
-    return sorted(set([*OBSERVATION.inputs(), Path(__file__).resolve(), ROOT/'deploy/test-mobile-tor-outbound.py', ROOT/'deploy/test_mobile_tor_dns_bootstrap.py', ROOT/'deploy/test_mobile_tor_thread_signals.py', ROOT/'deploy/test_mobile_tor_package_runtime.py', ROOT/'mobile/toroutbound/README.md', *TORPACK.inputs(),
-        *[p for p in (ROOT/'internal/common').glob('*.go') if not p.name.endswith('_test.go')],
-        *[p for p in (ROOT/'internal/awgpolicy').glob('*.go') if not p.name.endswith('_test.go')],
-        *[p for p in (ROOT/'internal/nativeopenvpn').glob('*.go') if not p.name.endswith('_test.go')],
-        *mobile_policy_sources(), *lease_policy_sources(), ROOT/'deploy/test_mobile_tor_source_closure.py',
-        ROOT/'internal/dnsmeasure/catalog.go', ROOT/'internal/desktopnetwork/desktop_network_lock.go',
-        *[p for p in (ROOT/'mobile/torpt').rglob('*') if p.is_file()],
-        *(ROOT/'mobile/toroutbound').glob('*.tmpl')]))
+    return sorted(set([*OBSERVATION.inputs(), Path(__file__).resolve(), ROOT / 'mobile/toroutbound/README.md', *TORPACK.inputs(), *[p for p in (ROOT / 'internal/common').glob('*.go') if not p.name.endswith('_test.go')], *[p for p in (ROOT / 'internal/awgpolicy').glob('*.go') if not p.name.endswith('_test.go')], *[p for p in (ROOT / 'internal/nativeopenvpn').glob('*.go') if not p.name.endswith('_test.go')], *mobile_policy_sources(), *lease_policy_sources(), ROOT / 'internal/dnsmeasure/catalog.go', ROOT / 'internal/desktopnetwork/desktop_network_lock.go', *[p for p in (ROOT / 'mobile/torpt').rglob('*') if p.is_file()], *(ROOT / 'mobile/toroutbound').glob('*.tmpl')]))
 
 
 def digest():
@@ -122,22 +115,7 @@ def copies():
             continue
         relative = str(path.relative_to(ROOT/'mobile/torpt'))
         result['routervpn/torpt/'+relative] = rewrite(path.read_bytes()) if path.suffix == '.go' else path.read_bytes()
-    mapped = {'box.go.tmpl': 'routervpn_tor.go',
-              'box_test.go.tmpl': 'routervpn_tor_test.go',
-              'comparison_box.go.tmpl': 'routervpn_tor_comparison.go',
-              'comparison_box_test.go.tmpl': 'routervpn_tor_comparison_test.go',
-              'comparison_bridge.go.tmpl': 'experimental/libbox/routervpn_tor_comparison.go',
-              'comparison_bridge_test.go.tmpl': 'experimental/libbox/routervpn_tor_comparison_test.go',
-              'comparison_round_box.go.tmpl': 'routervpn_tor_comparison_round.go',
-              'comparison_round_box_test.go.tmpl': 'routervpn_tor_comparison_round_test.go',
-              'comparison_round.go.tmpl': 'experimental/libbox/routervpn_tor_comparison_round.go',
-              'comparison_round_test.go.tmpl': 'experimental/libbox/routervpn_tor_comparison_round_test.go',
-              'padding_box.go.tmpl': 'routervpn_tor_padding.go',
-              'padding_box_test.go.tmpl': 'routervpn_tor_padding_test.go',
-              'padding_bridge.go.tmpl': 'experimental/libbox/routervpn_tor_padding.go',
-              'bridge.go.tmpl': 'experimental/libbox/routervpn_tor.go',
-              'server_bridge.go.tmpl': 'experimental/libbox/routervpn_tor_server.go',
-              'notices.go.tmpl': 'routervpn/tornotices/notices.go'}
+    mapped = {'box.go.tmpl': 'routervpn_tor.go', 'comparison_box.go.tmpl': 'routervpn_tor_comparison.go', 'comparison_bridge.go.tmpl': 'experimental/libbox/routervpn_tor_comparison.go', 'comparison_round_box.go.tmpl': 'routervpn_tor_comparison_round.go', 'comparison_round.go.tmpl': 'experimental/libbox/routervpn_tor_comparison_round.go', 'padding_box.go.tmpl': 'routervpn_tor_padding.go', 'padding_bridge.go.tmpl': 'experimental/libbox/routervpn_tor_padding.go', 'bridge.go.tmpl': 'experimental/libbox/routervpn_tor.go', 'server_bridge.go.tmpl': 'experimental/libbox/routervpn_tor_server.go', 'notices.go.tmpl': 'routervpn/tornotices/notices.go'}
     for path in sorted((ROOT/'mobile/toroutbound').glob('*.tmpl')):
         if path.name == 'dns_adapter.go.tmpl':
             continue

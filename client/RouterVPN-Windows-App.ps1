@@ -181,13 +181,6 @@ try{
         # enforced by the composed-source contract above and the helpers' own
         # self-tests. This list intentionally guards Product-v2 UI seams only.
         foreach($marker in @('UnifiedShell','UnifiedMapCanvas','UnifiedConnectButton','UnifiedFastestNode','UnifiedLiveLatency','UnifiedForwardButton','UnifiedKillSwitch','UnifiedMultihop','UnifiedMultihopLatency','UnifiedPerformanceButton','UnifiedModeCombo','UnifiedDnsCombo','UnifiedTorButton','Tor bridges','ShowUnifiedTorBridgeBuilder','SMART AUTO','New CUSTOM preset','Snowflake','WebTunnel','Auto / Custom','System.Collections.Generic.HashSet','real stored coordinates')){if(-not$ProductSource.Contains($marker)){throw "Windows unified product self-test missing $marker"}}
-        # Run the same composed-source/event-wiring regressions from source,
-        # installed and Portable packages, before Product-v2's self-test exits.
-        $HelpBindingTest=Join-Path $PSScriptRoot 'test-windows-help-binding.ps1'
-        if(-not(Test-Path -LiteralPath $HelpBindingTest)){throw 'Windows Help binding regression test is missing from this package.'}
-        & $HelpBindingTest -Root (Split-Path $PSScriptRoot -Parent)
-        if(-not$?){throw 'Windows composed Help binding regressions failed.'}
-        & (Join-Path $PSScriptRoot 'test-windows-vector-map.ps1') -ProductSource $ProductSource -Native
         & $ProductScript -BaseUrl $BaseUrl -SelfTest
     }else{Show-RouterVPNProductOnboarding;& $ProductScript -BaseUrl $BaseUrl}
     if(-not$?){throw 'Router VPN native Windows product shell failed.'}

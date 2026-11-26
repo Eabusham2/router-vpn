@@ -23,7 +23,6 @@ def prepare(vendor):
             source=source.replace(anchor,anchor+addition)
     directory=vendor/'service/routervpnperformance';directory.mkdir(parents=True,exist_ok=True)
     (directory/'service.go').write_bytes((ROOT/'mobile/performance/service.go.tmpl').read_bytes())
-    (directory/'service_test.go').write_bytes((ROOT/'mobile/performance/service_test.go.tmpl').read_bytes())
     (vendor/'routervpn_services.go').write_bytes((ROOT/'mobile/performance/box.go.tmpl').read_bytes())
     (vendor/'experimental/libbox/routervpn_performance.go').write_bytes((ROOT/'mobile/performance/bridge.go.tmpl').read_bytes())
     registry.write_bytes(source.encode('utf-8'))

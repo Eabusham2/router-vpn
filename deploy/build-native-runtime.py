@@ -118,247 +118,21 @@ def run(command, *, cwd=None, env=None, timeout=1800):
 
 
 def inputs():
-    files = list(dict.fromkeys([Path(__file__).resolve(), ROOT/'deploy/build-desktop-pq.py',
-                             ROOT/'deploy/prepare-go-windows-sockets.py',
-                             ROOT/'deploy/test_go_windows_sockets.py',
-                             ROOT/'deploy/windows_build_owner.py',
-                             ROOT/'deploy/test_windows_build_owner.py',
-                             ROOT/'deploy/test_desktop_darwin_retirement.py',
-                             ROOT/'deploy/test_desktop_imported_trio_execution.py',
-                             ROOT/'deploy/test_desktop_imported_trio_execution_runner.py',
-                             ROOT/'deploy/test_desktop_imported_trio_controller.py',
-                             ROOT/'deploy/test_desktop_imported_trio_controller_runner.py',
-                             ROOT/'deploy/server_dns_failure_diagnostic.py',
-                             ROOT/'deploy/fixtures/server-dns-diagnostic.go.tmpl',
-                             ROOT/'mobile/server_chain_acceptance/connect_linux_test.go.tmpl',
-                             ROOT/'deploy/build-mobile-pq.py', ROOT/'deploy/prepare-desktop-rosenpass.py',
-                             ROOT/'deploy/setup-desktop-native-toolchain.py',
-                             ROOT/'deploy/install-desktop-windows-toolchain.py',
-                             ROOT/'deploy/test_desktop_socket_uid.py',
-                             ROOT/'deploy/test_desktop_windows_identity.py',
-                             ROOT/'deploy/test_desktop_windows_identity_runner.py',
-                             ROOT/'deploy/test_windows_node_physical.py',
-                             ROOT/'deploy/test_windows_node_pq.py',
-                             ROOT/'deploy/test_windows_node_pq_runner.py',
-                             ROOT/'deploy/test_windows_node_max.py',
-                             ROOT/'deploy/test_windows_physical_bootstrap.py',
-                             ROOT/'deploy/test_windows_candidate_prefix.py',
-                             ROOT/'deploy/test_windows_candidate_prefix_runner.py',
-                             ROOT/'deploy/test_desktop_socks_parent.py',
-                             ROOT/'deploy/test_desktop_socks_parent_runner.py',
-                             ROOT/'deploy/test_windows_socks_node_chain_host.py',
-                             ROOT/'deploy/test_windows_socks_node_chain_host_runner.py',
-                             ROOT/'deploy/test_windows_socks_release_receipt.py',
-                             ROOT/'deploy/test_windows_connect_node_chain_host.py',
-                             ROOT/'deploy/test_windows_connect_node_chain_host_runner.py',
-                             ROOT/'deploy/test_windows_connect_release_receipt.py',
-                             ROOT/'deploy/windows_connect_node_chain_overlay.py',
-                             ROOT/'deploy/test_desktop_connect_parent.py',
-                             ROOT/'deploy/test_desktop_connect_parent_runner.py',
-                             ROOT/'deploy/test_desktop_connect_admission.py',
-                             ROOT/'deploy/test_desktop_connect_admission_runner.py',
-                             *sorted((ROOT/'deploy/fixtures/windows-connect-node-chain').glob('*.go')),
-                             ROOT/'deploy/windows_socks_node_chain_overlay.py',
-                             *sorted((ROOT/'deploy/fixtures/windows-socks-node-chain').glob('*.go')),
-                             ROOT/'deploy/windows_candidate_prefix_overlay.py',
-                             *sorted((ROOT/'deploy/fixtures/windows-candidate-prefix').glob('*.go')),
-                             ROOT/'cmd/client/ordered_candidate_prefix_windows_native_test.go',
-                             ROOT/'cmd/client/ordered_candidate_prefix_windows_sources_native_test.go',
-                             ROOT/'deploy/test_desktop_node_physical.py',
-                             ROOT/'deploy/test_desktop_node_phases.py',
-                             ROOT/'deploy/test_desktop_native_root_phases.py',
-                             ROOT/'mobile/server_chain_acceptance/openvpn_linux_test.go.tmpl',
-                             ROOT/'.github/workflows/build-all.yml',
-                             *sorted((ROOT/'cmd/router-agent').glob('*.go')),
-                             ROOT/'deploy/test_server_node_chain_openvpn_native.py',
-                             ROOT/'deploy/test_server_node_chain_openvpn_native_runner.py',
-                             ROOT/'deploy/test_node_chain_multiple_imported_native.py',
-                             ROOT/'deploy/test_node_chain_multiple_imported_native_runner.py',
-                             ROOT/'deploy/test_node_chain_multiple_imported_execution_owner.py',
-                             ROOT/'deploy/test_node_chain_multiple_imported_execution_owner_runner.py',
-                             ROOT/'mobile/chain_component/mixed_local_candidates_test.go.tmpl',
-                             ROOT/'mobile/chain_component/multiple_imported_test.go.tmpl',
-                             ROOT/'mobile/chain_component/mixed_local_traffic_test.go.tmpl',
-                             ROOT/'mobile/chain_component/external_final_test.go.tmpl',
-                             ROOT/'mobile/chain_component/external_final_candidates_test.go.tmpl',
-                             ROOT/'mobile/chain_component/extended_execution_client_test.go.tmpl',
-                             ROOT/'mobile/chain_component/extended_execution_peer_test.go.tmpl',
-                             ROOT/'mobile/server_chain_component/extended_execution_test.go.tmpl',
-                             ROOT/'mobile/chain_component/openvpn_execution_test.go.tmpl',
-                             ROOT/'mobile/server_chain_component/openvpn_owner.go.tmpl',
-                             ROOT/'mobile/server_chain_component/openvpn_test.go.tmpl',
-                             ROOT/'deploy/prepare-desktop-selected-latency-test.py',
-                             ROOT/'mobile/desktop_test/selected_latency_fixture.go.tmpl',
-                             ROOT/'deploy/prepare-desktop-selected-candidate-test.py',
-                             ROOT/'mobile/desktop_test/selected_candidate_fixture.go.tmpl',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/test_node_chain_ordinary_candidate_reservation.py',
-                             ROOT/'deploy/test_node_chain_ordinary_candidate_reservation_runner.py',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/test_mobile_node_chain_execution.py',
-                             ROOT/'deploy/test_mobile_node_chain_execution_runner.py',
-                             ROOT/'deploy/test_mobile_node_chain_execution_preparation.py',
-                             ROOT/'deploy/test_mobile_imported_socks_xray.py',
-                             ROOT/'deploy/test_mobile_imported_socks_xray_runner.py',
-                             ROOT/'deploy/test_mobile_imported_proxy_xray.py',
-                             ROOT/'deploy/test_mobile_imported_proxy_xray_runner.py',
-                             ROOT/'deploy/test_mobile_imported_connect_xray.py',
-                             ROOT/'deploy/test_mobile_imported_connect_xray_runner.py',
-                             ROOT/'deploy/test_native_imported_packet_xray.py',
-                             ROOT/'deploy/test_native_imported_packet_xray_runner.py',
-                             ROOT/'deploy/test_mobile_imported_packet_xray.py',
-                             ROOT/'deploy/test_mobile_imported_packet_xray_runner.py',
-                             ROOT/'deploy/test_mobile_imported_naive_h2.py',
-                             ROOT/'deploy/test_mobile_imported_naive_h2_runner.py',
-                             ROOT/'android/test_android_imported_router.py',
-                             ROOT/'mobile/routervpn_imported_pq_xray_native_test.go.tmpl',
-                             ROOT/'mobile/routervpn_imported_xhttp_xray_native_test.go.tmpl',
-                             ROOT/'mobile/routervpn_imported_naive_h2_native_test.go.tmpl',
-                             ROOT/'mobile/routervpn_imported_naive_h3_native_test.go.tmpl',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/test_desktop_node_chain_openvpn_prefix.py',
-                             ROOT/'deploy/test_desktop_node_chain_openvpn_prefix_runner.py',
-                             ROOT/'deploy/test_desktop_node_chain_openvpn_prefix_contract.py',
-                             ROOT/'deploy/test_desktop_node_chain_openvpn_prefix_contract_runner.py',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/test_desktop_node_chain_ss_prefix.py',
-                             ROOT/'deploy/test_desktop_node_chain_ss_prefix_runner.py',
-                             ROOT/'deploy/test_connected_imported_ss_candidates.py',
-                             ROOT/'deploy/test_connected_imported_ss_candidates_runner.py',
-                             ROOT/'deploy/test_desktop_node_chain_ss_prefix_contract.py',
-                             ROOT/'deploy/test_desktop_node_chain_ss_prefix_contract_runner.py',
-                             ROOT/'deploy/test_ios_node_candidate_typed_prefix.py',
-                             ROOT/'deploy/test_ios_node_layered_candidates.py',
-                             ROOT/'deploy/test_ios_node_chain_imported_capture.py',
-                             ROOT/'deploy/test_ios_node_chain_imported_profiles.py',
-                             ROOT/'deploy/test_ios_node_chain_imported_nodes.py',
-                             ROOT/'deploy/test_ios_node_chain_imported_nodes_profiles.py',
-                             ROOT/'deploy/test_ios_openvpn_execution_capture.py',
-                             ROOT/'deploy/test_ios_openvpn_execution_runtime.py',
-                             ROOT/'deploy/test_ios_openvpn_execution_restore_last.py',
-                             ROOT/'deploy/test_ios_openvpn_execution_profiles.py',
-                             ROOT/'internal/mobilemultihop/node_chain_openvpn_apple_fixture_test.go',
-                             ROOT/'deploy/test_ios_node_chain_connect_profiles.py',
-                             ROOT/'deploy/test_ios_hysteria_execution_capture.py',
-                             ROOT/'deploy/test_ios_node_chain_openvpn_profiles.py',
-                             ROOT/'deploy/test_ios_node_chain_execution_capture.py',
-                             ROOT/'deploy/test_ios_node_chain_profiles.py',
-                             ROOT/'deploy/test_ios_connect_execution_capture.py',
-                             ROOT/'deploy/test_ios_connect_execution_prefix_controls.py',
-                             ROOT/'deploy/test_ios_connect_execution_runtime.py',
-                             ROOT/'deploy/test_ios_connect_execution_control.py',
-                             ROOT/'deploy/test_ios_connect_execution_launch.py',
-                             ROOT/'deploy/test_ios_connect_execution_speed_lab.py',
-                             ROOT/'deploy/test_ios_connect_execution_layered_control.py',
-                             ROOT/'deploy/test_ios_connect_execution_layered_launch.py',
-                             ROOT/'deploy/test_ios_connect_execution_layered_profiles.py',
-                             ROOT/'deploy/test_ios_socks_execution_capture.py',
-                             ROOT/'deploy/test_ios_socks_execution_runtime.py',
-                             ROOT/'deploy/test_ios_socks_execution_restore_last.py',
-                             ROOT/'deploy/test_ios_socks_execution_layered_control.py',
-                             ROOT/'deploy/test_ios_socks_execution_layered_launch.py',
-                             ROOT/'deploy/test_ios_socks_execution_layered_profiles.py',
-                             ROOT/'deploy/ios_ordered_execution_control_boundary.py',
-                             ROOT/'ios/RouterVPN/test_runtime_selection_contract.py',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'android/test_android_node_chain_imported_runtime.py',
-                             ROOT/'android/test_android_multiple_imported_local.py',
-                             ROOT/'deploy/test_reference_udp_lifetime.py',
-                             ROOT/'deploy/test_mobile_imported_entry.py',
-                             ROOT/'deploy/test_mobile_imported_entry_runner.py',
-                             ROOT/'deploy/mobile_imported_openvpn_cases.py',
-                             ROOT/'deploy/test_desktop_node_routing_runner.py',
-                             ROOT/'deploy/test_desktop_node_pq.py',
-                             ROOT/'deploy/test_desktop_node_max.py',
-                             ROOT/'deploy/test_desktop_node_max_runner.py',
-                             ROOT/'deploy/build_pq_reference_fixture.py',
-                             ROOT/'deploy/test_server_pq_traffic.py',
-                             ROOT/'mobile/rosenpass/examples/native_keys.rs',
-                             ROOT/'go.mod',
-                             *([ROOT/'go.sum'] if (ROOT/'go.sum').exists() or (ROOT/'go.sum').is_symlink() else []),
-                             *sorted((ROOT/'cmd/start-layer-relay').glob('*.go')),
-                             *sorted((ROOT/'deploy/fixtures/windows-physical-bootstrap').glob('*.go')),
-                             *sorted((ROOT/'deploy/fixtures/windows-node-physical').glob('*.go')),
-                             ROOT/'deploy/test_desktop_linux_guardian.py',
-                             ROOT/'deploy/test_desktop_dnssec_namespace.py',
-                             ROOT/'deploy/test_desktop_dnssec_command.py',
-                             ROOT/'deploy/test_linux_node_child_control.py',
-                             ROOT/'deploy/test_linux_node_child_control_runner.py',
-                             ROOT/'deploy/test_linux_node_child_tun.py',
-                             ROOT/'deploy/test_linux_node_child_tun_runner.py',
-                             ROOT/'deploy/test_linux_node_host_tun.py',
-                             ROOT/'deploy/test_linux_node_host_tun_runner.py',
-                             ROOT/'deploy/unix_reality_cases.py',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/unix_naive_h2_cases.py',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/windows_connect_execution_overlay.py',
-                             ROOT/'deploy/fixtures/windows-connect-execution/peer.go',
-                             ROOT/'deploy/fixtures/windows-connect-execution/physical.go',
-                             ROOT/'deploy/fixtures/windows-connect-execution/security.go',
-                             ROOT/'deploy/fixtures/windows-connect-execution/security_test.go',
-                             ROOT/'deploy/windows_connect_execution_worker_controls.py',
-                             ROOT/'deploy/test_linux_controller_privilege.py',
-                             ROOT/'deploy/linux_standard_service_gate.py',
-                             ROOT/'deploy/test_linux_standard_service_runner.py',
-                             ROOT/'deploy/linux_standard_service_bundle.py',
-                             ROOT/'deploy/test_linux_standard_service_bundle.py',
-                             ROOT/'deploy/test_macos_external_host.py',
-                             ROOT/'deploy/test_macos_external_host_runner.py',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/test_macos_external_baseline_identity.py',
-                             ROOT/'deploy/seal-native-runtime.py',
-                             *sorted((ROOT/'cmd/client').glob('*.go')),
-                             ROOT/'cmd/client/ui.html', ROOT/'cmd/client/logical_ui.js',
-                             *sorted((ROOT/'internal').rglob('*.go')),
-                             ROOT/'deploy/test_darwin_node_child_tun.py',
-                             ROOT/'deploy/test_darwin_node_child_tun_runner.py',
-                             ROOT/'deploy/darwin_child_phases.py',
-                             ROOT/'deploy/test_darwin_child_phases.py',
-                             ROOT/'deploy/test_darwin_paired_node_child.py',
-                             ROOT/'deploy/test_darwin_paired_node_child_runner.py',
-                             ROOT/'deploy/test_darwin_paired_node_platform.py',
-                             ROOT/'deploy/test_darwin_paired_mtu_reader.py',
-                             ROOT/'deploy/test_darwin_ordered_mtu_reader.py',
-                             ROOT/'deploy/test_darwin_ordered_mtu_reader_runner.py',
-                             ROOT/'deploy/test_darwin_typed_mtu_reader.py',
-                             ROOT/'deploy/test_darwin_typed_mtu_reader_runner.py',
-                             ROOT/'.github/workflows/build-all.yml',
-                             ROOT/'deploy/darwin_race_toolchain.py',
-                             ROOT/'deploy/test_linux_guardian_namespace.py',
-                             ROOT/'deploy/test_linux_guardian_selection.py',
-                             ROOT/'deploy/test_linux_guardian_cleanup.py',
-                             *sorted((ROOT/'mobile/rosenpass').glob('Cargo.*')),
-                             *sorted((ROOT/'mobile/rosenpass').glob('*.h')),
-                             *sorted((ROOT/'mobile/rosenpass').glob('*.c')),
-                             *sorted((ROOT/'mobile/rosenpass/src').rglob('*.rs')),
-                             *POLICY.inputs(), *TOR.inputs(), *DNSSEC.inputs(),
-                             *PERFORMANCE.inputs(), *OPENVPN.inputs(), *EXTERNAL.inputs(),
-                             ROOT/'mobile/desktop/native_library.go.tmpl',
-                             ROOT/'deploy/prepare-mobile-buffers.py',
-                             ROOT/'deploy/mobile_udp_socket_policy.py']))
-    # Path ordering is case-folded on Windows and case-sensitive on POSIX.
-    # Nested preparers include mixed-case Java/Swift filenames, so preserving
-    # their discovery order gives identical bytes different source identities.
-    # Seal the complete set in one explicit, platform-independent order.
-    # Every captured input shares this checkout prefix. Sorting the complete
-    # POSIX name gives the identical relative order without rebuilding each
-    # ancestor path; digest() still seals and validates each relative name.
-    return sorted(files, key=lambda path: path.as_posix())
+    # Complete source fingerprints, excluding standalone regression suites.
+    files = [Path(__file__).resolve(), ROOT/'deploy/build-desktop-pq.py',
+             ROOT/'deploy/build-desktop-tor.py', ROOT/'deploy/build-mobile-tor.py',
+             ROOT/'deploy/prepare-desktop-rosenpass.py', ROOT/'deploy/prepare-mobile-buffers.py',
+             ROOT/'deploy/mobile_udp_socket_policy.py', ROOT/'deploy/seal-native-runtime.py',
+             ROOT/'deploy/prepare-go-windows-sockets.py', ROOT/'deploy/windows_build_owner.py',
+             ROOT/'deploy/install-desktop-windows-toolchain.py', ROOT/'deploy/darwin_race_toolchain.py',
+             *POLICY.inputs(), *TOR.inputs(), *DNSSEC.inputs(), *PERFORMANCE.inputs(),
+             *OPENVPN.inputs(), *EXTERNAL.inputs(), ROOT/'go.mod',
+             *sorted((ROOT/'cmd').rglob('*.go')), *sorted((ROOT/'internal').rglob('*.go')),
+             *sorted((ROOT/'mobile').rglob('*.tmpl')), ROOT/'cmd/client/ui.html',
+             ROOT/'cmd/client/logical_ui.js', ROOT/'.github/workflows/build-all.yml',
+             *sorted((ROOT/'mobile/rosenpass').rglob('Cargo.*')),
+             *sorted((ROOT/'mobile/rosenpass/src').rglob('*.rs'))]
+    return sorted({path for path in files if not path.name.endswith(('_test.go','_test.go.tmpl')) and not path.name.startswith(('test_','test-'))}, key=lambda p:p.as_posix())
 
 
 def digest():
@@ -408,31 +182,6 @@ def environment(target, *, compiler=False):
     return env
 
 
-def capture_native_test_compiler(bootstrap, target, environment):
-    # The build host may bootstrap Go with an older executable on PATH. First
-    # select the build's exact toolchain, then bind both compilation and
-    # test2json to that actual compiler before disabling toolchain switching.
-    fields = ('GOROOT','GOVERSION','GOHOSTOS','GOHOSTARCH')
-    def identity(executable):
-        value = json.loads(subprocess.check_output([str(executable),'env','-json',*fields],
-                                                   env=environment, text=True, timeout=15))
-        if (not isinstance(value,dict) or set(value) != set(fields) or
-                any(not isinstance(value[field],str) for field in fields) or
-                value['GOVERSION'] != TOOLCHAIN or
-                value['GOHOSTOS']+'/'+value['GOHOSTARCH'] != target or
-                not value['GOROOT'] or
-                any(c in value['GOROOT'] for c in '\r\n\0') or
-                not Path(value['GOROOT']).is_absolute()):
-            raise ValueError('Native test requires its exact pinned native Go compiler')
-        return value
-    selected = identity(bootstrap)
-    executable = Path(selected['GOROOT'])/'bin'/('go.exe' if target.startswith('windows/') else 'go')
-    if not executable.is_file():
-        raise ValueError('Selected native test compiler is unavailable')
-    environment = dict(environment, GOTOOLCHAIN='local', GOROOT=selected['GOROOT'])
-    if identity(executable) != selected:
-        raise ValueError('Selected native test compiler identity changed')
-    return str(executable), environment
 
 
 def tags(target):
@@ -653,49 +402,6 @@ STOCK_DNS_CASES = tuple(STOCK_DNS_TEST+'/'+case for case in (
     'udp-uncached', 'udp-cached-negative-control', 'tcp-uncached', 'tcp-cached-negative-control'))
 
 
-def verify_linux_stock_dns_verdicts(output):
-    # Keep the same exact run/pass inventory discipline as the existing native
-    # forwarder and Tor importer gates. A successful Go selector can run zero
-    # tests, and package success alone cannot attest these four boundaries.
-    required = {STOCK_DNS_TEST, *STOCK_DNS_CASES}
-    ran, passed, package_started, package_passed = set(), set(), False, False
-    for line in output.splitlines():
-        try:
-            row = json.loads(line, object_pairs_hook=unique_object)
-        except (ValueError, TypeError) as error:
-            raise ValueError('Stock DNS gate emitted malformed Go verdict JSON') from error
-        if not isinstance(row, dict):
-            raise ValueError('Stock DNS gate emitted a non-object verdict')
-        action, name = row.get('Action'), row.get('Test')
-        if action in ('skip', 'fail', 'build-fail') or 'WARNING: DATA RACE' in str(row.get('Output', '')):
-            raise ValueError('Stock DNS native case failed, skipped, raced or failed to build')
-        if row.get('Package') != 'router-vpn/cmd/client' or package_passed:
-            raise ValueError('Stock DNS verdict belongs to a foreign or completed package')
-        if name is not None:
-            if not isinstance(name, str) or name not in required or not package_started:
-                raise ValueError('Stock DNS native case inventory changed')
-            if action == 'run':
-                if name in ran or STOCK_DNS_TEST in passed or name != STOCK_DNS_TEST and STOCK_DNS_TEST not in ran:
-                    raise ValueError('Stock DNS native case duplicated or reordered its run')
-                ran.add(name)
-            elif action == 'pass':
-                if name not in ran or name in passed or name == STOCK_DNS_TEST and passed != set(STOCK_DNS_CASES):
-                    raise ValueError('Stock DNS native case passed without its exact preceding execution')
-                passed.add(name)
-            elif action not in ('output', 'pause', 'cont'):
-                raise ValueError('Stock DNS native case emitted an unknown action')
-        elif action == 'start':
-            if package_started:
-                raise ValueError('Stock DNS package duplicated its start')
-            package_started = True
-        elif action == 'pass':
-            if ran != required or passed != required or not package_started:
-                raise ValueError('Stock DNS package omitted an actual required native case')
-            package_passed = True
-        elif action != 'output':
-            raise ValueError('Stock DNS package emitted an unknown action')
-    if ran != required or passed != required or not package_passed:
-        raise ValueError('Stock DNS gate omitted native parent, leaf or package completion')
 
 
 
@@ -704,29 +410,8 @@ STANDARD_CONFIG_PROTOCOLS = ('wireguard', 'socks5', 'http-connect', 'https-conne
 STANDARD_CONFIG_POLICIES = ('default', 'fixed', 'ipv6-off')
 
 
-def verify_linux_standard_config_verdicts(output):
-    if '--- SKIP:' in output or '--- FAIL:' in output or 'WARNING: DATA RACE' in output:
-        raise ValueError('Standard engine graph preparation failed or skipped')
-    expected = {STANDARD_CONFIG_TEST}
-    expected.update(STANDARD_CONFIG_TEST+'/'+protocol for protocol in STANDARD_CONFIG_PROTOCOLS)
-    expected.update(STANDARD_CONFIG_TEST+'/'+protocol+'/'+policy for protocol in STANDARD_CONFIG_PROTOCOLS for policy in STANDARD_CONFIG_POLICIES)
-    passed = re.findall(r'(?m)^\s*--- PASS: (\S+) \([0-9]+(?:\.[0-9]+)?s\)$', output)
-    if set(passed) != expected or any(passed.count(name) != 1 for name in expected):
-        raise ValueError('Standard engine graph gate omitted, renamed or duplicated a captured stock selection')
 
 
-def verify_linux_standard_configs(bundle, env):
-    with tempfile.TemporaryDirectory(prefix='routervpn-standard-graphs-') as directory:
-        output = run(['go', 'test', '-v', '-race', './cmd/client', '-run', '^'+STANDARD_CONFIG_TEST+'$', '-count=1', '-timeout=60s'],
-                     cwd=ROOT, env={**env, 'ROUTERVPN_STANDARD_CONFIG_FIXTURES':directory}, timeout=300)
-        verify_linux_standard_config_verdicts(output)
-        expected = {protocol+'-'+policy+'.json' for protocol in STANDARD_CONFIG_PROTOCOLS for policy in STANDARD_CONFIG_POLICIES}
-        if {p.name for p in Path(directory).iterdir()} != expected:
-            raise ValueError('Standard engine lost its exact exported graph inventory')
-        binary = Path(bundle)/binary_name('linux/'+env['GOARCH'])
-        for name in sorted(expected):
-            run([binary, 'check', '-c', Path(directory)/name], env=env, timeout=20)
-    print('Native retained standard engine: all eighteen captured stock protocol/device graphs accepted by the actual built core', flush=True)
 
 
 IMPORTED_DESKTOP_GRAPH_TEST = 'TestDesktopImportedNativeCaptureExactGraphAndPhysicalSockets'
@@ -756,124 +441,18 @@ IMPORTED_DESKTOP_FILES = {entry+'--'+final+'.json' for entry,final in IMPORTED_D
     'layers-'+entry+'--'+final+'.json' for entry in IMPORTED_DESKTOP_LAYERS for final in IMPORTED_DESKTOP_LAYERS}
 
 
-def native_host_target():
-    return platform.system().lower()+'/'+{
-        'x86_64':'amd64', 'amd64':'amd64', 'aarch64':'arm64', 'arm64':'arm64'}.get(platform.machine().lower(),'')
 
 
-def imported_desktop_verdicts(target):
-    roots = (IMPORTED_DESKTOP_GRAPH_TEST, IMPORTED_DESKTOP_LAYER_TEST, *IMPORTED_DESKTOP_DNS_ROOTS)
-    expected = set(roots)
-    expected.update(IMPORTED_DESKTOP_DNS_ROOTS[0]+'/'+case for case in IMPORTED_DESKTOP_DNS_CASES)
-    expected.update('TestDesktopImportedDNSOperationDuration/'+case for case in IMPORTED_DESKTOP_DNS_DURATION_CASES)
-    expected.update(IMPORTED_DESKTOP_GRAPH_TEST+'/'+entry+'/'+final for entry,final in IMPORTED_DESKTOP_PAIRS)
-    expected.update(IMPORTED_DESKTOP_LAYER_TEST+'/'+execution+'/'+entry+'/'+final
-                    for execution in ('local','server','auto')
-                    for entry in IMPORTED_DESKTOP_LAYERS for final in IMPORTED_DESKTOP_LAYERS)
-    if target.startswith('linux/'):
-        roots += (IMPORTED_DESKTOP_LIFECYCLE_TEST,)
-        expected.update((IMPORTED_DESKTOP_LIFECYCLE_TEST, *(IMPORTED_DESKTOP_LIFECYCLE_TEST+'/'+fault
-            for fault in ('success','public-proof','source-replaced'))))
-    return roots, expected
 
 
-def verify_imported_desktop_verdicts(output, target):
-    _, expected = imported_desktop_verdicts(target)
-    verify_imported_native_verdicts(output, 'router-vpn/cmd/client', expected)
 
 
-def imported_native_dns_verdicts():
-    return (set(IMPORTED_NATIVE_DNS_ROOTS) | {IMPORTED_NATIVE_DNS_ROOTS[0]+'/'+case for case in IMPORTED_NATIVE_DNS_CASES}
-        | {'TestRouterVPNImportedDNSOperationDuration/'+case for case in IMPORTED_NATIVE_DNS_DURATION_CASES})
 
 
-def verify_imported_native_verdicts(output, package, expected):
-    started, passed, active = set(), set(), set()
-    package_start = package_pass = 0
-    for line in output.splitlines():
-        event = json.loads(line, object_pairs_hook=unique_object)
-        if not isinstance(event,dict):
-            raise ValueError('Malformed imported desktop native verdict')
-        action, name = event.get('Action'), event.get('Test')
-        if 'WARNING: DATA RACE' in str(event.get('Output','')):
-            raise ValueError('Imported desktop native proof contains a data race')
-        if action == 'build-output':
-            if set(event) != {'ImportPath','Action','Output'} or not isinstance(event['ImportPath'],str) or not event['ImportPath'].strip() or not isinstance(event['Output'],str) or not event['Output']:
-                raise ValueError('Malformed imported desktop compiler output')
-            if package_pass:
-                raise ValueError('Imported desktop compiler output followed package completion')
-            continue
-        if event.get('Package') != package or action in ('fail','skip','build-fail') or package_pass:
-            raise ValueError('Imported desktop native proof failed, skipped or changed package')
-        if name is not None and (not isinstance(name,str) or name not in expected):
-            raise ValueError('Imported desktop verdict moved outside its exact inventory')
-        if action == 'start' and name is None:
-            if package_start:
-                raise ValueError('Imported desktop package duplicated its start')
-            package_start += 1
-        elif action == 'run' and name is not None:
-            ancestors = {candidate for candidate in expected if name.startswith(candidate+'/')}
-            if name in started or not package_start or not ancestors.issubset(active):
-                raise ValueError('Duplicate or late imported desktop case')
-            started.add(name); active.add(name)
-        elif action == 'pass':
-            if name is None:
-                if active or passed != expected or not package_start:
-                    raise ValueError('Imported desktop package passed before original cases joined')
-                package_pass += 1
-            else:
-                children = {candidate for candidate in expected if candidate.startswith(name+'/')}
-                if name not in active or name in passed or not children.issubset(passed):
-                    raise ValueError('Imported desktop case passed without its original run')
-                active.remove(name); passed.add(name)
-        elif action in ('output','pause','cont'):
-            if not package_start or name is not None and name not in active or action != 'output' and name is None:
-                raise ValueError('Imported desktop output has no active original owner')
-        else:
-            raise ValueError('Unknown imported desktop native event')
-    if started != expected or passed != expected or active or package_start != 1 or package_pass != 1:
-        raise ValueError('Imported desktop native proof requires every exact original verdict once')
 
 
-def verify_imported_desktop_native_dns(source, target, env):
-    if target != native_host_target() or target not in TARGETS or env.get('GOOS') != target.split('/')[0] or env.get('GOARCH') != target.split('/')[1]:
-        raise ValueError('Imported native DNS gate requires the matching prepared native host')
-    # This is the same production package and complete build-tag selection as
-    # the command gate immediately before it, including the verified PQ archive.
-    command = ['go', 'test', '-json', *([] if target == 'windows/arm64' else ['-race']),
-        '-mod=readonly', '-tags='+','.join(tags(target)), '-ldflags=-checklinkname=0',
-        './cmd/sing-box', '-run', '^('+'|'.join(IMPORTED_NATIVE_DNS_ROOTS)+')$', '-count=1', '-timeout=60s']
-    output = run(command, cwd=source, env=env, timeout=300)
-    verify_imported_native_verdicts(output, IMPORTED_NATIVE_DNS_PACKAGE, imported_native_dns_verdicts())
 
 
-def verify_imported_desktop_configs(bundle, target, env):
-    if target != native_host_target() or target not in TARGETS or env.get('GOOS') != target.split('/')[0] or env.get('GOARCH') != target.split('/')[1]:
-        raise ValueError('Imported desktop native gate requires its matching complete bundle')
-    bundle = Path(bundle).absolute()
-    original_bundle = reuse(bundle, target, env=env)
-    roots, _ = imported_desktop_verdicts(target)
-    with tempfile.TemporaryDirectory(prefix='routervpn-imported-desktop-') as directory:
-        fixtures = Path(directory)
-        child = {**env, 'ROUTERVPN_IMPORTED_DESKTOP_FIXTURES':directory}
-        if target.startswith('linux/'):
-            child['ROUTERVPN_REQUIRE_IMPORTED_DESKTOP_LIFECYCLE'] = '1'
-        command = ['go','test','-json', *([] if target == 'windows/arm64' else ['-race']),
-                   './cmd/client','-run','^('+'|'.join(roots)+')$','-count=1','-timeout=60s']
-        output = run(command, cwd=ROOT, env=child, timeout=300)
-        verify_imported_desktop_verdicts(output, target)
-        if {path.name for path in fixtures.iterdir()} != IMPORTED_DESKTOP_FILES:
-            raise ValueError('Imported desktop lost its exact twenty-six original graphs')
-        captured = {name:regular(fixtures/name,4<<20) for name in IMPORTED_DESKTOP_FILES}
-        for name in sorted(captured):
-            if regular(fixtures/name,4<<20) != captured[name]:
-                raise ValueError('Imported desktop graph changed before actual native parsing')
-            run([bundle/binary_name(target),'check','-c',fixtures/name],env=env,timeout=20)
-        if {path.name for path in fixtures.iterdir()} != IMPORTED_DESKTOP_FILES or any(regular(fixtures/name,4<<20) != raw for name,raw in captured.items()):
-            raise ValueError('Imported desktop original graph changed during native parsing')
-    if reuse(bundle,target,env=env) != original_bundle:
-        raise ValueError('Completed native bundle changed during imported desktop proof')
-    print('Native imported desktop: all26 original graphs accepted by the complete built engine; exact captured-controller verdicts passed. Physical-device acceptance remains separate.',flush=True)
 
 
 IMPORTED_PACKET_PROTOCOLS = ('wireguard', 'amneziawg')
@@ -893,55 +472,8 @@ IMPORTED_PACKET_FILES = {protocol+'--'+mode+'--'+entry+'--'+final+'.json'
     for entry in IMPORTED_DESKTOP_LAYERS for final in IMPORTED_DESKTOP_LAYERS}
 
 
-def imported_desktop_packet_verdicts(target):
-    roots = (IMPORTED_PACKET_GRAPH_TEST, IMPORTED_PACKET_SOURCE_TEST, IMPORTED_PACKET_LIMIT_TEST,
-             IMPORTED_PACKET_DNS_TEST, IMPORTED_PACKET_PROFILE_TEST, IMPORTED_PACKET_PROOF_TEST)
-    expected = set(roots)
-    expected.update(IMPORTED_PACKET_GRAPH_TEST+'/'+protocol+'/'+mode+'/'+entry+'/'+final
-        for protocol in IMPORTED_PACKET_PROTOCOLS for mode in IMPORTED_PACKET_FINALS
-        for entry in IMPORTED_DESKTOP_LAYERS for final in IMPORTED_DESKTOP_LAYERS)
-    for root, cases in ((IMPORTED_PACKET_SOURCE_TEST,IMPORTED_PACKET_SOURCE_CASES),
-                        (IMPORTED_PACKET_LIMIT_TEST,IMPORTED_PACKET_LIMIT_CASES),
-                        (IMPORTED_PACKET_DNS_TEST,('home','dot','doh'))):
-        expected.update(root+'/'+protocol+'/'+case for protocol in IMPORTED_PACKET_PROTOCOLS for case in cases)
-    expected.update(root+'/'+protocol for root in (IMPORTED_PACKET_PROFILE_TEST,IMPORTED_PACKET_PROOF_TEST) for protocol in IMPORTED_PACKET_PROTOCOLS)
-    expected.update(IMPORTED_PACKET_PROOF_TEST+'/'+protocol+'/'+case for protocol in IMPORTED_PACKET_PROTOCOLS
-                    for case in ('wrong-public','cancel','replacement','success'))
-    if target.startswith('linux/'):
-        roots += (IMPORTED_PACKET_LIFECYCLE_TEST,)
-        expected.add(IMPORTED_PACKET_LIFECYCLE_TEST)
-        expected.update(IMPORTED_PACKET_LIFECYCLE_TEST+'/'+protocol for protocol in IMPORTED_PACKET_PROTOCOLS)
-        expected.update(IMPORTED_PACKET_LIFECYCLE_TEST+'/'+protocol+'/'+case for protocol in IMPORTED_PACKET_PROTOCOLS
-                        for case in ('success','public-proof','source-replaced'))
-    return roots, expected
 
 
-def verify_imported_desktop_packet_configs(bundle, target, env):
-    if target != native_host_target() or target not in TARGETS or env.get('GOOS') != target.split('/')[0] or env.get('GOARCH') != target.split('/')[1]:
-        raise ValueError('Imported packet gate requires its matching completed native bundle')
-    bundle = Path(bundle).absolute()
-    original = reuse(bundle,target,env=env)
-    roots, expected = imported_desktop_packet_verdicts(target)
-    with tempfile.TemporaryDirectory(prefix='routervpn-imported-packet-') as directory:
-        fixtures = Path(directory)
-        child = {**env,'ROUTERVPN_IMPORTED_DESKTOP_PACKET_FIXTURES':directory}
-        if target.startswith('linux/'):
-            child['ROUTERVPN_REQUIRE_IMPORTED_DESKTOP_LIFECYCLE'] = '1'
-        output = run(['go','test','-json',*([] if target == 'windows/arm64' else ['-race']),
-            './cmd/client','-run','^('+'|'.join(roots)+')$','-count=1','-timeout=60s'],cwd=ROOT,env=child,timeout=300)
-        verify_imported_native_verdicts(output,'router-vpn/cmd/client',expected)
-        if {path.name for path in fixtures.iterdir()} != IMPORTED_PACKET_FILES:
-            raise ValueError('Imported packet gate lost its exact108 original graphs')
-        captured = {name:regular(fixtures/name,4<<20) for name in IMPORTED_PACKET_FILES}
-        for name in sorted(captured):
-            if regular(fixtures/name,4<<20) != captured[name]:
-                raise ValueError('Original packet graph changed before native parsing')
-            run([bundle/binary_name(target),'check','-c',fixtures/name],env=env,timeout=20)
-        if {path.name for path in fixtures.iterdir()} != IMPORTED_PACKET_FILES or any(regular(fixtures/name,4<<20) != raw for name,raw in captured.items()):
-            raise ValueError('Original packet graph changed during native parsing')
-    if reuse(bundle,target,env=env) != original:
-        raise ValueError('Completed bundle changed during imported packet proof')
-    print('Native imported packet desktop: all108 original graphs accepted by the completed production engine; exact source/proof/profile verdicts passed. Installed-device acceptance remains separate.',flush=True)
 
 
 
@@ -976,60 +508,12 @@ IMPORTED_OPENVPN_NATIVE_CASES = {
 }
 
 
-def imported_desktop_openvpn_verdicts(target):
-    cases = dict(IMPORTED_OPENVPN_CASES)
-    if target.startswith('linux/'):
-        cases['DailyConnectRestoreAndOwnedTeardown'] = ('success','public-proof','source-replaced')
-    roots = tuple('TestDesktopImportedOpenVPN'+name for name in cases)
-    names = set(roots)
-    names.update('TestDesktopImportedOpenVPN'+name+'/'+case for name,children in cases.items() for case in children)
-    return roots,names
 
 
-def imported_native_openvpn_verdicts():
-    roots = tuple('TestRouterVPNImportedOpenVPN'+name for name in IMPORTED_OPENVPN_NATIVE_CASES)
-    return roots,set(roots) | {'TestRouterVPNImportedOpenVPN'+name+'/'+case
-        for name,children in IMPORTED_OPENVPN_NATIVE_CASES.items() for case in children}
 
 
-def verify_imported_desktop_native_openvpn(source, target, env):
-    if target != native_host_target() or target not in TARGETS or env.get('GOOS') != target.split('/')[0] or env.get('GOARCH') != target.split('/')[1]:
-        raise ValueError('Imported OpenVPN observation gate requires its matching prepared native host')
-    roots,expected = imported_native_openvpn_verdicts()
-    child = {**env,'ROUTERVPN_REQUIRE_IMPORTED_OPENVPN_OBSERVATION':'1'}
-    command = ['go','test','-json',*([] if target == 'windows/arm64' else ['-race']),'-mod=readonly',
-        '-tags='+','.join([*tags(target),'routervpn_openvpn_remote_test']),'-ldflags=-checklinkname=0',
-        './cmd/sing-box','-run','^('+'|'.join(roots)+')$','-count=1','-timeout=120s']
-    output = run(command,cwd=source,env=child,timeout=300)
-    verify_imported_native_verdicts(output,IMPORTED_NATIVE_DNS_PACKAGE,expected)
 
 
-def verify_imported_desktop_openvpn_configs(bundle, target, env):
-    if target != native_host_target() or target not in TARGETS or env.get('GOOS') != target.split('/')[0] or env.get('GOARCH') != target.split('/')[1]:
-        raise ValueError('Imported OpenVPN gate requires its matching completed native bundle')
-    bundle = Path(bundle).absolute()
-    original = reuse(bundle,target,env=env)
-    roots,expected = imported_desktop_openvpn_verdicts(target)
-    with tempfile.TemporaryDirectory(prefix='routervpn-imported-openvpn-') as directory:
-        fixtures = Path(directory)
-        child = {**env,'ROUTERVPN_IMPORTED_DESKTOP_OPENVPN_FIXTURES':directory}
-        if target.startswith('linux/'):
-            child['ROUTERVPN_REQUIRE_IMPORTED_DESKTOP_LIFECYCLE'] = '1'
-        output = run(['go','test','-json',*([] if target == 'windows/arm64' else ['-race']),
-            './cmd/client','-run','^('+'|'.join(roots)+')$','-count=1','-timeout=60s'],cwd=ROOT,env=child,timeout=300)
-        verify_imported_native_verdicts(output,'router-vpn/cmd/client',expected)
-        if {path.name for path in fixtures.iterdir()} != IMPORTED_OPENVPN_FILES:
-            raise ValueError('Imported OpenVPN gate lost its exact108 original graphs')
-        captured = {name:regular(fixtures/name,4<<20) for name in IMPORTED_OPENVPN_FILES}
-        for name in sorted(captured):
-            if regular(fixtures/name,4<<20) != captured[name]:
-                raise ValueError('Original OpenVPN graph changed before native parsing')
-            run([bundle/binary_name(target),'check','-c',fixtures/name],env=env,timeout=20)
-        if {path.name for path in fixtures.iterdir()} != IMPORTED_OPENVPN_FILES or any(regular(fixtures/name,4<<20) != raw for name,raw in captured.items()):
-            raise ValueError('Original OpenVPN graph changed during native parsing')
-    if reuse(bundle,target,env=env) != original:
-        raise ValueError('Completed bundle changed during imported OpenVPN proof')
-    print('Native imported OpenVPN desktop: all108 original TCP/UDP graphs accepted by the completed production engine; exact observation/source/profile verdicts passed. Installed-device acceptance remains separate.',flush=True)
 
 
 IMPORTED_PQ_GRAPH_TEST = 'TestDesktopImportedPQRealityCapturedGraphs'
@@ -1040,36 +524,8 @@ IMPORTED_PQ_FILES = {entry+'--reality-pq-vision--'+first+'--'+last+'.json'
     for first in IMPORTED_DESKTOP_LAYERS for last in IMPORTED_DESKTOP_LAYERS}
 
 
-def imported_desktop_pq_verdicts():
-    return {IMPORTED_PQ_GRAPH_TEST} | {IMPORTED_PQ_GRAPH_TEST+'/'+entry+'/'+first+'/'+last
-        for entry in IMPORTED_PQ_ENTRIES
-        for first in IMPORTED_DESKTOP_LAYERS for last in IMPORTED_DESKTOP_LAYERS}
 
 
-def verify_imported_desktop_pq_configs(bundle, target, env):
-    if target != native_host_target() or target not in TARGETS or env.get('GOOS') != target.split('/')[0] or env.get('GOARCH') != target.split('/')[1]:
-        raise ValueError('Imported PQ gate requires its matching completed native bundle')
-    bundle = Path(bundle).absolute()
-    original = reuse(bundle, target, env=env)
-    with tempfile.TemporaryDirectory(prefix='routervpn-imported-pq-') as directory:
-        fixtures = Path(directory)
-        child = {**env, 'ROUTERVPN_DESKTOP_IMPORTED_PQ_XRAY_FIXTURES':directory}
-        output = run(['go', 'test', '-json', *([] if target == 'windows/arm64' else ['-race']),
-            './cmd/client', '-run', '^'+IMPORTED_PQ_GRAPH_TEST+'$', '-count=1', '-timeout=180s'],
-            cwd=ROOT, env=child, timeout=300)
-        verify_imported_native_verdicts(output, 'router-vpn/cmd/client', imported_desktop_pq_verdicts())
-        if {path.name for path in fixtures.iterdir()} != IMPORTED_PQ_FILES:
-            raise ValueError('Imported PQ gate lost its exact81 separate original graphs')
-        captured = {name:regular(fixtures/name, 4<<20) for name in IMPORTED_PQ_FILES}
-        for name in sorted(captured):
-            if regular(fixtures/name, 4<<20) != captured[name]:
-                raise ValueError('Original PQ graph changed before native parsing')
-            run([bundle/binary_name(target), 'check', '-c', fixtures/name], env=env, timeout=20)
-        if {path.name for path in fixtures.iterdir()} != IMPORTED_PQ_FILES or any(regular(fixtures/name, 4<<20) != raw for name,raw in captured.items()):
-            raise ValueError('Original PQ graph changed during native parsing')
-    if reuse(bundle, target, env=env) != original:
-        raise ValueError('Completed bundle changed during imported PQ proof')
-    print('Native imported PQ desktop: all81 separate original graphs accepted by the completed production engine. Installed-device acceptance remains separate.', flush=True)
 
 
 IMPORTED_XHTTP_GRAPH_TEST = 'TestDesktopImportedXHTTPCapturedGraphs'
@@ -1080,36 +536,8 @@ IMPORTED_XHTTP_FILES = {entry+'--reality-xhttp--'+first+'--'+last+'.json'
     for first in IMPORTED_DESKTOP_LAYERS for last in IMPORTED_DESKTOP_LAYERS}
 
 
-def imported_desktop_xhttp_verdicts():
-    return {IMPORTED_XHTTP_GRAPH_TEST} | {IMPORTED_XHTTP_GRAPH_TEST+'/'+entry+'/'+first+'/'+last
-        for entry in IMPORTED_XHTTP_ENTRIES
-        for first in IMPORTED_DESKTOP_LAYERS for last in IMPORTED_DESKTOP_LAYERS}
 
 
-def verify_imported_desktop_xhttp_configs(bundle, target, env):
-    if target != native_host_target() or target not in TARGETS or env.get('GOOS') != target.split('/')[0] or env.get('GOARCH') != target.split('/')[1]:
-        raise ValueError('Imported XHTTP gate requires its matching completed native bundle')
-    bundle = Path(bundle).absolute()
-    original = reuse(bundle, target, env=env)
-    with tempfile.TemporaryDirectory(prefix='routervpn-imported-xhttp-') as directory:
-        fixtures = Path(directory)
-        child = {**env, 'ROUTERVPN_DESKTOP_IMPORTED_XHTTP_XRAY_FIXTURES':directory}
-        output = run(['go', 'test', '-json', *([] if target == 'windows/arm64' else ['-race']),
-            './cmd/client', '-run', '^'+IMPORTED_XHTTP_GRAPH_TEST+'$', '-count=1', '-timeout=180s'],
-            cwd=ROOT, env=child, timeout=300)
-        verify_imported_native_verdicts(output, 'router-vpn/cmd/client', imported_desktop_xhttp_verdicts())
-        if {path.name for path in fixtures.iterdir()} != IMPORTED_XHTTP_FILES:
-            raise ValueError('Imported XHTTP gate lost its exact81 separate original graphs')
-        captured = {name:regular(fixtures/name, 4<<20) for name in IMPORTED_XHTTP_FILES}
-        for name in sorted(captured):
-            if regular(fixtures/name, 4<<20) != captured[name]:
-                raise ValueError('Original XHTTP graph changed before native parsing')
-            run([bundle/binary_name(target), 'check', '-c', fixtures/name], env=env, timeout=20)
-        if {path.name for path in fixtures.iterdir()} != IMPORTED_XHTTP_FILES or any(regular(fixtures/name, 4<<20) != raw for name,raw in captured.items()):
-            raise ValueError('Original XHTTP graph changed during native parsing')
-    if reuse(bundle, target, env=env) != original:
-        raise ValueError('Completed bundle changed during imported XHTTP proof')
-    print('Native imported XHTTP desktop: all81 separate original graphs accepted by the completed production engine. Installed-device acceptance remains separate.', flush=True)
 
 
 IMPORTED_NAIVE_H2_GRAPH_TEST = 'TestDesktopImportedNaiveH2CapturedGraphs'
@@ -1120,36 +548,8 @@ IMPORTED_NAIVE_H2_FILES = {entry+'--naive-h2--'+first+'--'+last+'.json'
     for first in IMPORTED_DESKTOP_LAYERS for last in IMPORTED_DESKTOP_LAYERS}
 
 
-def imported_desktop_naive_h2_verdicts():
-    return {IMPORTED_NAIVE_H2_GRAPH_TEST} | {IMPORTED_NAIVE_H2_GRAPH_TEST+'/'+entry+'/'+first+'/'+last
-        for entry in IMPORTED_NAIVE_H2_ENTRIES
-        for first in IMPORTED_DESKTOP_LAYERS for last in IMPORTED_DESKTOP_LAYERS}
 
 
-def verify_imported_desktop_naive_h2_configs(bundle, target, env):
-    if target != native_host_target() or target not in TARGETS or env.get('GOOS') != target.split('/')[0] or env.get('GOARCH') != target.split('/')[1]:
-        raise ValueError('Imported Naive H2 gate requires its matching completed native bundle')
-    bundle = Path(bundle).absolute()
-    original = reuse(bundle, target, env=env)
-    with tempfile.TemporaryDirectory(prefix='routervpn-imported-naive-h2-') as directory:
-        fixtures = Path(directory)
-        child = {**env, 'ROUTERVPN_DESKTOP_IMPORTED_NAIVE_H2_FIXTURES':directory}
-        output = run(['go', 'test', '-json', *([] if target == 'windows/arm64' else ['-race']),
-            './cmd/client', '-run', '^'+IMPORTED_NAIVE_H2_GRAPH_TEST+'$', '-count=1', '-timeout=180s'],
-            cwd=ROOT, env=child, timeout=300)
-        verify_imported_native_verdicts(output, 'router-vpn/cmd/client', imported_desktop_naive_h2_verdicts())
-        if {path.name for path in fixtures.iterdir()} != IMPORTED_NAIVE_H2_FILES:
-            raise ValueError('Imported Naive H2 gate lost its exact81 separate original graphs')
-        captured = {name:regular(fixtures/name, 4<<20) for name in IMPORTED_NAIVE_H2_FILES}
-        for name in sorted(captured):
-            if regular(fixtures/name, 4<<20) != captured[name]:
-                raise ValueError('Original Naive H2 graph changed before native parsing')
-            run([bundle/binary_name(target), 'check', '-c', fixtures/name], env=env, timeout=20)
-        if {path.name for path in fixtures.iterdir()} != IMPORTED_NAIVE_H2_FILES or any(regular(fixtures/name, 4<<20) != raw for name,raw in captured.items()):
-            raise ValueError('Original Naive H2 graph changed during native parsing')
-    if reuse(bundle, target, env=env) != original:
-        raise ValueError('Completed bundle changed during imported Naive H2 proof')
-    print('Native imported Naive H2 desktop: all81 separate original graphs accepted by the completed production engine. Installed-device acceptance remains separate.', flush=True)
 
 IMPORTED_NAIVE_H3_GRAPH_TEST = 'TestDesktopImportedNaiveH3CapturedGraphs'
 IMPORTED_NAIVE_H3_ENTRIES = ('socks5', 'shadowsocks', 'hysteria2',
@@ -1159,336 +559,25 @@ IMPORTED_NAIVE_H3_FILES = {entry+'--naive-h3--'+first+'--'+last+'.json'
     for first in IMPORTED_DESKTOP_LAYERS for last in IMPORTED_DESKTOP_LAYERS}
 
 
-def imported_desktop_naive_h3_verdicts():
-    return {IMPORTED_NAIVE_H3_GRAPH_TEST} | {IMPORTED_NAIVE_H3_GRAPH_TEST+'/'+entry+'/'+first+'/'+last
-        for entry in IMPORTED_NAIVE_H3_ENTRIES
-        for first in IMPORTED_DESKTOP_LAYERS for last in IMPORTED_DESKTOP_LAYERS}
-
-
-def verify_imported_desktop_naive_h3_configs(bundle, target, env):
-    if target != native_host_target() or target not in TARGETS or env.get('GOOS') != target.split('/')[0] or env.get('GOARCH') != target.split('/')[1]:
-        raise ValueError('Imported Naive H3 gate requires its matching completed native bundle')
-    bundle = Path(bundle).absolute()
-    original = reuse(bundle, target, env=env)
-    with tempfile.TemporaryDirectory(prefix='routervpn-imported-naive-h3-') as directory:
-        groups = {'portable':Path(directory)/'portable'}
-        if target.startswith('windows/'):
-            groups['protected'] = Path(directory)/'protected'
-        for fixtures in groups.values(): fixtures.mkdir()
-        child = {**env, 'ROUTERVPN_DESKTOP_IMPORTED_NAIVE_H3_FIXTURES':str(groups['portable'])}
-        child.pop('ROUTERVPN_DESKTOP_IMPORTED_NAIVE_H3_PROTECTED_FIXTURES', None)
-        if 'protected' in groups:
-            child['ROUTERVPN_DESKTOP_IMPORTED_NAIVE_H3_PROTECTED_FIXTURES'] = str(groups['protected'])
-        output = run(['go', 'test', '-json', *([] if target == 'windows/arm64' else ['-race']),
-            './cmd/client', '-run', '^'+IMPORTED_NAIVE_H3_GRAPH_TEST+'$', '-count=1', '-timeout=180s'],
-            cwd=ROOT, env=child, timeout=300)
-        verify_imported_native_verdicts(output, 'router-vpn/cmd/client', imported_desktop_naive_h3_verdicts())
-        captured = {}
-        for name, fixtures in groups.items():
-            if {path.name for path in fixtures.iterdir()} != IMPORTED_NAIVE_H3_FILES:
-                raise ValueError('Imported Naive H3 gate lost its exact63 original '+name+' graphs')
-            captured[name] = {file:regular(fixtures/file, 4<<20) for file in IMPORTED_NAIVE_H3_FILES}
-        if 'protected' in captured and any(captured['protected'][name] == captured['portable'][name] for name in IMPORTED_NAIVE_H3_FILES):
-            raise ValueError('Protected Windows H3 launch evidence substituted its portable graph')
-        # Only the matching Windows engine may instantiate the inert protected
-        # projection. This check does not bind its owner or start a UDP relay.
-        for name, fixtures in groups.items():
-            for file in sorted(captured[name]):
-                if regular(fixtures/file, 4<<20) != captured[name][file]:
-                    raise ValueError('Original Naive H3 '+name+' graph changed before native parsing')
-                run([bundle/binary_name(target), 'check', '-c', fixtures/file], env=env, timeout=20)
-        for name, fixtures in groups.items():
-            if {path.name for path in fixtures.iterdir()} != IMPORTED_NAIVE_H3_FILES or any(regular(fixtures/file, 4<<20) != raw for file,raw in captured[name].items()):
-                raise ValueError('Original Naive H3 '+name+' graph changed during native parsing')
-    if reuse(bundle, target, env=env) != original:
-        raise ValueError('Completed bundle changed during imported Naive H3 proof')
-    suffix = '; all63 separate protected Windows launch graphs also parsed' if target.startswith('windows/') else ''
-    print('Native imported Naive H3: all63 original portable graphs parsed'+suffix+'. Owned network and installed-device execution remain separate.', flush=True)
-
-
-def verify_linux_stock_dns(bundle, target, env):
-    host = 'linux/'+{'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), '')
-    if platform.system() != 'Linux' or target != host or env.get('GOOS') != 'linux' or env.get('GOARCH') != target.split('/')[1]:
-        raise ValueError('Stock DNS native gate requires its matching completed Linux bundle')
-    # The exact completed core must execute the shared mixed-inbound DNS rules
-    # against real UDP/TCP responders. Cache-enabled negative controls must
-    # expose stale success; the shipping uncached path must reject it.
-    dns_env = {**env, 'ROUTERVPN_STOCK_DNS_CORE': str(Path(bundle).resolve()/binary_name(target)),
-               'ROUTERVPN_STOCK_DNS_CORE_SHA256': hashlib.sha256((Path(bundle)/binary_name(target)).read_bytes()).hexdigest()}
-    output = run(['go', 'test', '-json', '-race', '-tags=routervpn_stock_dns_native', './cmd/client',
-                  '-run', '^TestLegacyStandardDNSPinnedCore$', '-count=1', '-timeout=60s'],
-                 cwd=ROOT, env=dns_env, timeout=300)
-    verify_linux_stock_dns_verdicts(output)
-    verify_linux_standard_configs(bundle, env)
-    print('Native retained stock DNS: exact parent and four UDP/TCP uncached/cache-control cases PASS', flush=True)
-
-
-def verify_installed_linux_host(source, bundle, target, env):
-    if target not in ('linux/amd64', 'linux/arm64') or env.get('GOOS') != 'linux' or env.get('GOARCH') != target.split('/')[1]:
-        raise ValueError('Installed Linux host gate requires its matching complete native target')
-    # The final installed-host gate consumes the completed bundle, including
-    # native libraries and Tor, after every original payload/provenance check.
-    # It runs before stage publication and uses the ordinary app verifier.
-    reuse(bundle, target, env=env)
-    verify_linux_stock_dns(bundle, target, env)
-    run([sys.executable, ROOT/'deploy/test_linux_node_host_tun_runner.py'], cwd=ROOT, env=env, timeout=60)
-    run([sys.executable, ROOT/'deploy/test_connected_imported_ss_candidates_runner.py'], cwd=ROOT, env=env, timeout=60)
-    run([sys.executable, ROOT/'deploy/test_linux_node_host_tun.py', source, '--bundle', bundle], cwd=ROOT, env=env, timeout=2400)
-
-
-def verify_reused_linux_host(bundle, target, env):
-    # A payload/source receipt is not an installed-host execution receipt.
-    # Recreate only the exact prepared test sources, then use the same complete
-    # installed-host gate and the original retained bundle as a cold build.
-    if (platform.system() != 'Linux' or target != native_host_target() or
-            target not in ('linux/amd64', 'linux/arm64') or env.get('GOOS') != 'linux' or
-            env.get('GOARCH') != target.split('/')[1] or env.get('CGO_ENABLED') != '1'):
-        raise ValueError('Reused installed Linux host gate requires its matching native CGO host')
-    original = reuse(bundle, target, env=env)
-    if run(['go', 'env', 'GOVERSION'], env=env) != TOOLCHAIN:
-        raise ValueError('Incorrect pinned native Go compiler for reused Linux host acceptance')
-    with tempfile.TemporaryDirectory(prefix='routervpn-reused-linux-host-') as temporary:
-        source, xray = Path(temporary)/'core', Path(temporary)/'xray'
-        checkout(source, 'https://github.com/SagerNet/sing-box.git', PIN)
-        checkout(xray, 'https://github.com/XTLS/Xray-core.git', POLICY.XRAY.XRAY_PIN)
-        pristine(source, PIN)
-        pristine(xray, POLICY.XRAY.XRAY_PIN)
-        prepare_native_sources(source, xray, env)
-        verify_installed_linux_host(source, bundle, target, env)
-        if reuse(bundle, target, env=env) != original:
-            raise ValueError('Reused Linux bundle changed during its original installed-host acceptance')
-
-
-def verify_installed_windows_prefix(source, bundle, target, env):
-    if platform.system() != 'Windows' or target != native_host_target() or target not in ('windows/amd64', 'windows/arm64'):
-        raise ValueError('Installed Windows prefix requires its matching actual native host')
-    original = reuse(bundle, target, env=env)
-    digest_before = hashlib.sha256((Path(bundle)/'NATIVE-RUNTIME.json').read_bytes()).hexdigest()
-    run([sys.executable, ROOT/'deploy/test_windows_candidate_prefix_runner.py'], cwd=ROOT, env=env, timeout=60)
-    run([sys.executable, ROOT/'deploy/test_windows_socks_node_chain_host_runner.py'], cwd=ROOT, env=env, timeout=60)
-    run([sys.executable, ROOT/'deploy/test_windows_socks_release_receipt.py'], cwd=ROOT, env=env, timeout=60)
-    run([sys.executable, ROOT/'deploy/test_desktop_connect_parent_runner.py'], cwd=ROOT, env=env, timeout=60)
-    run([sys.executable, ROOT/'deploy/test_desktop_connect_admission_runner.py'], cwd=ROOT, env=env, timeout=60)
-    run([sys.executable, ROOT/'deploy/test_windows_connect_node_chain_host_runner.py'], cwd=ROOT, env=env, timeout=60)
-    run([sys.executable, ROOT/'deploy/test_windows_connect_release_receipt.py'], cwd=ROOT, env=env, timeout=60)
-    # The composed gate executes every original prefix and SOCKS case exactly
-    # once, their bounded longer paths, and the distinct HTTP/HTTPS carrier.
-    # All three receipts are mandatory for fresh and reused publication.
-    output = run([sys.executable, ROOT/'deploy/test_windows_connect_node_chain_host.py', source, '--bundle', bundle],
-                 cwd=ROOT, env=env, timeout=WINDOWS_INSTALLED_NATIVE_GATE_TIMEOUT)
-    prefix = 'Native Windows selected-prefix acceptance: '
-    rows = [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
-    if len(rows) != 1:
-        raise ValueError('Installed Windows prefix omitted its unique native execution receipt')
-    receipt = json.loads(rows[0], object_pairs_hook=unique_object)
-    if not isinstance(receipt, dict):
-        raise ValueError('Installed Windows prefix receipt is not an object')
-    mappings = [receipt.get(name) for name in ('sources', 'scope_sources', 'images')]
-    if not all(isinstance(values, dict) and values and all(isinstance(name, str) and name and
-               isinstance(digest, str) and re.fullmatch('[0-9a-f]{64}', digest) for name, digest in values.items()) for values in mappings):
-        raise ValueError('Installed Windows prefix omitted its exact source/image hash maps')
-    scope_names = {'desktop_socket_windows_'+name+'.go' for name in ('policy','transfer','commit','baseline','status','prepared','probe','observation')}
-    scope_names.add('routervpn_candidate_prefix_scope_windows.go')
-    if (type(receipt.get('schema')) is not int or receipt.get('schema') != 1 or receipt.get('native') is not True or receipt.get('target') != target or
-            receipt.get('source_sha256') != original['policy_sha256'] or receipt.get('bundle_sha256') != digest_before or
-            receipt.get('cases') != ['wg-save', 'wg-cancel', 'awg-fast-save', 'awg-fast-cancel', 'awg-strong-save', 'awg-strong-cancel', 'wg-off-save', 'wg-off-cancel'] or
-            receipt.get('unmodified_shipping_image') is not False or receipt.get('test_scope') != 'captured-native-child-app-id' or
-            receipt.get('application_open') is not False or receipt.get('dns_open') is not False or type(receipt.get('samples_per_case')) is not int or receipt.get('samples_per_case') != 50 or
-            receipt.get('original_final_unreachable') is not True or receipt.get('native_down_before_review') is not True or
-            set(receipt['scope_sources']) != scope_names or set(receipt['images']) != {'controller', 'peer', 'scoped_engine'}):
-        raise ValueError('Installed Windows prefix lost actual closed purpose, native DOWN or exact image provenance')
-    socks_receipt = verify_installed_windows_socks_receipt(output, target, original, digest_before, receipt)
-    verify_installed_windows_connect_receipt(output, target, original, digest_before, socks_receipt)
-    if reuse(bundle, target, env=env) != original:
-        raise ValueError('Installed Windows prefix changed the original completed shipping bundle')
-
-
-def verify_installed_windows_socks_receipt(output, target, original, digest_before, prefix_receipt):
-    prefix = 'Native Windows typed SOCKS full-path acceptance: '
-    rows = [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
-    if len(rows) != 1:
-        raise ValueError('Installed Windows SOCKS omitted its unique full-path native receipt')
-    receipt = json.loads(rows[0], object_pairs_hook=unique_object)
-    if not isinstance(receipt, dict):
-        raise ValueError('Installed Windows SOCKS receipt is not an object')
-    mappings = [receipt.get(name) for name in ('sources', 'scope_sources', 'images')]
-    if not all(isinstance(values, dict) and values and all(isinstance(name, str) and name and
-               isinstance(digest, str) and re.fullmatch('[0-9a-f]{64}', digest) for name, digest in values.items()) for values in mappings):
-        raise ValueError('Installed Windows SOCKS omitted its exact source/image hash maps')
-    cases = ['wg-connect', 'awg-fast-connect', 'awg-strong-connect', 'wg-wrong-middle-key',
-             'wg-wrong-middle-public', 'wg-final-dns-failure', 'wg-final-node-failure', 'wg-middle-source', 'wg-connect-off',
-             'wg-four-connect', 'wg-eight-connect']
-    if (type(receipt.get('schema')) is not int or receipt.get('schema') != 2 or receipt.get('native') is not True or
-            receipt.get('target') != target or receipt.get('source_sha256') != original['policy_sha256'] or
-            receipt.get('bundle_sha256') != digest_before or receipt.get('cases') != cases or
-            receipt.get('unmodified_shipping_image') is not False or receipt.get('test_scope') != 'captured-native-child-app-id' or
-            receipt.get('typed_full_path') is not True or receipt.get('positive_application_and_selected_dns_proved') is not True or
-            type(receipt.get('measurement_bytes_per_direction_per_hop')) is not int or receipt.get('measurement_bytes_per_direction_per_hop') != 8 << 20 or
-            type(receipt.get('measurement_hops')) is not int or receipt.get('measurement_hops') != 3 or
-            type(receipt.get('ordered_latency_samples_per_hop')) is not int or receipt.get('ordered_latency_samples_per_hop') != 50 or
-            receipt.get('native_joined') is not True or receipt.get('command_job_joined') is not True or
-            receipt.get('tun_absent_all_outcomes') is not True or type(receipt.get('remote_associations_after_retirement')) is not int or
-            receipt.get('remote_associations_after_retirement') != 0 or receipt.get('public_admission') != 'enabled' or
-            receipt.get('public_connect_path') != '/api/multihop/connect' or
-            receipt.get('original_prefix_acceptance') != prefix_receipt or
-            set(receipt['scope_sources']) != set(prefix_receipt['scope_sources']) or
-            set(receipt['images']) != {'controller', 'peer', 'scoped_engine'}):
-        raise ValueError('Installed Windows SOCKS lost its complete native path, joined retirement or original prefix evidence')
-    prefix_measurements = receipt.get('ordered_prefix_measurements')
-    expected_prefix_measurements = [
-        {'case': 'wg-four-connect', 'nodes': 4, 'positions': [2, 3], 'samples': 50},
-        {'case': 'wg-eight-connect', 'nodes': 8, 'positions': [6, 7], 'samples': 50},
-    ]
-    if (prefix_measurements != expected_prefix_measurements or
-            not isinstance(prefix_measurements, list) or
-            any(not isinstance(row, dict) or set(row) != {'case', 'nodes', 'positions', 'samples'} or
-                type(row['nodes']) is not int or type(row['samples']) is not int or
-                not isinstance(row['positions'], list) or any(type(position) is not int for position in row['positions'])
-                for row in prefix_measurements)):
-        raise ValueError('Installed Windows SOCKS lost its exact four/eight-node measured positions')
-    roots = {
-        'TestDesktopSOCKSOwnedParentRetainsStartProofAndJoinedRetirement': ('wg', 'awg2-fast', 'awg2-strong'),
-        'TestDesktopSOCKSProtectionRejectsForeignAndMixedOwners': ('foreign-policy', 'ordinary-policy', 'foreign-source', 'foreign-attempt', 'foreign-launch', 'wrong-command'),
-        'TestDesktopSOCKSPhysicalPolicyKeepsConcreteFamily': ('linux', 'windows', 'darwin'),
-    }
-    parent_cases = [name for root, leaves in roots.items() for name in (root, *(root + '/' + leaf for leaf in leaves))]
-    parent = receipt.get('typed_socks_parent_controls')
-    if (not isinstance(parent, dict) or parent.get('scope') != 'compiled-parent-model-and-source-controls' or
-            parent.get('native_kernel_acceptance') is not False or parent.get('target') != 'windows' or
-            parent.get('cases') != parent_cases or not isinstance(parent.get('output_sha256'), str) or
-            not re.fullmatch('[0-9a-f]{64}', parent['output_sha256'])):
-        raise ValueError('Installed Windows SOCKS lost its distinct complete compiled parent controls')
-    return receipt
 
 
 
-def verify_installed_windows_connect_receipt(output, target, original, digest_before, socks_receipt):
-    prefix = 'Native Windows typed CONNECT full-path acceptance: '
-    rows = [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
-    if len(rows) != 1:
-        raise ValueError('Installed Windows CONNECT omitted its unique full-path native receipt')
-    receipt = json.loads(rows[0], object_pairs_hook=unique_object)
-    if not isinstance(receipt, dict):
-        raise ValueError('Installed Windows CONNECT receipt is not an object')
-    mappings = [receipt.get(name) for name in ('sources', 'scope_sources', 'images')]
-    if not all(isinstance(values, dict) and values and all(isinstance(name, str) and name and
-               isinstance(digest, str) and re.fullmatch('[0-9a-f]{64}', digest) for name, digest in values.items()) for values in mappings):
-        raise ValueError('Installed Windows CONNECT omitted its exact source/image hash maps')
-    cases = ['http-wg-connect', 'http-awg-fast-connect', 'http-awg-strong-connect',
-             'https-wg-connect', 'https-awg-fast-connect', 'https-awg-strong-connect',
-             'https-wg-wrong-middle-key', 'http-wg-wrong-middle-public', 'https-wg-tls-name', 'https-wg-tls-trust',
-             'http-wg-final-dns-failure', 'https-wg-final-node-failure', 'https-wg-final-key', 'https-wg-middle-source', 'http-wg-connect-off', 'https-wg-connect-off',
-             'http-wg-four-connect', 'https-wg-eight-connect']
-    if (type(receipt.get('schema')) is not int or receipt.get('schema') != 1 or receipt.get('native') is not True or
-            receipt.get('target') != target or receipt.get('source_sha256') != original['policy_sha256'] or
-            receipt.get('bundle_sha256') != digest_before or receipt.get('cases') != cases or
-            receipt.get('unmodified_shipping_image') is not False or receipt.get('test_scope') != 'captured-native-child-app-id' or
-            receipt.get('typed_full_path') is not True or receipt.get('positive_application_and_selected_dns_proved') is not True or
-            type(receipt.get('measurement_bytes_per_direction_per_hop')) is not int or receipt.get('measurement_bytes_per_direction_per_hop') != 8 << 20 or
-            type(receipt.get('measurement_hops')) is not int or receipt.get('measurement_hops') != 3 or
-            type(receipt.get('ordered_latency_samples_per_hop')) is not int or receipt.get('ordered_latency_samples_per_hop') != 50 or
-            receipt.get('native_joined') is not True or receipt.get('command_job_joined') is not True or
-            receipt.get('tun_absent_all_outcomes') is not True or type(receipt.get('remote_connect_streams_after_retirement')) is not int or
-            receipt.get('remote_connect_streams_after_retirement') != 0 or receipt.get('public_admission') != 'public-typed-connect' or
-            receipt.get('public_route') != '/api/multihop/connect' or receipt.get('public_profile_capability') is not True or
-            receipt.get('final_udp_transport') != 'SS-UoT-v2' or receipt.get('connect_middle_tcp_only') is not True or
-            receipt.get('connect_protocols') != ['http-connect', 'https-connect'] or
-            receipt.get('original_socks_acceptance') != socks_receipt or
-            set(receipt['scope_sources']) != set(socks_receipt['scope_sources']) or
-            set(receipt['images']) != {'controller', 'peer', 'scoped_engine'}):
-        raise ValueError('Installed Windows CONNECT lost its actual carrier, joined retirement or original prefix/SOCKS evidence')
-    prefix_measurements = receipt.get('ordered_prefix_measurements')
-    expected_prefix_measurements = [
-        {'case': 'http-wg-four-connect', 'nodes': 4, 'positions': [2, 3], 'samples': 50},
-        {'case': 'https-wg-eight-connect', 'nodes': 8, 'positions': [6, 7], 'samples': 50},
-    ]
-    if (prefix_measurements != expected_prefix_measurements or
-            not isinstance(prefix_measurements, list) or
-            any(not isinstance(row, dict) or set(row) != {'case', 'nodes', 'positions', 'samples'} or
-                type(row['nodes']) is not int or type(row['samples']) is not int or
-                not isinstance(row['positions'], list) or any(type(position) is not int for position in row['positions'])
-                for row in prefix_measurements)):
-        raise ValueError('Installed Windows CONNECT lost its exact four/eight-node measured positions')
-    roots = {
-        'TestDesktopCONNECTOwnedParentRetainsStartProofAndJoinedRetirement': ('wg', 'awg2-fast', 'awg2-strong'),
-        'TestDesktopCONNECTProtectionRejectsForeignAndMixedOwners': ('foreign-policy', 'equal-policy', 'ordinary-policy', 'socks-policy', 'all-policies', 'foreign-source', 'foreign-attempt', 'equal-attempt', 'foreign-launch', 'wrong-command'),
-        'TestDesktopCONNECTPhysicalPolicyKeepsConcreteFamily': ('linux', 'windows', 'darwin'),
-    }
-    parent_cases = [name for root, leaves in roots.items() for name in (root, *(root + '/' + leaf for leaf in leaves))]
-    parent = receipt.get('typed_connect_parent_controls')
-    if (not isinstance(parent, dict) or parent.get('scope') != 'compiled-parent-model-and-source-controls' or
-            parent.get('native_kernel_acceptance') is not False or parent.get('target') != 'windows' or
-            parent.get('cases') != parent_cases or not isinstance(parent.get('output_sha256'), str) or
-            not re.fullmatch('[0-9a-f]{64}', parent['output_sha256'])):
-        raise ValueError('Installed Windows CONNECT lost its distinct complete compiled parent controls')
-    public_gate = load('windows_connect_public_receipt', 'test_desktop_connect_admission.py')
-    public = receipt.get('typed_connect_public_source_controls')
-    if (not isinstance(public, dict) or public.get('scope') != 'registered-public-connect-source-controls' or
-            public.get('native_kernel_acceptance') is not False or public.get('target') != 'windows' or
-            public.get('cases') != list(public_gate.REQUIRED) or not isinstance(public.get('output_sha256'), str) or
-            not re.fullmatch('[0-9a-f]{64}', public['output_sha256'])):
-        raise ValueError('Installed Windows CONNECT lost its complete public source transaction controls')
-    return receipt
 
 
-def verify_reused_windows_prefix(bundle, target, env):
-    # A source/package cache is not native lifecycle evidence. Recreate the
-    # same pinned core and original PQ link input, then run the identical gate.
-    if platform.system() != 'Windows' or target != native_host_target():
-        raise ValueError('Reused Windows prefix requires its actual matching host')
-    with tempfile.TemporaryDirectory(prefix='routervpn-reused-windows-prefix-') as temporary:
-        source, xray, pq = Path(temporary)/'core', Path(temporary)/'xray', Path(temporary)/'pq'
-        checkout(source, 'https://github.com/SagerNet/sing-box.git', PIN)
-        checkout(xray, 'https://github.com/XTLS/Xray-core.git', POLICY.XRAY.XRAY_PIN)
-        pristine(source, PIN)
-        pristine(xray, POLICY.XRAY.XRAY_PIN)
-        prepare_native_sources(source, xray, env)
-        PQ.build(target, pq, ROOT/'dist/.native-pq-cache')
-        pq_receipt = PQ.verify(pq, target)
-        captured = dict(env, CGO_LDFLAGS=shlex.join(['-static', '-L'+str(pq), *pq_receipt['native_static_libs']]))
-        verify_installed_windows_prefix(source, bundle, target, captured)
 
 
-def verify_installed_darwin_host(source, bundle, target, env):
-    if env.get('ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE') != '1':
-        return
-    host = 'darwin/'+{'x86_64': 'amd64', 'arm64': 'arm64'}.get(platform.machine(), '')
-    if platform.system() != 'Darwin' or target != host or env.get('GOOS') != 'darwin' or env.get('GOARCH') != target.split('/')[1]:
-        raise ValueError('Explicit Darwin native acceptance requires its matching disposable host')
-    reuse(bundle, target, env=env)
-    original = hashlib.sha256((Path(bundle)/'NATIVE-RUNTIME.json').read_bytes()).hexdigest()
-    run([sys.executable, ROOT/'deploy/test_macos_external_host_runner.py'], cwd=ROOT, env=env, timeout=60)
-    command = [sys.executable, ROOT/'deploy/test_macos_external_host.py', '--bundle', bundle]
-    if source is not None:
-        command += ['--source', source]
-    output = run(command, cwd=ROOT, env=env, timeout=1800)
-    prefix = 'Native Darwin retained external acceptance: '
-    records = [line[len(prefix):] for line in output.splitlines() if line.startswith(prefix)]
-    if len(records) != 1:
-        raise ValueError('Explicit Darwin native acceptance omitted its unique exact receipt')
-    def unique(fields):
-        result = {}
-        for key, value in fields:
-            if key in result:
-                raise ValueError('Native Darwin receipt repeated a field')
-            result[key] = value
-        return result
-    receipt = json.loads(records[0], object_pairs_hook=unique)
-    if (type(receipt.get('schema')) is not int or receipt.get('schema') != 1 or receipt.get('native') is not True or receipt.get('target') != target
-            or receipt.get('validation_toolchain') != DARWIN_RACE.TOOLCHAIN
-            or receipt.get('source_sha256') != digest() or receipt.get('bundle_sha256') != original
-            or receipt.get('cases') != ['shadowsocks', 'http-connect', 'https-connect', 'hysteria2', 'hysteria2-aes', 'hysteria2-aes-xor', 'wireguard', 'wireguard-always', 'wireguard-auto', 'socks5', 'socks5-always', 'amneziawg-fast', 'amneziawg-fast-always', 'amneziawg-strong', 'amneziawg-strong-always', 'openvpn-tcp', 'openvpn-tcp-always', 'openvpn-udp', 'openvpn-udp-always', 'openvpn-tcp-fallback', 'openvpn-tcp-fallback-always', 'openvpn-mixed-fallback', 'openvpn-mixed-fallback-always', 'wg-entry-ss', 'wg-entry-ss-always', 'awg-entry-ss-fast', 'awg-entry-ss-fast-always', 'awg-entry-ss-strong', 'awg-entry-ss-strong-always', 'wg-entry-http', 'wg-entry-http-always', 'wg-entry-https', 'wg-entry-https-always', 'awg-entry-http-fast', 'awg-entry-http-fast-always', 'awg-entry-http-strong', 'awg-entry-http-strong-always', 'awg-entry-https-fast', 'awg-entry-https-fast-always', 'awg-entry-https-strong', 'awg-entry-https-strong-always', 'wg-entry-hysteria2', 'wg-entry-hysteria2-always', 'awg-entry-hysteria2-fast', 'awg-entry-hysteria2-fast-always', 'awg-entry-hysteria2-strong', 'awg-entry-hysteria2-strong-always', 'wg-entry-socks5', 'wg-entry-socks5-always', 'awg-entry-socks5-fast', 'awg-entry-socks5-fast-always', 'awg-entry-socks5-strong', 'awg-entry-socks5-strong-always', 'wg-entry-hysteria2-aes', 'wg-entry-hysteria2-aes-always', 'wg-entry-hysteria2-aes-xor', 'wg-entry-hysteria2-aes-xor-always', 'awg-entry-hysteria2-fast-aes', 'awg-entry-hysteria2-fast-aes-always', 'awg-entry-hysteria2-fast-aes-xor', 'awg-entry-hysteria2-fast-aes-xor-always', 'awg-entry-hysteria2-strong-aes', 'awg-entry-hysteria2-strong-aes-always', 'awg-entry-hysteria2-strong-aes-xor', 'awg-entry-hysteria2-strong-aes-xor-always', 'wg-entry-wireguard', 'wg-entry-wireguard-always', 'awg-entry-wireguard-fast', 'awg-entry-wireguard-fast-always', 'awg-entry-wireguard-strong', 'awg-entry-wireguard-strong-always', 'wg-entry-amneziawg-fast', 'wg-entry-amneziawg-fast-always', 'wg-entry-amneziawg-strong', 'wg-entry-amneziawg-strong-always', 'awg-entry-fast-amneziawg-fast', 'awg-entry-fast-amneziawg-fast-always', 'awg-entry-fast-amneziawg-strong', 'awg-entry-fast-amneziawg-strong-always', 'awg-entry-strong-amneziawg-fast', 'awg-entry-strong-amneziawg-fast-always', 'awg-entry-strong-amneziawg-strong', 'awg-entry-strong-amneziawg-strong-always', 'wg-entry-openvpn-tcp', 'wg-entry-openvpn-tcp-always', 'wg-entry-openvpn-udp', 'wg-entry-openvpn-udp-always', 'wg-entry-openvpn-tcp-fallback', 'wg-entry-openvpn-tcp-fallback-always', 'wg-entry-openvpn-mixed-fallback', 'wg-entry-openvpn-mixed-fallback-always', 'awg-entry-fast-openvpn-tcp', 'awg-entry-fast-openvpn-tcp-always', 'awg-entry-fast-openvpn-udp', 'awg-entry-fast-openvpn-udp-always', 'awg-entry-fast-openvpn-tcp-fallback', 'awg-entry-fast-openvpn-tcp-fallback-always', 'awg-entry-fast-openvpn-mixed-fallback', 'awg-entry-fast-openvpn-mixed-fallback-always', 'awg-entry-strong-openvpn-tcp', 'awg-entry-strong-openvpn-tcp-always', 'awg-entry-strong-openvpn-udp', 'awg-entry-strong-openvpn-udp-always', 'awg-entry-strong-openvpn-tcp-fallback', 'awg-entry-strong-openvpn-tcp-fallback-always', 'awg-entry-strong-openvpn-mixed-fallback', 'awg-entry-strong-openvpn-mixed-fallback-always', 'ss-entry-aes128-ss-aes128', 'ss-entry-aes128-ss-aes128-always', 'ss-entry-aes128-ss-aes256', 'ss-entry-aes128-ss-aes256-always', 'ss-entry-aes128-ss-chacha', 'ss-entry-aes128-ss-chacha-always', 'ss-entry-aes256-ss-aes128', 'ss-entry-aes256-ss-aes128-always', 'ss-entry-aes256-ss-aes256', 'ss-entry-aes256-ss-aes256-always', 'ss-entry-aes256-ss-chacha', 'ss-entry-aes256-ss-chacha-always', 'ss-entry-chacha-ss-aes128', 'ss-entry-chacha-ss-aes128-always', 'ss-entry-chacha-ss-aes256', 'ss-entry-chacha-ss-aes256-always', 'ss-entry-chacha-ss-chacha', 'ss-entry-chacha-ss-chacha-always', 'ss-entry-aes128-http', 'ss-entry-aes128-http-always', 'ss-entry-aes128-https', 'ss-entry-aes128-https-always', 'ss-entry-aes256-http', 'ss-entry-aes256-http-always', 'ss-entry-aes256-https', 'ss-entry-aes256-https-always', 'ss-entry-chacha-http', 'ss-entry-chacha-http-always', 'ss-entry-chacha-https', 'ss-entry-chacha-https-always', 'ss-entry-aes128-hysteria', 'ss-entry-aes128-hysteria-always', 'ss-entry-aes256-hysteria', 'ss-entry-aes256-hysteria-always', 'ss-entry-chacha-hysteria', 'ss-entry-chacha-hysteria-always', 'ss-entry-aes256-hysteria-layers00-always', 'ss-entry-aes256-hysteria-layers01-always', 'ss-entry-aes256-hysteria-layers02-always', 'ss-entry-aes256-hysteria-layers10-always', 'ss-entry-aes256-hysteria-layers11-always', 'ss-entry-aes256-hysteria-layers12-always', 'ss-entry-aes256-hysteria-layers20-always', 'ss-entry-aes256-hysteria-layers21-always', 'ss-entry-aes256-hysteria-layers22-always', 'ss-entry-aes256-ss-chacha-layers00-always', 'ss-entry-aes256-ss-chacha-layers01-always', 'ss-entry-aes256-ss-chacha-layers02-always', 'ss-entry-aes256-ss-chacha-layers10-always', 'ss-entry-aes256-ss-chacha-layers11-always', 'ss-entry-aes256-ss-chacha-layers12-always', 'ss-entry-aes256-ss-chacha-layers20-always', 'ss-entry-aes256-ss-chacha-layers21-always', 'ss-entry-aes256-ss-chacha-layers22-always', 'openvpn-entry-ss-tcp', 'openvpn-entry-ss-tcp-always', 'openvpn-entry-ss-udp', 'openvpn-entry-ss-udp-always', 'openvpn-entry-ss-tcp-entry-always', 'openvpn-entry-ss-tcp-final-off-entry-always', 'shadowsocks-off', 'hysteria2-off', 'wireguard-off', 'wg-entry-ss-off', 'ss-entry-aes256-ss-aes256-off', 'openvpn-entry-ss-tcp-off', 'hysteria2-aes-wrong-layer-key', 'hysteria2-aes-wrong-inner-key', 'hysteria2-aes-xor-wrong-layer-key', 'hysteria2-aes-xor-wrong-inner-key', 'hysteria2-aes-xor-wrong-whitening', 'wireguard-wrong-client-key', 'wireguard-wrong-psk', 'wireguard-wrong-dns', 'wireguard-wrong-trust', 'wireguard-wrong-exit', 'socks5-wrong-password', 'socks5-auth-downgrade', 'socks5-relay-domain', 'socks5-control-eof', 'socks5-wrong-dns', 'socks5-wrong-trust', 'socks5-wrong-exit', 'amneziawg-fast-wrong-client-key', 'amneziawg-strong-wrong-psk', 'amneziawg-fast-wrong-parameters', 'amneziawg-strong-wrong-parameters', 'amneziawg-strong-wrong-dns', 'amneziawg-strong-wrong-trust', 'amneziawg-strong-wrong-exit', 'openvpn-tcp-wrong-control', 'openvpn-udp-wrong-control', 'openvpn-tcp-wrong-provider-trust', 'openvpn-udp-wrong-password', 'openvpn-tcp-wrong-username', 'openvpn-udp-wrong-dns', 'openvpn-tcp-wrong-trust', 'openvpn-udp-wrong-exit', 'wg-entry-ss-wrong-entry-key', 'wg-entry-ss-wrong-entry-public', 'wg-entry-ss-wrong-exit-key', 'wg-entry-ss-wrong-dns', 'wg-entry-ss-wrong-trust', 'wg-entry-ss-wrong-exit', 'awg-entry-ss-fast-wrong-entry-key', 'awg-entry-ss-strong-wrong-entry-psk', 'awg-entry-ss-fast-wrong-entry-parameters', 'awg-entry-ss-strong-wrong-entry-parameters', 'awg-entry-ss-strong-wrong-entry-public', 'awg-entry-ss-strong-wrong-exit-key', 'awg-entry-ss-strong-wrong-dns', 'awg-entry-ss-strong-wrong-trust', 'awg-entry-ss-strong-wrong-exit', 'wg-entry-http-wrong-entry-key', 'wg-entry-http-wrong-exit-username', 'wg-entry-http-wrong-exit-key', 'wg-entry-http-wrong-dns', 'wg-entry-http-wrong-exit', 'wg-entry-https-wrong-entry-public', 'wg-entry-https-wrong-exit-server-name', 'wg-entry-https-wrong-exit-key', 'wg-entry-https-wrong-trust', 'awg-entry-http-fast-wrong-entry-parameters', 'awg-entry-https-strong-wrong-entry-parameters', 'awg-entry-https-strong-wrong-exit-key', 'wg-entry-hysteria2-wrong-entry-key', 'wg-entry-hysteria2-wrong-entry-public', 'wg-entry-hysteria2-wrong-exit-key', 'wg-entry-hysteria2-wrong-exit-server-name', 'wg-entry-hysteria2-wrong-exit-address', 'wg-entry-hysteria2-wrong-dns', 'wg-entry-hysteria2-wrong-trust', 'wg-entry-hysteria2-wrong-exit', 'awg-entry-hysteria2-fast-wrong-entry-parameters', 'awg-entry-hysteria2-strong-wrong-entry-parameters', 'awg-entry-hysteria2-strong-wrong-entry-psk', 'wg-entry-socks5-wrong-entry-key', 'wg-entry-socks5-wrong-entry-public', 'wg-entry-socks5-wrong-exit-username', 'wg-entry-socks5-wrong-exit-key', 'wg-entry-socks5-auth-downgrade', 'wg-entry-socks5-relay-domain', 'wg-entry-socks5-control-eof', 'wg-entry-socks5-relay-route', 'wg-entry-socks5-wrong-exit-address', 'wg-entry-socks5-wrong-dns', 'wg-entry-socks5-wrong-trust', 'wg-entry-socks5-wrong-exit', 'awg-entry-socks5-fast-wrong-entry-parameters', 'awg-entry-socks5-strong-wrong-entry-parameters', 'awg-entry-socks5-strong-wrong-entry-psk', 'wg-entry-hysteria2-aes-wrong-entry-key', 'wg-entry-hysteria2-aes-wrong-layer-key', 'wg-entry-hysteria2-aes-wrong-inner-key', 'wg-entry-hysteria2-aes-wrong-dns', 'wg-entry-hysteria2-aes-wrong-trust', 'wg-entry-hysteria2-aes-wrong-exit', 'wg-entry-hysteria2-aes-xor-wrong-entry-public', 'wg-entry-hysteria2-aes-xor-wrong-layer-key', 'wg-entry-hysteria2-aes-xor-wrong-inner-key', 'wg-entry-hysteria2-aes-xor-wrong-whitening', 'wg-entry-hysteria2-aes-xor-wrong-layer-route', 'awg-entry-hysteria2-fast-aes-wrong-entry-parameters', 'awg-entry-hysteria2-fast-aes-wrong-layer-key', 'awg-entry-hysteria2-strong-aes-xor-wrong-entry-psk', 'awg-entry-hysteria2-strong-aes-xor-wrong-layer-key', 'awg-entry-hysteria2-strong-aes-xor-wrong-whitening', 'wg-entry-wireguard-wrong-entry-key', 'wg-entry-wireguard-wrong-entry-psk', 'wg-entry-wireguard-wrong-entry-public', 'wg-entry-wireguard-wrong-exit-key', 'wg-entry-wireguard-wrong-exit-peer-key', 'wg-entry-wireguard-wrong-exit-psk', 'wg-entry-wireguard-wrong-exit-address', 'wg-entry-wireguard-wrong-dns', 'wg-entry-wireguard-wrong-trust', 'wg-entry-wireguard-wrong-exit', 'awg-entry-wireguard-fast-wrong-entry-parameters', 'awg-entry-wireguard-strong-wrong-entry-parameters', 'awg-entry-wireguard-strong-wrong-entry-psk', 'awg-entry-wireguard-strong-wrong-exit-key', 'awg-entry-wireguard-strong-wrong-exit-peer-key', 'awg-entry-wireguard-strong-wrong-exit-psk', 'wg-entry-amneziawg-fast-wrong-exit-key', 'wg-entry-amneziawg-fast-wrong-exit-peer-key', 'wg-entry-amneziawg-fast-wrong-exit-psk', 'wg-entry-amneziawg-fast-wrong-exit-parameters', 'wg-entry-amneziawg-fast-wrong-exit-padding', 'wg-entry-amneziawg-fast-wrong-exit-address', 'wg-entry-amneziawg-fast-wrong-dns', 'wg-entry-amneziawg-fast-wrong-trust', 'wg-entry-amneziawg-fast-wrong-exit', 'wg-entry-amneziawg-strong-wrong-exit-key', 'wg-entry-amneziawg-strong-wrong-exit-peer-key', 'wg-entry-amneziawg-strong-wrong-exit-psk', 'wg-entry-amneziawg-strong-wrong-exit-parameters', 'wg-entry-amneziawg-strong-wrong-exit-padding', 'wg-entry-amneziawg-strong-wrong-exit-address', 'wg-entry-amneziawg-strong-wrong-dns', 'wg-entry-amneziawg-strong-wrong-trust', 'wg-entry-amneziawg-strong-wrong-exit', 'awg-entry-fast-amneziawg-strong-wrong-entry-parameters', 'awg-entry-strong-amneziawg-fast-wrong-entry-parameters', 'awg-entry-strong-amneziawg-strong-wrong-entry-psk', 'wg-entry-amneziawg-strong-wrong-entry-key', 'wg-entry-amneziawg-strong-wrong-entry-psk', 'wg-entry-amneziawg-strong-wrong-entry-public', 'wg-entry-openvpn-tcp-wrong-control', 'wg-entry-openvpn-udp-wrong-control', 'wg-entry-openvpn-tcp-wrong-provider-trust', 'wg-entry-openvpn-udp-wrong-password', 'wg-entry-openvpn-tcp-wrong-username', 'wg-entry-openvpn-udp-wrong-dns', 'wg-entry-openvpn-tcp-wrong-trust', 'wg-entry-openvpn-udp-wrong-exit', 'wg-entry-openvpn-udp-wrong-exit-address', 'wg-entry-openvpn-tcp-wrong-entry-key', 'wg-entry-openvpn-udp-wrong-entry-psk', 'wg-entry-openvpn-tcp-wrong-entry-public', 'awg-entry-fast-openvpn-udp-wrong-entry-parameters', 'awg-entry-strong-openvpn-tcp-wrong-entry-parameters', 'awg-entry-strong-openvpn-udp-wrong-entry-psk', 'ss-entry-aes256-ss-aes256-wrong-entry-key', 'ss-entry-aes256-ss-aes256-wrong-entry-method', 'ss-entry-aes256-ss-aes256-wrong-entry-public', 'ss-entry-aes256-ss-aes256-wrong-exit-key', 'ss-entry-aes256-ss-aes256-wrong-exit-method', 'ss-entry-aes256-ss-aes256-wrong-exit-address', 'ss-entry-aes256-ss-aes256-wrong-dns', 'ss-entry-aes256-ss-aes256-wrong-trust', 'ss-entry-aes256-ss-aes256-wrong-exit', 'ss-entry-aes256-http-wrong-entry-key', 'ss-entry-aes256-https-wrong-entry-method', 'ss-entry-aes256-http-wrong-entry-public', 'ss-entry-aes256-http-wrong-exit-username', 'ss-entry-aes256-http-wrong-exit-key', 'ss-entry-aes256-http-wrong-exit-address', 'ss-entry-aes256-http-wrong-dns', 'ss-entry-aes256-http-wrong-exit', 'ss-entry-aes256-https-wrong-exit-username', 'ss-entry-aes256-https-wrong-exit-key', 'ss-entry-aes256-https-wrong-exit-server-name', 'ss-entry-aes256-https-wrong-trust', 'ss-entry-aes256-hysteria-wrong-entry-key', 'ss-entry-aes256-hysteria-wrong-entry-method', 'ss-entry-aes256-hysteria-wrong-entry-public', 'ss-entry-aes256-hysteria-wrong-exit-key', 'ss-entry-aes256-hysteria-wrong-exit-address', 'ss-entry-aes256-hysteria-wrong-exit-server-name', 'ss-entry-aes256-hysteria-wrong-final-trust', 'ss-entry-aes256-hysteria-wrong-dns', 'ss-entry-aes256-hysteria-wrong-exit', 'ss-entry-aes256-hysteria-layers22-wrong-entry-layer', 'ss-entry-aes256-hysteria-layers22-wrong-final-layer', 'ss-entry-aes256-hysteria-layers22-wrong-entry-whitening', 'ss-entry-aes256-hysteria-layers22-wrong-final-whitening', 'ss-entry-aes256-hysteria-layers22-wrong-entry-public', 'ss-entry-aes256-hysteria-layers22-wrong-dns', 'ss-entry-aes256-hysteria-layers22-wrong-exit', 'ss-entry-aes256-hysteria-layers22-wrong-final-trust', 'ss-entry-aes256-ss-chacha-layers22-wrong-entry-layer', 'ss-entry-aes256-ss-chacha-layers22-wrong-final-layer', 'ss-entry-aes256-ss-chacha-layers22-wrong-entry-whitening', 'ss-entry-aes256-ss-chacha-layers22-wrong-final-whitening', 'ss-entry-aes256-ss-chacha-layers22-wrong-entry-public', 'ss-entry-aes256-ss-chacha-layers22-wrong-dns', 'ss-entry-aes256-ss-chacha-layers22-wrong-exit', 'ss-entry-aes256-ss-chacha-layers22-wrong-trust', 'openvpn-entry-ss-tcp-wrong-entry-public', 'openvpn-entry-ss-tcp-wrong-control', 'openvpn-entry-ss-udp-wrong-password', 'openvpn-entry-ss-tcp-wrong-provider-trust', 'openvpn-entry-ss-udp-wrong-final-key', 'openvpn-entry-ss-tcp-wrong-dns', 'openvpn-entry-ss-udp-wrong-trust', 'openvpn-entry-ss-tcp-wrong-exit']
-            or not re.fullmatch('[0-9a-f]{64}', receipt.get('sealed_bundle_sha256', ''))
-            or set(receipt.get('images', {})) != {'controller', 'peer'}
-            or any(not re.fullmatch('[0-9a-f]{64}', value) for value in receipt['images'].values())
-            or set(receipt.get('sources', {})) != {'application', 'peer'}
-            or any(not group or any(not isinstance(name, str) or not name or name.startswith('/') or '..' in name.split('/')
-                                    or not isinstance(value, str) or not re.fullmatch('[0-9a-f]{64}', value)
-                                    for name, value in group.items()) for group in receipt['sources'].values())):
-        raise ValueError('Native Darwin host receipt changed its exact source, bundle or protocol coverage')
-    if hashlib.sha256((Path(bundle)/'NATIVE-RUNTIME.json').read_bytes()).hexdigest() != original:
-        raise ValueError('Native Darwin acceptance changed its delivered bundle')
-    print(output, flush=True)
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def checkout(path, repository, revision):
@@ -1578,23 +667,6 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists() and any(destination.iterdir()):
         reuse(destination, target, policy, env)
-        if target.startswith('darwin/'):
-            verify_installed_darwin_host(None, destination, target, env)
-        elif platform.system() == 'Linux' and target == 'linux/'+{'x86_64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), ''):
-            verify_linux_stock_dns(destination, target, env)
-            DNSSEC.test_native_bundle(destination, target, env)
-        if target == native_host_target():
-            verify_imported_desktop_configs(destination, target, env)
-            verify_imported_desktop_packet_configs(destination, target, env)
-            verify_imported_desktop_openvpn_configs(destination, target, env)
-            verify_imported_desktop_pq_configs(destination, target, env)
-            verify_imported_desktop_xhttp_configs(destination, target, env)
-            verify_imported_desktop_naive_h2_configs(destination, target, env)
-            verify_imported_desktop_naive_h3_configs(destination, target, env)
-            if target.startswith('linux/'):
-                verify_reused_linux_host(destination, target, env)
-            elif target.startswith('windows/'):
-                verify_reused_windows_prefix(destination, target, env)
         print('Reused verified complete native runtime '+target, flush=True)
         return destination
     if run(['go', 'env', 'GOVERSION'], env=env) != TOOLCHAIN:
@@ -1630,22 +702,10 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
         stage_cronet(source, stage, target, env)
         host = ('darwin' if platform.system() == 'Darwin' else platform.system().lower())+'/'+{
             'x86_64': 'amd64', 'AMD64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64', 'ARM64': 'arm64'}.get(platform.machine(), '')
-        if target == host:
-            # Keep one direct native protocol smoke test; installed artifact and
-            # OS protection verification still run after the actual build.
-            race = [] if target == 'windows/arm64' else ['-race']
-            run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', './protocol/wireguard', '-run', '^TestRouterVPNWireGuard',
-                 '-count=1', '-timeout=60s'], cwd=source, env=env, timeout=120)
         if target.startswith('linux/'):
             validator = DNSSEC.build(target, temp/'dnssec-bundle', compiled=dnssec_compiled, env=env)
             for name in DNSSEC.names(target):
                 shutil.copyfile(validator/name, stage/name)
-            run([sys.executable, ROOT/'deploy/test_desktop_dnssec_namespace.py',
-                 source, validator, target], cwd=ROOT, env=env, timeout=900)
-            run([sys.executable, ROOT/'deploy/test_desktop_dnssec_command.py',
-                 '--source', source, '--bundle', validator, '--target', target],
-                cwd=ROOT, env=env, timeout=900)
         ldflags = '-s -w -buildid= -checklinkname=0 -X github.com/sagernet/sing-box/constant.Version='+marker(policy)
         if target.startswith('linux/'):
             validator_library = payload(regular(stage/DNSSEC.LIBRARY, DNSSEC.bound(DNSSEC.LIBRARY, target)))
@@ -1684,19 +744,6 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             help_output = run([binary, 'routervpn-external', '--help'], env=env, timeout=20)
             if '--runtime-dir' not in help_output or '--session' not in help_output:
                 raise ValueError('Actual native engine omitted its captured external owner command')
-            verify_imported_desktop_configs(stage, target, env)
-            verify_imported_desktop_packet_configs(stage, target, env)
-            verify_imported_desktop_openvpn_configs(stage, target, env)
-            verify_imported_desktop_pq_configs(stage, target, env)
-            verify_imported_desktop_xhttp_configs(stage, target, env)
-            verify_imported_desktop_naive_h2_configs(stage, target, env)
-            verify_imported_desktop_naive_h3_configs(stage, target, env)
-            if target.startswith('linux/'):
-                verify_installed_linux_host(source, stage, target, env)
-            elif target.startswith('windows/'):
-                verify_installed_windows_prefix(source, stage, target, env)
-            elif target.startswith('darwin/'):
-                verify_installed_darwin_host(source, stage, target, env)
         if destination.exists():
             destination.rmdir()
         os.replace(stage, destination)

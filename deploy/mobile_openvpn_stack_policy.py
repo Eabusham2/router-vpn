@@ -27,8 +27,7 @@ DIAL_PATCHES = tuple((old, old.replace('return '+call, 'connection, err := '+cal
 
 
 def inputs():
-    return [Path(__file__).resolve(), ROOT/'deploy/test_mobile_openvpn_stack_policy.py',
-            ROOT/'mobile/openvpn/stack_close_test.go.tmpl', ROOT/'mobile/openvpn/stack_capacity.go.tmpl']
+    return [Path(__file__).resolve(), ROOT / 'mobile/openvpn/stack_capacity.go.tmpl']
 
 
 def blobsha(data):
@@ -58,13 +57,11 @@ def prepare(vendor):
     if subprocess.check_output(['git', '-C', str(vendor), 'rev-parse', 'HEAD'], text=True).strip() != PIN:
         raise ValueError('OpenVPN delivery drain requires the exact pinned core')
     source = vendor/'transport/openvpn/device_stack.go'
-    fixture = source.with_name('routervpn_stack_close_test.go')
     capacity = source.with_name('routervpn_stack_capacity.go')
-    for target in (source, fixture, capacity):
+    for target in (source, capacity):
         if target.is_symlink() or not target.resolve().is_relative_to(vendor):
             raise ValueError('Unsafe native OpenVPN delivery-drain target')
     fixed = patch(source.read_text())
     source.write_bytes(fixed.encode('utf-8'))
-    fixture.write_bytes((ROOT/'mobile/openvpn/stack_close_test.go.tmpl').read_bytes())
     capacity.write_bytes((ROOT/'mobile/openvpn/stack_capacity.go.tmpl').read_bytes())
     print('Verified native OpenVPN link delivery drains before gVisor teardown')

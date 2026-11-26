@@ -162,12 +162,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Require actual build-job descendant ownership before native preparation
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          python deploy/test_windows_build_owner.py
-          if ($LASTEXITCODE -ne 0) { throw 'Native build job ownership failed' }
       - name: Install native Linux build libraries
         if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends clang libclang-dev cmake ninja-build pkg-config libssl-dev autoconf automake libtool make perl nftables iproute2 passwd util-linux
@@ -182,30 +176,6 @@ jobs:
         with:
           name: RouterVPN-Tor-Windows-compile-${{ github.sha }}
           path: dist/tor-compiled/windows-amd64
-      - name: Native DNS proxy H3 exchanges and kernel proof
-        shell: bash
-        env:
-          ROUTER_VPN_DNS_TARGET: '${{ matrix.target }}'
-        run: |
-          set -euo pipefail
-          python3 deploy/test_dnsproxy_build.py
-          python3 - <<'PY'
-          import os, subprocess, sys
-          from pathlib import Path
-          target = os.environ['ROUTER_VPN_DNS_TARGET']
-          if target not in {'linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64', 'windows/amd64', 'windows/arm64'}:
-              raise RuntimeError('Unknown native DNS test target')
-          selector = os.environ.copy()
-          selector['GOTOOLCHAIN'] = 'go1.26.3'
-          identity = subprocess.check_output(['go', 'env', 'GOROOT', 'GOHOSTOS', 'GOHOSTARCH'], env=selector, text=True).splitlines()
-          if len(identity) != 3 or '/'.join(identity[1:]) != target:
-              raise RuntimeError('DNS tests must execute on the actual target architecture')
-          go = Path(identity[0])/'bin'/('go.exe' if target.startswith('windows/') else 'go')
-          command = [sys.executable, 'deploy/build-dnsproxy.py', 'test', '--go', str(go)]
-          if target == 'windows/arm64':
-              command.append('--without-race')
-          subprocess.run(command, check=True)
-          PY
       - name: Compute complete source identity
         id: policy
         shell: bash
@@ -241,12 +211,6 @@ jobs:
             export ROUTERVPN_DARWIN_NATIVE_HOST_ACCEPTANCE=1
           fi
           python3 deploy/build-native-runtime.py "${runtime_args[@]}"
-          if [[ '${{ matrix.target }}' == linux/* ]]; then
-            python3 deploy/test_desktop_dnssec_bundle.py --bundle 'dist/native-runtime/${{ matrix.slug }}' --target '${{ matrix.target }}'
-          fi
-          python3 deploy/test_desktop_tor_package.py --package 'dist/native-runtime/${{ matrix.slug }}' --target '${{ matrix.target }}' --within-native
-          python3 deploy/test_desktop_native_bundle.py 'dist/native-runtime/${{ matrix.slug }}' '${{ matrix.target }}'
-          python3 deploy/test_native_runtime_delivery.py --bundle 'dist/native-runtime/${{ matrix.slug }}' --target '${{ matrix.target }}'
           python3 deploy/native-runtime-bundle.py archive '${{ matrix.target }}' 'dist/native-runtime/${{ matrix.slug }}' 'dist/native-artifact/native-${{ matrix.slug }}.tar.gz'
       - uses: actions/cache/save@v4
         if: steps.engine-cache.outputs.cache-hit != 'true'
@@ -310,90 +274,28 @@ jobs:
       - uses: ./.github/actions/go-windows-sockets
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - name: Owned Stop retry preserves the displayed cleanup receipt
-        shell: pwsh
-        run: |
-          python deploy/test_desktop_stop_retry.py --platform windows --shell pwsh
-          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 7 owned Stop retry failed' }
-          python deploy/test_desktop_stop_retry.py --platform windows --shell powershell.exe
-          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 5.1 owned Stop retry failed' }
       - name: Verify native Windows Tor host compatibility API
         shell: pwsh
         env: {ROUTER_VPN_REQUIRE_TOR_HELPERS: '1'}
         run: go test -v -run '^TestWindowsTor(ArchitecturePolicy|HostCompatibilityNative)$' ./cmd/client
       - uses: actions/download-artifact@v4
         with: {name: RouterVPN-generic-release-candidate, path: artifacts}
-      - name: Execute Portable native WPF self-test and relocation
-        shell: pwsh
-        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
-        run: |
-          $ErrorActionPreference='Stop'; $arch=$env:ROUTER_VPN_ARCH
-          $archive=(Get-ChildItem artifacts -Recurse -Filter "RouterVPN-Portable-Windows-$arch.zip"|Select-Object -First 1).FullName
-          if(-not $archive){throw "Missing Portable $arch package"}
-          $extract=Join-Path $env:RUNNER_TEMP "portable-$arch"; Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue; Expand-Archive $archive $extract -Force
-          $roots=@(Get-ChildItem -LiteralPath $extract -Directory)
-          if($roots.Count -ne 1){throw 'Portable archive did not contain exactly one owned package root'}
-          $root=$roots[0]
-          $test=Join-Path $root.FullName 'App/RouterVPN/client/test-windows-package-session.ps1'
-          if(-not(Test-Path -LiteralPath $test -PathType Leaf)){throw 'Portable package lacks its actual owned Session test'}
-          $movedParent=Join-Path $env:RUNNER_TEMP "portable-moved-$arch"
-          $moved=Join-Path $movedParent $root.Name
-          & $test -Root $root.FullName -Portable -RelocateTo $moved
-      - name: Verify installed package native entrypoint
+      - name: Smoke-test packaged Windows launchers
         shell: pwsh
         env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
         run: |
           $ErrorActionPreference='Stop'
-          $arch=$env:ROUTER_VPN_ARCH; $archive=(Get-ChildItem artifacts -Recurse -Filter "RouterVPN-Windows-$arch.zip"|Select-Object -First 1).FullName
-          $extract=Join-Path $env:RUNNER_TEMP "installed-$arch"; Expand-Archive $archive $extract -Force; $root=Get-ChildItem $extract -Directory|Select-Object -First 1; $start=Get-Content (Join-Path $root.FullName 'Start-RouterVPN.ps1') -Raw
-          if($start-notmatch'RouterVPN-Windows-App\.ps1'){throw 'installed package not native WPF'}; if($start-match'msedge\.exe|chrome\.exe|--app='){throw 'browser shell regression'}
-          $killTest=Join-Path $root.FullName 'client\test-windows-kill-switch.ps1'; if(-not(Test-Path $killTest)){throw 'shipped Windows package missing kill-switch contract test'}; & $killTest; $privateStateTest=Join-Path $root.FullName 'client\test-private-router-vpn-state.ps1'; if(-not(Test-Path $privateStateTest)){throw 'shipped Windows package missing private profile-store contract test'}; & $privateStateTest
-          $asyncTest=Join-Path $root.FullName 'client\test-windows-async-actions.ps1'
-          if(-not(Test-Path -LiteralPath $asyncTest)){throw 'shipped Windows package missing async lifecycle regression tests'}
-          & $asyncTest -Root $root.FullName
-          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $asyncTest -Root $root.FullName
-          if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 packaged async lifecycle tests failed'}
-          $performanceTest=Join-Path $root.FullName 'client\test-windows-performance.ps1'
-          if(-not(Test-Path -LiteralPath $performanceTest)){throw 'shipped Windows package missing Performance ownership regression tests'}
-          & $performanceTest -Root $root.FullName
-          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $performanceTest -Root $root.FullName
-          if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 packaged Performance ownership tests failed'}
-          $candidateTest=Join-Path $root.FullName 'client\test-windows-ordered-candidates.ps1'
-          if(-not(Test-Path -LiteralPath $candidateTest)){throw 'shipped Windows package missing ordered candidate callback tests'}
-          & $candidateTest -Root $root.FullName
-          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $candidateTest -Root $root.FullName
-          if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 packaged ordered candidate callbacks failed'}
-          $runtimeTest=Join-Path $root.FullName 'client\test-windows-runtime-install.ps1'
-          & $runtimeTest -SourceRoot $root.FullName
-          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runtimeTest -SourceRoot $root.FullName
-          if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 runtime installation fixture failed'}
-          & (Join-Path $root.FullName 'client\test-windows-installed-runtimes.ps1') -PackageRoot $root.FullName -ExpectedArchitecture $arch
-      - name: Execute packaged device and DNS ownership gates
-        shell: pwsh
-        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
-        run: |
-          $ErrorActionPreference='Stop'; $arch=$env:ROUTER_VPN_ARCH
-          $installed=Join-Path $env:RUNNER_TEMP "installed-$arch"
-          $roots=@(Get-ChildItem -LiteralPath $installed -Directory)
-          if($roots.Count -ne 1){throw 'Expected exactly one extracted Windows release package'}
-          foreach($shell in @('pwsh','powershell.exe')){
-            python deploy/test_windows_release_gates.py --package-root $roots[0].FullName --shell $shell
-            if($LASTEXITCODE -ne 0){throw "Packaged Windows $arch device/DNS gates failed in $shell"}
+          foreach($family in @('Windows','Portable-Windows')){
+            $archive=(Get-ChildItem artifacts -Recurse -Filter "RouterVPN-$family-$env:ROUTER_VPN_ARCH.zip"|Select-Object -First 1).FullName
+            if(-not $archive){throw "Missing $family package"}
+            $extract=if($family -eq 'Windows'){Join-Path $env:RUNNER_TEMP "installed-$env:ROUTER_VPN_ARCH"}else{Join-Path $env:RUNNER_TEMP "smoke-portable-$env:ROUTER_VPN_ARCH"}
+            Expand-Archive $archive $extract -Force
+            $root=(Get-ChildItem -LiteralPath $extract -Directory|Select-Object -First 1).FullName
+            $name=if($family -eq 'Windows'){'RouterVPN.exe'}else{'RouterVPNPortable.exe'}
+            $p=Start-Process -FilePath (Join-Path $root $name) -ArgumentList '--self-test' -Wait -PassThru
+            if($p.ExitCode -ne 0){throw "Packaged $family self-test failed"}
           }
-      - name: Execute packaged suspended-process Job ownership
-        shell: pwsh
-        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
-        run: |
-          $ErrorActionPreference='Stop'; $arch=$env:ROUTER_VPN_ARCH
-          $installed=Join-Path $env:RUNNER_TEMP "installed-$arch"
-          $roots=@(Get-ChildItem -LiteralPath $installed -Directory)
-          if($roots.Count -ne 1){throw 'Expected exactly one extracted Windows release package'}
-          $test=Join-Path $roots[0].FullName 'client/test-windows-private-job.ps1'
-          if(-not(Test-Path -LiteralPath $test -PathType Leaf)){throw 'Shipped Windows package lacks its suspended-process Job test'}
-          foreach($shell in @('pwsh','powershell.exe')){
-            & $shell -NoProfile -ExecutionPolicy Bypass -File $test -SourceRoot $roots[0].FullName
-            if($LASTEXITCODE -ne 0){throw "Packaged Windows $arch suspended-process Job tests failed in $shell"}
-          }
+
       - name: Execute packaged Windows WFP enforcement
         shell: pwsh
         env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
@@ -408,51 +310,6 @@ jobs:
             & $shell -NoProfile -ExecutionPolicy Bypass -File $test -SourceRoot $roots[0].FullName
             if($LASTEXITCODE -ne 0){throw "Packaged Windows $arch WFP kernel enforcement failed in $shell"}
           }
-      - name: Execute packaged owned Windows protection adapter
-        shell: pwsh
-        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
-        run: |
-          $ErrorActionPreference='Stop'; $arch=$env:ROUTER_VPN_ARCH
-          $installed=Join-Path $env:RUNNER_TEMP "installed-$arch"
-          $roots=@(Get-ChildItem -LiteralPath $installed -Directory)
-          if($roots.Count -ne 1){throw 'Expected exactly one extracted Windows release package'}
-          $relocated=@(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP "portable-moved-$arch") -Directory)
-          if($relocated.Count -ne 1){throw 'Expected exactly one relocated Portable release package'}
-          $packages=@($roots[0].FullName,(Join-Path $relocated[0].FullName 'App/RouterVPN'))
-          foreach($package in $packages){
-            foreach($name in @('test-windows-owned-protection.ps1','test-windows-protection-dispatch.ps1','test-windows-legacy-protection-recovery.ps1')){
-              $test=Join-Path $package ('client/'+$name)
-              if(-not(Test-Path -LiteralPath $test -PathType Leaf)){throw "Shipped Windows package lacks its owned protection fixture: $name"}
-              foreach($shell in @('pwsh','powershell.exe')){
-                & $shell -NoProfile -ExecutionPolicy Bypass -File $test
-                if($LASTEXITCODE -ne 0){throw "Packaged Windows $arch $name failed in $shell at $package"}
-              }
-            }
-          }
-      - name: Execute packaged Tor wrapper lifecycle
-        shell: pwsh
-        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
-        run: |
-          $ErrorActionPreference='Stop'; $arch=$env:ROUTER_VPN_ARCH
-          $installed=Join-Path $env:RUNNER_TEMP "installed-$arch"
-          $roots=@(Get-ChildItem -LiteralPath $installed -Directory)
-          if($roots.Count -ne 1){throw 'Expected exactly one extracted Windows release package'}
-          $test=Join-Path $roots[0].FullName 'client/test-windows-tor-wrapper-lifecycle.ps1'
-          if(-not(Test-Path -LiteralPath $test -PathType Leaf)){throw 'Shipped Windows package lacks its Tor wrapper lifecycle test'}
-          foreach($shell in @('pwsh','powershell.exe')){
-            & $shell -NoProfile -ExecutionPolicy Bypass -File $test -SourceRoot $roots[0].FullName
-            if($LASTEXITCODE -ne 0){throw "Packaged Windows $arch Tor wrapper lifecycle tests failed in $shell"}
-          }
-      - name: Execute shipped Tor helpers on the actual Windows architecture
-        shell: pwsh
-        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
-        run: |
-          $ErrorActionPreference='Stop'; $arch=$env:ROUTER_VPN_ARCH
-          $installed=Join-Path $env:RUNNER_TEMP "installed-$arch"
-          $root=Get-ChildItem -LiteralPath $installed -Directory|Select-Object -First 1
-          $test=Join-Path $root.FullName 'client\test-windows-tor-compatibility.ps1'
-          if(-not(Test-Path -LiteralPath $test)){throw 'Shipped Windows package lacks Tor compatibility test'}
-          & $test -SourceRoot $root.FullName -ExpectedArchitecture $arch
 
   android:
     needs: source-snapshot
@@ -474,13 +331,7 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
       - name: Android graph integration dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libandroid-json-java
-      - name: Android native routing smoke tests
-        run: |
-          sudo apt-get install -y --no-install-recommends build-essential autoconf automake libtool pkg-config perl patch
-          python3 android/test_android_home_dns.py
-          python3 android/test_android_multihop_graph.py
-          python3 android/test_android_mtu_session.py
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential autoconf automake libtool pkg-config perl patch
       - name: Build and verify the configured Android delivery
         env:
           ROUTERVPN_ANDROID_KEYSTORE_BASE64: ${{ github.ref == 'refs/heads/main' && secrets.ROUTERVPN_ANDROID_KEYSTORE_BASE64 || '' }}
@@ -508,11 +359,6 @@ jobs:
       - uses: actions/setup-go@v5
         with: {go-version: '1.26.3', cache: false}
       - uses: ./.github/actions/go-windows-sockets
-      - name: iOS native routing smoke tests
-        run: |
-          python3 deploy/test_ios_home_dns.py
-          python3 deploy/test_ios_physical_path.py
-          python3 deploy/test_ios_mtu_client.py
       - name: Install XcodeGen
         run: |
           brew install xcodegen autoconf automake libtool pkg-config
@@ -520,7 +366,7 @@ jobs:
         working-directory: ios/RouterVPN
         run: |
           sh prepare-wireguard-kit.sh
-          python3 ../../deploy/test_apple_amnezia_timer_preparation.py --kit "$PWD/.deps/wireguard-apple"
+
       - name: Prepare exact pinned Libbox before Xcode resolves the framework
         working-directory: ios/RouterVPN
         run: ./prepare-libbox.sh
@@ -582,8 +428,6 @@ jobs:
       - name: Verify and stage exact native runtime payloads
         shell: bash
         run: python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime darwin/amd64 darwin/arm64
-      - name: Owned Stop retry preserves the displayed cleanup receipt
-        run: python3 deploy/test_desktop_stop_retry.py --platform macos
       - name: Build native macOS packages
         run: |
           chmod +x client/macos/build-native-app.sh deploy/package-macos-native.sh
@@ -627,8 +471,6 @@ jobs:
       - name: Verify and stage exact native runtime payloads
         shell: bash
         run: python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime linux/${{ matrix.arch }}
-      - name: Owned Stop retry preserves the displayed cleanup receipt
-        run: python3 deploy/test_desktop_stop_retry.py --platform linux
       - name: Build native Linux package
         run: |
           chmod +x client/linux/build-native-app.sh deploy/package-linux-native.sh

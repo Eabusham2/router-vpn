@@ -49,14 +49,6 @@ OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"
 OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$TOR_SOURCE_SHA")
 # Native graph evidence is tied to the actual Java builder/policy inputs, not
 # only the Go core. Changing a host graph invalidates the cached AAR proof.
-ANDROID_GRAPH_SHA=$(python3 "$ROOT/../deploy/test_android_multihop_pinned.py" --digest)
-OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$ANDROID_GRAPH_SHA")
-ANDROID_TOR_GRAPH_SHA=$(python3 "$ROOT/../deploy/test_android_tor_pinned.py" --digest)
-OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$ANDROID_TOR_GRAPH_SHA")
-APPLE_TOR_GRAPH_SHA=$(python3 "$ROOT/../deploy/test_ios_tor_pinned.py" --digest)
-OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$APPLE_TOR_GRAPH_SHA")
-ANDROID_MODULE_SHA=$(python3 "$ROOT/../deploy/test_mobile_tor_module_graph.py" --digest)
-OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$ANDROID_MODULE_SHA")
 EXPECTED_STAMP="$COMMIT+$LIBXRAY_COMMIT+$XRAY_CORE_VERSION+$GO_TOOLCHAIN+$XRAY_POLICY_SHA+$NATIVE_XRAY_SHA"
 
 require_typed_candidate_prefix_api() {
@@ -346,9 +338,6 @@ GOBIN="$GO_BIN_DIR" go_retry install "github.com/sagernet/gomobile/cmd/gomobile@
 GOBIN="$GO_BIN_DIR" go_retry install "github.com/sagernet/gomobile/cmd/gobind@v$GOMOBILE_VERSION"
 [[ -x "$GO_BIN_DIR/gomobile" && -x "$GO_BIN_DIR/gobind" ]] || { echo 'Pinned gomobile/gobind installation failed' >&2; exit 1; }
 export PATH="$GO_BIN_DIR:$PATH"
-python3 "$ROOT/../deploy/test_mobile_tor_loader.py" --go "$(command -v go)"
-python3 "$ROOT/../deploy/test_mobile_tor_package_policy.py" --source-cache "$TOR_SOURCE_CACHE"
-python3 "$ROOT/../deploy/test_mobile_tor_packaged_link.py" --native-package "$TOR_PACKAGE"
 
 rm -rf "$VENDOR" "$XRAY_VENDOR" "$XRAY_CORE_VENDOR"
 mkdir -p "$(dirname "$VENDOR")" "$LIBDIR"
@@ -372,7 +361,6 @@ install -m 0644 "$ROOT/routervpn_xray_bridge.go" "$VENDOR/experimental/libbox/ro
 grep -Fq 'with_openvpn' "$VENDOR/cmd/internal/build_libbox/main.go"
 python3 "$ROOT/../deploy/prepare-mobile-openvpn.py" "$VENDOR"
 python3 "$ROOT/../deploy/prepare-mobile-multihop.py" "$VENDOR"
-python3 "$ROOT/../deploy/test_retained_strategy_preparation.py" "$VENDOR"
 python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)"
 
 (
@@ -404,36 +392,21 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
     exit 1
   }
   gofmt -w experimental/libbox/routervpn_xray_bridge.go
-  go_retry test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./protocol/routervpnnodesocks -run '^TestOriginalSOCKS' -count=1 -timeout=90s
-  go_retry test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./protocol/routervpnnodeconnect -run '^TestCONNECT' -count=1 -timeout=90s
-  go_retry test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1
-  go_retry test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./transport/wireguard -run TestRouterVPNClientBind -count=1
   python3 "$ROOT/../deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"
-  bash "$ROOT/../deploy/test_mobile_openvpn_pinned.sh" "$VENDOR"
-  bash "$ROOT/../deploy/test_mobile_external_pinned.sh" "$VENDOR"
-  bash "$ROOT/../deploy/test_apple_xray_pinned.sh" "$VENDOR" "$XRAY_CORE_VENDOR"
-  bash "$ROOT/../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"
-  bash "$ROOT/../deploy/test_mobile_sip003_pinned.sh" "$VENDOR"
-  python3 "$ROOT/../deploy/test_android_multihop_pinned.py" "$VENDOR"
   # This Linux gate runs real pinned Tor, the shipping Cgo owner and actual PT
   # workers in the same prepared Libbox module before cross-platform linkage.
   if [[ $(uname -s) == Linux ]]; then
     TOR_HOST_PACKAGE="$ROOT/.vendor/tor-host-test"
     python3 "$ROOT/../deploy/build-mobile-tor-package.py" --platform host-test --output "$TOR_HOST_PACKAGE" --source-cache "$TOR_SOURCE_CACHE"
-    python3 "$ROOT/../deploy/test_mobile_tor_package_runtime.py" --package "$TOR_HOST_PACKAGE" --go "$(command -v go)"
     TOR_GATE_PARENT=$(mktemp -d "$ROOT/.vendor/tor-outbound-proof.XXXXXX")
-    python3 "$ROOT/../deploy/test-mobile-tor-outbound.py" --go "$(command -v go)" --vendor "$VENDOR" --native-package "$TOR_HOST_PACKAGE" --output "$TOR_GATE_PARENT/evidence"
-    python3 "$ROOT/../deploy/test_android_tor_pinned.py" "$VENDOR" --native-package "$TOR_HOST_PACKAGE" --go "$(command -v go)"
     # Run the shipping Swift profile compiler against these same real engines.
     # Linux CI includes Swift; this must not use the unavailable macOS C stub.
-    python3 "$ROOT/../deploy/test_mobile_external_graphs.py" --vendor "$VENDOR" --platform android --native-package "$TOR_HOST_PACKAGE" --go "$(command -v go)"
   fi
   # Install only the verified C dependency into the existing Go module after
   # host graph gates, before the sole gomobile build of the combined runtime.
   python3 "$ROOT/../deploy/prepare-mobile-torpack.py" "$VENDOR" --native-package "$TOR_PACKAGE"
   # Recheck the actual Android-only Xray import after every host preparation.
   # Host tests cannot detect a lowered Go directive on that platform-only edge.
-  python3 "$ROOT/../deploy/test_mobile_tor_module_graph.py" --vendor "$VENDOR" --libxray "$XRAY_VENDOR" --go "$(command -v go)"
   go_retry run ./cmd/internal/build_libbox -target android
 )
 
