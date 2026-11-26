@@ -200,7 +200,7 @@ def main():
             subprocess.run(command+[str(source),str(work/'Selector.swift'),str(ownership),str(work/'Tests.swift'),'-o',str(binary)],check=True,timeout=90)
             return subprocess.run([str(binary),str(compiler)],capture_output=True,text=True,timeout=180)
         result=run(original);assert result.returncode==0,result.stdout+result.stderr;print(result.stdout.strip())
-        before='try json(selectedProfile, maximum: 256 * 1024) == json(capture.finalProfile, maximum: 256 * 1024)'
+        before='try json(selectedProfile, maximum: 256 * 1024) == json(capture.controlMember.profile, maximum: 256 * 1024)'
         assert original.count(before)==1
         failed=run(original.replace(before,'true',1))
         assert failed.returncode!=0 and 'ACCEPTED Imported SS final identity substitution' in failed.stdout+failed.stderr,failed.stdout+failed.stderr
