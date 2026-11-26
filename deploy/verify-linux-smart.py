@@ -986,6 +986,70 @@ def remove_login_user(name, uid):
     wait_for(remove, "final retirement of the disposable login user", 30)
 
 
+@contextmanager
+def fixture_directory(prefix, parent, retirement):
+    directory = Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
+    original = directory.stat()
+    try:
+        yield directory
+    finally:
+        if not retirement["complete"]:
+            print("SMART retained original fixture directory after unproved retirement:", directory, flush=True)
+        else:
+            try:
+                if not os.path.samestat(original, directory.stat()):
+                    raise RuntimeError("The original fixture directory was replaced before cleanup")
+                shutil.rmtree(directory)
+            except BaseException:
+                retirement["complete"] = False
+                raise
+
+
+@contextmanager
+def installed_case(template, work, retirement):
+    # The production journal and stable locks are siblings of INSTALL under
+    # /opt. Each independent network namespace needs its own complete ancestry;
+    # a new application overlay alone must not inherit another case's journal.
+    previous = os.stat("/opt")
+    run("mount", "-t", "tmpfs", "-o", "mode=0755,size=4m",
+        "routervpn-smart-case-" + secrets.token_hex(12), "/opt")
+    anchor = os.stat("/opt")
+    namespaces = ExitStack()
+    overlay = None
+    try:
+        if os.path.samestat(previous, anchor):
+            raise RuntimeError("The case did not acquire a fresh installation ancestry")
+        INSTALL.mkdir(mode=0o755)
+        backing = work / "overlay-backing"
+        backing.mkdir(mode=0o700)
+        upper, overlay_work = backing / "upper", backing / "work"
+        upper.mkdir(mode=0o700)
+        overlay_work.mkdir(mode=0o700)
+        # Overlayfs exposes the upper directory's mode at the mounted root.
+        installed_mode = stat.S_IMODE(template.stat().st_mode)
+        upper.chmod(installed_mode)
+        run("mount", "-t", "overlay", "overlay", "-o",
+            f"lowerdir={template},upperdir={upper},workdir={overlay_work}", INSTALL)
+        overlay = INSTALL.stat()
+        if stat.S_IMODE(overlay.st_mode) != installed_mode:
+            raise RuntimeError("Mounted application root differs from the installed directory mode")
+        yield namespaces.enter_context(paired_namespaces())
+    finally:
+        # Join both original namespace process groups before releasing their
+        # installation ancestry. A failed join leaves these mounts retained.
+        namespaces.close()
+        if overlay is not None:
+            if not os.path.samestat(overlay, INSTALL.stat()):
+                raise RuntimeError("The case's original installed overlay was replaced")
+            run("umount", INSTALL)
+        if not os.path.samestat(anchor, os.stat("/opt")):
+            raise RuntimeError("The case's original installation ancestry was replaced")
+        run("umount", "/opt")
+        if not os.path.samestat(previous, os.stat("/opt")):
+            raise RuntimeError("The previous private installation ancestry was not restored")
+        retirement["complete"] = True
+
+
 def root_fixture(archive, references):
     if os.getuid() or os.path.samefile("/proc/self/ns/mnt", "/proc/1/ns/mnt"):
         raise RuntimeError("Qualification requires its own private root mount namespace")
@@ -995,8 +1059,8 @@ def root_fixture(archive, references):
     run("loginctl", "show-seat", "seat0", "--property=CanTTY")
     run("mount", "-t", "tmpfs", "-o", "mode=0755,size=4m", "tmpfs", "/opt")
     INSTALL.mkdir(mode=0o755)
-    with tempfile.TemporaryDirectory(prefix="routervpn-smart-", dir="/var/tmp") as temporary, ExitStack() as cleanup:
-        temp = Path(temporary)
+    retirement = {"complete": True}
+    with fixture_directory("routervpn-smart-", "/var/tmp", retirement) as temp, ExitStack() as cleanup:
         temp.chmod(0o711)
         secure = temp / "private"
         secure.mkdir(mode=0o700)
@@ -1021,26 +1085,12 @@ def root_fixture(archive, references):
         for source, candidate, policy, layer, outcome in matrix(archive.name):
             label = "-".join((source, candidate, policy, layer, outcome))
             print("Qualifying installed SMART", label, flush=True)
-            with tempfile.TemporaryDirectory(prefix=label+"-", dir=temp) as scratch, paired_namespaces() as (client, peer):
-                work = Path(scratch)
+            retirement["complete"] = False
+            with fixture_directory(label+"-", temp, retirement) as work:
                 work.chmod(0o711)
-                backing = work / "overlay-backing"
-                backing.mkdir(mode=0o700)
-                upper, overlay_work = backing / "upper", backing / "work"
-                upper.mkdir(mode=0o700)
-                overlay_work.mkdir(mode=0o700)
-                # Overlayfs exposes the upper directory's mode at the mounted root.
-                installed_mode = stat.S_IMODE(template.stat().st_mode)
-                upper.chmod(installed_mode)
-                run("mount", "-t", "overlay", "overlay", "-o",
-                    f"lowerdir={template},upperdir={upper},workdir={overlay_work}", INSTALL)
-                try:
-                    if stat.S_IMODE(INSTALL.stat().st_mode) != installed_mode:
-                        raise RuntimeError("Mounted application root differs from the installed directory mode")
+                with installed_case(template, work, retirement) as (client, peer):
                     run("ip", "netns", "exec", client, sys.executable, HERE, "--case",
                         work, user, password, peer, source, candidate, policy, layer, outcome, timeout=650)
-                finally:
-                    run("umount", INSTALL)
 
 
 def matrix(package_name):

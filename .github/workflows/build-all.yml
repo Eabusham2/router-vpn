@@ -860,6 +860,7 @@ jobs:
           (cd dist/macos-native && shasum -a 256 -c SHA256SUMS)
       - name: Save rendered macOS layouts
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: RouterVPN-macOS-layout-${{ github.sha }}
           path: ${{ runner.temp }}/routervpn-ui/*.png
@@ -920,6 +921,7 @@ jobs:
           PYMACINTEL
       - name: Save rendered Intel macOS layouts
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: RouterVPN-macOS-layout-amd64-${{ github.sha }}
           path: ${{ runner.temp }}/routervpn-macos-intel-layout/*.png

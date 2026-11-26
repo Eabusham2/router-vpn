@@ -51,10 +51,11 @@ type Session struct {
 }
 
 type gui struct {
-	child *windowscontroller.GUIChild
-	pipe  *windowscontroller.Pipe
-	done  chan error
-	ready chan struct{}
+	child          *windowscontroller.GUIChild
+	pipe           *windowscontroller.Pipe
+	done           chan error
+	ready          chan struct{}
+	outputReported bool
 }
 
 // Start derives both roots from this actual retained launcher executable. The
@@ -305,12 +306,14 @@ func (s *Session) launchUI(tray, selfTest bool, uiPID uint32, uiTicks int64) (*g
 	g := &gui{pipe: pipe, done: make(chan error, 1), ready: make(chan struct{})}
 	s.guis = append(s.guis, g)
 	environment := s.environment
+	launch := windowscontroller.LaunchGUIChild
 	if selfTest && !tray && os.Getenv("ROUTERVPN_CAPTURE_SELF_TEST_LAYOUT") == "1" {
+		launch = windowscontroller.LaunchGUIChildSelfTest
 		// The original-user App writes fixed, new PNGs in its captured data
 		// working directory. Never forward a caller-controlled destination.
 		environment = append(slices.Clone(environment), "ROUTERVPN_CAPTURE_SELF_TEST_LAYOUT=1")
 	}
-	g.child, err = windowscontroller.LaunchGUIChild(s.ctx, s.powershell, func(parent uint64) ([]string, error) {
+	g.child, err = launch(s.ctx, s.powershell, func(parent uint64) ([]string, error) {
 		arguments := []string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", filepath.Join(s.packageRoot, "client", name),
 			"-ControllerPipe", pipe.Name(), "-ControllerParentHandle", strconv.FormatUint(parent, 10)}
 		if tray {
@@ -479,7 +482,14 @@ func (s *Session) Close(ctx context.Context) error {
 	}
 	for _, g := range s.guis {
 		if g.child != nil {
-			failures = append(failures, g.child.Close(ctx))
+			closeErr := g.child.Close(ctx)
+			failures = append(failures, closeErr)
+			if closeErr == nil && !g.outputReported {
+				if report := g.child.SelfTestOutput(); report != "" {
+					fmt.Fprintln(os.Stderr, "Router VPN native App output:", report)
+					g.outputReported = true
+				}
+			}
 		}
 		if g.pipe != nil {
 			failures = append(failures, g.pipe.Close())

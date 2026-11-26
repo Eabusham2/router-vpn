@@ -950,6 +950,29 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     guard let window = owner.window, let content = window.contentView else { return 2 }
     defer { owner.timer?.invalidate(); window.close() }
     window.orderFront(nil)
+    func writeEvidence(_ size: NSSize, failure: Bool = false) -> Bool {
+        guard let directory = ProcessInfo.processInfo.environment["ROUTERVPN_UI_EVIDENCE_DIR"] else { return true }
+        do {
+            content.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let output = URL(fileURLWithPath: directory, isDirectory: true)
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            guard let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { return false }
+            content.cacheDisplay(in: content.bounds, to: bitmap)
+            guard let png = bitmap.representation(using: .png, properties: [:]) else { return false }
+            let suffix = failure ? "-failure" : ""
+            try png.write(to: output.appendingPathComponent("macos-\(Int(size.width))x\(Int(size.height))\(suffix).png"), options: .atomic)
+            return true
+        } catch { print("macOS layout image failed: \(error)"); return false }
+    }
+    func fail(_ message: String, size: NSSize, views: [NSView] = []) -> Int32 {
+        print(message)
+        for view in views {
+            print("macOS layout geometry: \(view.identifier?.rawValue ?? "unknown") bounds=\(NSStringFromRect(view.bounds)) visible=\(NSStringFromRect(view.visibleRect)) content=\(NSStringFromRect(view.convert(view.bounds, to: content))) alignmentInsets=\(view.alignmentRectInsets)")
+        }
+        _ = writeEvidence(size, failure: true)
+        return 2
+    }
     let primary = ["unified-connection-profiles", "unified-connect", "unified-kill-switch", "unified-forward-master",
                    "unified-multihop-toggle", "unified-settings", "unified-mode-popup", "unified-dns-popup"]
     for size in [NSSize(width: 720, height: 560), NSSize(width: 1050, height: 720)] {
@@ -958,7 +981,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         for id in primary {
             guard let control = owner.findUnifiedView(id) as? NSControl,
                   !control.isHidden, control.action != nil, control.target === owner else {
-                print("macOS layout self-test: missing or unbound \(id)"); return 2
+                return fail("macOS layout self-test: missing or unbound \(id)", size: size)
             }
             _ = control.scrollToVisible(control.bounds)
             content.layoutSubtreeIfNeeded()
@@ -966,30 +989,19 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
             guard control.bounds.width >= 20, control.bounds.height >= 16,
                   visible.width >= control.bounds.width - 1,
                   visible.height >= control.bounds.height - 1 else {
-                print("macOS layout self-test: clipped \(id) at \(Int(size.width))×\(Int(size.height))"); return 2
+                return fail("macOS layout self-test: clipped \(id) at \(Int(size.width))×\(Int(size.height))", size: size, views: [control])
             }
             let shown = control.convert(visible, to: content)
             for otherID in primary where otherID != id {
                 guard let other = owner.findUnifiedView(otherID), !other.isHidden else { continue }
                 let overlap = shown.intersection(other.convert(other.visibleRect, to: content))
                 guard overlap.isNull || overlap.width <= 1 || overlap.height <= 1 else {
-                    print("macOS layout self-test: overlapping \(id) / \(otherID) at \(Int(size.width))×\(Int(size.height))"); return 2
+                    return fail("macOS layout self-test: overlapping \(id) / \(otherID) at \(Int(size.width))×\(Int(size.height))", size: size, views: [control, other])
                 }
             }
         }
         if let connect = owner.findUnifiedView("unified-connect") { _ = connect.scrollToVisible(connect.bounds) }
-        content.layoutSubtreeIfNeeded()
-        window.displayIfNeeded()
-        if let directory = ProcessInfo.processInfo.environment["ROUTERVPN_UI_EVIDENCE_DIR"] {
-            do {
-                let output = URL(fileURLWithPath: directory, isDirectory: true)
-                try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-                guard let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { return 2 }
-                content.cacheDisplay(in: content.bounds, to: bitmap)
-                guard let png = bitmap.representation(using: .png, properties: [:]) else { return 2 }
-                try png.write(to: output.appendingPathComponent("macos-\(Int(size.width))x\(Int(size.height)).png"), options: .atomic)
-            } catch { print("macOS layout image failed: \(error)"); return 2 }
-        }
+        guard writeEvidence(size) else { return 2 }
         print("macOS native layout: \(Int(size.width))×\(Int(size.height)), \(primary.count) primary controls reachable")
     }
     return 0

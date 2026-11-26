@@ -4,8 +4,12 @@ package windowscontroller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -30,6 +34,7 @@ type GUIChild struct {
 	closed        bool
 	processClosed bool
 	retiring      atomic.Bool
+	output        *guiSelfTestOutput
 }
 
 type guiAPI struct {
@@ -78,6 +83,17 @@ func LaunchGUIChild(ctx context.Context, image *Image, build func(uint64) ([]str
 // Job membership and token proof, and cannot skip the following image readback,
 // cancellation guard or Resume ordering.
 func launchGUIChild(ctx context.Context, image *Image, build func(uint64) ([]string, error), environment []string, directory string, afterSuspended func()) (_ *GUIChild, failure error) {
+	return launchGUIChildWithOutput(ctx, image, build, environment, directory, afterSuspended, false)
+}
+
+// LaunchGUIChildSelfTest adds only an anonymous output pipe to the original
+// child. It accepts the fixed SelfTest argv/environment, never an output path.
+// The pipe and reader remain owned until this exact Job has joined.
+func LaunchGUIChildSelfTest(ctx context.Context, image *Image, build func(uint64) ([]string, error), environment []string, directory string) (*GUIChild, error) {
+	return launchGUIChildWithOutput(ctx, image, build, environment, directory, nil, true)
+}
+
+func launchGUIChildWithOutput(ctx context.Context, image *Image, build func(uint64) ([]string, error), environment []string, directory string, afterSuspended func(), capture bool) (_ *GUIChild, failure error) {
 	if ctx == nil || image == nil || build == nil || !filepath.IsAbs(directory) || strings.ContainsRune(directory, 0) {
 		return nil, errors.New("the native GUI requires its exact captured launch")
 	}
@@ -126,6 +142,17 @@ func launchGUIChild(ctx context.Context, image *Image, build func(uint64) ([]str
 	if len(strings.Join(quoted, " ")) > 16384 {
 		return child, errors.New("the native GUI command line is unbounded")
 	}
+	if capture {
+		enabled := false
+		for _, value := range environment {
+			if value == "ROUTERVPN_CAPTURE_SELF_TEST_LAYOUT=1" {
+				enabled = true
+			}
+		}
+		if !enabled || arguments[len(arguments)-1] != "-SelfTest" {
+			return child, errors.New("native GUI output is available only for the explicit self-test")
+		}
+	}
 	block, err := guiEnvironment(environment)
 	if err != nil {
 		return child, err
@@ -137,6 +164,21 @@ func launchGUIChild(ctx context.Context, image *Image, build func(uint64) ([]str
 		return child, err
 	}
 	defer syscall.CloseHandle(nul)
+	if capture {
+		child.output = &guiSelfTestOutput{}
+		err = withDescriptor(identity.SID, func(attributes *syscall.SecurityAttributes) error {
+			attributes.InheritHandle = 1
+			return syscall.CreatePipe(&child.output.read, &child.output.write, attributes, 4096)
+		})
+		if err != nil {
+			return child, err
+		}
+		if err = syscall.SetHandleInformation(child.output.read, syscall.HANDLE_FLAG_INHERIT, 0); err != nil {
+			return child, err
+		}
+		child.output.done = make(chan struct{})
+		go child.output.drain()
+	}
 	err = withDescriptor(identity.SID, func(attributes *syscall.SecurityAttributes) error {
 		value, _, callErr := api.native.createJob.Call(uintptr(unsafe.Pointer(attributes)), 0)
 		child.job = syscall.Handle(value)
@@ -167,6 +209,9 @@ func launchGUIChild(ctx context.Context, image *Image, build func(uint64) ([]str
 	defer api.delete.Call(uintptr(list))
 	jobs := []syscall.Handle{child.job}
 	inherited := []syscall.Handle{parent, nul}
+	if child.output != nil {
+		inherited = append(inherited, child.output.write)
+	}
 	for _, attribute := range []struct {
 		kind    uintptr
 		handles []syscall.Handle
@@ -186,6 +231,9 @@ func launchGUIChild(ctx context.Context, image *Image, build func(uint64) ([]str
 	startup.Info.Cb = uint32(unsafe.Sizeof(startup))
 	startup.Info.Flags = syscall.STARTF_USESTDHANDLES
 	startup.Info.StdInput, startup.Info.StdOutput, startup.Info.StdErr = nul, nul, nul
+	if child.output != nil {
+		startup.Info.StdOutput, startup.Info.StdErr = child.output.write, child.output.write
+	}
 	if unsafe.Sizeof(startup) != 112 || unsafe.Sizeof(limits) != 144 {
 		return child, errors.New("native GUI creation ABI changed")
 	}
@@ -207,6 +255,9 @@ func launchGUIChild(ctx context.Context, image *Image, build func(uint64) ([]str
 	command, _ := syscall.UTF16FromString(syscall.EscapeArg(launchPath) + " " + strings.Join(quoted, " "))
 	err = syscall.CreateProcess(application, &command[0], nil, nil, true, 0x00080000|0x00000400|0x00000004|0x08000000,
 		&block[0], dir, &startup.Info, &created)
+	if child.output != nil {
+		err = errors.Join(err, child.output.closeWriter())
+	}
 	if closeErr := syscall.CloseHandle(launchImage); closeErr != nil {
 		image.handles = append(image.handles, launchImage)
 		err = errors.Join(err, nativeError("normalized GUI image release", closeErr))
@@ -450,6 +501,11 @@ func (child *GUIChild) Close(ctx context.Context) error {
 			}
 		}
 	}
+	if child.output != nil {
+		if err := child.output.close(ctx); err != nil {
+			return err
+		}
+	}
 	if child.process != nil && !child.processClosed {
 		if err := child.process.Close(); err != nil {
 			return err
@@ -476,4 +532,127 @@ func joinGUIProcessTermination(ctx context.Context, process *Process, terminateE
 		return errors.Join(terminateErr, err)
 	}
 	return nil
+}
+
+// guiSelfTestOutput retains only a bounded prefix and a full-stream digest.
+// Excess bytes are drained rather than blocking the child's original startup.
+type guiSelfTestOutput struct {
+	read, write syscall.Handle
+	done        chan struct{}
+	sample      []byte
+	bytes       uint64
+	digest      string
+	readFailed  bool
+}
+
+func (output *guiSelfTestOutput) closeWriter() error {
+	if output.write == 0 {
+		return nil
+	}
+	if err := syscall.CloseHandle(output.write); err != nil {
+		return err
+	}
+	output.write = 0
+	return nil
+}
+
+func (output *guiSelfTestOutput) drain() {
+	defer close(output.done)
+	digest := sha256.New()
+	buffer := make([]byte, 4096)
+	for {
+		var count uint32
+		err := syscall.ReadFile(output.read, buffer, &count, nil)
+		if count > 0 {
+			part := buffer[:count]
+			output.bytes += uint64(count)
+			_, _ = digest.Write(part)
+			if remaining := 16384 - len(output.sample); remaining > 0 {
+				output.sample = append(output.sample, part[:min(remaining, len(part))]...)
+			}
+		}
+		if err != nil || count == 0 {
+			output.readFailed = err != nil && !errors.Is(err, syscall.ERROR_BROKEN_PIPE) && !errors.Is(err, syscall.ERROR_HANDLE_EOF)
+			output.digest = hex.EncodeToString(digest.Sum(nil))
+			return
+		}
+	}
+}
+
+// Only called after every process in the captured Job has joined. Failure
+// keeps the read handle, goroutine and original Job retained for another Close.
+func (output *guiSelfTestOutput) close(ctx context.Context) error {
+	if err := output.closeWriter(); err != nil {
+		return err
+	}
+	if output.done != nil {
+		select {
+		case <-output.done:
+		case <-ctx.Done():
+			return errors.Join(ctx.Err(), errors.New("native GUI self-test output reader has not joined"))
+		}
+	}
+	if output.read != 0 {
+		if err := syscall.CloseHandle(output.read); err != nil {
+			return err
+		}
+		output.read = 0
+	}
+	return nil
+}
+
+// SelfTestOutput returns only fixed markers, bounded source coordinates and
+// digests after checked retirement. Raw interpreter text may contain private
+// values and is never printed, persisted or returned to the application.
+func (child *GUIChild) SelfTestOutput() string {
+	if child == nil {
+		return ""
+	}
+	child.mu.Lock()
+	defer child.mu.Unlock()
+	if !child.closed || child.output == nil || child.output.done == nil {
+		return ""
+	}
+	output := child.output
+	text := strings.ToLower(strings.ReplaceAll(string(output.sample), "\x00", ""))
+	markers := []string{}
+	for _, marker := range []string{
+		"parameterbinding", "argumenttransformation", "parsererror", "commandnotfound",
+		"parentcontainserrorrecord", "methodinvocationexception", "typeinitializationexception",
+		"invalidoperation", "invalidcastexception", "securityexception", "unauthorizedaccess",
+		"could not load file or assembly", "unable to find type", "cannot find an overload",
+		"cannot convert", "cannot bind", "cannot process argument", "access is denied",
+		"running scripts is disabled", "malicious content", "not digitally signed",
+		"namedparameternotfound", "positionalparameternotfound", "parameterbindingexception",
+		"itemnotfoundexception", "providernotfoundexception", "drivenotfoundexception",
+		"authorizationmanager", "pssecurityexception", "cannot find path", "cannot find drive",
+		"cannot find provider", "does not exist", "not recognized", "unrecognized",
+		"parameter cannot be found", "the argument to the -file parameter",
+		"import-module", "add-type", "select-object", "convertto-json",
+		"controllertransport", "initializeroutervpncontrollertransport", "initialize-routervpncontrollertransport",
+		"new-routervpncontrollerclient", "presentationframework", "system.net.http",
+	} {
+		if strings.Contains(text, marker) {
+			markers = append(markers, marker)
+		}
+	}
+	locations := regexp.MustCompile(`(?i)RouterVPN-Windows-(?:App|ControllerTransport|Product-v2|Telemetry|Tray)\.(?:ps1|psm1):[0-9]{1,6}\b(?:[ \t]+char:[0-9]{1,6}\b)?`).FindAllString(text, 8)
+	compilerCodes := regexp.MustCompile(`\bcs[0-9]{4}\b`).FindAllString(text, 8)
+	sampleDigest := sha256.Sum256(output.sample)
+	report, err := json.Marshal(struct {
+		Bytes         uint64   `json:"bytes"`
+		SHA256        string   `json:"sha256"`
+		SampleBytes   int      `json:"sample_bytes"`
+		SampleSHA256  string   `json:"sample_sha256"`
+		Truncated     bool     `json:"truncated"`
+		ReadFailed    bool     `json:"read_failed"`
+		ReaderJoined  bool     `json:"reader_joined"`
+		Markers       []string `json:"markers"`
+		Locations     []string `json:"locations"`
+		CompilerCodes []string `json:"compiler_codes"`
+	}{output.bytes, output.digest, len(output.sample), hex.EncodeToString(sampleDigest[:]), output.bytes > uint64(len(output.sample)), output.readFailed, true, markers, locations, compilerCodes})
+	if err != nil {
+		return `{"classification_failed":true,"reader_joined":true}`
+	}
+	return string(report)
 }
