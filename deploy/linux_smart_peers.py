@@ -3,6 +3,7 @@
 from contextlib import contextmanager, ExitStack
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -45,6 +46,67 @@ def prepare_reference_tools(directory):
     subprocess.run(['go', 'build', '-buildvcs=false', '-mod=readonly', '-o', target/'router-agent', './cmd/router-agent'], cwd=ROOT, check=True)
     return {'ROUTERVPN_QUALIFICATION_ROSENPASS': str(target/'rosenpass'),
             'ROUTERVPN_QUALIFICATION_ROUTER_AGENT': str(target/'router-agent')}
+
+
+def http_header_summary(data):
+    """Bounded header-only readback from the existing private -tt -S capture."""
+    first, last = [], []
+    offset = complete = count = invalid = 0
+    for raw in data.splitlines(keepends=True):
+        offset += len(raw)
+        if not raw.endswith(b'\n'):
+            continue
+        complete = offset
+        match = re.fullmatch(
+            rb'([0-9]{9,12})\.([0-9]{1,6})\s+'
+            rb'(?:[A-Za-z0-9_.@:-]{1,32}\s+(?:In|Out)\s+)?'
+            rb'IP ([0-9.]{7,15})\.([0-9]{1,5}) > ([0-9.]{7,15})\.([0-9]{1,5}): '
+            rb'Flags \[([FSRPAUEW.]{0,9})\](.{0,512}?)length ([0-9]{1,5})(?::[^\r\n]*)?\r?\n',
+            raw)
+        if match is None:
+            continue
+        seconds, fraction, source, source_port, target, target_port, flags, details, length = match.groups()
+        if source == PRIVATE.encode() and source_port == b'8787':
+            direction = 'from_private'
+        elif target == PRIVATE.encode() and target_port == b'8787':
+            direction = 'to_private'
+        else:
+            continue
+        try:
+            source_ip, target_ip = str(ipaddress.IPv4Address(source.decode())), str(ipaddress.IPv4Address(target.decode()))
+        except ValueError:
+            invalid += 1
+            continue
+        source_port, target_port, length = int(source_port), int(target_port), int(length)
+        if not (0 < source_port <= 65535 and 0 < target_port <= 65535 and length <= 65535):
+            invalid += 1
+            continue
+        sequence = re.search(rb'(?:^|,\s*)seq ([0-9]{1,10})(?::([0-9]{1,10}))?(?=,|$)', details)
+        ack = re.search(rb'(?:^|,\s*)ack ([0-9]{1,10})(?=,|$)', details)
+        stamp = re.search(rb'\bTS val ([0-9]{1,10}) ecr ([0-9]{1,10})(?=,|\]|$)', details)
+        numbers = {'sequence': int(sequence[1]) if sequence else None,
+                   'sequence_end': int(sequence[2]) if sequence and sequence[2] else None,
+                   'acknowledgment': int(ack[1]) if ack else None,
+                   'tsval': int(stamp[1]) if stamp else None,
+                   'tsecr': int(stamp[2]) if stamp else None}
+        if any(value is not None and value > 0xffffffff for value in numbers.values()):
+            invalid += 1
+            continue
+        count += 1
+        record = {'index': count, 'byte_end': offset,
+                  'unix_us': int(seconds)*1_000_000 + int(fraction.ljust(6, b'0')),
+                  'direction': direction, 'source': source_ip, 'source_port': source_port,
+                  'target': target_ip, 'target_port': target_port,
+                  'flags': flags.decode('ascii'), 'payload_bytes': length, **numbers}
+        if len(first) < 8:
+            first.append(record)
+        last.append(record)
+        del last[:-16]
+    tail = [record for record in last if record['index'] > len(first)]
+    return {'clock': 'unix_microseconds', 'sequence_numbers': 'absolute',
+            'cursor': {'sample_bytes': len(data), 'complete_line_bytes': complete, 'parsed_headers': count},
+            'invalid_numeric_headers': invalid, 'omitted_headers': count-len(first)-len(tail),
+            'first': first, 'last': tail}
 
 
 def stop_process(process):
@@ -146,7 +208,7 @@ class Peers:
              '--cache-size=0', '--bind-interfaces', '--listen-address='+PRIVATE, '--log-queries',
              '--local=/#/', '--host-record=example.com,93.184.216.34', '--address=/#/'+OUTER])
         self.wait_listening('dns', 53, False)
-        self.capture('http', ['-A', '-s', '2048', '-i', 'any', f'host {PRIVATE} and tcp port 8787'])
+        self.capture('http', ['-tt', '-S', '-A', '-s', '2048', '-i', 'any', f'host {PRIVATE} and tcp port 8787'])
 
     def capture(self, name, options):
         self.spawn(name, ['tcpdump', '-nn', '-l', *options])
@@ -353,6 +415,7 @@ class Peers:
         result = {'http': http_records.count(body),
                   'http_get_health_headers': http_records.count(b'GET /health HTTP/1.1'),
                   'http_packets': http_packets,
+                  'http_headers': http_header_summary(http_records),
                   'dns': records('dns').count(b' query['), 'pq_key_applied': False,
                   'source_uot': records(self.source).count(b'inbound UoT'),
                   'candidate_uot': records(self.candidate).count(b'inbound UoT'),
