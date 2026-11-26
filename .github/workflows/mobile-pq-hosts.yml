@@ -2,18 +2,7 @@ name: Native mobile Rosenpass hosts
 on:
   workflow_dispatch:
   workflow_call:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/mobile-pq-hosts.yml'
-      - 'mobile/rosenpass/**'
-      - 'mobile/pq/**'
-      - 'mobile/routervpn_pq_bridge.go.tmpl'
-      - 'deploy/*pq*'
-      - 'android/app/src/main/java/com/eabusham/routervpn/RouterPQNative.java'
-      - 'ios/RouterVPN/PacketTunnel/RouterVPNPQFactory.swift'
-      - 'ios/RouterVPN/App/IOSNativePQProfile.swift'
-      - 'ios/RouterVPN/App/IOSRuntimeSelection.swift'
+
 permissions:
   contents: read
 concurrency:

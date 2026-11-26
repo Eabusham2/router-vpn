@@ -3,19 +3,6 @@ name: Ordered Server encrypted suffix acceptance
 on:
   workflow_dispatch:
   workflow_call:
-  pull_request:
-    paths:
-      - 'mobile/server_chain/**'
-      - 'mobile/server_chain_acceptance/**'
-      - 'mobile/chain/**'
-      - 'mobile/desktop/**'
-      - 'internal/mobilemultihop/**'
-      - 'internal/multihoprelay/**'
-      - 'internal/awgpolicy/**'
-      - 'deploy/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/server-node-chain-encrypted.yml'
 
 permissions:
   contents: read

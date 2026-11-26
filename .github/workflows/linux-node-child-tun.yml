@@ -3,35 +3,6 @@ name: Linux generated Node command TUN acceptance
 on:
   workflow_dispatch:
   workflow_call:
-  push:
-    branches: [main]
-    paths:
-      - 'mobile/desktop/**'
-      - 'internal/mobileamnezia/**'
-      - 'internal/mobilemultihop/**'
-      - 'internal/mobiletor/**'
-      - 'internal/linuxprocess/**'
-      - 'internal/linuxprotection/**'
-      - 'internal/desktoptransport/**'
-      - 'internal/desktopidentity/**'
-      - 'deploy/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/linux-node-child-tun.yml'
-  pull_request:
-    paths:
-      - 'mobile/desktop/**'
-      - 'internal/mobileamnezia/**'
-      - 'internal/mobilemultihop/**'
-      - 'internal/mobiletor/**'
-      - 'internal/linuxprocess/**'
-      - 'internal/linuxprotection/**'
-      - 'internal/desktoptransport/**'
-      - 'internal/desktopidentity/**'
-      - 'deploy/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/linux-node-child-tun.yml'
 
 permissions:
   contents: read

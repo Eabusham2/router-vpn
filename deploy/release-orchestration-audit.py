@@ -19,7 +19,7 @@ preflight = read(".github/workflows/arm64-portainer-preflight.yml")
 publish = read(".github/workflows/publish-arm64-images.yml")
 compose = read(".github/workflows/production-release-compose.yml")
 
-assert "\n  push:\n    branches: [main]\n" in build, "Build all must be the automatic main-branch release orchestrator"
+assert "\n  workflow_dispatch:\n" in build and "\n  push:\n" not in build, "Build all is an intentional manual release orchestrator"
 assert "group: build-all-${{ github.ref }}" in build, "Build all must cancel superseded main-branch release chains"
 assert "cancel-in-progress: true" in build, "Build all must cancel superseded release chains"
 updater = read("cmd/update-controller/main.go")
@@ -202,7 +202,6 @@ for audit in (
     "deploy/runtime-state-ownership-audit.py",
     "deploy/native-auto-requirements-ui-audit.py",
     "deploy/native-artifact-workflow-parity-audit.py",
-    "deploy/test_native_artifact_aggregate.py",
     "deploy/test_server_node_chain_encrypted_runner.py",
     "deploy/test_server_node_chain_connect_encrypted_runner.py",
     "deploy/workflow-structure-audit.py",

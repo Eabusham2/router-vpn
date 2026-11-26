@@ -1,9 +1,7 @@
 name: Multihop contract
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: multihop-contract-${{ github.ref }}

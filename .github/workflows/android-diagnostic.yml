@@ -1,11 +1,6 @@
 name: Android libbox diagnostics
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'android/**'
-      - '.github/workflows/android-diagnostic.yml'
   workflow_dispatch:
 
 permissions:

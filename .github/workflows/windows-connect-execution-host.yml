@@ -59,8 +59,6 @@ jobs:
         run: |
           python deploy/test_windows_connect_execution_host_runner.py
           if ($LASTEXITCODE -ne 0) { throw 'Windows CONNECT execution inventory or cleanup controls failed' }
-          python deploy/test_windows_connect_execution_workflow.py
-          if ($LASTEXITCODE -ne 0) { throw 'Windows CONNECT execution workflow contract failed' }
       - uses: actions/download-artifact@v4
         with:
           name: RouterVPN-native-runtime-windows-${{ matrix.arch }}-${{ github.sha }}

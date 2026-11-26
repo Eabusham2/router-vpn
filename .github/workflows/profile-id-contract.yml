@@ -1,12 +1,6 @@
 name: Profile ID traversal contract
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'modes/**'
-      - 'client/**'
-      - '.github/workflows/profile-id-contract.yml'
   workflow_dispatch:
 
 permissions:

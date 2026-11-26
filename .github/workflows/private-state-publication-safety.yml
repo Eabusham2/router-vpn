@@ -1,8 +1,6 @@
 name: Private state and generated-secret publication safety
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:

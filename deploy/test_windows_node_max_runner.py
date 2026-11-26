@@ -2722,10 +2722,10 @@ class NativeWorkflowConcurrency(unittest.TestCase):
                     if p.render(selected, values) != expected:
                         raise AssertionError('MAX job group lost caller, source, run, architecture or suite identity')
         events = p.section(raw, 'on', 0)
-        for trigger in ('workflow_dispatch', 'workflow_call', 'pull_request', 'push'):
+        for trigger in ('workflow_dispatch', 'workflow_call'):
             p.section(events, trigger, 2)
-        if p.field(p.section(events, 'push', 2), 'branches', 4) != '[main]':
-            raise AssertionError('MAX automatic trigger changed branches')
+        if re.search(r"(?m)^  (?:push|pull_request):", events):
+            raise AssertionError("MAX is an explicit validation workflow")
 
     def check_mtu(self, raw):
         p = self.policy
@@ -2742,10 +2742,10 @@ class NativeWorkflowConcurrency(unittest.TestCase):
                     if self.value(cancel, values) is not automatic:
                         raise AssertionError('Native MTU cancellation escaped automatic main pushes')
         events = p.section(raw, 'on', 0)
-        for trigger in ('workflow_dispatch', 'pull_request', 'push'):
+        for trigger in ('workflow_dispatch',):
             p.section(events, trigger, 2)
-        if p.field(p.section(events, 'push', 2), 'branches', 4) != '[main]':
-            raise AssertionError('Native MTU automatic trigger changed branches')
+        if re.search(r"(?m)^  (?:push|pull_request):", events):
+            raise AssertionError("Native MTU is an explicit validation workflow")
 
     def test_actual_max_groups_isolate_standalone_release_manual_and_pr_evidence(self):
         self.check_max((ROOT / '.github/workflows/windows-node-max-contract.yml').read_text())

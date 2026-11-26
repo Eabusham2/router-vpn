@@ -27,7 +27,7 @@ python3 deploy/binding-edge-requirements-audit.py
 
 The [repository-state workflow](.github/workflows/repository-state-audit.yml) also checks public README links, tracked generated files, source-workflow integrity, and remote branch inventory. Check changed Markdown links and headings locally; a source-contract check alone does not validate a rendered document.
 
-For code changes, run the affected component's tests and the corresponding existing workflow checks. Follow [docs/BUILDS.md](docs/BUILDS.md), `go.mod`, and the workflow's pinned dependency setup. Go code declares Go 1.25 with the Go 1.26.3 toolchain. Native Windows, macOS, Linux, Android, and iOS builds have different dependencies; a generic host build cannot certify all platforms. Report unavailable checks explicitly instead of weakening them.
+For code changes, run focused existing behavioral tests. Keep routine CI to the single CI workflow; do not add independent push or pull-request workflows, redundant source-shape tests, or test shards merely to prove the test infrastructure. Run expensive native diagnostics and the full release only when needed. Follow [docs/BUILDS.md](docs/BUILDS.md), `go.mod`, and the workflow's pinned dependency setup. Go code declares Go 1.25 with the Go 1.26.3 toolchain. Native Windows, macOS, Linux, Android, and iOS builds have different dependencies; a generic host build cannot certify all platforms. Report unavailable checks explicitly instead of weakening them.
 
 ## Behavior and deployment boundaries
 
@@ -40,7 +40,7 @@ For code changes, run the affected component's tests and the corresponding exist
 
 ## Releases and public documentation
 
-The [Build all Router VPN release gates](.github/workflows/build-all.yml) workflow owns publishing. Client assets, release manifests, ARM64 server images, and generated production Compose must correspond to the same complete source commit. The tracked `server/portainer-current.yaml` is a template, not a generated release deployment.
+The [Build all Router VPN release gates](.github/workflows/build-all.yml) workflow owns publishing and is dispatched deliberately only for a stable release candidate. Routine commits never launch release or native diagnostic workflows. Client assets, release manifests, ARM64 server images, and generated production Compose must correspond to the same complete source commit. The tracked `server/portainer-current.yaml` is a template, not a generated release deployment.
 
 Keep the existing source, native, packaging, signing, networking, and deployment gates. A green source audit does not establish physical routing, leak protection, off-LAN interoperability, Apple signing, or live production acceptance. Do not move an existing release tag or use an older green release as evidence for newer source.
 

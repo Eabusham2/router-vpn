@@ -3,31 +3,6 @@ name: Darwin generated ordered child utun acceptance
 on:
   workflow_dispatch:
   workflow_call:
-  push:
-    branches: [main]
-    paths:
-      - 'mobile/desktop/**'
-      - 'mobile/mtu/**'
-      - 'internal/mobilemultihop/**'
-      - 'internal/mobiletor/**'
-      - 'internal/macosprocess/**'
-      - 'internal/desktopnetwork/**'
-      - 'deploy/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/darwin-node-child-tun.yml'
-  pull_request:
-    paths:
-      - 'mobile/desktop/**'
-      - 'mobile/mtu/**'
-      - 'internal/mobilemultihop/**'
-      - 'internal/mobiletor/**'
-      - 'internal/macosprocess/**'
-      - 'internal/desktopnetwork/**'
-      - 'deploy/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/darwin-node-child-tun.yml'
 
 permissions:
   contents: read

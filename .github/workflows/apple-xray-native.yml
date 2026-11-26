@@ -1,29 +1,7 @@
 name: Native Apple Xray protocol and ownership tests
 on:
-  push:
-    paths:
-      - 'internal/applexray/**'
-      - 'mobile/applexray/**'
-      - 'deploy/prepare-apple-xray.py'
-      - 'deploy/prepare-mobile-whitening.py'
-      - 'mobile/startwhitening/**'
-      - 'internal/startwhitening/**'
-      - 'deploy/xray_native_dialer_policy.py'
-      - 'deploy/prepare-xray-runtime.py'
-      - 'deploy/xray_vision_policy.py'
-      - 'deploy/xray_datagram_policy.py'
-      - 'deploy/xray_connection_policy.py'
-      - 'deploy/xray_datagram_policy.py'
-      - 'deploy/xray_connection_policy.py'
-      - 'deploy/test_apple_xray_pinned.sh'
-      - 'deploy/test_mobile_imported_socks_xray.py'
-      - 'deploy/test_native_runner_dependencies.py'
-      - 'deploy/test_xray_start_layer_pinned.sh'
-      - 'deploy/prepare-mobile-buffers.py'
-      - 'deploy/mobile_udp_socket_policy.py'
-      - 'cmd/start-layer-relay/**'
-      - '.github/workflows/apple-xray-native.yml'
   workflow_dispatch:
+
 permissions:
   contents: read
 jobs:

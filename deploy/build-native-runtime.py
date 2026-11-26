@@ -289,7 +289,6 @@ def inputs():
                              ROOT/'deploy/test_desktop_paired_ss_execution_controller_runner.py',
                              ROOT/'deploy/test_macos_paired_ss_execution_host.py',
                              ROOT/'deploy/test_macos_paired_ss_execution_host_runner.py',
-                             ROOT/'deploy/test_darwin_paired_ss_execution_workflow.py',
                              ROOT/'deploy/test_desktop_hysteria_execution_controller.py',
                              ROOT/'deploy/test_desktop_hysteria_execution_controller_runner.py',
                              ROOT/'deploy/test_mobile_node_chain_execution.py',
@@ -315,10 +314,6 @@ def inputs():
                              ROOT/'deploy/test_mobile_imported_xhttp_xray_runner.py',
                              ROOT/'deploy/test_mobile_imported_naive_h2_runner.py',
                              ROOT/'deploy/test_mobile_imported_naive_h3_runner.py',
-                             ROOT/'deploy/test_imported_pq_workflow.py',
-                             ROOT/'deploy/test_imported_xhttp_workflow.py',
-                             ROOT/'deploy/test_imported_naive_h2_workflow.py',
-                             ROOT/'deploy/test_imported_naive_h3_workflow.py',
                              ROOT/'android/test_android_imported_router.py',
                              ROOT/'mobile/routervpn_imported_pq_xray_native_test.go.tmpl',
                              ROOT/'mobile/routervpn_imported_xhttp_xray_native_test.go.tmpl',
@@ -376,7 +371,6 @@ def inputs():
                              ROOT/'deploy/test_ios_socks_execution_layered_launch.py',
                              ROOT/'deploy/test_ios_socks_execution_layered_profiles.py',
                              ROOT/'deploy/ios_ordered_execution_control_boundary.py',
-                             ROOT/'deploy/test_ios_connect_execution_workflow.py',
                              ROOT/'ios/RouterVPN/test_runtime_selection_contract.py',
                              ROOT/'.github/workflows/ios-native-compile-smoke.yml',
                              ROOT/'.github/workflows/ios-libbox-engine.yml',
@@ -424,28 +418,22 @@ def inputs():
                              ROOT/'.github/workflows/unix-naive-h2-host.yml',
                              ROOT/'deploy/test_linux_connect_execution_host.py',
                              ROOT/'deploy/test_linux_connect_execution_host_runner.py',
-                             ROOT/'deploy/test_linux_connect_execution_workflow.py',
                              ROOT/'.github/workflows/linux-connect-execution-host.yml',
                              ROOT/'deploy/test_linux_socks_execution_host.py',
                              ROOT/'deploy/test_linux_socks_execution_host_runner.py',
-                             ROOT/'deploy/test_linux_socks_execution_workflow.py',
                              ROOT/'.github/workflows/linux-socks-execution-host.yml',
                              ROOT/'deploy/test_linux_connect_prefix_execution_host.py',
                              ROOT/'deploy/test_linux_connect_prefix_execution_host_runner.py',
-                             ROOT/'deploy/test_linux_connect_prefix_execution_workflow.py',
                              ROOT/'.github/workflows/linux-connect-prefix-execution-host.yml',
                              ROOT/'deploy/test_linux_socks_prefix_execution_host.py',
                              ROOT/'deploy/test_linux_socks_prefix_execution_host_runner.py',
-                             ROOT/'deploy/test_linux_socks_prefix_execution_workflow.py',
                              ROOT/'.github/workflows/linux-socks-prefix-execution-host.yml',
                              ROOT/'deploy/test_linux_imported_execution_host.py',
                              ROOT/'deploy/test_linux_imported_execution_host_runner.py',
-                             ROOT/'deploy/test_linux_imported_execution_workflow.py',
                              ROOT/'.github/workflows/linux-imported-execution-host.yml',
                              ROOT/'.github/workflows/windows-connect-execution-host.yml',
                              ROOT/'deploy/test_windows_connect_execution_host.py',
                              ROOT/'deploy/test_windows_connect_execution_host_runner.py',
-                             ROOT/'deploy/test_windows_connect_execution_workflow.py',
                              ROOT/'deploy/windows_connect_execution_overlay.py',
                              ROOT/'deploy/fixtures/windows-connect-execution/peer.go',
                              ROOT/'deploy/fixtures/windows-connect-execution/physical.go',
@@ -465,15 +453,11 @@ def inputs():
                              ROOT/'deploy/test_macos_imported_execution_host_runner.py',
                              ROOT/'deploy/test_macos_imported_execution_layers_host.py',
                              ROOT/'deploy/test_macos_imported_execution_layers_host_runner.py',
-                             ROOT/'deploy/test_darwin_imported_execution_layers_workflow.py',
                              ROOT/'deploy/test_macos_imported_execution_alias.py',
                              ROOT/'deploy/test_macos_imported_execution_alias_runner.py',
-                             ROOT/'deploy/test_darwin_imported_execution_workflow.py',
                              ROOT/'deploy/test_macos_connect_execution_host.py',
                              ROOT/'deploy/test_macos_connect_execution_host_runner.py',
-                             ROOT/'deploy/test_darwin_connect_execution_workflow.py',
                              ROOT/'deploy/test_darwin_paired_transport_context.py',
-                             ROOT/'deploy/test_darwin_paired_host_workflow.py',
                              ROOT/'.github/workflows/darwin-node-host-tun.yml',
                              ROOT/'deploy/test_macos_external_baseline_identity.py',
                              ROOT/'deploy/seal-native-runtime.py',
@@ -1934,8 +1918,6 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                      '--phase', openvpn_parent_phase, '--receipt', temp/('openvpn-controller-'+openvpn_parent_phase+'.json'),
                      *(['--without-race'] if not race else [])], cwd=ROOT, env=env,
                     timeout=900 if openvpn_parent_phase == 'controls' else 1800)
-            run([sys.executable, ROOT/'deploy/test_darwin_paired_ss_execution_workflow.py'],
-                cwd=ROOT, env=env, timeout=60)
             run([sys.executable, ROOT/'deploy/test_desktop_paired_ss_execution_controller_runner.py'],
                 cwd=ROOT, env=env, timeout=60)
             for paired_ss_parent_phase in ('source', 'controls'):
@@ -2023,8 +2005,6 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                     # verdicts. Parsing, ML-KEM protocol refusal and complete
                     # imported peers are separate mandatory stages; none
                     # replaces an ordinary REALITY reference above.
-                    run([sys.executable, ROOT/'deploy/test_imported_pq_workflow.py'],
-                        cwd=ROOT, env=env, timeout=60)
                     run([sys.executable, ROOT/'deploy/test_mobile_imported_pq_xray_runner.py'],
                         cwd=ROOT, env=env, timeout=60)
                     run([sys.executable, ROOT/'deploy/test_mobile_imported_pq_xray.py',
@@ -2035,8 +2015,6 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                          source, '--reference-only'], env=env, timeout=3000)
                     # XHTTP has separate captured sources, path/key refusal and
                     # empty-flow selected DNS. All previous inventories remain.
-                    run([sys.executable, ROOT/'deploy/test_imported_xhttp_workflow.py'],
-                        cwd=ROOT, env=env, timeout=60)
                     run([sys.executable, ROOT/'deploy/test_mobile_imported_xhttp_xray_runner.py'],
                         cwd=ROOT, env=env, timeout=60)
                     run([sys.executable, ROOT/'deploy/test_mobile_imported_xhttp_xray.py',
@@ -2047,8 +2025,6 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                          source, '--reference-only'], env=env, timeout=3000)
                     # Naive H2 retains its own captured sources, original TLS
                     # identity, transport/DNS ownership and imported peers.
-                    run([sys.executable, ROOT/'deploy/test_imported_naive_h2_workflow.py'],
-                        cwd=ROOT, env=env, timeout=60)
                     run([sys.executable, ROOT/'deploy/test_mobile_imported_naive_h2_runner.py'],
                         cwd=ROOT, env=env, timeout=60)
                     run([sys.executable, ROOT/'deploy/test_mobile_imported_naive_h2.py',
@@ -2059,8 +2035,6 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                          source, '--reference-only'], env=env, timeout=3000)
                     # Naive H3 retains its own captured sources, original QUIC
                     # ownership, UDP DNS and independently captured peers.
-                    run([sys.executable, ROOT/'deploy/test_imported_naive_h3_workflow.py'],
-                        cwd=ROOT, env=env, timeout=60)
                     run([sys.executable, ROOT/'deploy/test_mobile_imported_naive_h3_runner.py'],
                         cwd=ROOT, env=env, timeout=60)
                     run([sys.executable, ROOT/'deploy/test_mobile_imported_naive_h3.py',

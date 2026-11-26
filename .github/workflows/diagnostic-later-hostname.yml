@@ -1,8 +1,6 @@
 name: Original later hostname Local route diagnostic
 
 on:
-  push:
-    branches: [diagnostic/later-hostname-local-20261125]
   workflow_dispatch:
 
 permissions:

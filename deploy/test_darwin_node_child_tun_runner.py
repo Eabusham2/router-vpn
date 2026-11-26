@@ -65,7 +65,7 @@ def workflow_inventory(raw):
     if re.findall(r'^\s*if:.*$',raw,re.M) != [aggregate_guard]:
         raise ValueError('only the mandatory aggregate may run conditionally')
     head, jobs = raw.split('jobs:\n', 1)
-    if ('  workflow_call:\n  push:' not in head or '  cancel-in-progress: false\n' not in head
+    if ('  workflow_call:\n' not in head or re.search(r'^  (?:push|pull_request):', head, re.M) or '  cancel-in-progress: false\n' not in head
             or "  ROUTERVPN_DARWIN_NODE_CHILD_ACCEPTANCE: '1'" not in head or "  CGO_ENABLED: '1'" not in head):
         raise ValueError('Darwin checkout lost original opt-in, cancellation or caller scope')
     workflow_concurrency_cases(raw)

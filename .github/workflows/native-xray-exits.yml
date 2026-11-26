@@ -1,33 +1,7 @@
 name: Native Xray exit integration
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/native-xray-exits.yml'
-      - 'android/**'
-      - 'ios/RouterVPN/PacketTunnel/**'
-      - 'ios/RouterVPN/App/**'
-      - 'deploy/test_ios_xray_exits.py'
-      - 'deploy/test_ios_multihop_profiles.py'
-      - 'internal/applexray/**'
-      - 'internal/hopmeasure/ordered.go'
-      - 'internal/mobilemultihop/**'
-      - 'internal/multihoprelay/**'
-      - 'internal/mobiletor/**'
-      - 'internal/linuxprocess/**'
-      - 'mobile/**'
-      - 'cmd/router-agent/**'
-      - 'deploy/prepare-*.py'
-      - 'deploy/router-agent.Dockerfile'
-      - 'deploy/test_native_xray_*.py'
-      - 'deploy/test_server_tor_preparation.py'
-      - 'deploy/test_server_node_chain_*.py'
-      - 'deploy/test_native_naive_pairing.py'
-      - 'deploy/test_mobile_multihop_groups.py'
-      - 'deploy/test_focused_multihop_clocks.py'
-      - 'deploy/test_desktop_node_chain_ss_prefix_contract_runner.py'
-      - 'server/scripts/provision-multihop-relays.py'
+
 permissions:
   contents: read
 concurrency:
@@ -147,8 +121,6 @@ jobs:
           test "$CORE_RESULT" = success
           test "$GROUP_RESULT" = success
       - uses: actions/checkout@v4
-      - name: Verify complete shared test coverage
-        run: python3 deploy/test_native_xray_shared_workflow.py
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.3'

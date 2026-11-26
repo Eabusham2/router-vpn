@@ -69,8 +69,8 @@ def check_requirements_release(source, caller):
     if re.search(r"(?m)^  push:", source_events) or any(
             source_events.splitlines().count(event) != 1 for event in ("  workflow_call:", "  workflow_dispatch:")):
         raise ValueError("Requirements must run through its release caller or manual dispatch")
-    if re.findall(r"(?m)^  push:\n((?:    .+\n)+)", triggers(caller)) != ["    branches: [main]\n"]:
-        raise ValueError("Build-all must require closure on every main push")
+    if "  workflow_dispatch:" not in triggers(caller).splitlines() or re.search(r"(?m)^  (?:push|pull_request):", triggers(caller)):
+        raise ValueError("Build-all must be manual-only")
     if not all(source.splitlines().count(line) == 1 for line in (
             "  group: requirements-closure-${{ github.workflow }}-${{ github.ref }}",
             "  cancel-in-progress: true", "  contents: read")):
@@ -414,9 +414,8 @@ class RunnerTests(unittest.TestCase):
             with self.subTest(change=changed), self.assertRaises(ValueError):
                 check_requirements_release(changed, caller)
         for changed in (
-                caller.replace("  push:\n    branches: [main]\n", ""),
-                caller.replace("    branches: [main]\n", "    branches: [other]\n"),
-                caller.replace("    branches: [main]\n", "    branches: [main]\n    paths: ['docs/**']\n"),
+                caller.replace("  workflow_dispatch:\n", "  workflow_dispatch:\n  push:\n    branches: [main]\n"),
+                caller.replace("  workflow_dispatch:\n", "  workflow_call:\n"),
                 caller.replace("  requirements-closure:", "  omitted-closure:"),
                 caller.replace("    uses: ./.github/workflows/requirements-closure.yml",
                                "    if: false\n    uses: ./.github/workflows/requirements-closure.yml"),

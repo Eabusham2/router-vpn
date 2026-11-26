@@ -54,8 +54,8 @@ def required_workflow(value):
         raise ValueError('CONNECT native step lost original source, compiler or bounded invocation')
     if not value.index(runner)<value.index(command)<value.index('      - uses: actions/upload-artifact@v4'):
         raise ValueError('CONNECT gate/receipt execution order changed')
-    for path in ('mobile/chain/**','mobile/server_chain/**','mobile/server_chain_acceptance/**','mobile/desktop/**','internal/mobilemultihop/**','internal/multihoprelay/**'):
-        if value.count("      - '"+path+"'")!=2: raise ValueError('CONNECT native source trigger missing')
+    if re.search(r"^  (?:push|pull_request):", value, re.M) or "  workflow_call:\n" not in value:
+        raise ValueError("Use the explicit release caller instead of automatic source triggers")
 
 class CONNECTServerGateTests(unittest.TestCase):
     def refuse(self,text,case='http-connect/original'):
@@ -289,7 +289,7 @@ func TestCapturedAWGReceiptRefusal(t *testing.T){for _,row:=range []struct{name,
           raw.replace(command,command+' || true'),
           raw.replace('          - arch: arm64\n            runner: ubuntu-24.04-arm\n',''),
           raw.replace('            ${{ runner.temp }}/server-connect-node-chain-${{ matrix.arch }}.json\n',''),
-          raw.replace("      - 'mobile/chain/**'\n",'',1),
+          raw.replace("  workflow_call:\n","",1),
           raw.replace('    timeout-minutes: 105','    timeout-minutes: 104'),
           raw.replace("          CGO_ENABLED: '1'","          CGO_ENABLED: '0'"),
         ]

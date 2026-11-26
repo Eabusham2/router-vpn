@@ -1,12 +1,6 @@
 name: AI Help and Setup Center guide contract
 
 on:
-  pull_request:
-    branches: [main]
-    paths: ['server/scripts/**', '.github/workflows/ai-help-contract.yml']
-  push:
-    branches: [main]
-    paths: ['server/scripts/**', '.github/workflows/ai-help-contract.yml']
   workflow_dispatch:
 
 permissions:

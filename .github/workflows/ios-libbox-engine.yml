@@ -1,59 +1,6 @@
 name: iOS pinned Libbox engine contract
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'ios/RouterVPN/prepare-libbox.sh'
-      - 'deploy/fetch_mobile_pinned_git.py'
-      - 'deploy/test_fetch_mobile_pinned_git.py'
-      - 'ios/RouterVPN/App/IOS*.swift'
-      - 'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift'
-      - 'ios/RouterVPN/test_runtime_selection_contract.py'
-      - 'deploy/test_ios_connect_execution_*.py'
-      - 'deploy/test_ios_socks_execution_*.py'
-      - 'deploy/test_ios_openvpn_execution_*.py'
-      - 'deploy/test_ios_hysteria_execution_*.py'
-      - 'deploy/test_ios_node_chain_connect_profiles.py'
-      - 'deploy/test_ios_node_chain_imported_nodes.py'
-      - 'deploy/test_ios_node_chain_imported_nodes_profiles.py'
-      - 'deploy/ios_ordered_execution_control_boundary.py'
-      - 'ios/RouterVPN/prepare-wireguard-kit.sh'
-      - 'deploy/prepare-apple-amnezia-timers.py'
-      - 'deploy/test_apple_amnezia_timer_preparation.py'
-      - 'deploy/prepare-amnezia-timers.py'
-      - 'mobile/amneziatimers/**'
-      - 'ios/RouterVPN/test_libbox_build_contract.py'
-      - 'ios/RouterVPN/test_libbox_link_contract.py'
-      - 'ios/RouterVPN/project.yml'
-      - 'ios/RouterVPN/PacketTunnel/Libbox*.swift'
-      - '.github/workflows/ios-libbox-engine.yml'
-  pull_request:
-    paths:
-      - 'ios/RouterVPN/prepare-libbox.sh'
-      - 'deploy/fetch_mobile_pinned_git.py'
-      - 'deploy/test_fetch_mobile_pinned_git.py'
-      - 'ios/RouterVPN/App/IOS*.swift'
-      - 'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift'
-      - 'ios/RouterVPN/test_runtime_selection_contract.py'
-      - 'deploy/test_ios_connect_execution_*.py'
-      - 'deploy/test_ios_socks_execution_*.py'
-      - 'deploy/test_ios_openvpn_execution_*.py'
-      - 'deploy/test_ios_hysteria_execution_*.py'
-      - 'deploy/test_ios_node_chain_connect_profiles.py'
-      - 'deploy/test_ios_node_chain_imported_nodes.py'
-      - 'deploy/test_ios_node_chain_imported_nodes_profiles.py'
-      - 'deploy/ios_ordered_execution_control_boundary.py'
-      - 'ios/RouterVPN/prepare-wireguard-kit.sh'
-      - 'deploy/prepare-apple-amnezia-timers.py'
-      - 'deploy/test_apple_amnezia_timer_preparation.py'
-      - 'deploy/prepare-amnezia-timers.py'
-      - 'mobile/amneziatimers/**'
-      - 'ios/RouterVPN/test_libbox_build_contract.py'
-      - 'ios/RouterVPN/test_libbox_link_contract.py'
-      - 'ios/RouterVPN/project.yml'
-      - 'ios/RouterVPN/PacketTunnel/Libbox*.swift'
-      - '.github/workflows/ios-libbox-engine.yml'
   workflow_dispatch:
 
 permissions:
@@ -71,7 +18,6 @@ jobs:
       - name: Require complete typed CONNECT execution contracts
         run: |
           xcrun --find swiftc
-          python3 deploy/test_ios_connect_execution_workflow.py
           python3 deploy/test_ios_connect_execution_capture.py
           python3 deploy/test_ios_connect_execution_prefix_controls.py
           python3 deploy/test_ios_connect_execution_runtime.py

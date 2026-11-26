@@ -1,0 +1,72 @@
+name: Router VPN CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: routervpn-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-core:
+    name: Shared Go core
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Test profile, route, MTU and measurement behavior
+        run: go test -timeout 5m ./internal/common ./internal/routechoice ./internal/mobilemtu ./internal/hopmeasure ./internal/mtuprobe
+      - name: Test kill switch and router controls
+        run: |
+          go test -timeout 5m ./cmd/client -run 'KillSwitch|EnvWithValue' -count=1
+          go test -timeout 5m ./cmd/router-agent -run 'Admin|Peer|Listener|Forwarding|ProtectedDMZ|ServerControl' -count=1
+
+  behavior:
+    name: VPN policy and Setup Center
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test modes, routing and private access
+        run: |
+          set -euo pipefail
+          python3 modes/test_kill_switch.py
+          python3 modes/test_mtu_policy.py
+          python3 modes/test_multihop.py
+          python3 modes/test_profile_id_safety.py
+          python3 server/scripts/test_setup_auth.py
+          python3 server/scripts/test_broker_security.py
+          python3 server/scripts/test_download_safety.py
+          python3 deploy/test_router_forwarding_fail_open.py
+
+  syntax:
+    name: Source syntax
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Check tracked Python, shell and JavaScript syntax
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import ast, pathlib, subprocess
+          for path in subprocess.check_output(["git", "ls-files", "-z", "*.py"]).decode().split("\0"):
+              if path:
+                  ast.parse(pathlib.Path(path).read_bytes(), filename=path)
+          PY
+          git ls-files -z '*.sh' | xargs -0 -r -n1 bash -n
+          node --check cmd/client/logical_ui.js
+          git diff --check HEAD^ HEAD

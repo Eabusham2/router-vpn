@@ -3,23 +3,6 @@ name: Linux guardian namespace regression
 on:
   workflow_dispatch:
   workflow_call:
-  push:
-    branches: [main]
-    paths:
-      - 'deploy/test_desktop_linux_guardian.py'
-      - 'deploy/test_linux_guardian_namespace.py'
-      - 'deploy/test_linux_guardian_selection.py'
-      - 'deploy/test_linux_guardian_cleanup.py'
-      - 'deploy/test_desktop_socket_uid.py'
-      - '.github/workflows/linux-guardian-namespace.yml'
-  pull_request:
-    paths:
-      - 'deploy/test_desktop_linux_guardian.py'
-      - 'deploy/test_linux_guardian_namespace.py'
-      - 'deploy/test_linux_guardian_selection.py'
-      - 'deploy/test_linux_guardian_cleanup.py'
-      - 'deploy/test_desktop_socket_uid.py'
-      - '.github/workflows/linux-guardian-namespace.yml'
 
 permissions:
   contents: read

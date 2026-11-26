@@ -1,33 +1,7 @@
 name: Native Shadowsocks V2Ray TLS and Hysteria2 interoperability
 on:
-  push:
-    paths:
-      - 'internal/nativesip003/**'
-      - 'internal/startwhitening/**'
-      - 'mobile/sip003/**'
-      - 'mobile/startwhitening/**'
-      - 'deploy/mobile_shadowsocks_stream_policy.py'
-      - 'deploy/prepare-mobile-whitening.py'
-      - 'mobile/composite/**'
-      - 'mobile/applexray/**'
-      - 'mobile/routervpn_sip003_bridge.go.tmpl'
-      - 'deploy/prepare-mobile-multihop.py'
-      - 'deploy/prepare-mobile-tor.py'
-      - 'mobile/toroutbound/**'
-      - 'mobile/externalpolicy/**'
-      - 'deploy/prepare-mobile-composite.py'
-      - 'deploy/prepare-apple-xray.py'
-      - 'deploy/test_mobile_sip003_pinned.sh'
-      - 'deploy/test_mobile_composite_pinned.sh'
-      - 'deploy/test_native_runner_dependencies.py'
-      - 'deploy/test_ios_native_sip003_profiles.py'
-      - 'ios/RouterVPN/App/IOSNativeXrayProfile.swift'
-      - 'ios/RouterVPN/App/IOSRuntimeSelection.swift'
-      - 'ios/RouterVPN/App/IOSHomeDNSPolicy.swift'
-      - 'ios/RouterVPN/App/IOSDNSRuntimePolicy.swift'
-      - 'android/app/src/main/java/com/eabusham/routervpn/NativeSingBoxController.java'
-      - '.github/workflows/mobile-sip003-native.yml'
   workflow_dispatch:
+
 permissions:
   contents: read
 jobs:

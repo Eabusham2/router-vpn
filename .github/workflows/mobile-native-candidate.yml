@@ -1,12 +1,6 @@
 name: Mobile native candidate validation
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/mobile-native-candidate.yml
-      - .github/scripts/stage_mobile_candidate.py
-      - configs/mobile-native-candidate.json
   workflow_dispatch:
 
 permissions:

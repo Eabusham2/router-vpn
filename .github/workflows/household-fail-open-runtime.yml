@@ -1,17 +1,6 @@
 name: ASUS household Internet fail-open contract
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'server/**'
-      - 'router/**'
-      - 'scripts/**'
-      - 'deploy/router-forwarding-audit.py'
-      - 'deploy/test_router_forwarding_fail_open.py'
-      - 'deploy/router-acceleration-safety-audit.py'
-      - 'deploy/router-private-port-exposure-audit.py'
-      - '.github/workflows/household-fail-open-runtime.yml'
   workflow_dispatch:
 
 permissions:

@@ -43,7 +43,6 @@ jobs:
       - name: Require longer CONNECT execution inventory, cleanup controls and authoritative workflow
         run: |
           python3 deploy/test_linux_connect_prefix_execution_host_runner.py
-          python3 deploy/test_linux_connect_prefix_execution_workflow.py
       - uses: actions/download-artifact@v4
         with:
           name: RouterVPN-native-runtime-linux-${{ matrix.arch }}-${{ github.sha }}

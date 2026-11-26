@@ -1,36 +1,7 @@
 name: Native authenticated AES and whitening traffic
 on:
-  push:
-    paths:
-      - 'ios/RouterVPN/PacketTunnel/IOSStartLayer.swift'
-      - 'ios/RouterVPN/App/IOSMultihopStartLayer.swift'
-      - 'ios/RouterVPN/App/IOSDNSRuntimePolicy.swift'
-      - 'ios/RouterVPN/App/RouterVPNModel.swift'
-      - 'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift'
-      - 'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift'
-      - 'internal/nativecomposite/**'
-      - 'deploy/test_ios_ss_service_asset.py'
-      - 'deploy/test_ios_ss_service_dns.py'
-      - 'deploy/ios_test_crypto_bridge.py'
-      - 'deploy/test_ios_start_layer.py'
-      - 'internal/startwhitening/**'
-      - 'internal/mobilemultihop/**'
-      - 'mobile/amnezia/**'
-      - 'mobile/amneziatimers/**'
-      - 'mobile/wireguard/**'
-      - 'mobile/startwhitening/**'
-      - 'cmd/start-layer-relay/**'
-      - 'deploy/prepare-mobile-whitening.py'
-      - 'deploy/prepare-mobile-amnezia.py'
-      - 'deploy/prepare-amnezia-timers.py'
-      - 'deploy/mobile_wireguard_bind_policy.py'
-      - 'deploy/prepare-mobile-buffers.py'
-      - 'deploy/mobile_udp_socket_policy.py'
-      - 'deploy/test_prepare_mobile_whitening.py'
-      - 'deploy/test_mobile_whitening_pinned.sh'
-      - 'deploy/test_native_runner_dependencies.py'
-      - '.github/workflows/mobile-start-layer-native.yml'
   workflow_dispatch:
+
 permissions:
   contents: read
 jobs:

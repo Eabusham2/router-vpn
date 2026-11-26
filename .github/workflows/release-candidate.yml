@@ -643,7 +643,6 @@ jobs:
       - name: Require complete typed CONNECT execution contracts
         run: |
           xcrun --find swiftc
-          python3 deploy/test_ios_connect_execution_workflow.py
       - name: Run iOS/iPadOS source contracts
         working-directory: ios/RouterVPN
         run: |

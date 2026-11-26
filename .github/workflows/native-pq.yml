@@ -2,24 +2,7 @@ name: Native Rosenpass protocol and ownership
 on:
   workflow_dispatch:
   workflow_call:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/native-pq.yml'
-      - 'mobile/rosenpass/**'
-      - 'internal/mobilepq/**'
-      - 'internal/mobilemultihop/**'
-      - 'internal/multihoprelay/**'
-      - 'internal/applexray/**'
-      - 'mobile/pq/**'
-      - 'mobile/routervpn_pq_bridge.go.tmpl'
-      - 'mobile/routervpn_max_resolve_bridge.go.tmpl'
-      - 'deploy/prepare-mobile-pq.py'
-      - 'deploy/test_native_pq_bridge.py'
-      - 'deploy/test_server_pq_real.py'
-      - 'deploy/test_native_pq_pairing.py'
-      - 'server/scripts/provision-multihop-relays.py'
-      - 'cmd/router-agent/multihop_pq_compile*'
+
 permissions:
   contents: read
 concurrency:

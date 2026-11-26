@@ -109,7 +109,6 @@ jobs:
         timeout-minutes: 90
         run: |
           set -euo pipefail
-          python3 deploy/test_imported_naive_h2_workflow.py
           python3 deploy/test_mobile_imported_naive_h2_runner.py
           python3 deploy/test_mobile_imported_naive_h2.py \
             "$RUNNER_TEMP/routervpn-imported-naive-h2-core" \

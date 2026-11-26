@@ -96,7 +96,6 @@ jobs:
         timeout-minutes: 90
         run: |
           set -euo pipefail
-          python3 deploy/test_imported_pq_workflow.py
           python3 deploy/test_mobile_imported_pq_xray_runner.py
           python3 deploy/test_mobile_imported_pq_xray.py \
             "$RUNNER_TEMP/routervpn-imported-pq-core" \

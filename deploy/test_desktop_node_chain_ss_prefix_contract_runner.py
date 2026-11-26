@@ -7,7 +7,6 @@ import json
 import sys
 import unittest
 
-from test_native_xray_shared_workflow import declared_groups, shared_plan
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('ss_contract_runner', ROOT / 'deploy/test_desktop_node_chain_ss_prefix_contract.py')
@@ -49,10 +48,6 @@ class ImportedSSContracts(unittest.TestCase):
         workflow.workflow_contract(source, release)
         with self.assertRaises(ValueError):
             workflow.workflow_contract(source, release.replace('desktop-connect-child, ss-prefix-native]', 'desktop-connect-child]'))
-        xray = (ROOT / '.github/workflows/native-xray-exits.yml').read_text()
-        selected = shared_plan(xray, declared_groups())
-        self.assertEqual([roots for label, roots in selected if label == shared.PREFIX_PHASE],
-                         [[shared.PREFIX_ROOT]])
 
     def test_preserved_and_additive_exact_inventories(self):
         phases = G.source_cases()

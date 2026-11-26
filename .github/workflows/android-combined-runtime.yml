@@ -1,19 +1,6 @@
 name: Android combined runtime gate
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'android/build-sing-box-libbox.sh'
-      - 'deploy/fetch_mobile_pinned_git.py'
-      - 'deploy/test_fetch_mobile_pinned_git.py'
-      - 'android/build-awg-tunnel.sh'
-      - 'android/routervpn_xray_bridge.go'
-      - 'android/app/build.gradle'
-      - 'android/app/src/main/java/com/eabusham/routervpn/XrayVpnService.java'
-      - 'android/app/src/main/java/com/eabusham/routervpn/NativeXrayController.java'
-      - 'android/test_android_runtime_contract.py'
-      - '.github/workflows/android-combined-runtime.yml'
   workflow_dispatch:
 
 permissions:

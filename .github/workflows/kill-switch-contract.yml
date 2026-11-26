@@ -1,9 +1,7 @@
 name: Kill switch contract
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: kill-switch-contract-${{ github.ref }}

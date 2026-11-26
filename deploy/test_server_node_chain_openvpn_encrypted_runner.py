@@ -44,10 +44,8 @@ def required_workflow(value):
     if any(value.count(x+'\n')!=1 for x in required):raise ValueError('Required OpenVPN native workflow changed')
     if not value.index("go-version: '1.26.3'")<value.index(runner)<value.index(command)<value.index('      - uses: actions/upload-artifact@v4'):raise ValueError('OpenVPN required execution order changed')
     if re.search(r'^\s*(?:if:|continue-on-error:|allow_failure:)',value,re.M) or any(v in value for v in ('--compile-only','|| true','|| :','set +e')):raise ValueError('OpenVPN native workflow bypass')
-    if not all(event in value for event in ('  workflow_call:\n','  workflow_dispatch:\n','  pull_request:\n')) or re.search(r'^  push:', value, re.M):
-        raise ValueError('Use the release caller for main pushes; keep PR and manual checks')
-    for path in ('mobile/server_chain/**','mobile/server_chain_acceptance/**','mobile/desktop/**','internal/mobilemultihop/**','internal/multihoprelay/**','internal/nativeopenvpn/**','deploy/**'):
-        if value.count("      - '"+path+"'\n")!=1:raise ValueError('OpenVPN source trigger missing')
+    if not all(event in value for event in ("  workflow_call:\n", "  workflow_dispatch:\n")) or re.search(r"^  (?:push|pull_request):", value, re.M):
+        raise ValueError("Use the explicit release caller and manual checks")
 
 def required_reusable_job(value):
     key='  openvpn-direct:\n    name: Require actual zero-prefix OpenVPN Server suffix\n    uses: ./.github/workflows/server-openvpn-direct-encrypted.yml\n'
@@ -315,7 +313,7 @@ func TestOriginalWrongPasswordConstruction(t *testing.T){
     def test_mandatory_workflow_and_causal_controls(self):
         raw=(G.ROOT/'.github/workflows/server-openvpn-direct-encrypted.yml').read_text();required_workflow(raw)
         command=next(x for x in raw.splitlines(keepends=True) if ' --standalone ' in x)
-        for bad in (raw.replace(command,''),raw.replace(command,command*2),raw.replace('--standalone','--compile-only'),raw.replace('        timeout-minutes: 40','        if: false\n        timeout-minutes: 40'),raw.replace('          - arch: arm64\n',''),raw.replace('          if-no-files-found: error','          if-no-files-found: warn'),raw.replace("      - 'internal/nativeopenvpn/**'\n",'',1)):
+        for bad in (raw.replace(command,''),raw.replace(command,command*2),raw.replace('--standalone','--compile-only'),raw.replace('        timeout-minutes: 40','        if: false\n        timeout-minutes: 40'),raw.replace('          - arch: arm64\n',''),raw.replace('          if-no-files-found: error','          if-no-files-found: warn'),raw.replace("  workflow_call:\n", "", 1)):
             with self.assertRaises(ValueError):required_workflow(bad)
 
     def test_reusable_original_release_workflow_requires_new_gate(self):

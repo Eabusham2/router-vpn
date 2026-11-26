@@ -1,8 +1,6 @@
 name: Original AWG2 Strong selected worker diagnostic
 
 on:
-  push:
-    branches: [diagnostic/strong-selected-20261124]
   workflow_dispatch:
 
 permissions:

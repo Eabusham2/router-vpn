@@ -55,10 +55,8 @@ def required_workflow(value):
     if any(value.count(x+'\n')!=1 for x in required):raise ValueError('Required Hysteria2 workflow changed')
     if not value.index("go-version: '1.26.3'")<value.index(runner)<value.index(command)<value.index('      - uses: actions/upload-artifact@v4'):raise ValueError('Required Hysteria2 order changed')
     if re.search(r'^\s*(?:if:|continue-on-error:|allow_failure:)',value,re.M) or any(v in value for v in ('--compile-only','|| true','|| :','set +e')):raise ValueError('Hysteria2 acceptance bypass')
-    if not all(event in value for event in ('  workflow_call:\n','  workflow_dispatch:\n','  pull_request:\n')) or re.search(r'^  push:', value, re.M):
-        raise ValueError('Use the release caller for main pushes; keep PR and manual checks')
-    for path in ('mobile/server_chain/**','mobile/server_chain_acceptance/**','mobile/desktop/**','internal/mobilemultihop/**','internal/multihoprelay/**','deploy/**'):
-        if value.count("      - '"+path+"'\n")!=1:raise ValueError('Hysteria2 source trigger missing')
+    if not all(event in value for event in ("  workflow_call:\n", "  workflow_dispatch:\n")) or re.search(r"^  (?:push|pull_request):", value, re.M):
+        raise ValueError("Use the explicit release caller and manual checks")
 
 class HysteriaServerGateTests(unittest.TestCase):
     def refuse(self,text,case=G.CASES[0]):
@@ -326,7 +324,7 @@ func TestProviderKeepsForeignIdentityRefusals(t *testing.T){
     def test_required_workflow_and_removal_controls(self):
         source=(G.ROOT/'.github/workflows/server-hysteria-encrypted.yml').read_text();required_workflow(source)
         for line in source.splitlines(keepends=True):
-            if any(x in line for x in ('test_server_node_chain_hysteria_encrypted','runner: ubuntu','timeout-minutes:',"go-version:",'if-no-files-found:','ROUTERVPN_EXPECTED_SOURCE:',"'mobile/desktop/**'")):
+            if any(x in line for x in ('test_server_node_chain_hysteria_encrypted','runner: ubuntu','timeout-minutes:',"go-version:",'if-no-files-found:','ROUTERVPN_EXPECTED_SOURCE:',"  workflow_call:")):
                 with self.assertRaises(ValueError):required_workflow(source.replace(line,'',1))
         for prefix in ('    continue-on-error: true\n','    if: false\n'):
             with self.assertRaises(ValueError):required_workflow(source+prefix)

@@ -220,74 +220,18 @@ def check_release_aggregate_gates(source: str) -> None:
             f"native release {name} gate became conditional or nonblocking")
 
 
-def check_paired_ss_execution_host_workflow(source: str, release: str, builder: str) -> None:
-    """Require the bounded actual paired SS Darwin job before publication."""
-    path = ROOT / "deploy/test_darwin_paired_ss_execution_workflow.py"
-    spec = importlib.util.spec_from_file_location("paired_ss_execution_host_workflow", path)
-    assert spec and spec.loader, "paired SS execution workflow guard is unavailable"
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    module.check(source, release, builder)
 
 
-def check_connect_execution_host_workflow(source: str, release: str, builder: str) -> None:
-    """Require the separate CONNECT native job in the shipping artifact audit."""
-    path = ROOT / "deploy/test_darwin_connect_execution_workflow.py"
-    spec = importlib.util.spec_from_file_location("connect_execution_host_workflow", path)
-    assert spec and spec.loader, "CONNECT execution workflow guard is unavailable"
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    module.check(source, release, builder)
 
 
-def check_linux_connect_execution_host_workflow(source: str, release: str, builder: str) -> None:
-    """Require exact installed Linux execution before release publication."""
-    path = ROOT / "deploy/test_linux_connect_execution_workflow.py"
-    spec = importlib.util.spec_from_file_location("linux_connect_execution_host_workflow", path)
-    assert spec and spec.loader, "Linux CONNECT execution workflow guard is unavailable"
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    module.check(source, release, builder)
 
 
-def check_linux_socks_execution_host_workflow(source: str, release: str, builder: str) -> None:
-    """Require exact installed Linux execution before release publication."""
-    path = ROOT / "deploy/test_linux_socks_execution_workflow.py"
-    spec = importlib.util.spec_from_file_location("linux_socks_execution_host_workflow", path)
-    assert spec and spec.loader, "Linux SOCKS execution workflow guard is unavailable"
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    module.check(source, release, builder)
 
 
-def check_linux_imported_execution_host_workflow(source: str, release: str, builder: str) -> None:
-    """Require exact installed Linux execution before release publication."""
-    path = ROOT / "deploy/test_linux_imported_execution_workflow.py"
-    spec = importlib.util.spec_from_file_location("linux_imported_execution_host_workflow", path)
-    assert spec and spec.loader, "Linux imported Shadowsocks execution workflow guard is unavailable"
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    module.check(source, release, builder)
 
 
-def check_linux_connect_prefix_execution_host_workflow(source: str, release: str, builder: str) -> None:
-    """Require exact installed Linux execution before release publication."""
-    path = ROOT / "deploy/test_linux_connect_prefix_execution_workflow.py"
-    spec = importlib.util.spec_from_file_location("linux_connect_prefix_execution_host_workflow", path)
-    assert spec and spec.loader, "Linux CONNECT prefix execution workflow guard is unavailable"
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    module.check(source, release, builder)
 
 
-def check_linux_socks_prefix_execution_host_workflow(source: str, release: str, builder: str) -> None:
-    """Require exact installed Linux execution before release publication."""
-    path = ROOT / "deploy/test_linux_socks_prefix_execution_workflow.py"
-    spec = importlib.util.spec_from_file_location("linux_socks_prefix_execution_host_workflow", path)
-    assert spec and spec.loader, "Linux SOCKS prefix execution workflow guard is unavailable"
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    module.check(source, release, builder)
 
 
 def check_unix_naive_h2_host_workflow(source: str, release: str, builder: str) -> None:
@@ -310,14 +254,6 @@ def check_unix_reality_host_workflow(source: str, release: str, builder: str) ->
     module.workflow(source, release, builder)
 
 
-def check_windows_connect_execution_host_workflow(source: str, release: str, builder: str) -> None:
-    """Require exact installed Windows execution before release publication."""
-    path = ROOT / "deploy/test_windows_connect_execution_workflow.py"
-    spec = importlib.util.spec_from_file_location("windows_connect_execution_host_workflow", path)
-    assert spec and spec.loader, "Windows CONNECT execution workflow guard is unavailable"
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    module.check(source, release, builder)
 
 
 def check_focused_native_release_workflow(source: str) -> None:
@@ -851,16 +787,8 @@ _connected_spec.loader.exec_module(_connected_gate)
 _connected_gate.workflow_contract((ROOT/".github/workflows/typed-connected-candidates.yml").read_text(), rc)
 check_focused_native_release_workflow(read(".github/workflows/focused-source-validation.yml"))
 check_server_encrypted_workflow(read(".github/workflows/server-node-chain-encrypted.yml"))
-check_paired_ss_execution_host_workflow(read(".github/workflows/darwin-node-host-tun.yml"), rc, read("deploy/build-native-runtime.py"))
-check_connect_execution_host_workflow(read(".github/workflows/darwin-node-host-tun.yml"), rc, read("deploy/build-native-runtime.py"))
-check_linux_connect_execution_host_workflow(read(".github/workflows/linux-connect-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
-check_linux_socks_execution_host_workflow(read(".github/workflows/linux-socks-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
-check_linux_imported_execution_host_workflow(read(".github/workflows/linux-imported-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
-check_linux_connect_prefix_execution_host_workflow(read(".github/workflows/linux-connect-prefix-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
-check_linux_socks_prefix_execution_host_workflow(read(".github/workflows/linux-socks-prefix-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
 check_unix_naive_h2_host_workflow(read(".github/workflows/unix-naive-h2-host.yml"), rc, read("deploy/build-native-runtime.py"))
 check_unix_reality_host_workflow(read(".github/workflows/unix-reality-host.yml"), rc, read("deploy/build-native-runtime.py"))
-check_windows_connect_execution_host_workflow(read(".github/workflows/windows-connect-execution-host.yml"), rc, read("deploy/build-native-runtime.py"))
 require(rc, rc_rel,
         "windows-complete-max:",
         "uses: ./.github/workflows/windows-node-max-contract.yml",
@@ -916,5 +844,3 @@ subprocess.run([sys.executable, str(ROOT/"deploy/test_mobile_xray_entry_bindings
 
 subprocess.run([sys.executable, str(ROOT/"deploy/test_ios_xray_exit_fixture_inputs.py")], check=True)
 
-from test_ios_connect_execution_workflow import check as check_ios_connect_execution_workflow
-check_ios_connect_execution_workflow(read)

@@ -1,25 +1,7 @@
 name: Imported SOCKS5 REALITY native reference
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/imported-socks-reality-native.yml'
-      - '.github/workflows/imported-pq-reality-native.yml'
-      - '.github/workflows/imported-xhttp-native.yml'
-      - '.github/workflows/imported-naive-h2-native.yml'
-      - '.github/workflows/imported-naive-h3-native.yml'
-      - 'internal/**'
-      - 'mobile/**'
-      - 'android/**'
-      - 'ios/**'
-      - 'deploy/**'
-      - 'cmd/client/**'
-      - 'cmd/router-agent/*.go'
-      - 'go.mod'
-      - 'go.sum'
-      - 'server/**'
-      - 'configs/client/**'
+
 permissions:
   contents: read
 concurrency:

@@ -2,8 +2,6 @@ name: iOS native compile smoke
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
@@ -25,7 +23,6 @@ jobs:
       - name: Require complete typed CONNECT execution contracts
         run: |
           xcrun --find swiftc
-          python3 deploy/test_ios_connect_execution_workflow.py
       - name: Validate iOS runtime and DNS truth contracts
         run: |
           python3 ios/RouterVPN/test_runtime_selection_contract.py

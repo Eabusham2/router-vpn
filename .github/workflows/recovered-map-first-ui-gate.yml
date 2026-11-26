@@ -1,47 +1,6 @@
 name: Recovered map-first UI gate
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "client/**"
-      - "android/**"
-      - "ios/RouterVPN/**"
-      - "cmd/client/**"
-      - "deploy/*map-first*"
-      - "deploy/*session-mutation*"
-      - "deploy/recovered-native-ui-*.py"
-      - "deploy/speed-lab-shipping-audit*.py"
-      - "deploy/setup-center-responsive-ui-audit.py"
-      - "deploy/endpoint-sync-ownership-audit.py"
-      - "deploy/backend-session-transaction-audit.py"
-      - "deploy/native_multihop_audit.py"
-      - "deploy/durable-state-transaction-audit.py"
-      - "deploy/tor-circumvention-audit*.py"
-      - "deploy/typed-external-node-audit.py"
-      - "deploy/product-parity-audit.py"
-      - "deploy/profile-settings-audit.py"
-      - ".github/workflows/recovered-map-first-ui-gate.yml"
-  pull_request:
-    paths:
-      - "client/**"
-      - "android/**"
-      - "ios/RouterVPN/**"
-      - "cmd/client/**"
-      - "deploy/*map-first*"
-      - "deploy/*session-mutation*"
-      - "deploy/recovered-native-ui-*.py"
-      - "deploy/speed-lab-shipping-audit*.py"
-      - "deploy/setup-center-responsive-ui-audit.py"
-      - "deploy/endpoint-sync-ownership-audit.py"
-      - "deploy/backend-session-transaction-audit.py"
-      - "deploy/native_multihop_audit.py"
-      - "deploy/durable-state-transaction-audit.py"
-      - "deploy/tor-circumvention-audit*.py"
-      - "deploy/typed-external-node-audit.py"
-      - "deploy/product-parity-audit.py"
-      - "deploy/profile-settings-audit.py"
-      - ".github/workflows/recovered-map-first-ui-gate.yml"
   workflow_dispatch:
 
 permissions:

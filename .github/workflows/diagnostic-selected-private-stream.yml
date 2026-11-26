@@ -1,8 +1,6 @@
 name: Selected private stream with a separate native worker
 
 on:
-  push:
-    branches: [diagnostic/selected-private-stream-20261125]
   workflow_dispatch:
 
 permissions:

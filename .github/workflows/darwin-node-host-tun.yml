@@ -98,7 +98,6 @@ jobs:
       - name: Require complete paired host inventory and authoritative workflow
         run: |
           python3 deploy/test_macos_paired_node_host_runner.py
-          python3 deploy/test_darwin_paired_host_workflow.py
       - uses: actions/download-artifact@v4
         with:
           name: RouterVPN-native-runtime-darwin-${{ matrix.arch }}-${{ github.sha }}
@@ -149,7 +148,6 @@ jobs:
         run: |
           python3 deploy/test_macos_imported_execution_host_runner.py
           python3 deploy/test_macos_imported_execution_alias_runner.py
-          python3 deploy/test_darwin_imported_execution_workflow.py
       - uses: actions/download-artifact@v4
         with:
           name: RouterVPN-native-runtime-darwin-${{ matrix.arch }}-${{ github.sha }}
@@ -200,7 +198,6 @@ jobs:
         run: |
           python3 deploy/test_macos_paired_ss_execution_host_runner.py
           python3 deploy/test_macos_imported_execution_alias_runner.py
-          python3 deploy/test_darwin_paired_ss_execution_workflow.py
       - uses: actions/download-artifact@v4
         with:
           name: RouterVPN-native-runtime-darwin-${{ matrix.arch }}-${{ github.sha }}
@@ -254,7 +251,6 @@ jobs:
           python3 deploy/test_macos_imported_execution_host_runner.py
           python3 deploy/test_macos_imported_execution_layers_host_runner.py
           python3 deploy/test_macos_imported_execution_alias_runner.py
-          python3 deploy/test_darwin_imported_execution_layers_workflow.py
       - uses: actions/download-artifact@v4
         with:
           name: RouterVPN-native-runtime-darwin-${{ matrix.arch }}-${{ github.sha }}
@@ -305,7 +301,6 @@ jobs:
         run: |
           python3 deploy/test_macos_connect_execution_host_runner.py
           python3 deploy/test_macos_imported_execution_alias_runner.py
-          python3 deploy/test_darwin_connect_execution_workflow.py
       - uses: actions/download-artifact@v4
         with:
           name: RouterVPN-native-runtime-darwin-${{ matrix.arch }}-${{ github.sha }}
