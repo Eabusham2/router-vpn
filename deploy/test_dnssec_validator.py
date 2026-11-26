@@ -13,6 +13,30 @@ import subprocess
 import tempfile
 import time
 ROOT=Path(__file__).resolve().parents[1]
+TASKS = Path('/proc/self/task')
+
+
+def require_joined(original, deadline):
+    # pthread_join observes CLONE_CHILD_CLEARTID in exit_mm. Linux can still
+    # list that TID until exit_notify unlinks it. Only kernel-exiting threads
+    # may be observed in that interval. A live worker fails immediately.
+    while True:
+        current = set(TASKS.iterdir())
+        if current == original:
+            return
+        assert original <= current, 'an original task disappeared'
+        for task in current - original:
+            try:
+                stat = (task / 'stat').read_text()
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            # /proc/[tid]/stat field 9 is the task flags; field 2 (comm)
+            # is parenthesized and may contain spaces or parentheses.
+            flags = int(stat.rsplit(')', 1)[1].split()[6])
+            assert flags & 0x4, f'worker {task.name} survived teardown without PF_EXITING'
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, 'joined workers did not disappear before the original deadline'
+        time.sleep(min(.001, remaining))
 
 def main():
     p=argparse.ArgumentParser()
@@ -66,14 +90,14 @@ def main():
                     assert ready>=0
                     return ready,list(header),packet.raw[:header[6]]
                 def resolve(name,want,qtype=1,insecure=None):
-                    threads_before=len(list(Path('/proc/self/task').iterdir()))
+                    threads_before=set(TASKS.iterdir())
+                    deadline=time.monotonic()+8
                     v=new()
                     try:
                         if insecure:
                             n=insecure.encode();assert lib.rvdns_insecure(v,n,len(n))==0
                         n=name.encode();assert lib.rvdns_start(v,n,len(n),qtype)==0
                         assert lib.rvdns_anchor(v,anchor,len(anchor))==-1, 'anchors changed after start'
-                        deadline=time.monotonic()+8
                         while not result(v)[0]:
                             assert time.monotonic()<deadline, name+' deadline'
                             if select.select([lib.rvdns_fd(v)],[],[],.1)[0]:assert lib.rvdns_process(v)==0
@@ -91,7 +115,7 @@ def main():
                         print('PASS',name,header,flush=True)
                     finally:
                         lib.rvdns_destroy(v)
-                        assert len(list(Path('/proc/self/task').iterdir()))==threads_before,'worker survived context destruction'
+                        require_joined(threads_before, deadline)
                 v=new()
                 try:
                     for bad in (b'UPPER.signed.test.',b'no-final-dot',b'a..signed.test.',b'\x00.signed.test.'):
@@ -130,7 +154,7 @@ def main():
                 assert not any('query '+name in alias_queries for name in ('good.signed.test.','bogus.signed.test.','outside.example.net.','host.outside.example.net.','host.changed.example.net.')), 'alias proof inherited target query authority'
                 assert 'query host.branch.signed.test. 5' in alias_queries and 'query signed.test. 48' in alias_queries, 'DNAME proof omitted original question or signing key'
                 print('PASS separate CNAME/DNAME proof without target queries',flush=True)
-                before=len(list(Path('/proc/self/task').iterdir()))
+                before=set(TASKS.iterdir())
                 v=new()
                 try:
                     name=b'hold.signed.test.';assert lib.rvdns_start(v,name,len(name),1)==0
@@ -145,7 +169,7 @@ def main():
                     assert result(v)[1][1]==5 and not result(v)[2]
                     assert lib.rvdns_fd(v)==-1
                     assert lib.rvdns_process(v)==-1
-                    assert len(list(Path('/proc/self/task').iterdir()))==before,'worker survived cancellation'
+                    require_joined(before, start+2)
                     print('PASS cancellation and worker join',flush=True)
                 finally:lib.rvdns_destroy(v)
             finally:

@@ -99,7 +99,10 @@ def elf_identity(raw,target):
         if tag in (15,29,0x7ffffffd,0x7fffffff,0x6ffffefa,0x6ffffefb,0x6ffffefc):raise ValueError('DNSSEC indirect loader/search path is forbidden')
         if tag==1:needed.append(string(table,value))
     if any(tags.get(tag)!=[value] for tag,value in ((5,text[3]),(10,text[5]),(6,symbol[3]),(11,24))):raise ValueError('DNSSEC loader addresses differ from inspected tables')
-    if not needed or len(set(needed))!=len(needed) or any(x not in ('libc.so.6','libpthread.so.0','libdl.so.2') for x in needed):raise ValueError('Ambient DNSSEC dependency')
+    system_libraries = {'libc.so.6', 'libpthread.so.0', 'libdl.so.2'}
+    if machine == 183 and 'libc.so.6' in needed:
+        system_libraries.add('ld-linux-aarch64.so.1')
+    if not needed or len(set(needed))!=len(needed) or any(x not in system_libraries for x in needed):raise ValueError('Ambient DNSSEC dependency')
     s=symbols[0];table=strings(s);exports=[]
     if s[9]!=24 or len(data(s))%24:raise ValueError('Invalid DNSSEC symbol table')
     for name,info,other,section,_,_ in struct.iter_unpack('<IBBHQQ',data(s)):

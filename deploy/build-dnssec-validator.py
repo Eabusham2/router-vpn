@@ -106,12 +106,16 @@ def main():
         raise ValueError('unexpected expat reference in libunbound archive')
     dependencies = subprocess.check_output(['/usr/bin/readelf', '-d', str(artifact)], text=True)
     needed = [line.split('[')[1].split(']')[0] for line in dependencies.splitlines() if '(NEEDED)' in line]
-    if any(name not in ('libc.so.6', 'libpthread.so.0', 'libdl.so.2') for name in needed):
-        raise ValueError('unexpected dynamic dependency: ' + repr(needed))
     elf = artifact.read_bytes()
     machine = int.from_bytes(elf[18:20], 'little')
     if elf[:6] != b'\x7fELF\x02\x01' or machine != (62 if platform.machine() == 'x86_64' else 183):
         raise ValueError('wrong ELF class, endian or target machine')
+    system_libraries = {'libc.so.6', 'libpthread.so.0', 'libdl.so.2'}
+    if machine == 183 and 'libc.so.6' in needed:
+        # AArch64 glibc can link the system loader directly into DT_NEEDED.
+        system_libraries.add('ld-linux-aarch64.so.1')
+    if any(name not in system_libraries for name in needed):
+        raise ValueError('unexpected dynamic dependency: ' + repr(needed))
     exports = subprocess.check_output(['/usr/bin/nm', '-D', '--defined-only', str(artifact)], text=True)
     symbols = [line.split()[-1] for line in exports.splitlines()]
     expected = ['rvdns_' + x for x in ('abi','create','anchor','insecure','start','fd','process','cancel','result','destroy')]

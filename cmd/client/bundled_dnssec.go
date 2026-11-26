@@ -9,6 +9,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -17,7 +18,7 @@ const bundledDNSSECLibrary = "libroutervpn_dnssec.so"
 const bundledDNSSECReceiptName = "DNSSEC-VALIDATOR.json"
 const bundledDNSSECShimSHA = "e23fa88ed8b52922a71dbfd0018d42e93b9f76420a21c6e6835dfd7652c1fc6e"
 const bundledDNSSECHeaderSHA = "7182ea1e70b2b710cb6573d1d31ae4d19dbf8741a93bd952b9a293c1f5c7e930"
-const bundledDNSSECBuilderSHA = "b6dbb564dec73d1e242a435831bc5e453dd2e2722dd96303765089f2ec8aa872"
+const bundledDNSSECBuilderSHA = "5ebabdca054125cc21e62804934d36a998a812aa0f1382a93e30ad068e292bc7"
 const bundledDNSSECLockSHA = "e7a2ef2ccf5a71970e7118daf2fb6433149acfc7e4c2ed74f775fb235392ead9"
 
 var bundledDNSSECNames = []string{bundledDNSSECLibrary, bundledDNSSECReceiptName, "DNSSEC-UNBOUND-LICENSE", "DNSSEC-OPENSSL-LICENSE"}
@@ -180,9 +181,11 @@ func bundledDNSSECIdentity(raw []byte, target string) (uint16, []string, []strin
 	if err != nil || len(needed) == 0 {
 		return 0, nil, nil, bad
 	}
+	arm64Glibc := file.Machine == elf.EM_AARCH64 && slices.Contains(needed, "libc.so.6")
 	seen := map[string]bool{}
 	for _, name := range needed {
-		if seen[name] || (name != "libc.so.6" && name != "libpthread.so.0" && name != "libdl.so.2") {
+		arm64Loader := arm64Glibc && name == "ld-linux-aarch64.so.1"
+		if seen[name] || (name != "libc.so.6" && name != "libpthread.so.0" && name != "libdl.so.2" && !arm64Loader) {
 			return 0, nil, nil, bad
 		}
 		seen[name] = true

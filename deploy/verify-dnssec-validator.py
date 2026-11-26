@@ -30,7 +30,10 @@ def verify(directory, architecture):
         raise ValueError('package ELF target mismatch')
     dynamic=subprocess.check_output(['/usr/bin/readelf','-d',str(artifact)],text=True)
     needed=[line.split('[')[1].split(']')[0] for line in dynamic.splitlines() if '(NEEDED)' in line]
-    if needed!=manifest['needed'] or any(x not in ('libc.so.6','libpthread.so.0','libdl.so.2') for x in needed) or '(RPATH)' in dynamic or '(RUNPATH)' in dynamic:
+    system_libraries = {'libc.so.6', 'libpthread.so.0', 'libdl.so.2'}
+    if machine == 183 and 'libc.so.6' in needed:
+        system_libraries.add('ld-linux-aarch64.so.1')
+    if needed!=manifest['needed'] or any(x not in system_libraries for x in needed) or '(RPATH)' in dynamic or '(RUNPATH)' in dynamic:
         raise ValueError('package dependency mismatch')
     symbols=subprocess.check_output(['/usr/bin/nm','-D','--defined-only',str(artifact)],text=True)
     exports=sorted(line.split()[-1] for line in symbols.splitlines())
