@@ -52,7 +52,7 @@ public final class ProductActivity extends Activity {
     private static final String STATE_PROBE_ENTRY="routervpn.via_entry_probe.entry",STATE_PROBE_CANDIDATES="routervpn.via_entry_probe.candidates";
 
     private AndroidNodeStore nodeStore; private AndroidStandardExitStore exitStore; private AndroidUnifiedNodeCatalog catalog; private AndroidUnifiedConnectionController connection; private AndroidTelemetry telemetry; private AndroidForwardingMaster forwardingMaster; private AndroidViaEntryLatencyProbe viaEntryProbe;
-    private RouterVpnNodeMapView mapView; private LinearLayout sheet; private ScrollView sheetScroll;
+    private RouterVpnNodeMapView mapView; private LinearLayout sheet,primaryControls; private ScrollView sheetScroll;
     private TextView sheetHandle,nodeButton,statusView,modeHint,dnsHint,multihopHint,liveLatency,autoRequirementsHint;
     private Button connectButton,fastestButton,performanceButton,forwardButton,hopsButton;
     private static final String CREATE_CUSTOM_ACTION="action:create-custom";
@@ -115,7 +115,34 @@ public final class ProductActivity extends Activity {
     @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] grantResults){if(AndroidUpdateDialog.onPermissionResult(this,requestCode))return;super.onRequestPermissionsResult(requestCode,permissions,grantResults);}
 
     private View buildUi(){
-        LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(dp(10),dp(10),dp(10),dp(8));root.setBackgroundColor(Color.rgb(8,16,30));
+        LinearLayout root=new LinearLayout(this){
+            @Override protected void onMeasure(int widthSpec,int heightSpec){
+                if(mapView!=null && sheetScroll!=null){
+                    // Measure the real row width and scaled text before choosing
+                    // the viewport; a fixed fraction can cut primary controls.
+                    LinearLayout.LayoutParams map=(LinearLayout.LayoutParams)mapView.getLayoutParams();
+                    LinearLayout.LayoutParams controls=(LinearLayout.LayoutParams)sheetScroll.getLayoutParams();
+                    map.height=0;map.weight=sheetExpanded?0.30f:0.56f;
+                    controls.height=0;controls.weight=sheetExpanded?0.70f:0.44f;
+                }
+                super.onMeasure(widthSpec,heightSpec);
+                if(sheetScroll==null || primaryControls==null || sheetHandle==null)return;
+                int available=mapView.getMeasuredHeight()+sheetScroll.getMeasuredHeight();
+                LinearLayout.LayoutParams handle=(LinearLayout.LayoutParams)sheetHandle.getLayoutParams();
+                LinearLayout.LayoutParams primary=(LinearLayout.LayoutParams)primaryControls.getLayoutParams();
+                int minimum=sheet.getPaddingTop()+sheet.getPaddingBottom()
+                        +sheetScroll.getPaddingTop()+sheetScroll.getPaddingBottom()
+                        +sheetHandle.getMeasuredHeight()+handle.topMargin+handle.bottomMargin
+                        +primaryControls.getMeasuredHeight()+primary.topMargin+primary.bottomMargin;
+                int controlsHeight=Math.min(available,Math.max(minimum,
+                        Math.round(available*(sheetExpanded?0.70f:0.44f))));
+                LinearLayout.LayoutParams controls=(LinearLayout.LayoutParams)sheetScroll.getLayoutParams();
+                LinearLayout.LayoutParams map=(LinearLayout.LayoutParams)mapView.getLayoutParams();
+                controls.height=controlsHeight;controls.weight=0;
+                map.height=available-controlsHeight;map.weight=0;
+                super.onMeasure(widthSpec,heightSpec);
+            }
+        };root.setOrientation(LinearLayout.VERTICAL);root.setPadding(dp(10),dp(10),dp(10),dp(8));root.setBackgroundColor(Color.rgb(8,16,30));
         if(android.os.Build.VERSION.SDK_INT>=35) {
             // Current targets draw edge to edge. Keep both the map and controls
             // clear of navigation bars and landscape display cutouts.
@@ -134,7 +161,7 @@ public final class ProductActivity extends Activity {
         sheetHandle.setContentDescription("Expand connection controls");sheetHandle.setMinimumHeight(dp(48));sheetHandle.setFocusable(true);
         sheetHandle.setOnClickListener(v->{sheetExpanded=!sheetExpanded;applySheetWeight();});sheet.addView(sheetHandle);
 
-        LinearLayout connectRow=row();
+        LinearLayout connectRow=row();primaryControls=connectRow;
         LinearLayout primaryAction=new LinearLayout(this);
         primaryAction.setOrientation(LinearLayout.VERTICAL);
         primaryAction.setGravity(Gravity.CENTER);
@@ -176,7 +203,7 @@ public final class ProductActivity extends Activity {
         LinearLayout footer=row();Button nodes=smallButton("Nodes");nodes.setContentDescription("Add / manage nodes");nodes.setOnClickListener(v->showNodes());footer.addView(nodes);Button profiles=smallButton("Router nodes");profiles.setContentDescription("Manage linked Router VPN node records");profiles.setOnClickListener(v->showProfileManager());footer.addView(profiles);Button pair=smallButton("Add Router");pair.setOnClickListener(v->showAddRouter());footer.addView(pair);Button custom=smallButton("Add custom");custom.setOnClickListener(v->openStandardExits());footer.addView(custom);Button help=smallButton("Help");help.setOnClickListener(v->showHelp());footer.addView(help);sheet.addView(footer,margins(0,dp(8),0,0));return root;
     }
 
-    private void applySheetWeight(){sheetHandle.setContentDescription(sheetExpanded?"Collapse connection controls":"Expand connection controls");LinearLayout.LayoutParams p=(LinearLayout.LayoutParams)sheetScroll.getLayoutParams();p.weight=sheetExpanded?0.70f:0.44f;sheetScroll.setLayoutParams(p);LinearLayout.LayoutParams m=(LinearLayout.LayoutParams)mapView.getLayoutParams();m.weight=sheetExpanded?0.30f:0.56f;mapView.setLayoutParams(m);}
+    private void applySheetWeight(){sheetHandle.setContentDescription(sheetExpanded?"Collapse connection controls":"Expand connection controls");((View)sheetScroll.getParent()).requestLayout();}
     private void refreshAll(){requestOrderedPresentation();refreshNodes();refreshFastestAvailability();refreshModeChoices();refreshConnectionState();refreshSettingsState();refreshDnsSelection();refreshMultihopSummary();refreshTelemetry(false);refreshLiveRoute();refreshForwardingState();}
     private boolean orderedPathEnabled(){AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(this);return home.connected&&"node-chain".equals(home.logicalMode)||AndroidOrderedPathPresentation.configured(this);}
     private AndroidOrderedPathPresentation currentOrderedPresentation(){return orderedPresentation!=null&&orderedPresentation.current(this)?orderedPresentation:null;}
@@ -1390,29 +1417,35 @@ if(isExternalSelected()){boolean on=prefs().getBoolean(MULTI_ON,false);multihopT
                 return readableLabel(super.getView(position,recycled,parent));
             }
             @Override public View getDropDownView(int position,View recycled,ViewGroup parent){
-                TextView label=readableLabel(super.getDropDownView(position,recycled,parent));
-                ViewGroup.LayoutParams params=label.getLayoutParams();
-                if(params!=null && params.height>0)
-                    label.setMinimumHeight(Math.max(label.getMinimumHeight(),params.height));
-                // Dropdown height is measured before the popup is shown. Give
-                // each multiline row its actual content width at that stage.
-                int width=spinner.getWidth()-spinner.getPaddingLeft()-spinner.getPaddingRight();
-                if(width<=0){
-                    android.graphics.Rect frame=new android.graphics.Rect();
-                    spinner.getWindowVisibleDisplayFrame(frame);
-                    width=frame.width()>0?frame.width():getResources().getDisplayMetrics().widthPixels;
-                }
-                width=Math.max(dp(48),width);
-                if(params==null)params=new ViewGroup.LayoutParams(width,ViewGroup.LayoutParams.WRAP_CONTENT);
-                params.width=width;params.height=ViewGroup.LayoutParams.WRAP_CONTENT;
-                label.setLayoutParams(params);
-                label.setMaxWidth(width);
-                label.setHorizontallyScrolling(false);
-                return label;
+                HomeChoiceRow row=recycled instanceof HomeChoiceRow
+                        ?(HomeChoiceRow)recycled:new HomeChoiceRow(spinner.getContext());
+                row.label.setText(String.valueOf(getItem(position)));
+                return row;
             }
         };
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         return adapter;
+    }
+    /** The popup forces scrolling on root TextViews; keep the label inside a checkable row. */
+    private final class HomeChoiceRow extends LinearLayout implements android.widget.Checkable {
+        final android.widget.CheckedTextView label;
+        HomeChoiceRow(android.content.Context context){
+            super(context);
+            setOrientation(LinearLayout.VERTICAL);
+            setLayoutParams(new android.widget.AbsListView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT));
+            label=new android.widget.CheckedTextView(context,null,android.R.attr.spinnerDropDownItemStyle);
+            label.setId(android.R.id.text1);
+            label.setTextColor(Color.WHITE);
+            label.setSingleLine(false);
+            label.setEllipsize(null);
+            label.setMinimumHeight(dp(48));
+            label.setPaddingRelative(dp(8),dp(8),dp(8),dp(8));
+            addView(label,new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
+        @Override public void setChecked(boolean checked){label.setChecked(checked);}
+        @Override public boolean isChecked(){return label.isChecked();}
+        @Override public void toggle(){label.toggle();}
     }
     private LinearLayout row(){return new AndroidControlRow(this);}
     private LinearLayout controlRow(String title){LinearLayout r=row();TextView label=text(title,13,true);label.setTextColor(Color.WHITE);label.setGravity(Gravity.END);label.setMinimumWidth(dp(72));r.addView(label);return r;}
