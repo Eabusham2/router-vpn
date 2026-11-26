@@ -1018,18 +1018,259 @@ jobs:
             --mount "type=bind,src=${PWD},dst=/routervpn-source,readonly" \
             --entrypoint python3 ghcr.io/eabusham2/router-vpn-agent:${GITHUB_SHA} \
             /routervpn-source/deploy/test_server_tor_pairing.py --installed -v
-      - name: Prove benchmark and Emergency Stop tooling in ARM64 agent
+      - name: Verify installed private benchmark traffic and Emergency Stop tools
         if: matrix.name == 'agent'
+        timeout-minutes: 5
         run: |
-          set -euo pipefail
-          cid="$(docker create --platform linux/arm64 ghcr.io/eabusham2/router-vpn-agent:${GITHUB_SHA})"
-          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
-          docker cp "$cid:/usr/local/bin/router-vpn-agent" "$RUNNER_TEMP/router-vpn-agent-arm64"
-          test -s "$RUNNER_TEMP/router-vpn-agent-arm64"
-          grep -aF '/api/benchmark/download' "$RUNNER_TEMP/router-vpn-agent-arm64" >/dev/null
-          grep -aF '/api/benchmark/upload' "$RUNNER_TEMP/router-vpn-agent-arm64" >/dev/null
-          grep -aF 'authenticated tunnel-peer private throughput sink' "$RUNNER_TEMP/router-vpn-agent-arm64" >/dev/null
-          docker run --rm --platform linux/arm64 --entrypoint /bin/sh ghcr.io/eabusham2/router-vpn-agent:${GITHUB_SHA} -c 'command -v wg >/dev/null && command -v awg >/dev/null'
+          python3 - <<'PY'
+          import hashlib, ipaddress, json, os, re, secrets, shutil, subprocess, tempfile, time
+          from pathlib import Path
+          
+          sha = os.environ["GITHUB_SHA"]
+          tree = os.environ["SOURCE_TREE_SHA"]
+          ref = "ghcr.io/eabusham2/router-vpn-agent:" + sha
+          scope = "routervpn-bench-" + secrets.token_hex(8)
+          label = "routervpn.benchmark=" + scope
+          work = Path(tempfile.mkdtemp(prefix=scope + "-", dir=os.environ["RUNNER_TEMP"]))
+          os.chmod(work, 0o700)
+          deadline = time.monotonic() + 150
+          failure = cleanup_failure = None
+          token = secrets.token_hex(32)
+          node = secrets.token_hex(32)
+          image = None
+          names = {scope + "-" + role for role in ("agent", "peer", "nonpeer")}
+          
+          def run(*args, timeout=20):
+              remaining = deadline - time.monotonic()
+              if remaining <= 0:
+                  raise TimeoutError("agent image qualification command budget expired")
+              done = subprocess.run(["docker", *args], text=True, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, timeout=min(timeout, remaining))
+              if done.returncode:
+                  detail = (done.stderr + done.stdout).replace(token, "[redacted]")[-2000:]
+                  raise RuntimeError("docker " + args[0] + " failed: " + detail)
+              return (done.stdout + (done.stderr if args[0] == "logs" else "")).strip()
+          
+          def inspect(kind, identity):
+              rows = json.loads(run(kind, "inspect", identity))
+              assert len(rows) == 1
+              return rows[0]
+          
+          def labels(row):
+              return row.get("Labels") or row.get("Config", {}).get("Labels") or {}
+          
+          def cleanup():
+              global deadline
+              deadline = time.monotonic() + 60
+              retired, errors = [], []
+              ids = run("container", "ls", "-aq", "--no-trunc", "--filter", "label=" + label).split()
+              for cid in ids:
+                  try:
+                      row = inspect("container", cid)
+                      assert row["Id"] == cid and row["Name"].lstrip("/") in names
+                      assert labels(row).get("routervpn.benchmark") == scope and row["Image"] == image
+                      if row["State"]["Status"] == "created":
+                          assert row["State"]["Pid"] == 0
+                          code = None
+                      else:
+                          if row["State"]["Running"]:
+                              run("stop", "--time", "5", cid, timeout=12)
+                          code = int(run("wait", cid, timeout=5))
+                          row = inspect("container", cid)
+                          assert not row["State"]["Running"] and row["State"]["Pid"] == 0
+                          assert code == row["State"]["ExitCode"]
+                          expected = (0, 143) if row["Name"].lstrip("/") == scope + "-agent" else (0,)
+                          if code not in expected:
+                              errors.append(RuntimeError("unexpected owned container exit " + str(code) + ": " + cid))
+                      run("rm", cid)
+                      assert not run("container", "ls", "-aq", "--no-trunc", "--filter", "id=" + cid)
+                      retired.append({"id": cid, "exit_code": code})
+                  except Exception as error:
+                      errors.append(error)
+              nets = run("network", "ls", "-q", "--no-trunc", "--filter", "label=" + label).split()
+              for nid in nets:
+                  try:
+                      row = inspect("network", nid)
+                      assert row["Id"] == nid and row["Name"] == scope and row["Internal"]
+                      assert labels(row).get("routervpn.benchmark") == scope and not row["Containers"]
+                      run("network", "rm", nid)
+                      assert not run("network", "ls", "-q", "--no-trunc", "--filter", "id=" + nid)
+                  except Exception as error:
+                      errors.append(error)
+              if run("container", "ls", "-aq", "--filter", "label=" + label) or run("network", "ls", "-q", "--filter", "label=" + label):
+                  errors.append(RuntimeError("owned image qualification resources remain"))
+              if errors:
+                  raise ExceptionGroup("agent image cleanup failed", errors)
+              return retired
+          
+          try:
+              assert re.fullmatch(r"[0-9a-f]{40}", sha) and re.fullmatch(r"[0-9a-f]{40}", tree)
+              original = inspect("image", ref)
+              image = original["Id"]
+              assert re.fullmatch(r"sha256:[0-9a-f]{64}", image)
+              assert original["Architecture"] == "arm64" and original["Os"] == "linux"
+              assert labels(original)["org.opencontainers.image.revision"] == sha
+              assert labels(original)["org.opencontainers.image.source-tree"] == tree
+              assert labels(original)["org.opencontainers.image.source"] == "https://github.com/Eabusham2/router-vpn"
+              assert original["Config"]["Entrypoint"] == ["/usr/local/bin/router-vpn-agent"]
+              nid = run("network", "create", "--internal", "--driver", "bridge", "--label", label, scope)
+              network = inspect("network", nid)
+              assert network["Id"] == nid and network["Internal"] and network["Name"] == scope
+              assert labels(network)["routervpn.benchmark"] == scope and not network["Containers"]
+              cidrs = [ipaddress.ip_network(item["Subnet"]) for item in network["IPAM"]["Config"]]
+              cidrs = [item for item in cidrs if item.version == 4]
+              assert len(cidrs) == 1 and cidrs[0].num_addresses >= 8
+              agent_ip, peer_ip, nonpeer_ip = [str(cidrs[0].network_address + i) for i in (2, 3, 4)]
+              config = {"listen": agent_ip + ":8787", "token": token, "node_id": node,
+                        "tunnel_cidrs": [peer_ip + "/32"], "wan_interface": "eth0",
+                        "nft_table": "routervpn_image_benchmark", "daita_listen": agent_ip + ":45999"}
+              (work / "agent.json").write_text(json.dumps(config))
+              os.chmod(work / "agent.json", 0o600)
+              probe = r'''
+          import hashlib, http.client, json, secrets, shutil, sys, time
+          from pathlib import Path
+          cfg = json.loads(Path("/run/routervpn-benchmark/agent.json").read_text())
+          host = cfg["listen"].rsplit(":", 1)[0]
+          peer = cfg["tunnel_cidrs"][0].split("/")[0]
+          mode = sys.argv[1]
+          size = 8 << 20
+          assert shutil.which("wg") and shutil.which("awg")
+          def request(method, path, auth=None, body=None, timeout=10):
+              c = http.client.HTTPConnection(host, 8787, timeout=timeout)
+              try:
+                  c.connect()
+                  source = c.sock.getsockname()[0]
+                  headers = {} if auth is None else {"Authorization": "Bearer " + auth}
+                  c.request(method, path, body=body, headers=headers)
+                  r = c.getresponse()
+                  data = r.read(size + 1)
+                  assert len(data) <= size
+                  return r.status, dict(r.getheaders()), data, source
+              finally:
+                  c.close()
+          until = time.monotonic() + 15
+          while True:
+              try:
+                  code, headers, body, source = request("GET", "/health", timeout=1)
+                  assert code == 200 and json.loads(body) == {
+                      "ok": True, "node_id": cfg["node_id"], "proof": "router-vpn-private-agent-v1"}
+                  break
+              except (OSError, http.client.HTTPException):
+                  if time.monotonic() >= until:
+                      raise
+                  time.sleep(0.2)
+          assert (source == peer) == (mode == "peer")
+          denials = []
+          bad_token = "wrong-" + secrets.token_hex(32) if mode == "peer" else cfg["token"]
+          expected = b"bad token\n" if mode == "peer" else b"source is not a tunnel peer\n"
+          for method, path, payload in (("GET", "/api/benchmark/download", None),
+                                         ("POST", "/api/benchmark/upload", b"x" * (64 << 10))):
+              code, headers, body, actual = request(method, path, bad_token, payload)
+              assert actual == source and code == 403 and body == expected
+              denials.append({"method": method, "status": code})
+          result = {"mode": mode, "actual_peer": source, "denials": denials}
+          if mode == "peer":
+              code, headers, body, actual = request("GET", "/api/benchmark/download", cfg["token"])
+              headers = {k.lower(): v for k, v in headers.items()}
+              assert code == 200 and actual == peer and len(body) == size
+              assert headers["x-routervpn-peer"] == peer and headers["x-routervpn-benchmark"] == "download-v1"
+              assert headers["x-routervpn-benchmark-bytes"] == str(size) and headers["content-length"] == str(size)
+              assert headers["content-type"] == "application/octet-stream"
+              assert headers["content-encoding"] == "identity" and headers["cache-control"] == "no-store, no-transform"
+              result["download"] = {"bytes": len(body), "sha256": hashlib.sha256(body).hexdigest()}
+              payload = secrets.token_bytes(size)
+              code, headers, body, actual = request("POST", "/api/benchmark/upload", cfg["token"], payload)
+              answer = json.loads(body)
+              assert code == 200 and actual == peer and answer["ok"] is True
+              assert answer["bytes"] == size and answer["peer"] == peer and answer["direction"] == "upload"
+              assert answer["proof"] == "authenticated tunnel-peer private throughput sink"
+              assert isinstance(answer["server_receive_ms"], (int, float)) and answer["server_receive_ms"] >= 0
+              result["upload"] = {"bytes": answer["bytes"], "sha256": hashlib.sha256(payload).hexdigest()}
+          print(json.dumps(result, sort_keys=True))
+          '''
+              (work / "probe.py").write_text(probe)
+              os.chmod(work / "probe.py", 0o600)
+              def create(role, address):
+                  args = ["create", "--init", "--name", scope + "-" + role, "--label", label, "--platform", "linux/arm64",
+                          "--network", nid, "--ip", address, "--read-only", "--cap-drop", "ALL", "--cap-add", "DAC_READ_SEARCH",
+                          "--security-opt", "no-new-privileges", "--pids-limit", "64",
+                          "--mount", "type=bind,src=" + str(work) + ",dst=/run/routervpn-benchmark,readonly"]
+                  if role == "agent":
+                      args += ["--cap-add", "NET_ADMIN", "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,mode=1777,size=16m",
+                               "-e", "ROUTER_VPN_CONFIG=/run/routervpn-benchmark/agent.json",
+                               "-e", "ROUTER_VPN_MULTIHOP_CONFIG=/run/routervpn-benchmark/absent-relays.json", image]
+                  else:
+                      args += ["--entrypoint", "python3", image, "-B", "/run/routervpn-benchmark/probe.py", role]
+                  cid = run(*args)
+                  row = inspect("container", cid)
+                  assert row["Id"] == cid and row["Image"] == image and labels(row)["routervpn.benchmark"] == scope
+                  assert row["HostConfig"]["ReadonlyRootfs"] and not row["HostConfig"]["PortBindings"]
+                  binds = [m for m in row["Mounts"] if m["Type"] == "bind"]
+                  assert len(binds) == 1 and binds[0]["Source"] == str(work)
+                  assert binds[0]["Destination"] == "/run/routervpn-benchmark" and not binds[0]["RW"]
+                  assert all(m in binds or (role == "agent" and m["Type"] == "tmpfs" and m["Destination"] == "/tmp")
+                             for m in row["Mounts"])
+                  tmpfs = row["HostConfig"].get("Tmpfs") or {}
+                  assert tmpfs == ({"/tmp": "rw,noexec,nosuid,nodev,mode=1777,size=16m"} if role == "agent" else {})
+                  caps = {c.removeprefix("CAP_") for c in row["HostConfig"]["CapAdd"]}
+                  assert caps == ({"DAC_READ_SEARCH", "NET_ADMIN"} if role == "agent" else {"DAC_READ_SEARCH"})
+                  run("start", cid)
+                  row = inspect("container", cid)
+                  links = list(row["NetworkSettings"]["Networks"].values())
+                  assert len(links) == 1 and links[0]["NetworkID"] == nid and links[0]["IPAddress"] == address
+                  assert not row["HostConfig"]["Privileged"]
+                  return cid
+              agent = create("agent", agent_ip)
+              results = []
+              for role, address in (("peer", peer_ip), ("nonpeer", nonpeer_ip)):
+                  cid = create(role, address)
+                  code = int(run("wait", cid, timeout=60))
+                  output = run("logs", "--tail", "20", cid)
+                  assert code == 0, role + " benchmark probe failed"
+                  result = json.loads(output)
+                  assert result["mode"] == role and result["actual_peer"] == address
+                  results.append(result)
+                  state = inspect("container", agent)
+                  assert state["State"]["Running"] and state["Image"] == image
+              augmented = run("exec", agent, "python3", "-B", "-c", r'''
+          import json, stat
+          from pathlib import Path
+          original = json.loads(Path("/run/routervpn-benchmark/agent.json").read_text())
+          files = list(Path("/tmp").glob("router-vpn-agent-*.json"))
+          assert len(files) == 1 and files[0].lstat().st_uid == 0
+          assert stat.S_IMODE(files[0].lstat().st_mode) == 0o600
+          current = json.loads(files[0].read_text())
+          ports = current.pop("reserved_ports")
+          assert current == original and {22, 53, 8787, 45999, 26240, 26271}.issubset(ports)
+          print("original private startup augmentation verified")
+          ''')
+              assert augmented == "original private startup augmentation verified"
+              assert inspect("image", ref)["Id"] == image
+              proof = {"source_commit": sha, "source_tree": tree, "image_id": image,
+                       "network_id": nid, "agent_id": agent, "agent_ip": agent_ip, "private_startup_augmentation": True,
+                       "scope": "installed agent HTTP/authentication; encrypted tunnel transport is qualified separately",
+                       "results": results}
+          except Exception as error:
+              failure = error
+              try:
+                  for cid in run("container", "ls", "-aq", "--filter", "label=" + label).split():
+                      detail = run("logs", "--tail", "20", cid).replace(token, "[redacted]")
+                      print(detail[-3000:], flush=True)
+              except Exception:
+                  pass
+          finally:
+              try:
+                  retired = cleanup()
+                  shutil.rmtree(work)
+              except Exception as error:
+                  cleanup_failure = error
+          if failure or cleanup_failure:
+              raise ExceptionGroup("installed agent benchmark failed",
+                                   [e for e in (failure, cleanup_failure) if e is not None])
+          proof["retired_containers"] = retired
+          proof["owned_network_removed"] = True
+          print(json.dumps(proof, sort_keys=True))
+          PY
       - name: Push the already built and verified image
         shell: bash
         run: |
