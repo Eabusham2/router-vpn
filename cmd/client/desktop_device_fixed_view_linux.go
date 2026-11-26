@@ -23,7 +23,7 @@ func (a *app) readPlatformDeviceMTUView(ctx context.Context, c *deviceMTUCapture
 		if err != nil {
 			return err
 		}
-		policy, err := h.readyPolicy()
+		policy, err := h.readyPolicySource()
 		if err != nil {
 			return err
 		}

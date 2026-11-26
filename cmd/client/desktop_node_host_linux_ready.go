@@ -178,7 +178,7 @@ func (h *desktopLinuxNodeHost) readReadyLocked(ctx context.Context, fresh bool) 
 	if err != nil {
 		return empty, noLive, err
 	}
-	policy, err := h.readyPolicy()
+	policy, err := h.readyPolicySource()
 	if err != nil {
 		return empty, noLive, err
 	}

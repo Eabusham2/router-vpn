@@ -249,7 +249,9 @@ func (owner *desktopLinuxImportedConnection) Restore(ctx context.Context) error 
 	return h.current(ctx)
 }
 
-func (h *desktopLinuxNodeHost) readyPolicy() (mobilemultihop.DesktopPhysicalPolicy, error) {
+// Select the original source. Both callers validate its concrete constructor
+// in the same read before using any derived value.
+func (h *desktopLinuxNodeHost) readyPolicySource() (mobilemultihop.DesktopPhysicalPolicy, error) {
 	if h != nil && h.candidatePrefix != nil {
 		if (h.chain != nil || h.socksChain != nil || h.connectChain != nil) || h.policy != nil || h.imported != nil || h.external != nil {
 			return nil, errors.New("Linux prefix readback mixed native policy families")
@@ -271,7 +273,7 @@ func (h *desktopLinuxNodeHost) readyPolicy() (mobilemultihop.DesktopPhysicalPoli
 	if h.imported != nil {
 		return h.imported, h.imported.Validate()
 	}
-	return h.policy, h.policy.Validate()
+	return h.policy, nil
 }
 
 func (h *desktopLinuxNodeHost) proveImportedLocked(parent context.Context) (elapsed time.Duration, failure error) {

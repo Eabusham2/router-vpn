@@ -37,10 +37,10 @@ func (r DesktopNodeReadyRecord) Validate(policy DesktopPhysicalPolicy, transfer 
 	if _, prefixOnly := policy.(*DesktopNodeCandidatePreparationPolicy); prefixOnly {
 		return errors.New("candidate prefix preparation cannot become ordinary Router readiness")
 	}
-	if policy == nil || policy.Validate() != nil || !proofID.MatchString(transfer) {
+	if policy == nil || !proofID.MatchString(transfer) {
 		return errors.New("native Router readiness lost its captured policy")
 	}
-	_, meta, capture, err := ReadDesktopPhysicalPolicy(policy)
+	config, meta, capture, err := ReadDesktopPhysicalPolicy(policy)
 	if err != nil {
 		return errors.New("native Router readiness lost its original source")
 	}
@@ -50,7 +50,7 @@ func (r DesktopNodeReadyRecord) Validate(policy DesktopPhysicalPolicy, transfer 
 	// targets cannot claim this Linux proof merely by adding receipt fields.
 	coverCount, coverSHA256 := 0, ""
 	if meta.TargetOS == "linux" {
-		cover, digest, err := ReadDesktopPhysicalCoverPolicy(policy)
+		cover, digest, err := desktopPhysicalCoverPolicy(config, meta.NodeID)
 		if err != nil {
 			return err
 		}

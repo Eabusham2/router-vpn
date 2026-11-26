@@ -246,8 +246,12 @@ func (h *desktopLinuxNodeHost) current(ctx context.Context) error {
 		return h.currentExternal(ctx)
 	}
 	if h == nil || ctx == nil || ctx.Err() != nil || h.operation == nil || h.closing || h.closed ||
-		h.parent == nil || h.policy == nil || h.policy.Validate() != nil || h.launch == nil || h.network == "" || physicalNetworkIdentity() != h.network {
+		h.parent == nil || h.policy == nil || h.launch == nil || h.network == "" {
 		return errors.New("Linux Node host no longer owns its captured operation and policy")
+	}
+	_, meta, _, err := h.policy.ReadValidated()
+	if err != nil || physicalNetworkIdentity() != h.network {
+		return errors.Join(err, errors.New("Linux Node host no longer owns its captured operation and policy"))
 	}
 	if h.activation == nil {
 		if h.operation.Err() != nil {
@@ -259,7 +263,6 @@ func (h *desktopLinuxNodeHost) current(ctx context.Context) error {
 	if err := h.parent.Current(ctx); err != nil {
 		return err
 	}
-	meta := h.policy.Metadata()
 	wanted := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256,
 		ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
 	if meta.TargetOS != "linux" || h.selection != wanted || h.launch.root != linuxOwnedControllerRoot ||
@@ -283,7 +286,7 @@ func (h *desktopLinuxNodeHost) current(ctx context.Context) error {
 		[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} != h.options {
 		return errors.New("Linux active Node host belongs to another original connection")
 	}
-	return nil
+	return ctx.Err()
 }
 
 func (h *desktopLinuxNodeHost) Stage(ctx context.Context) error {
