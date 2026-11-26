@@ -351,6 +351,11 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     var dnsPolicyCapture: [String: Any]?
     var dnsPolicyGeneration = UUID()
     let map = MKMapView()
+    var selfTestMapRenderingObserver: ((Bool) -> Void)?
+    func mapViewDidFinishRenderingMap(_ mapView: MKMapView, fullyRendered: Bool) {
+        guard mapView === map else { return }
+        selfTestMapRenderingObserver?(fullyRendered)
+    }
     let nodesText = NSTextView(); let modesText = NSTextView(); let dnsText = NSTextView(); let advancedText = NSTextView(); let settingsText = NSTextView(); let helpText = NSTextView()
     let forwardInput = NSTextView(); let forwardOutput = NSTextView()
     var routerIDs: [String] = []; var modeIDs: [String] = []; var profiles: [[String: Any]] = []; var eventSeq: UInt64 = 0; var timer: Timer?
@@ -960,6 +965,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
             guard let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { return false }
             content.cacheDisplay(in: content.bounds, to: bitmap)
             guard let png = bitmap.representation(using: .png, properties: [:]) else { return false }
+            print("macOS native capture: requested=\(Int(size.width))x\(Int(size.height)) content=\(Int(content.bounds.width))x\(Int(content.bounds.height)) bitmap=\(bitmap.pixelsWide)x\(bitmap.pixelsHigh)")
             let suffix = failure ? "-failure" : ""
             try png.write(to: output.appendingPathComponent("macos-\(Int(size.width))x\(Int(size.height))\(suffix).png"), options: .atomic)
             return true
@@ -973,11 +979,34 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         _ = writeEvidence(size, failure: true)
         return 2
     }
+    func prepareViewport(_ size: NSSize) -> Bool {
+        var rendered: Bool?
+        owner.selfTestMapRenderingObserver = { rendered = $0 }
+        defer { owner.selfTestMapRenderingObserver = nil }
+        window.setContentSize(size)
+        content.layoutSubtreeIfNeeded()
+        let bases = owner.map.overlays.compactMap { $0 as? RouterVPNVectorMapOverlay }
+        guard bases.count == 1, let base = bases.first, base.geometry != nil else { return false }
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        var rendererReady = false
+        repeat {
+            let remaining = max(0, deadline - ProcessInfo.processInfo.systemUptime)
+            _ = RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: min(0.02, remaining)))
+            content.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            rendererReady = owner.map.renderer(for: base) is RouterVPNVectorMapRenderer
+        } while (!rendererReady || rendered == nil) && ProcessInfo.processInfo.systemUptime < deadline
+        // External Apple tile completion is observed, never required for our local vector map.
+        let observation = rendered.map { $0 ? "complete" : "partial" } ?? "pending"
+        print("macOS native local map: renderer=\(rendererReady) callback=\(observation) viewport=\(Int(owner.map.bounds.width))x\(Int(owner.map.bounds.height))")
+        return rendererReady
+    }
     let primary = ["unified-connection-profiles", "unified-connect", "unified-kill-switch", "unified-forward-master",
                    "unified-multihop-toggle", "unified-settings", "unified-mode-popup", "unified-dns-popup"]
     for size in [NSSize(width: 720, height: 560), NSSize(width: 1050, height: 720)] {
-        window.setContentSize(size)
-        content.layoutSubtreeIfNeeded()
+        guard prepareViewport(size) else {
+            return fail("macOS layout self-test: local vector map renderer unavailable", size: size)
+        }
         for id in primary {
             guard let control = owner.findUnifiedView(id) as? NSControl,
                   !control.isHidden, control.action != nil, control.target === owner else {
