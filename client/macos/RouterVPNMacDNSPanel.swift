@@ -6,7 +6,7 @@ final class RouterVPNMacDNSPanel: NSWindowController, NSWindowDelegate, NSTableV
     let profileID: String
     private let heading = NSTextField(wrappingLabelWithString: "Reading the connected DNS path…")
     private let details = NSTextField(wrappingLabelWithString: "")
-    private let owner = NSTextField(wrappingLabelWithString: "")
+    private let ownerLabel = NSTextField(wrappingLabelWithString: "")
     private let draft = NSTextField(wrappingLabelWithString: "")
     private let table = NSTableView()
     private let spinner = NSProgressIndicator()
@@ -56,9 +56,9 @@ final class RouterVPNMacDNSPanel: NSWindowController, NSWindowDelegate, NSTableV
         spinner.style = .spinning; spinner.controlSize = .small; spinner.isDisplayedWhenStopped = false
         let progress = NSStackView(views: [spinner, heading]); progress.orientation = .horizontal; progress.spacing = 8
         stack.addArrangedSubview(progress)
-        owner.font = .systemFont(ofSize: 11); owner.textColor = .secondaryLabelColor
+        ownerLabel.font = .systemFont(ofSize: 11); ownerLabel.textColor = .secondaryLabelColor
         details.identifier = NSUserInterfaceItemIdentifier("dns-measurement-status"); details.setAccessibilityIdentifier("dns-measurement-status")
-        stack.addArrangedSubview(owner); stack.addArrangedSubview(details)
+        stack.addArrangedSubview(ownerLabel); stack.addArrangedSubview(details)
         let controls = NSStackView(); controls.orientation = .horizontal; controls.spacing = 8
         controls.addArrangedSubview(NSTextField(labelWithString: "Compare public resolvers over"))
         transport.addItems(withTitles: ["TCP", "DoT", "DoH"])
@@ -95,7 +95,7 @@ final class RouterVPNMacDNSPanel: NSWindowController, NSWindowDelegate, NSTableV
             button.bezelStyle = .rounded; button.target = self; button.action = action
             button.identifier = NSUserInterfaceItemIdentifier(id); button.setAccessibilityIdentifier(id)
         }
-        for field in [explanation, owner, details, draft, note] {
+        for field in [explanation, ownerLabel, details, draft, note] {
             field.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40).isActive = true
         }
     }
@@ -105,7 +105,7 @@ final class RouterVPNMacDNSPanel: NSWindowController, NSWindowDelegate, NSTableV
         precondition(Thread.isMainThread)
         let previousID = table.selectedRow >= 0 && table.selectedRow < state.rows.count ? state.rows[table.selectedRow].id : nil
         state = value
-        heading.stringValue = value.title; details.stringValue = value.detail; owner.stringValue = value.owner; draft.stringValue = value.draft
+        heading.stringValue = value.title; details.stringValue = value.detail; ownerLabel.stringValue = value.owner; draft.stringValue = value.draft
         table.reloadData()
         if let previousID, let index = state.rows.firstIndex(where: { $0.id == previousID }) { table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false) }
         retestButton.isEnabled = value.canRetest; cancelButton.isEnabled = value.canCancel
