@@ -306,7 +306,7 @@ func snapshotConnectionPreferences(p common.RouterProfile, customLayers []string
 		nodes = append([]common.MultihopNodeSelection(nil), p.MultihopNodes...)
 		execution = p.MultihopExecution
 	}
-	return &connectionProfilePreferences{
+	preferences := &connectionProfilePreferences{
 		HomeLANAccess: p.HomeLANAccess, KillSwitchPolicy: p.KillSwitchPolicy, IPv6Mode: p.IPv6Mode,
 		HomeLANCIDRs: &lan, StartupMode: &startup, AutoConnect: &autoConnect,
 		AutoRequireEncrypted: p.AutoRequireEncrypted, AutoRequireObfuscation: p.AutoRequireObfuscation,
@@ -318,7 +318,14 @@ func snapshotConnectionPreferences(p common.RouterProfile, customLayers []string
 		MultihopEntryMode: entryMode,
 		MultihopNodes:     nodes, MultihopExecution: execution,
 		CustomLayers: layers,
-	}, nil
+	}
+	// Bind the policy that its actual saved decoder will restore. In particular,
+	// legacy Home/Fastest presets become UDP/53 before an ordered member token
+	// is captured; explicit Home transport choices retain their captured marker.
+	if err := normalizeSavedConnectionDNS(preferences); err != nil {
+		return nil, err
+	}
+	return preferences, nil
 }
 
 func (a *app) listConnectionProfiles(w http.ResponseWriter, r *http.Request) {

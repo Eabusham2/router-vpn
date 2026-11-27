@@ -740,8 +740,26 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         return prefix
     }
 
+    /// Complete Local family only; the native source getter is authoritative.
+    static func pairedHysteriaLocalModes(_ modes: [String], execution: String?) -> Bool {
+        execution == "local" && (3...physicalTraversalDepth).contains(modes.count) &&
+            supportsNativePrefix(modes.first ?? "") && nativeFinalModes.contains(modes.last ?? "") &&
+            modes.dropFirst().dropLast().contains("hysteria2") &&
+            modes.dropFirst().dropLast().allSatisfy { supportsNativePrefix($0) || nativeFinalModes.contains($0) }
+    }
+
+    static func pairedHysteriaLocalSource(_ nodes: [Self], execution: String?, profiles: [RouterProfile]) -> Bool {
+        guard pairedHysteriaLocalModes(nodes.map(\.mode), execution: execution) else { return false }
+        return nodes.allSatisfy { node in
+            let matches = profiles.filter { $0.id == node.id }
+            guard matches.count == 1, let profile = matches.first else { return false }
+            return profile.normalizedNodeKind == "router-vpn" && profile.external == nil && [nil, "", "off"].contains(profile.startLayer)
+        }
+    }
+
     static func extendedOriginalModes(_ modes: [String], execution: String?) -> Bool {
-        extendedPairedModes(modes, execution: execution) || extendedMixedPacketCount(modes, execution: execution) > 0 ||
+        modes.count > maximumNodes && pairedHysteriaLocalModes(modes, execution: execution) ||
+            extendedPairedModes(modes, execution: execution) || extendedMixedPacketCount(modes, execution: execution) > 0 ||
             extendedLocalModes(modes, execution: execution) || ["server", "auto"].contains(execution ?? "") && extendedSelectedModeShape(modes)
     }
 

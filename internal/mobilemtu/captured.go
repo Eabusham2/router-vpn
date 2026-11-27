@@ -123,6 +123,58 @@ func CombineExtendedMixedLocalPlans(config string, actual int, prefixes []*Plan,
 	return combinePlans(config, actual, prefixes, originalTags, packets, true, nil)
 }
 
+// CombineExtendedPairedHysteriaLocalPlans retains the complete paired Local
+// compiler's ordered prefix inventory. The original compiler has already bound
+// its private members and proofs; this scope independently verifies every exact
+// native detour, Off layer and transport before combining the private plans.
+func CombineExtendedPairedHysteriaLocalPlans(config string, actual int, prefixes []*Plan, originalTags []string) (*Plan, error) {
+	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(prefixes) != len(originalTags) {
+		return nil, errors.New("extended paired Hysteria2 MTU needs every original complete prefix")
+	}
+	scope := &capturedPairedHysteriaLocalMTU{source: config, tags: append([]string(nil), originalTags...)}
+	return combinePlansWithPairedHysteria(config, actual, prefixes, scope.tags, 0, false, nil, scope)
+}
+
+// This scope is exclusive to the complete paired family. It is not an imported
+// suffix count or an append-prefix capability.
+type capturedPairedHysteriaLocalMTU struct {
+	source string
+	tags   []string
+}
+
+func (scope *capturedPairedHysteriaLocalMTU) valid(config string, nodes map[string]map[string]any) bool {
+	if scope == nil || scope.source != config || len(scope.tags) <= 8 || len(scope.tags) > hopmeasure.PhysicalTraversalDepth {
+		return false
+	}
+	interiorHysteria := false
+	for i, tag := range scope.tags {
+		node := nodes[tag]
+		if node == nil || !extendedLocalMTUTag.MatchString(tag) || !strings.HasPrefix(tag, "routervpn-chain-"+strconv.Itoa(i)+"-") {
+			return false
+		}
+		kind := node["type"]
+		packet := kind == "wireguard" || kind == "routervpn-amneziawg"
+		stream := kind == "shadowsocks" || kind == "hysteria2"
+		if !packet && !stream || i == 0 && !packet || i == len(scope.tags)-1 && !stream {
+			return false
+		}
+		if kind == "shadowsocks" && node["method"] != "2022-blake3-aes-256-gcm" {
+			return false
+		}
+		if i == 0 {
+			if node["detour"] != nil && node["detour"] != "routervpn-node-physical-egress" {
+				return false
+			}
+		} else if node["detour"] != scope.tags[i-1] {
+			return false
+		}
+		if i > 0 && i < len(scope.tags)-1 && kind == "hysteria2" {
+			interiorHysteria = true
+		}
+	}
+	return interiorHysteria
+}
+
 type capturedEntryLayer struct {
 	tag, kind string
 }
@@ -159,6 +211,10 @@ func originalExternalEntryLayer(entryTag, outerTag, layer string) (*capturedEntr
 }
 
 func combinePlans(config string, actual int, prefixes []*Plan, originalTags []string, packets int, mixed bool, layer *capturedEntryLayer) (*Plan, error) {
+	return combinePlansWithPairedHysteria(config, actual, prefixes, originalTags, packets, mixed, layer, nil)
+}
+
+func combinePlansWithPairedHysteria(config string, actual int, prefixes []*Plan, originalTags []string, packets int, mixed bool, layer *capturedEntryLayer, pairedHysteria *capturedPairedHysteriaLocalMTU) (*Plan, error) {
 	bad := errors.New("captured MTU needs complete matching prefix plans")
 	if len(prefixes) < 2 || len(prefixes) > 8 && originalTags == nil {
 		return nil, bad
@@ -206,6 +262,9 @@ func combinePlans(config string, actual int, prefixes []*Plan, originalTags []st
 			return nil, bad
 		}
 	}
+	if pairedHysteria != nil && (packets != 0 || mixed || layer != nil || !reflect.DeepEqual(originalTags, pairedHysteria.tags) || !pairedHysteria.valid(config, extendedNodes)) {
+		return nil, bad
+	}
 	result := &Plan{Original: actual, Ceiling: MaxMTU, source: config}
 	seen := map[string]bool{}
 	for i, prefix := range prefixes {
@@ -228,8 +287,14 @@ func combinePlans(config string, actual int, prefixes []*Plan, originalTags []st
 		if err != nil || tag == selected || seen[tag] || i == len(prefixes)-1 && tag != choices[0] {
 			return nil, bad
 		}
-		if originalTags != nil && !extendedMTUPrefix(extendedNodes, originalTags, tag, i, packets, mixed, layer) {
-			return nil, bad
+		if originalTags != nil {
+			if pairedHysteria != nil {
+				if tag != originalTags[i] {
+					return nil, bad
+				}
+			} else if !extendedMTUPrefix(extendedNodes, originalTags, tag, i, packets, mixed, layer) {
+				return nil, bad
+			}
 		}
 		seen[tag] = true
 		projectedRoute["final"] = selected

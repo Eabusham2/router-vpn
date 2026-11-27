@@ -15,7 +15,11 @@ func applyNodeChainImportedPacketMTU(members []nodeChainGraphMember, closures []
 }
 
 func applyNodeChainCapturedStreamPacketMTU(members []nodeChainGraphMember, closures []*externalPredecessor, position int, appendScope *nodeChainAppendGraphScope) error {
-	if len(members) != len(closures) || position < 2 || position >= len(closures) || !NodeChainPrefixMode(members[position].mode) {
+	return applyNodeChainCapturedStreamPacketMTUOwned(members, closures, position, appendScope, nil)
+}
+
+func applyNodeChainCapturedStreamPacketMTUOwned(members []nodeChainGraphMember, closures []*externalPredecessor, position int, appendScope *nodeChainAppendGraphScope, completeScope *nodeChainPairedHysteriaGraphScope) error {
+	if appendScope != nil && completeScope != nil || len(members) != len(closures) || position < 2 || position >= len(closures) || !NodeChainPrefixMode(members[position].mode) {
 		return nodeChainError
 	}
 	all := map[string]map[string]any{}
@@ -49,8 +53,9 @@ func applyNodeChainCapturedStreamPacketMTU(members []nodeChainGraphMember, closu
 				break
 			}
 			if members[at].mode == "hysteria2" {
-				if appendScope == nil || at >= len(appendScope.nodes) || appendScope.nodes[at] == nil ||
-					appendScope.closures[at] != closure || !nodeChainAppendHysteriaClosure(appendScope.nodes[at], closure) {
+				appendOwned := appendScope != nil && at < len(appendScope.nodes) && at < len(appendScope.closures) && appendScope.nodes[at] != nil &&
+					appendScope.closures[at] == closure && nodeChainAppendHysteriaClosure(appendScope.nodes[at], closure)
+				if !appendOwned && !completeScope.admitsProxy(at, closure, "hysteria2") {
 					return nodeChainError
 				}
 				// HY2 owns native UDP message fragmentation/reassembly. The
@@ -61,10 +66,13 @@ func applyNodeChainCapturedStreamPacketMTU(members []nodeChainGraphMember, closu
 			if members[at].mode != "shadowsocks" {
 				return nodeChainError
 			}
-			if !members[at].imported && (appendScope == nil || at >= len(appendScope.nodes) ||
-				appendScope.nodes[at] == nil || appendScope.nodes[at].mode != "shadowsocks" ||
-				appendScope.closures[at] != closure || !nodeChainAppendSSClosure(closure)) {
-				return nodeChainError
+			if !members[at].imported {
+				appendOwned := appendScope != nil && at < len(appendScope.nodes) && at < len(appendScope.closures) &&
+					appendScope.nodes[at] != nil && appendScope.nodes[at].mode == "shadowsocks" &&
+					appendScope.closures[at] == closure && nodeChainAppendSSClosure(closure)
+				if !appendOwned && !completeScope.admitsProxy(at, closure, "shadowsocks") {
+					return nodeChainError
+				}
 			}
 		}
 		previousOuter = outer

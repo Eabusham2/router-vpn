@@ -15,6 +15,12 @@ func nodeChainAppendProxyMode(mode string) bool {
 }
 
 func nodeChainAppendHysteriaClosure(node *NodeProfile, closure *externalPredecessor) bool {
+	return nodeChainCapturedHysteriaClosure(node, closure)
+}
+
+// Pure captured transport validation; execution authority belongs to the
+// caller's distinct original append or complete-source owner.
+func nodeChainCapturedHysteriaClosure(node *NodeProfile, closure *externalPredecessor) bool {
 	if node == nil || node.mode != "hysteria2" || closure == nil || len(closure.nodes) != 1 ||
 		!nodeChainFinalClosure(node, closure) ||
 		predecessorText(node.profile, "start_layer") != "" && predecessorText(node.profile, "start_layer") != "off" {
@@ -37,6 +43,12 @@ func nodeChainAppendHysteriaClosure(node *NodeProfile, closure *externalPredeces
 // present. Reusing a packet/SS key as HY2 authentication or obfuscation must not
 // acquire another independent route merely because its wire encoding differs.
 func nodeChainAppendHysteriaKeys(out map[string]any) (map[string]bool, error) {
+	return nodeChainCapturedHysteriaKeys(out)
+}
+
+// Pure captured transport validation; execution authority belongs to the
+// caller's distinct original append or complete-source owner.
+func nodeChainCapturedHysteriaKeys(out map[string]any) (map[string]bool, error) {
 	if out == nil || out["type"] != "hysteria2" || predecessorText(out, "password") == "" {
 		return nil, nodeChainCandidateAppendError
 	}
@@ -70,6 +82,12 @@ func (s *NodeChainCandidateAppendSource) hasHysteriaPrefix() bool {
 }
 
 func validateNodeChainAppendProxyTargets(closures []*externalPredecessor, targets map[netip.AddrPort]bool) error {
+	return validateNodeChainCapturedProxyTargets(closures, targets)
+}
+
+// Pure captured transport validation; execution authority belongs to the
+// caller's distinct original append or complete-source owner.
+func validateNodeChainCapturedProxyTargets(closures []*externalPredecessor, targets map[netip.AddrPort]bool) error {
 	var streams []*externalPredecessor
 	for _, closure := range closures {
 		if closure == nil || closure.final == nil {
@@ -97,6 +115,12 @@ func validateNodeChainAppendProxyTargets(closures []*externalPredecessor, target
 // Apply the added HY2 secret independence check to a genuinely hybrid capture.
 // Legacy packet/SS-only graphs retain their existing source validators.
 func validateNodeChainAppendHybridKeys(closures []*externalPredecessor) error {
+	return validateNodeChainCapturedHybridKeys(closures)
+}
+
+// Pure captured transport validation; execution authority belongs to the
+// caller's distinct original append or complete-source owner.
+func validateNodeChainCapturedHybridKeys(closures []*externalPredecessor) error {
 	hasHysteria := false
 	for _, closure := range closures {
 		if closure != nil && closure.final != nil && closure.final["type"] == "hysteria2" {

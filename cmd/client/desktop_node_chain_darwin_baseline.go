@@ -95,6 +95,10 @@ func (s desktopMacOSNodeChainSelection) validMembers() bool {
 			}
 		}
 	}
+	pairedHysteria := common.PairedHysteriaLocalMultihopSelection(refs)
+	if pairedHysteria && s.Family != macosprocess.NodeChainFamily {
+		return false
+	}
 	imported := func(i int) bool { return rows[i][2] == "external" }
 	privateStreams := s.Family == macosprocess.NodeChainFamily && desktopPairedStreamRoles(refs, imported) ||
 		s.Family == macosprocess.NodeChainExecutionFamily && desktopSelectedPrivateStreamRoles(refs, imported)
@@ -138,7 +142,10 @@ func (s desktopMacOSNodeChainSelection) validMembers() bool {
 		if i == len(rows)-1 && (id != s.ProfileID || !externalFinal && row[2] == "external") {
 			return false
 		}
-		if len(rows) > common.MultihopMaximumNodes && !privateStreams && !externalFinal {
+		if pairedHysteria && row[2] != "router-vpn" {
+			return false
+		}
+		if len(rows) > common.MultihopMaximumNodes && !privateStreams && !externalFinal && !pairedHysteria {
 			expectedMode, expectedKind := "shadowsocks", "external"
 			if i < firstImport {
 				expectedMode, expectedKind = "wg", "router-vpn"

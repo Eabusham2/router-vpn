@@ -266,7 +266,7 @@ func captureDesktopNodeChainGraphWithCONNECT(originalConfig, projectedConfig str
 	bad := func() (DesktopPhysicalCapture, string, bool, error) {
 		return DesktopPhysicalCapture{}, "", false, desktopNodeChainPolicyError
 	}
-	if len(proofs) < 2 || len(proofs) > NodeChainMaximumNodes && !extendedLocalProofs(proofs) && !extendedPairedLocalProofs(proofs) {
+	if len(proofs) < 2 || len(proofs) > NodeChainMaximumNodes && !extendedLocalProofs(proofs) && !extendedPairedLocalProofs(proofs) && !pairedHysteriaLocalProofs(proofs) {
 		return bad()
 	}
 	var graph map[string]any

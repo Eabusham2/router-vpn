@@ -392,7 +392,8 @@ final class AndroidConnectionProfileStore {
         if(!"local".equals(execution))AndroidNodeChainCapture.validateExecutionSources(sources,modes,execution);
         else {
             int schema=AndroidNodeChainCapture.sourceSchema(sources,modes);
-            if(schema==6 || schema==7 || schema==8 || schema==1&&NativeSingBoxController.nativeWireGuardFamily(modes.get(modes.size()-1)))
+            if(schema==6 || schema==7 || schema==8 || schema==1&&NativeSingBoxController.nativeWireGuardFamily(modes.get(modes.size()-1))
+                    || AndroidNodeChainCapture.pairedHysteriaLocalSource(sources,modes,execution))
                 AndroidNodeChainCapture.validateLocalSources(sources,modes);
         }
     }

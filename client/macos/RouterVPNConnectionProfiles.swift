@@ -93,6 +93,15 @@ enum RouterVPNOrderedNodes {
         guard execution == "local", extendedPairedShape(rows) else { return false }
         return pairedMembersOff(rows, profiles: profiles)
     }
+    static func pairedHysteriaLocalShape(_ rows: [[String: String]]) -> Bool {
+        (3...physicalTraversalDepth).contains(rows.count) && prefixModes.contains(rows.first?["mode"] ?? "") &&
+            ["shadowsocks", "hysteria2"].contains(rows.last?["mode"] ?? "") &&
+            rows.dropFirst().dropLast().contains { $0["mode"] == "hysteria2" } &&
+            rows.dropLast().allSatisfy { prefixModes.contains($0["mode"] ?? "") || ["shadowsocks", "hysteria2"].contains($0["mode"] ?? "") }
+    }
+    static func pairedHysteriaLocalPath(_ rows: [[String: String]], execution: String, profiles: [[String: Any]]) -> Bool {
+        execution == "local" && pairedHysteriaLocalShape(rows) && pairedMembersOff(rows, profiles: profiles)
+    }
     static func pairedMembersOff(_ rows: [[String: String]], profiles: [[String: Any]]) -> Bool {
         return rows.allSatisfy { row in
             let matches = profiles.filter { $0["id"] as? String == row["id"] }
@@ -359,16 +368,17 @@ enum RouterVPNOrderedNodes {
         return true
     }
     static func decode(_ raw: Any, control: String) throws -> [[String: String]] {
-        guard let rows = raw as? [[String: String]], (2...8).contains(rows.count) || extendedLocalShape(rows) || extendedPairedShape(rows) || extendedMixedPacketCount(rows) > 0 else {
+        guard let rows = raw as? [[String: String]], (2...8).contains(rows.count) || extendedLocalShape(rows) || extendedPairedShape(rows) || extendedMixedPacketCount(rows) > 0 || pairedHysteriaLocalShape(rows) else {
             throw issue("Choose at least two ordered nodes. Longer routes require a supported sequence of paired and imported nodes.")
         }
+        let retainedHysteria = pairedHysteriaLocalShape(rows)
         var seen = Set<String>()
         for (position, row) in rows.enumerated() {
             guard Set(row.keys) == Set(["id", "mode"]), let id = row["id"],
                   id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
                   seen.insert(id).inserted,
                   let mode = row["mode"],
-                  position == rows.count - 1 ? finalModes.contains(mode) : prefixModes.contains(mode) || ((importedPosition(mode, position: position, count: rows.count) || localSSPosition(mode, position: position, count: rows.count) || position == 0 && customEntryShape(rows)) && ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode) && rows.last?["mode"] == "shadowsocks") else {
+                  position == rows.count - 1 ? finalModes.contains(mode) : prefixModes.contains(mode) || retainedHysteria || ((importedPosition(mode, position: position, count: rows.count) || localSSPosition(mode, position: position, count: rows.count) || position == 0 && customEntryShape(rows)) && ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode) && rows.last?["mode"] == "shadowsocks") else {
                 throw issue("Use paired packet prefixes, supported imported middle hops, or two distinct custom Shadowsocks hops before a paired Shadowsocks exit in Local. Keep SOCKS5, CONNECT and OpenVPN immediately before a Shadowsocks exit.")
             }
         }
@@ -392,9 +402,11 @@ enum RouterVPNOrderedNodes {
         if externalFinal && !externalFinalPath(rows, control: selection.selectedNodeID, profiles: profiles) {
             throw issue("An external exit requires the original paired WireGuard or AmneziaWG entry and independently linked literal Shadowsocks hops.")
         }
+        let retainedHysteria = pairedHysteriaLocalPath(rows, execution: selection.execution, profiles: profiles)
+        if pairedHysteriaLocalShape(rows) && !retainedHysteria { throw issue("A retained Hysteria2 route requires Local execution and paired nodes with Start Layer Off throughout.") }
         let localImported = selection.execution == "local" && (externalFinal || localImportedPath(rows, profiles: profiles))
         let multipleImported = selection.execution != "local" && localImportedPath(rows, profiles: profiles, selectedExecution: true)
-        guard rows.count <= 8 || externalFinal || localImported || multipleImported || extendedPairedPath(rows, execution: selection.execution, profiles: profiles) else { throw issue("For a longer Local route, choose paired WireGuard nodes or paired WireGuard/AWG2 nodes followed by literal Shadowsocks 2022 imports. End at a paired Shadowsocks node and use Start Layer Off throughout. Longer Server or Compare routes require a single WireGuard, AWG2 Fast, or AWG2 Strong entry before the imports.") }
+        guard rows.count <= 8 || externalFinal || localImported || multipleImported || retainedHysteria || extendedPairedPath(rows, execution: selection.execution, profiles: profiles) else { throw issue("For a longer Local route, choose paired WireGuard nodes or paired WireGuard/AWG2 nodes followed by literal Shadowsocks 2022 imports. End at a paired Shadowsocks node and use Start Layer Off throughout. Longer Server or Compare routes require a single WireGuard, AWG2 Fast, or AWG2 Strong entry before the imports.") }
         if !externalFinal && selection.execution != "local" && multipleImportedShape(rows) && !multipleImported { throw issue("Each imported Shadowsocks interior must support the selected execution.") }
         for (position, row) in rows.enumerated() {
             let id = row["id"]!
@@ -402,7 +414,7 @@ enum RouterVPNOrderedNodes {
             guard matches.count == 1 else { throw issue("An ordered source is missing.") }
             let importedMode = importedMiddleMode(matches[0])
             guard externalFinal || importedMode == nil || selection.execution == "local" || multipleImported || importedExecutionPrefixes(rows, profiles: profiles) || connectExecutionTrio(rows, profiles: profiles) || socksExecutionTrio(rows, profiles: profiles) || openVPNExecutionPath(rows, profiles: profiles) else { throw issue("This imported ordered path has not enabled native Server or Compare execution.") }
-            guard externalFinal || (importedMode != nil ? (importedPosition(importedMode!, position: position, count: rows.count) || (localImported || multipleImported) && (localSSPosition(importedMode!, position: position, count: rows.count) || position == 0 && customEntryShape(rows))) && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!) || (localImported || multipleImported) && row["mode"] == "shadowsocks")) else { throw issue("The ordered source kind or position changed.") }
+            guard externalFinal || (importedMode != nil ? (importedPosition(importedMode!, position: position, count: rows.count) || (localImported || multipleImported) && (localSSPosition(importedMode!, position: position, count: rows.count) || position == 0 && customEntryShape(rows))) && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!) || retainedHysteria || (localImported || multipleImported) && row["mode"] == "shadowsocks")) else { throw issue("The ordered source kind or position changed.") }
             if position == rows.count - 1 && !externalFinal {
                 guard finalProfile(matches[0], mode: row["mode"]!) else { throw issue("Choose a paired final transport supported by its captured settings. Hysteria2 keeps its own Start Layer.") }
             }
@@ -653,6 +665,22 @@ struct RouterVPNOrderedNodeDraft {
             guard (0...prefixes.count).contains(index) else { return [] }
             return index == 0 ? RouterVPNOrderedNodes.prefixModes : ["shadowsocks"]
         }
+        if execution == "local", nodes.indices.contains(index) {
+            let choices = index == prefixes.count ? finalModes : RouterVPNOrderedNodes.prefixModes + ["shadowsocks", "hysteria2"]
+            let retained = RouterVPNOrderedNodes.pairedHysteriaLocalShape(nodes)
+            let allowed = choices.filter { mode in
+                var proposed = nodes
+                proposed[index]["mode"] = mode
+                return RouterVPNOrderedNodes.pairedHysteriaLocalPath(proposed, execution: execution, profiles: capturedCatalog) ||
+                    retained && (RouterVPNOrderedNodes.extendedPairedPath(proposed, execution: execution, profiles: capturedCatalog) ||
+                        RouterVPNOrderedNodes.pairedSSExecutionPath(proposed, profiles: capturedCatalog) ||
+                        RouterVPNOrderedNodes.pairedHysteriaExecutionPath(proposed, profiles: capturedCatalog))
+            }
+            if retained { return allowed }
+            if prefixes.indices.contains(index), !allowed.isEmpty {
+                return RouterVPNOrderedNodes.prefixModes + allowed.filter { !RouterVPNOrderedNodes.prefixModes.contains($0) }
+            }
+        }
         if execution != "local", index >= 2, prefixes.indices.contains(index), !importedIDs.contains(prefixes[index]) {
             var proposed = nodes
             proposed[index]["mode"] = "shadowsocks"
@@ -814,6 +842,7 @@ struct RouterVPNOrderedNodeDraft {
         var proposed = nodes
         proposed.insert(["id": id, "mode": mode], at: position)
         guard proposed.count <= 8 ||
+                RouterVPNOrderedNodes.pairedHysteriaLocalPath(proposed, execution: execution, profiles: capturedCatalog) ||
                 RouterVPNOrderedNodes.extendedPairedPath(proposed, execution: execution, profiles: capturedCatalog) ||
                 RouterVPNOrderedNodes.localImportedPath(proposed, profiles: capturedCatalog, selectedExecution: execution != "local") else {
             throw RouterVPNOrderedNodes.issue("This node cannot occupy the selected position in the longer route.")
@@ -891,16 +920,18 @@ struct RouterVPNOrderedNodeDraft {
             _ = try RouterVPNOrderedNodes.connectBody(selection, current: ["profiles": capturedCatalog, "selected_id": control])
             return selection
         }
+        let retainedHysteria = RouterVPNOrderedNodes.pairedHysteriaLocalPath(ordered, execution: execution, profiles: capturedCatalog)
+        if RouterVPNOrderedNodes.pairedHysteriaLocalShape(ordered) && !retainedHysteria { throw RouterVPNOrderedNodes.issue("Keep the retained Hysteria2 route Local, paired, and unlayered.") }
         let localImported = execution == "local" && RouterVPNOrderedNodes.localImportedPath(ordered, profiles: capturedCatalog)
         let multipleImported = execution != "local" && RouterVPNOrderedNodes.localImportedPath(ordered, profiles: capturedCatalog, selectedExecution: true)
-        guard ordered.count <= 8 || localImported || multipleImported ||
+        guard ordered.count <= 8 || localImported || multipleImported || retainedHysteria ||
                 RouterVPNOrderedNodes.extendedPairedPath(ordered, execution: execution, profiles: capturedCatalog) else {
             throw RouterVPNOrderedNodes.issue("Longer Local packet routes require paired WireGuard prefixes and a paired Shadowsocks final, all with Start Layer Off.")
         }
         if execution != "local" && RouterVPNOrderedNodes.multipleImportedShape(ordered) && !multipleImported { throw RouterVPNOrderedNodes.issue("Each imported Shadowsocks interior must support the selected execution.") }
         guard execution == "local" || multipleImported || !prefixes.contains(where: importedIDs.contains) || RouterVPNOrderedNodes.importedExecutionPrefixes(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.connectExecutionTrio(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.socksExecutionTrio(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.openVPNExecutionPath(ordered, profiles: capturedCatalog) else { throw RouterVPNOrderedNodes.issue("Imported ordered paths retain Local execution until native Server admission is available.") }
         for (index, id) in prefixes.enumerated() {
-            guard importedIDs.contains(id) ? (RouterVPNOrderedNodes.importedPosition(modes[index], position: index, count: ordered.count) || (localImported || multipleImported) && (RouterVPNOrderedNodes.localSSPosition(modes[index], position: index, count: ordered.count) || index == 0 && RouterVPNOrderedNodes.customEntryShape(ordered))) && modes[index] == importedModes[id] && finalMode == "shadowsocks" : (RouterVPNOrderedNodes.prefixModes.contains(modes[index]) || (localImported || multipleImported) && modes[index] == "shadowsocks") else { throw RouterVPNOrderedNodes.issue("Keep each imported node in a position supported by its captured Local or Server path.") }
+            guard importedIDs.contains(id) ? (RouterVPNOrderedNodes.importedPosition(modes[index], position: index, count: ordered.count) || (localImported || multipleImported) && (RouterVPNOrderedNodes.localSSPosition(modes[index], position: index, count: ordered.count) || index == 0 && RouterVPNOrderedNodes.customEntryShape(ordered))) && modes[index] == importedModes[id] && finalMode == "shadowsocks" : (RouterVPNOrderedNodes.prefixModes.contains(modes[index]) || retainedHysteria || (localImported || multipleImported) && modes[index] == "shadowsocks") else { throw RouterVPNOrderedNodes.issue("Keep each imported node in a position supported by its captured Local or Server path.") }
         }
         return RouterVPNConnectionProfileSelection(selectedNodeID: control, multihopEnabled: true, entryMode: "",
             execution: execution, profileTokens: tokens.filter { key, _ in ordered.contains { $0["id"] == key } }, orderedNodes: ordered)
@@ -1202,6 +1233,7 @@ extension ProductWindowController {
                   fromCatalog || (stored?["mode"] as? String == selection.orderedNodes.last?["mode"] && payload["mode"] as? String == selection.orderedNodes.last?["mode"]) else {
                 throw RouterVPNOrderedNodes.issue("The loaded ordered path mixes an independent entry, exit or execution.")
             }
+            if RouterVPNOrderedNodes.pairedHysteriaLocalShape(selection.orderedNodes) && selection.execution != "local" { throw RouterVPNOrderedNodes.issue("The loaded retained Hysteria2 route lost its original Local execution.") }
             referenced.formUnion(selection.orderedNodes.compactMap { $0["id"] })
         } else if selection.multihopEnabled {
             guard !selection.entryID.isEmpty, !selection.exitID.isEmpty, selection.entryID != selection.exitID,
@@ -1640,7 +1672,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         super.init(window: window)
         let root = NSStackView(); root.orientation = .vertical; root.alignment = .leading; root.spacing = 12
         root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        let note = NSTextField(wrappingLabelWithString: "Choose the entry and preceding hops. Longer Local packet paths use paired WireGuard nodes and a paired Shadowsocks 2022 final, all with Start Layer Off. Longer Local routes can also begin with paired WireGuard or AWG2 nodes followed by literal Shadowsocks 2022 imports. For a paired final, keep every Start Layer Off on these longer routes. A Local route to an imported exit uses the paired entry’s saved Start Layer and requires Off on every import. Each packet layer must fit the route MTU. A WireGuard or AWG2 final requires two to eight paired Local packet nodes with Start Layer Off throughout. A Hysteria2 final keeps its own Start Layer. An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN middle requires a Shadowsocks 2022 final. With a paired entry, supported SS2022 imports can occupy any interior position. Server and Compare require support from every import and the native controller. An OpenVPN middle also needs its own private pairing. Each node keeps its own linked credentials and settings.")
+        let note = NSTextField(wrappingLabelWithString: "Choose the entry and preceding hops. Longer Local packet paths use paired WireGuard nodes and a paired Shadowsocks 2022 final, all with Start Layer Off. Longer Local routes can also begin with paired WireGuard or AWG2 nodes followed by literal Shadowsocks 2022 imports. For a paired final, keep every Start Layer Off on these longer routes. A Local route to an imported exit uses the paired entry’s saved Start Layer and requires Off on every import. Each packet layer must fit the route MTU. A WireGuard or AWG2 final requires two to eight paired Local packet nodes with Start Layer Off throughout. A Hysteria2 final keeps its own Start Layer. A Local route with a Hysteria2 middle uses paired nodes with Start Layer Off throughout and ends at Shadowsocks or Hysteria2. An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN middle requires a Shadowsocks 2022 final. With a paired entry, supported SS2022 imports can occupy any interior position. Server and Compare require support from every import and the native controller. An OpenVPN middle also needs its own private pairing. Each node keeps its own linked credentials and settings.")
         root.addArrangedSubview(note)
         path.setAccessibilityLabel("Ordered path"); path.target = self; path.action = #selector(selectedHopChanged); root.addArrangedSubview(path)
         transport.setAccessibilityLabel("Selected node transport")

@@ -120,6 +120,12 @@ func validateAppendMemberAliases(nodes []*NodeProfile, imports []*nodeChainImpor
 // The stream is a genuine UDP-capable, literal, unlayered SS2022 capture. A
 // paired stream keeps its private proof identity; an import keeps public proof.
 func nodeChainAppendSSClosure(closure *externalPredecessor) bool {
+	return nodeChainCapturedSSClosure(closure)
+}
+
+// Pure captured transport validation; execution authority belongs to the
+// caller's distinct original append or complete-source owner.
+func nodeChainCapturedSSClosure(closure *externalPredecessor) bool {
 	if closure == nil || closure.final == nil || len(closure.nodes) != 1 {
 		return false
 	}

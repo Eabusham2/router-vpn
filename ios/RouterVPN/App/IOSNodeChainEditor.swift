@@ -89,7 +89,8 @@ struct IOSNodeChainDraft {
             nodes.allSatisfy({ $0.id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil }) &&
             Set(nodes.map(\.id)).count == nodes.count && (nodes.last?.id == controlID || IOSMultihopNodeSelection.externalExitReferences(nodes, controlID: controlID, execution: "local")) &&
             (nodes.first?.mode != "shadowsocks" || IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) &&
-            nodes.dropLast().enumerated().allSatisfy({ position, node in IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || (IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count) || IOSMultihopNodeSelection.supportsLocalImportedNode(node.mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes))) && nodes.last?.mode == "shadowsocks" }) &&
+            (IOSMultihopNodeSelection.pairedHysteriaLocalModes(nodes.map(\.mode), execution: "local") ||
+             nodes.dropLast().enumerated().allSatisfy({ position, node in IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || (IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count) || IOSMultihopNodeSelection.supportsLocalImportedNode(node.mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes))) && nodes.last?.mode == "shadowsocks" })) &&
             (IOSMultihopNodeSelection.nativeFinalModes.contains(nodes.last?.mode ?? "") ||
              IOSMultihopNodeSelection.supportsLocalPacketRoute(nodes, execution: "local"))
     }
@@ -592,6 +593,11 @@ enum IOSNodeChainEditorVisible {
             nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) {
             modes.append("hysteria2")
         }
+        var hysteriaFinal = nodes
+        hysteriaFinal[hysteriaFinal.count - 1].mode = "hysteria2"
+        if !modes.contains("hysteria2"), IOSMultihopNodeSelection.pairedHysteriaLocalSource(hysteriaFinal, execution: execution, profiles: linked) {
+            modes.append("hysteria2")
+        }
         if execution == "local", nodes.count <= IOSMultihopNodeSelection.maximumNodes,
            [nil, "", "off"].contains(profile.startLayer), let bundle, bundle.selectedRouterID == profile.id,
            bundle.profiles["wg"]?["wg.conf"]?.isEmpty == false,
@@ -632,7 +638,8 @@ enum IOSNodeChainEditorVisible {
                 IOSMultihopNodeSelection.localStreamLayout(proposed, execution: execution, profiles: profiles)?.hostname == position)
             if hostname && IOSMultihopNodeSelection.requiresImportedNodesSource(proposed) && !independentHostname { return false }
             let pairedChoice = profile.normalizedNodeKind == "router-vpn" && pairedStreamChoice(proposed, at: position, execution: execution, profiles: profiles)
-            let extendedPosition = pairedChoice || independentHostname || nodes.count <= IOSMultihopNodeSelection.maximumNodes ||
+            let retainedHysteria = IOSMultihopNodeSelection.pairedHysteriaLocalSource(proposed, execution: execution, profiles: profiles)
+            let extendedPosition = retainedHysteria || pairedChoice || independentHostname || nodes.count <= IOSMultihopNodeSelection.maximumNodes ||
                 retainedStream && profile.id == nodes[position].id ||
                 (IOSMultihopNodeSelection.supportsNativePrefix(nodes[position].mode) ? profile.normalizedNodeKind == "router-vpn" && [nil, "", "off"].contains(profile.startLayer) : IOSImportedShadowsocksSource.eligibleLiteral(profile))
             return eligible(profile) && extendedPosition &&

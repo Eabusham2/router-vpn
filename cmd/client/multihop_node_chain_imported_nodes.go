@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"net/netip"
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
@@ -104,6 +105,17 @@ func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error)
 	bad := errors.New("ordered imports require their complete Local source and supported positions")
 	if len(members) < 2 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes {
 		return 0, bad
+	}
+	if common.PairedHysteriaLocalMultihopSelection(nodeChainSelectedReferences(members)) {
+		for _, member := range members {
+			p := member.Profile
+			address, err := netip.ParseAddr(p.Endpoint)
+			if p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || !common.ValidNodeProofID(p.NodeProofID) ||
+				p.StartLayer != "" && p.StartLayer != "off" || err != nil || address.Zone() != "" || address.Is4In6() || address.IsUnspecified() || address.IsMulticast() {
+				return 0, bad
+			}
+		}
+		return 1, nil
 	}
 	if mobilemultihop.NodeChainPrefixMode(members[len(members)-1].Mode) {
 		if !desktopPacketFinalMembersSupported(members, "local") {

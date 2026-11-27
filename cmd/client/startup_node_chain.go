@@ -177,6 +177,10 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 	for i, member := range capture.Nodes {
 		refs[i] = common.MultihopNodeSelection{ID: member.ID, Mode: member.Mode}
 	}
+	pairedHysteria := common.PairedHysteriaLocalMultihopSelection(refs)
+	if pairedHysteria && (capture.Schema != 1 || capture.Execution != "local") {
+		return bad
+	}
 	packetFinal := mobilemultihop.NodeChainPrefixMode(selection.RuntimeMode)
 	if packetFinal && (capture.Schema != 1 || capture.Execution != "local" || !common.PairedPacketLocalMultihopSelection(refs)) {
 		return bad
@@ -187,7 +191,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 	if len(capture.Nodes) > common.MultihopMaximumNodes {
 		packets := common.ExtendedMixedLocalPacketCount(refs)
 		switch {
-		case capture.Schema == 1 && capture.Execution == "local" && common.ExtendedPairedLocalMultihopSelection(refs):
+		case pairedHysteria || capture.Schema == 1 && capture.Execution == "local" && common.ExtendedPairedLocalMultihopSelection(refs):
 			packets = len(refs) - 1
 		case capture.Schema == 6 && (common.ExtendedLocalMultihopSelection(refs) || common.ExtendedAWGSelectedMultihopSelection(refs)):
 			packets = 1
@@ -208,7 +212,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 	}
 	importedCount, importedPosition := 0, -1
 	for i, member := range capture.Nodes {
-		if packetFinal && (member.NodeKind != "" || member.StartLayer != "") {
+		if (packetFinal || pairedHysteria) && (member.NodeKind != "" || member.StartLayer != "") {
 			return bad
 		}
 		if capture.Execution == "local" {
@@ -244,7 +248,7 @@ func validateStartupNodeChainSelection(selection startupSelection) error {
 			return bad
 		}
 		if !common.ValidNodeProofID(member.NodeProofID) || proofs[member.NodeProofID] || !savedNodeChainDigest(member.ProfileToken) ||
-			i < len(capture.Nodes)-1 && !mobilemultihop.NodeChainPrefixMode(member.Mode) && !(privateStreams && member.Mode == "shadowsocks") ||
+			i < len(capture.Nodes)-1 && !mobilemultihop.NodeChainPrefixMode(member.Mode) && !(privateStreams && member.Mode == "shadowsocks") && !(pairedHysteria && (member.Mode == "shadowsocks" || member.Mode == "hysteria2")) ||
 			i == len(capture.Nodes)-1 && !desktopNodeChainFinalSupported(member.Mode, member.StartLayer) {
 			return bad
 		}

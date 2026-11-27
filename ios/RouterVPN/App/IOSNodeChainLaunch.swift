@@ -75,12 +75,12 @@ extension IOSRuntimeSelector {
             capture.members.prefix(2).allSatisfy { $0.profile["node_kind"] as? String == "external" }
         guard capture.selectionExecution == "local",
               (2...IOSMultihopNodeSelection.maximumNodes).contains(capture.members.count) || IOSMultihopNodeSelection.extendedOriginalModes(capture.members.map(\.mode), execution: capture.selectionExecution),
-              capture.members.dropLast().enumerated().allSatisfy({ position, member in
+              capture.pairedHysteriaLocal || capture.members.dropLast().enumerated().allSatisfy({ position, member in
                   IOSMultihopNodeSelection.supportsNativePrefix(member.mode) && member.profile["node_kind"] as? String == "router-vpn" ||
                   (IOSMultihopNodeSelection.supportsImportedMiddle(member.mode, position: position, count: capture.members.count) && ["shadowsocks", "openvpn"].contains(member.mode) || IOSMultihopNodeSelection.supportsLocalImportedNode(member.mode, position: position, count: capture.members.count, importedEntry: importedEntry)) && member.profile["node_kind"] as? String == "external"
               }),
               let final = capture.members.last, final.profile["node_kind"] as? String == (capture.sourceSchema == 8 ? "external" : "router-vpn"),
-              final.mode == "shadowsocks" || IOSMultihopNodeSelection.supportsNativePrefix(final.mode) && capture.sourceSchema == 1 || final.mode == "hysteria2" &&
+              capture.pairedHysteriaLocal || final.mode == "shadowsocks" || IOSMultihopNodeSelection.supportsNativePrefix(final.mode) && capture.sourceSchema == 1 || final.mode == "hysteria2" &&
                 (final.profile["start_layer"] == nil ||
                  (final.profile["start_layer"] as? String).map({ ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains($0) }) == true) &&
                 capture.members.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) && $0.profile["node_kind"] as? String == "router-vpn" }) else {

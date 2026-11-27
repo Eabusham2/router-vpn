@@ -99,6 +99,7 @@ type NodeChain struct {
 	openVPNOwners                                 *nodeChainOpenVPNOwners
 	socksSource                                   *NodeChainSOCKSSource
 	connectSource                                 *NodeChainCONNECTSource
+	pairedHysteria                                *nodeChainPairedHysteriaLocal
 	extendedPairedOwner                           *NodeChain
 	extendedPairedMembers                         []*NodeProfile
 	typedOriginal                                 *nodeChainMultipleImportedLocalSeal
@@ -173,6 +174,7 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 	c.sourceSHA = externalDigest(digest)
 	clear(digest)
 	ids, peers, clients, servers := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	pairedHysteria := false
 	for position, input := range source.Nodes {
 		if source.Schema == 5 && position == len(source.Nodes)-2 {
 			middle, err := parseNodeChainOpenVPNMember(input)
@@ -227,7 +229,10 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		// The schema-six compiler validates the complete packet-to-stream order
 		// and each paired SS identity, raw cipher and endpoint together.
 		pairedStream := source.Schema == 6 && position > 0 && position < len(source.Nodes)-1 && node.mode == "shadowsocks"
-		if position < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) && !pairedStream ||
+		completeProxy := source.Schema == 1 && position > 0 && position < len(source.Nodes)-1 &&
+			(node.mode == "shadowsocks" || node.mode == "hysteria2")
+		pairedHysteria = pairedHysteria || completeProxy
+		if position < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) && !pairedStream && !completeProxy ||
 			position == len(source.Nodes)-1 && !nodeChainFinalCapture(node) {
 			return nil, errors.New("ordered Local chains require captured WG or AWG2 Fast/Strong prefixes and an eligible original paired final")
 		}
@@ -261,7 +266,12 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 			}
 		}
 	}
-	if c.importedNodes != nil {
+	if pairedHysteria {
+		if source.Schema != 1 || len(source.IdentitySources) != len(c.nodes) || slices.Contains(source.IdentitySources, "") {
+			return nil, nodeChainError
+		}
+		c.config, c.proofs, c.dns, c.physical, err = compileNodeChainPairedHysteria(c)
+	} else if c.importedNodes != nil {
 		c.config, c.proofs, c.dns, c.physical, err = c.importedNodes.compile(c.nodes)
 	} else if c.openVPNMiddle != nil {
 		c.config, c.proofs, c.dns, c.physical, err = compileNodeChainOpenVPN(c.nodes, c.openVPNMiddle)
@@ -283,6 +293,11 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		return nil, err
 	}
 	c.seal = c.captureSeal()
+	if c.pairedHysteria != nil {
+		if err := c.pairedHysteria.freeze(c); err != nil {
+			return nil, err
+		}
+	}
 	if c.importedNodes != nil {
 		if err := c.importedNodes.freeze(c); err != nil {
 			return nil, err
@@ -417,6 +432,9 @@ func (c *NodeChain) captureSeal() string {
 
 func (c *NodeChain) validateCapture() error {
 	if c == nil || c.seal == "" || c.captureSeal() != c.seal || len(c.nodes) != len(c.proofs) {
+		return nodeChainError
+	}
+	if pairedHysteriaLocalProofs(c.proofs) != (c.pairedHysteria != nil) || c.pairedHysteria != nil && !c.pairedHysteria.current(c) {
 		return nodeChainError
 	}
 	if c.extendedPairedOwner != nil && (c.extendedPairedOwner != c || !slices.Equal(c.extendedPairedMembers, c.nodes) || !extendedPairedLocalProofs(c.proofs)) {

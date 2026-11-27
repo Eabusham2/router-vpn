@@ -78,6 +78,10 @@ func compileNodeChainGraphWithHome(nodes []nodeChainGraphMember, closures []*ext
 }
 
 func compileNodeChainGraphWithAppend(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress, connect nodeChainCapturedTransportScope, server *nodeChainMultipleImportedServerScope, closed *NodeChainCandidatePlan, home *NodeChainServerHomeDNS, appendScope *nodeChainAppendGraphScope) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
+	return compileNodeChainGraphWithOwnedScopes(nodes, closures, expected, connect, server, closed, home, appendScope, nil)
+}
+
+func compileNodeChainGraphWithOwnedScopes(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress, connect nodeChainCapturedTransportScope, server *nodeChainMultipleImportedServerScope, closed *NodeChainCandidatePlan, home *NodeChainServerHomeDNS, appendScope *nodeChainAppendGraphScope, completeScope *nodeChainPairedHysteriaGraphScope) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 	bad := errors.New("ordered chain lost a complete captured node closure")
 	fail := func(err error) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 		return "", nil, NodeChainDNSCapture{}, nil, err
@@ -86,6 +90,12 @@ func compileNodeChainGraphWithAppend(nodes []nodeChainGraphMember, closures []*e
 	// test may keep the original entry resolver attached to its own outbound.
 	// Only the separately owned closed-ingress constructor can request this.
 	resolverPosition := len(nodes) - 1
+	if completeScope != nil {
+		if connect != nil || server != nil || closed != nil || home != nil || appendScope != nil || completeScope.validate(nodes, closures, expected) != nil {
+			return fail(bad)
+		}
+		// A complete source keeps its actual final application resolver.
+	}
 	if appendScope != nil {
 		if connect != nil || server != nil || closed != nil || home != nil || appendScope.validate(nodes, closures, expected) != nil {
 			return fail(bad)
@@ -105,7 +115,7 @@ func compileNodeChainGraphWithAppend(nodes []nodeChainGraphMember, closures []*e
 			return fail(err)
 		}
 	}
-	if err := applyNodeChainMemberMTUWithAppendScope(nodes, closures, server, appendScope); err != nil {
+	if err := applyNodeChainMemberMTUWithOwnedScopes(nodes, closures, server, appendScope, completeScope); err != nil {
 		return fail(err)
 	}
 	last := closures[len(closures)-1]

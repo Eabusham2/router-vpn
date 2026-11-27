@@ -95,11 +95,40 @@ func ExtendedMixedLocalPacketCount(nodes []MultihopNodeSelection) int {
 	return p
 }
 
+// PairedHysteriaLocalMultihopSelection describes a complete Local path with
+// a retained Hysteria2 interior. This mode shape grants no source authority:
+// the compiler proves every original paired identity, Off layer and endpoint.
+func PairedHysteriaLocalMultihopSelection(nodes []MultihopNodeSelection) bool {
+	if len(nodes) < 3 || len(nodes) > MultihopPhysicalTraversalDepth {
+		return false
+	}
+	switch nodes[0].Mode {
+	case "wg", "awg2-fast", "awg2-strong":
+	default:
+		return false
+	}
+	final := nodes[len(nodes)-1].Mode
+	if final != "shadowsocks" && final != "hysteria2" {
+		return false
+	}
+	retained := false
+	for _, node := range nodes[1 : len(nodes)-1] {
+		switch node.Mode {
+		case "wg", "awg2-fast", "awg2-strong", "shadowsocks":
+		case "hysteria2":
+			retained = true
+		default:
+			return false
+		}
+	}
+	return retained
+}
+
 // ValidateMultihopNodes checks the saved selection independently of transport
 // admission. The native compiler must also prove each complete selected source.
 func ValidateMultihopNodes(nodes []MultihopNodeSelection) error {
-	if len(nodes) < 2 || len(nodes) > MultihopMaximumNodes && !ExtendedLocalMultihopSelection(nodes) && !ExtendedPairedLocalMultihopSelection(nodes) && ExtendedMixedLocalPacketCount(nodes) == 0 {
-		return fmt.Errorf("ordered multihop requires at least two nodes; paths beyond %d require independent packet prefixes followed by supported Shadowsocks members", MultihopMaximumNodes)
+	if len(nodes) < 2 || len(nodes) > MultihopMaximumNodes && !ExtendedLocalMultihopSelection(nodes) && !ExtendedPairedLocalMultihopSelection(nodes) && ExtendedMixedLocalPacketCount(nodes) == 0 && !PairedHysteriaLocalMultihopSelection(nodes) {
+		return fmt.Errorf("ordered multihop requires at least two nodes; paths beyond %d require a supported complete ordered family", MultihopMaximumNodes)
 	}
 	seen := make(map[string]bool, len(nodes))
 	for _, node := range nodes {
@@ -128,6 +157,9 @@ func validateRouterProfileNodeChain(p *RouterProfile) error {
 	if len(p.MultihopNodes) != 0 {
 		if err := ValidateMultihopNodes(p.MultihopNodes); err != nil {
 			return err
+		}
+		if PairedHysteriaLocalMultihopSelection(p.MultihopNodes) && p.MultihopExecution != "local" {
+			return errors.New("retained Hysteria2 interiors require their complete paired Local route")
 		}
 		if PairedPacketLocalMultihopSelection(p.MultihopNodes) && p.MultihopExecution != "local" {
 			return errors.New("paired packet finals require Local execution")

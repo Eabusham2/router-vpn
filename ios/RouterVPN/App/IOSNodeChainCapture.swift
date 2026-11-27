@@ -34,6 +34,9 @@ struct IOSNodeChainCapture {
     let homeLANAccess: Bool
     let selectionExecution: String
 
+    var pairedHysteriaLocal: Bool {
+        sourceSchema == 1 && selectionExecution == "local" && Int(plan.pairedHysteriaLocalNodeCount()) == members.count
+    }
     var config: String { plan.config() }
     var sourceSHA256: String { plan.sourceSHA256() }
     var configSHA256: String { plan.configSHA256() }
@@ -99,11 +102,25 @@ struct IOSNodeChainCapture {
         if publicExit && !IOSMultihopNodeSelection.externalExitReferences(selectedNodes, controlID: finalID, execution: selectionExecution) {
             throw issue("An imported final requires the original paired packet entry and distinct literal Shadowsocks sources.")
         }
+        let pairedHysteria = IOSMultihopNodeSelection.pairedHysteriaLocalModes(selectedNodes.map(\.mode), execution: selectionExecution)
+        if pairedHysteria {
+            for (position, data) in bundles.enumerated() {
+                let captured = try object(data, maximum: 32 * 1024 * 1024)
+                guard captured["selectedRouterID"] as? String == selectedNodes[position].id,
+                      let profiles = captured["routerProfiles"] as? [[String: Any]],
+                      profiles.filter({ $0["id"] as? String == selectedNodes[position].id }).count == 1,
+                      let profile = profiles.first(where: { $0["id"] as? String == selectedNodes[position].id }),
+                      profile["node_kind"] as? String == "router-vpn", profile["external"] == nil,
+                      profile["start_layer"] == nil || (profile["start_layer"] as? String).map({ ["", "off"].contains($0) }) == true else {
+                    throw issue("A retained Hysteria2 route needs every original paired source with Start Layer Off.")
+                }
+            }
+        }
         let importedEntry = selectionExecution == "local" && IOSMultihopNodeSelection.usesLocalImportedEntry(selectedNodes)
         if multipleExecution && !IOSMultihopNodeSelection.supportsMultipleImportedExecution(selectedNodes) {
             throw issue("The selected execution requires its original paired packet entry and literal Shadowsocks interiors.")
         }
-        let importedNodes = !publicExit && (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.requiresImportedNodesSource(selectedNodes)
+        let importedNodes = !publicExit && !pairedHysteria && (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.requiresImportedNodesSource(selectedNodes)
         var hostnamePosition: Int?
         if importedNodes {
             guard selectedNodes.last?.mode == "shadowsocks", importedEntry || IOSMultihopNodeSelection.supportsNativePrefix(selectedNodes[0].mode),
@@ -301,6 +318,15 @@ struct IOSNodeChainCapture {
                     ($0.profile["start_layer"] == nil || ($0.profile["start_layer"] as? String).map { ["", "off"].contains($0) } == true) }),
                   LibboxRouterNodeChainConnectedFinalCandidateResponseMode(plan, Int32(members.count - 2)) == packet.mode else {
                 throw Self.issue("A packet final requires two to eight original paired Local WireGuard or AmneziaWG nodes with Start Layer off.")
+            }
+        }
+        let pairedHysteriaCount = Int(plan.pairedHysteriaLocalNodeCount())
+        if pairedHysteriaCount != 0 || members.dropFirst().dropLast().contains(where: { $0.mode == "hysteria2" }) {
+            let completeNodes = members.map { IOSMultihopNodeSelection(id: $0.id, mode: $0.mode) }
+            let completeProfiles = try members.map { try JSONDecoder().decode(RouterProfile.self, from: Data($0.profileJSON.utf8)) }
+            guard pairedHysteriaCount == members.count, schema == 1, identitySources.allSatisfy({ !$0.isEmpty }),
+                  IOSMultihopNodeSelection.pairedHysteriaLocalSource(completeNodes, execution: selectionExecution, profiles: completeProfiles) else {
+                throw Self.issue("The complete native source lost its original paired Local Hysteria2 family.")
             }
         }
         let selectedPrivate = multipleExecution && members.dropFirst().dropLast().contains { $0.mode == "shadowsocks" && $0.profile["node_kind"] as? String == "router-vpn" }

@@ -13,10 +13,12 @@ function Assert-RouterVPNUIStateName([string]$Name){
 }
 
 function Get-RouterVPNUIStateEntry([string]$Path,[bool]$Directory,[bool]$MissingAllowed=$false){
-    try{$Item=Get-Item -LiteralPath $Path -Force -ErrorAction Stop}
+    try{$Item=Microsoft.PowerShell.Management\Get-Item -LiteralPath $Path -Force -ErrorAction Stop}
     catch [System.Management.Automation.ItemNotFoundException]{if($MissingAllowed){return $null};throw}
+    if($Item-isnot[IO.FileSystemInfo]){throw 'The Windows UI state path is not a filesystem entry.'}
+    $IsDirectory=($Item.Attributes-band[IO.FileAttributes]::Directory)-ne0
     $Link=$Item.PSObject.Properties['LinkType']
-    if([bool]$Item.PSIsContainer-ne$Directory-or($Item.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0-or
+    if($IsDirectory-ne$Directory-or($Item.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0-or
        ($null-ne$Link-and-not[string]::IsNullOrEmpty([string]$Link.Value))){
         throw 'The Windows UI state path must be a regular unlinked file or directory.'
     }

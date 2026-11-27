@@ -491,6 +491,8 @@ final class AndroidOrderedPathSelection {
             if(preview==null)throw new IllegalStateException("The native compiler returned no complete ordered path.");
             try {
                 if(preview.config()==null||preview.config().isEmpty())throw new IllegalStateException("The native compiler returned no complete ordered graph.");
+                if((AndroidNodeChainCapture.pairedHysteriaLocalSource(sources,modes,execution)?sources.size():0)!=preview.pairedHysteriaLocalNodeCount())
+                    throw new IllegalStateException("The complete preview lost its original paired Local Hysteria2 family.");
                 if(!"local".equals(execution))AndroidNodeChainCapture.validateExecutionPlan(preview,execution);
                 requireCurrent();
             } finally { preview.close(); }

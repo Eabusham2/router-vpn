@@ -749,8 +749,11 @@ final class AndroidNodeStore {
         if (selected.length() < 2 || selected.length() > PHYSICAL_TRAVERSAL_DEPTH) {
             throw new IllegalStateException("This ordered path exceeds the available traversal depth for the selected execution.");
         }
+        List<String> selectedModes=new ArrayList<>();
+        for(int i=0;i<selected.length();i++)selectedModes.add(selected.getJSONObject(i).optString("mode"));
+        boolean pairedHysteria=AndroidNodeChainCapture.pairedHysteriaLocalModes(selectedModes,profile.getString("multihop_execution"));
         int firstStream=0;
-        if(selected.length()>8){
+        if(selected.length()>8&&!pairedHysteria){
             while(firstStream<selected.length()-1 && !"shadowsocks".equals(selected.getJSONObject(firstStream).optString("mode")))firstStream++;
             if(firstStream==0 || !"local".equals(profile.getString("multihop_execution")) && (firstStream!=1 || !List.of("wg","awg2-fast","awg2-strong").contains(selected.getJSONObject(0).optString("mode"))))
                 throw new IllegalStateException("The longer mixed packet and stream route requires Local execution.");
@@ -759,7 +762,7 @@ final class AndroidNodeStore {
         for (int i = 0; i < selected.length(); i++) {
             JSONObject member = selected.getJSONObject(i);
             String mode=member.optString("mode");
-            if (selected.length()>8 && (i>=firstStream ? !"shadowsocks".equals(mode)
+            if (selected.length()>8 && !pairedHysteria && (i>=firstStream ? !"shadowsocks".equals(mode)
                     : firstStream==selected.length()-1 ? !"wg".equals(mode) : !java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(mode))) {
                 throw new IllegalStateException("Retain the selected packet nodes followed by the original Shadowsocks stream.");
             }
