@@ -31,6 +31,17 @@ struct IOSNodeChainEditorView: View {
         let id = UUID()
     }
     @State private var request: PrefixRequest?
+    private struct FinalChoiceRequest: Equatable {
+        let finalID: String
+        let nodes: [IOSMultihopNodeSelection]
+        let draftRevision: String
+        var profileName: String? = nil
+        var proposalID: UUID? = nil
+        let id = UUID()
+    }
+    @State private var finalChoiceRequest: FinalChoiceRequest?
+    @State private var completedDraft: IOSNodeChainAppendCompletion?
+    @State private var completedDraftName = ""
 
     private var available: [RouterProfile] {
         model.iosNodeChainEditorProfiles(owner: owner)
@@ -38,6 +49,10 @@ struct IOSNodeChainEditorView: View {
 
     private var pairedAppendSources: [RouterProfile] {
         IOSNodeChainEditorVisible.unique(available).filter { $0.normalizedNodeKind == "router-vpn" && $0.external == nil }
+    }
+    private var alternateFinals: [RouterProfile] {
+        guard draft.unfinished, draft.nodes.contains(where: { $0.id == draft.controlID }) else { return [] }
+        return model.iosNodeChainAppendFinalChoices(owner: owner, prefix: draft.nodes)
     }
     private func visibleNodes(at position: Int) -> [RouterProfile] {
         if draft.unfinished {
@@ -65,7 +80,7 @@ struct IOSNodeChainEditorView: View {
                             Menu(profile.name.isEmpty ? profile.id : profile.name) {
                                 ForEach(IOSMultihopNodeSelection.nativePrefixModes, id: \.self) { mode in
                                     Button(IOSMultihopNodeSelection.transportName(mode)) {
-                                        change {
+                                        change(measureAfter: 0) {
                                             try draft.beginPrefix(id: profile.id, mode: mode)
                                             execution = "local"
                                         }
@@ -196,19 +211,34 @@ struct IOSNodeChainEditorView: View {
                         }
                     }
                     Button("Measure next packet node") {
-                        do {
-                            let nodes = try draft.appendMeasurementPath(profiles: available)
-                            request = PrefixRequest(position: nodes.count - 1, nextMode: appendMode,
-                                draftRevision: draft.revision, nodes: nodes)
-                        } catch { detail = error.localizedDescription }
+                        schedule(after: draft.nodes.count - 1)
                     }.disabled(owner == nil || (try? draft.appendMeasurementPath(profiles: available)) == nil)
                     Button("Choose selected router as the real final node") {
                         change { try draft.finishPrefixWithSelectedFinal() }
                     }.disabled(draft.nodes.contains(where: { $0.id == draft.controlID }) ||
                         draft.nodes.count >= IOSMultihopNodeSelection.physicalTraversalDepth)
+                    if draft.nodes.contains(where: { $0.id == draft.controlID }) {
+                        Menu("Choose a different final node") {
+                            ForEach(alternateFinals) { profile in
+                                Button(profile.name.isEmpty ? profile.id : profile.name) { chooseDraftFinal(profile.id) }
+                            }
+                        }.disabled(owner == nil || alternateFinals.isEmpty || finalChoiceRequest != nil)
+                        Text("Keep this prefix and choose a distinct paired Shadowsocks final. Save the complete choice as a named profile, then Load it separately.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     if !detail.isEmpty { Text(detail).font(.caption) }
                 }
             }.disabled(model.profileMutationBlocked || model.iosSpeedLabOwnership.active)
+            if let completedDraft {
+                Section("Complete draft profile") {
+                    LabeledContent("Final node", value: completedDraft.finalName)
+                    Text("The complete path keeps all \(completedDraft.prefix.count) prefix nodes. Load the saved profile and Connect to verify the final path.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    TextField("Profile name", text: $completedDraftName)
+                    Button("Save completed draft as profile") { saveCompletedDraft(completedDraft) }
+                        .disabled(completedDraftName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || finalChoiceRequest != nil)
+                }.disabled(model.profileMutationBlocked || model.iosSpeedLabOwnership.active)
+            }
             if firstHop.running || !firstHop.progress.isEmpty && needsFirstPublicHop {
                 Section("First hop measurement") {
                     Text(firstHop.error.isEmpty ? firstHop.progress : firstHop.error).font(.caption)
@@ -307,9 +337,42 @@ struct IOSNodeChainEditorView: View {
                 detail = error.localizedDescription
             }
         }
-        .onChange(of: execution) { _, _ in candidates.cancel(); firstHop.cancel(); request = nil }
-        .onChange(of: appendMode) { _, _ in candidates.cancel(); request = nil }
-        .onDisappear { candidates.cancel(); firstHop.cancel() }
+        .task(id: finalChoiceRequest) {
+            guard let selected = finalChoiceRequest else { return }
+            await candidates.finishEditorComparison()
+            guard !Task.isCancelled, finalChoiceRequest == selected else { return }
+            do {
+                guard let owner, draft.unfinished, execution == "local", draft.nodes == selected.nodes,
+                      draft.revision == selected.draftRevision else { throw CancellationError() }
+                if let name = selected.profileName, let token = selected.proposalID {
+                    guard let proposal = completedDraft, proposal.id == token, proposal.finalID == selected.finalID else { throw CancellationError() }
+                    let saved = try model.saveIOSNodeChainAppendCompletion(proposal, draft: draft, owner: owner, name: name) {
+                        guard self.finalChoiceRequest == selected, self.completedDraft?.id == token,
+                              self.draft.unfinished, self.draft.nodes == selected.nodes,
+                              self.draft.revision == selected.draftRevision, self.execution == "local" else { throw CancellationError() }
+                    }
+                    model.message = "Saved \(saved). Load this profile separately, then Connect to verify the complete path."
+                    completedDraft = nil; finalChoiceRequest = nil
+                    dismiss()
+                } else {
+                    completedDraft = try model.prepareIOSNodeChainAppendCompletion(draft, owner: owner, finalID: selected.finalID)
+                    finalChoiceRequest = nil
+                    detail = "Complete path compiled. Name it and Save explicitly."
+                }
+            } catch {
+                if finalChoiceRequest == selected { finalChoiceRequest = nil; detail = error.localizedDescription }
+            }
+        }
+        .onChange(of: execution) { _, _ in
+            // Starting an unfinished prefix explicitly changes execution to Local.
+            // Its new request already waits for the original comparison to join.
+            if draft.unfinished, execution == "local", let request, request.nextMode == appendMode,
+               request.nodes == draft.nodes, request.draftRevision == draft.revision,
+               request.position == draft.nodes.count - 1 { return }
+            candidates.cancel(); firstHop.cancel(); request = nil; finalChoiceRequest = nil; completedDraft = nil
+        }
+        .onChange(of: appendMode) { _, _ in candidates.cancel(); request = nil; finalChoiceRequest = nil; completedDraft = nil }
+        .onDisappear { candidates.cancel(); firstHop.cancel(); finalChoiceRequest = nil }
         .navigationTitle("Ordered nodes")
         .onAppear {
             let selected = model.selectedNodeProfile
@@ -320,8 +383,38 @@ struct IOSNodeChainEditorView: View {
         }
     }
 
+    private func chooseDraftFinal(_ finalID: String) {
+        do {
+            let nodes = try draft.appendMeasurementPath(profiles: available)
+            guard draft.unfinished, execution == "local", let owner else { throw CancellationError() }
+            try model.requireIOSNodeChainAppendSources(owner, nodes: nodes)
+            request = nil; candidates.cancel(); firstHop.cancel(); completedDraft = nil; completedDraftName = ""
+            finalChoiceRequest = FinalChoiceRequest(finalID: finalID, nodes: nodes, draftRevision: draft.revision)
+            detail = "Closing the previous review before preparing this complete path…"
+        } catch { detail = error.localizedDescription }
+    }
+
+    private func saveCompletedDraft(_ proposal: IOSNodeChainAppendCompletion) {
+        guard completedDraft?.id == proposal.id, draft.unfinished, draft.nodes == proposal.prefix,
+              draft.revision == proposal.draftRevision else { return }
+        request = nil; candidates.cancel(); firstHop.cancel()
+        finalChoiceRequest = FinalChoiceRequest(finalID: proposal.finalID, nodes: draft.nodes, draftRevision: draft.revision,
+            profileName: completedDraftName, proposalID: proposal.id)
+    }
+
     private func schedule(after position: Int) {
-        guard !draft.unfinished else { return }
+        finalChoiceRequest = nil; completedDraft = nil
+        if draft.unfinished {
+            guard position == draft.nodes.count - 1 else { return }
+            do {
+                guard execution == "local", let owner else { throw CancellationError() }
+                let nodes = try draft.appendMeasurementPath(profiles: available)
+                try model.requireIOSNodeChainAppendSources(owner, nodes: nodes)
+                request = PrefixRequest(position: position, nextMode: appendMode,
+                    draftRevision: draft.revision, nodes: nodes)
+            } catch { request = nil; detail = error.localizedDescription }
+            return
+        }
         if position == 0 && needsFirstPublicHop || (try? draft.measurementPath(through: position, execution: execution, profiles: available)) != nil {
             request = PrefixRequest(position: position)
         }
@@ -330,6 +423,7 @@ struct IOSNodeChainEditorView: View {
     private func change(measureAfter position: Int? = nil, _ action: () throws -> Void) {
         do {
             try action()
+            finalChoiceRequest = nil; completedDraft = nil
             firstHop.cancel()
             candidates.cancel()
             request = nil

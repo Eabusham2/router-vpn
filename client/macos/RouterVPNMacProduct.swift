@@ -1016,8 +1016,10 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
                 posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, errorURL.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
             ]
             guard setup.allSatisfy({ $0 == 0 }) else { print("macOS compositor capture: child descriptor setup failed"); return false }
-            var arguments = ["/usr/sbin/screencapture", "-x", "-o", "-l", String(number), imageURL.path].map { strdup($0) } + [nil]
-            var environment = ["PATH=/usr/bin:/bin:/usr/sbin:/sbin"].map { strdup($0) } + [nil]
+            let argumentStrings: [String] = ["/usr/sbin/screencapture", "-x", "-o", "-l", String(number), imageURL.path]
+            let environmentStrings: [String] = ["PATH=/usr/bin:/bin:/usr/sbin:/sbin"]
+            var arguments: [UnsafeMutablePointer<CChar>?] = argumentStrings.map { value in value.withCString { strdup($0) } } + [nil]
+            var environment: [UnsafeMutablePointer<CChar>?] = environmentStrings.map { value in value.withCString { strdup($0) } } + [nil]
             defer { arguments.forEach { free($0) }; environment.forEach { free($0) } }
             guard arguments.dropLast().allSatisfy({ $0 != nil }), environment.dropLast().allSatisfy({ $0 != nil }) else {
                 print("macOS compositor capture: child argument allocation failed"); return false

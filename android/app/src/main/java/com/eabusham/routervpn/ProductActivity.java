@@ -842,7 +842,7 @@ public final class ProductActivity extends Activity {
                 actions.add(i);
             }
             if(draft.unfinished()) {
-                if(draft.canAddPrefix()){labels.add("Add a packet prefix node");actions.add(-2);}
+                if(draft.canAddPrefix()){labels.add("Add prefix node");actions.add(-2);}
                 if(!members.isEmpty()&&members.size()<AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH){labels.add("Measure next packet node");actions.add(-4);}
                 if(!members.isEmpty()){labels.add("Choose final Router node");actions.add(-1);}
             } else {
@@ -887,7 +887,7 @@ public final class ProductActivity extends Activity {
                             for(String mode:modes)titles.add(AndroidOrderedPathSelection.prefixModeTitle(mode));
                             choiceDialog("First prefix transport","Keep this node's exact saved transport and Start Layer.")
                                     .setItems(titles.toArray(new CharSequence[0]),(m,index)->{
-                                        try{if(mutationBusy())throw new IllegalStateException("The VPN state changed before starting the draft.");draft.beginPrefix(id,modes.get(index));showOrderedEditor(draft);}
+                                        try{if(mutationBusy())throw new IllegalStateException("The VPN state changed before starting the draft.");draft.beginPrefix(id,modes.get(index));measureOrderedAppend(draft);}
                                         catch(Exception error){toast(safe(error));}
                                     }).setNegativeButton("Back",(m,index)->showOrderedEditor(draft)).show();
                         } catch(Exception error){toast(safe(error));}
@@ -899,19 +899,28 @@ public final class ProductActivity extends Activity {
         try {
             if(mutationBusy())throw new IllegalStateException("Stop the current VPN before measuring the next packet node.");
             draft.requireCurrent();
+            final long revision=draft.revision();
             List<String> modes=List.of("wg","awg2-fast","awg2-strong");List<String> labels=new ArrayList<>();
             for(String mode:modes)labels.add(AndroidOrderedPathSelection.prefixModeTitle(mode));
             choiceDialog("Next packet transport","Measure saved candidates in this exact mode through the unfinished prefix. Applying a result adds one node after the last prefix.")
                     .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
                         try {
-                            if(mutationBusy())throw new IllegalStateException("The VPN state changed before prefix measurement.");
-                            var capture=draft.candidateAppendCapture(modes.get(w));int position=draft.members().size()-1;
-                            showOrderedEditor(draft);detachCandidatePreparation();
-                            preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater,this::continueOrderedDraft);
-                            preparedCandidateDialog.showDraft(capture,position,draft);
+                            startOrderedAppend(draft,modes.get(w),revision);
                         } catch(Exception error){toast(safe(error));}
                     }).setNegativeButton("Back",(d,w)->showOrderedEditor(draft)).show();
         } catch(Exception error){toast(safe(error));}
+    }
+
+    private void startOrderedAppend(AndroidOrderedPathSelection draft,String mode,long revision)throws Exception {
+        if(mutationBusy()||AndroidNodeCandidatePreparation.retained()!=null)
+            throw new IllegalStateException("Finish the original VPN and candidate review before measuring the next prefix.");
+        draft.requireCurrent();
+        if(!draft.unfinished()||draft.revision()!=revision)
+            throw new IllegalStateException("The unfinished prefix changed before its next measurement.");
+        var capture=draft.candidateAppendCapture(mode);int position=draft.members().size()-1;
+        showOrderedEditor(draft);detachCandidatePreparation();
+        preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater,this::continueOrderedDraft);
+        preparedCandidateDialog.showDraft(capture,position,draft);
     }
 
     private void chooseOrderedExecution(AndroidOrderedPathSelection draft){
@@ -998,7 +1007,17 @@ public final class ProductActivity extends Activity {
     private void continueOrderedDraft(AndroidOrderedPathSelection draft,int inserted) {
         if(!resumed || isFinishing() || isDestroyed())return;
         try {
+            draft.requireCurrent();
             var members=draft.members();
+            if(draft.unfinished()) {
+                if(inserted!=members.size()-1||!List.of("wg","awg2-fast","awg2-strong").contains(members.get(inserted).mode))
+                    throw new IllegalStateException("The measured append no longer ends this original prefix.");
+                if(members.size()<AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH) {
+                    startOrderedAppend(draft,members.get(inserted).mode,draft.revision());
+                    return;
+                }
+                showOrderedEditor(draft);return;
+            }
             boolean canRetest=members.size()<AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || members.get(members.size()-1).source.imported;
             if(canRetest && draft.canMeasureThrough(inserted)) {
                 measureOrderedDraft(draft,inserted);

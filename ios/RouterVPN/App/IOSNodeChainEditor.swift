@@ -319,6 +319,24 @@ struct IOSNodeChainEditorOwner {
     let fingerprints: [String: String]
 }
 
+/// An explicitly chosen complete future profile. The original device/control
+/// remains selected; this value supplies no measured-final or runtime authority.
+struct IOSNodeChainAppendCompletion {
+    let id = UUID()
+    let owner: IOSNodeChainEditorOwner
+    let prefix: [IOSMultihopNodeSelection]
+    let draftRevision: String
+    let finalID: String
+    let finalName: String
+    let profiles: [RouterProfile]
+    let launchInput: String
+    let originalBundle: Data
+    let records: [String: Data]
+    let stamp: IOSCandidateCatalogPublication.Stamp
+    let deviceMTU: IOSDeviceMTUPreference
+    let idleGeneration: UUID
+}
+
 @MainActor
 extension RouterVPNModel {
     private func iosNodeChainEditorFingerprint(_ id: String) throws -> String {
@@ -380,6 +398,105 @@ extension RouterVPNModel {
             guard IOSNodeCandidateAppendSource.prefixModes(allNodeProfiles.first(where: { $0.id == node.id }), position: position).contains(node.mode) else {
                 throw IOSNodeCandidateAppendSource.issue()
             }
+        }
+    }
+
+    func iosNodeChainAppendFinalChoices(owner: IOSNodeChainEditorOwner?, prefix: [IOSMultihopNodeSelection]) -> [RouterProfile] {
+        guard let owner, !prefix.isEmpty, prefix.count < IOSMultihopNodeSelection.physicalTraversalDepth else { return [] }
+        return iosNodeChainEditorProfiles(owner: owner).filter { profile in
+            guard profile.normalizedNodeKind == "router-vpn", profile.external == nil,
+                  !prefix.contains(where: { $0.id == profile.id }),
+                  let raw = IOSNodeBundleStore.shared.bundleData(containing: profile.id, current: bundle),
+                  let source = try? JSONDecoder().decode(ClientBundle.self, from: raw),
+                  source.routerProfiles.filter({ $0.id == profile.id }).count == 1,
+                  source.profiles["shadowsocks"]?["sing-box.json"]?.isEmpty == false else { return false }
+            return true
+        }
+    }
+
+    private func requireIOSNodeChainAppendCompletionIdle(_ owner: IOSNodeChainEditorOwner,
+                                                         prefix: [IOSMultihopNodeSelection], finalID: String) throws {
+        guard !connected, !tunnelTransitioning, !iosUserDisconnectInProgress, !profileMutationBlocked,
+              !iosSpeedLabOwnership.active, !IOSMTUMeasurementGate.held,
+              IOSNodeCandidatePreparation.retained == nil else { throw CancellationError() }
+        try requireIOSNodeChainAppendSources(owner, nodes: prefix)
+        guard !prefix.contains(where: { $0.id == finalID }),
+              let expected = owner.fingerprints[finalID], try iosNodeChainEditorFingerprint(finalID) == expected,
+              allNodeProfiles.filter({ $0.id == finalID }).count == 1 else {
+            throw IOSMultihopNodeSelection.issue("Choose a distinct final node from the original linked sources.")
+        }
+    }
+
+    func prepareIOSNodeChainAppendCompletion(_ draft: IOSNodeChainDraft, owner: IOSNodeChainEditorOwner,
+                                             finalID: String) throws -> IOSNodeChainAppendCompletion {
+        guard draft.unfinished else { throw IOSNodeCandidateAppendSource.issue() }
+        let prefix = try draft.appendMeasurementPath(profiles: iosNodeChainEditorProfiles(owner: owner))
+        try requireIOSNodeChainAppendCompletionIdle(owner, prefix: prefix, finalID: finalID)
+        let originalBundle = try IOSNodeUsage.canonical(bundle)
+        let snapshot = try IOSNodeBundleStore.shared.candidateSnapshot()
+        let deviceMTU = try IOSDeviceMTUPreference.current(), idleGeneration = iosConnectGeneration
+        guard snapshot.stamp.ready,
+              let raw = IOSNodeBundleStore.shared.bundleData(containing: finalID, current: bundle),
+              var value = try? JSONDecoder().decode(ClientBundle.self, from: raw),
+              value.routerProfiles.filter({ $0.id == finalID }).count == 1,
+              let index = value.routerProfiles.firstIndex(where: { $0.id == finalID }),
+              value.routerProfiles[index].normalizedNodeKind == "router-vpn", value.routerProfiles[index].external == nil,
+              value.profiles["shadowsocks"]?["sing-box.json"]?.isEmpty == false else {
+            throw IOSMultihopNodeSelection.issue("The final node needs its original paired Shadowsocks 2022 source.")
+        }
+        let nodes = prefix + [IOSMultihopNodeSelection(id: finalID, mode: "shadowsocks")]
+        try IOSMultihopNodeSelection.validate(nodes, execution: "local", entryID: nil, entryMode: nil,
+                                             exitID: nil, exitMode: nil, controlID: finalID)
+        value.selectedRouterID = finalID
+        value.routerProfiles[index].multihopEnabled = true
+        value.routerProfiles[index].multihopExecution = "local"
+        value.routerProfiles[index].multihopNodes = nodes
+        value.routerProfiles[index].multihopEntryID = nil; value.routerProfiles[index].multihopEntryMode = nil
+        value.routerProfiles[index].multihopExitID = nil; value.routerProfiles[index].multihopExitMode = nil
+        let final = value.routerProfiles[index]
+        value.nodeProofID = final.nodeProofID ?? ""
+        value.endpoint = final.endpoint; value.routerAPI = final.routerAPI; value.apiToken = final.apiToken
+        value.adGuardIPv4 = final.adGuardIPv4; value.adGuardIPv6 = final.adGuardIPv6
+        value.socks5Host = final.socksHost; value.socks5Port = final.socksPort
+        value = try IOSDNSRuntimePolicy.patch(value)
+        let captured = try captureIOSOrderedRoute(value)
+        defer { try? captured.close() }
+        _ = try IOSRuntimeSelector.selectNodeChain(captured)
+        guard captured.members.map({ IOSMultihopNodeSelection(id: $0.id, mode: $0.mode) }) == nodes else {
+            throw IOSNodeCandidateAppendSource.issue()
+        }
+        let profiles = try captured.members.map { try JSONDecoder().decode(RouterProfile.self, from: Data($0.profileJSON.utf8)) }
+        let proposal = IOSNodeChainAppendCompletion(owner: owner, prefix: prefix, draftRevision: draft.revision,
+            finalID: finalID, finalName: final.name.isEmpty ? finalID : final.name, profiles: profiles,
+            launchInput: captured.launchInput, originalBundle: originalBundle, records: snapshot.records, stamp: snapshot.stamp,
+            deviceMTU: deviceMTU, idleGeneration: idleGeneration)
+        try captured.close()
+        try requireIOSNodeChainAppendCompletion(proposal, draft: draft, owner: owner)
+        return proposal
+    }
+
+    private func requireIOSNodeChainAppendCompletion(_ proposal: IOSNodeChainAppendCompletion,
+                                                     draft: IOSNodeChainDraft, owner: IOSNodeChainEditorOwner) throws {
+        guard draft.unfinished, draft.revision == proposal.draftRevision, draft.nodes == proposal.prefix,
+              owner.controlID == proposal.owner.controlID, owner.fingerprints == proposal.owner.fingerprints,
+              iosConnectGeneration == proposal.idleGeneration,
+              try IOSNodeUsage.canonical(bundle) == proposal.originalBundle else { throw CancellationError() }
+        try requireIOSNodeChainAppendCompletionIdle(owner, prefix: proposal.prefix, finalID: proposal.finalID)
+        try proposal.deviceMTU.requireCurrent()
+        let snapshot = try IOSNodeBundleStore.shared.candidateSnapshot()
+        guard snapshot.stamp == proposal.stamp, snapshot.records == proposal.records else { throw CancellationError() }
+    }
+
+    func saveIOSNodeChainAppendCompletion(_ proposal: IOSNodeChainAppendCompletion, draft: IOSNodeChainDraft,
+                                          owner: IOSNodeChainEditorOwner, name: String,
+                                          current: () throws -> Void) throws -> String {
+        try current()
+        try requireIOSNodeChainAppendCompletion(proposal, draft: draft, owner: owner)
+        let replay = try prepareIOSNodeChainAppendCompletion(draft, owner: owner, finalID: proposal.finalID)
+        guard replay.launchInput == proposal.launchInput else { throw IOSNodeCandidateAppendSource.issue() }
+        return try IOSCandidateConnectionProfiles.save(name: name, profiles: replay.profiles) {
+            try current()
+            try self.requireIOSNodeChainAppendCompletion(proposal, draft: draft, owner: owner)
         }
     }
 

@@ -1459,15 +1459,30 @@ def desktop_connect(package, family, evidence):
             raise ValueError('Desktop connection phase changed during readback')
         return value
 
-    def command(argv, timeout=20):
+    def command(argv, timeout=20, inspection=None):
         # Fixed OS inspection / package commands only. The original child is
         # retained before wait, and every timeout joins that child before error.
-        with tempfile.TemporaryFile() as output:
-            child = subprocess.Popen([str(v) for v in argv], stdout=output, stderr=subprocess.STDOUT)
+        if inspection not in (None, 'before', 'during', 'after', 'cleanup'):
+            raise ValueError('Unknown fixed desktop network inspection')
+        command_deadline = min(deadline_all, time.monotonic()+timeout)
+        if inspection == 'before':
+            command_deadline = min(command_deadline, deadline_all-280)
+        if command_deadline <= time.monotonic():
+            raise ValueError('Desktop inspection exhausted its original absolute budget')
+        with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as diagnostics:
+            child = subprocess.Popen([str(v) for v in argv], stdout=output,
+                                     stderr=diagnostics if inspection is not None else subprocess.STDOUT)
             command_children.append(child)  # original handles survive every failed wait through final readback
+            primary = None
             try:
-                code = child.wait(max(0.01, min(timeout, deadline_all-time.monotonic())))
-            except BaseException as primary:
+                remaining = command_deadline-time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired([str(v) for v in argv], timeout)
+                code = child.wait(remaining)
+                if code != 0:
+                    raise ValueError('A fixed desktop inspection or installation command failed')
+            except BaseException as failure:
+                primary = failure
                 signal_error = join_error = None
                 if child.poll() is None:
                     try:
@@ -1482,24 +1497,51 @@ def desktop_connect(package, family, evidence):
                 if signal_error or join_error:
                     primary.add_note('Original inspection child retirement: signal='+str(type(signal_error).__name__ if signal_error else 'ok')+' join='+str(type(join_error).__name__ if join_error else 'ok'))
                 raise
+            finally:
+                if inspection is not None:
+                    try:
+                        captured = {'schema': 1, 'phase': inspection, 'pid': child.pid,
+                                    'exit_code': child.returncode, 'joined': child.returncode is not None,
+                                    'timeout_seconds': timeout, 'streams': {}}
+                        for name, stream in (('stdout', output), ('stderr', diagnostics)):
+                            size = stream.seek(0, os.SEEK_END)
+                            stream.seek(0)
+                            sample = stream.read(1 << 20)
+                            target = evidence/('windows-network-'+inspection+'.'+name+'.log')
+                            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                            with os.fdopen(fd, 'wb') as retained:
+                                retained.write(sample)
+                            captured['streams'][name] = {'bytes': size, 'retained_bytes': len(sample),
+                                'truncated': size > len(sample), 'sha256': hashlib.sha256(sample).hexdigest()}
+                        publish(evidence/('windows-network-'+inspection+'.json'), captured)
+                    except BaseException as capture_error:
+                        if primary is None:
+                            raise
+                        primary.add_note('Fixed network inspection evidence could not be retained: '+type(capture_error).__name__)
             output.seek(0)
             data = output.read((1 << 20)+1)
-        if len(data) > 1 << 20 or code != 0:
+            diagnostic_size = diagnostics.seek(0, os.SEEK_END)
+        if len(data) > 1 << 20 or diagnostic_size > 1 << 20 or code != 0:
             raise ValueError('A fixed desktop inspection or installation command failed')
         return data.decode('utf-8-sig').strip()
 
     powershell = (Path(os.environ.get('SystemRoot', r'C:\Windows')) /
                   'System32/WindowsPowerShell/v1.0/powershell.exe')
-    def ps(script):
+    def ps(script, inspection, timeout):
+        script = ("$ProgressPreference='SilentlyContinue'\n"
+                  "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)\n"+script)
         encoded = base64.b64encode(script.encode('utf-16le')).decode()
-        return json.loads(command([powershell, '-NoProfile', '-NonInteractive',
-                                   '-EncodedCommand', encoded]))
+        return json.loads(command([powershell, '-NoLogo', '-NoProfile', '-NonInteractive',
+                                   '-OutputFormat', 'Text', '-EncodedCommand', encoded],
+                                  timeout=timeout, inspection=inspection))
 
-    def snapshot():
+    def snapshot(inspection):
         if windows:
+            # The first four-query CIM snapshot may initialize native modules.
+            # command() caps it before the unchanged full App cleanup reserve.
+            timeout = 60 if inspection == 'before' else 20
             return ps(r"""
 $ErrorActionPreference='Stop'
-[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 $v=@{
  interfaces=@(Get-NetAdapter -IncludeHidden | ForEach-Object {@{index=[int]$_.ifIndex;id=$_.InterfaceGuid.ToString();name=$_.Name;status=$_.Status.ToString()}})
  addresses=@(Get-NetIPAddress | ForEach-Object {@{index=[int]$_.InterfaceIndex;address=$_.IPAddress;prefix=[int]$_.PrefixLength}})
@@ -1507,7 +1549,7 @@ $v=@{
  dns=@(Get-DnsClientServerAddress | ForEach-Object {@{index=[int]$_.InterfaceIndex;family=$_.AddressFamily.ToString();servers=@($_.ServerAddresses)}})
 }
 $v | ConvertTo-Json -Depth 6 -Compress
-""")
+""", inspection, timeout)
         interfaces, addresses, routes = [], [], []
         current = None
         for line in command(['/sbin/ifconfig', '-a']).splitlines():
@@ -1621,7 +1663,7 @@ $v | ConvertTo-Json -Depth 6 -Compress
             if (phase_root/('desktop-connect-'+name+'.json')).exists():
                 raise ValueError('The original data root already contains a connection gate')
         stage = 'network-capture'
-        before = snapshot()
+        before = snapshot('before')
         result['before'] = before
         if windows:
             defaults = [r for r in before['routes'] if r['prefix'] == '0.0.0.0/0']
@@ -1854,7 +1896,7 @@ $v | ConvertTo-Json -Depth 6 -Compress
         if (connected.get('runtime_mode') != 'wg' or connected.get('private_address') != private
                 or connected.get('payload_sha256') != body_hash or not connected.get('profile_id')):
             raise ValueError('The original App reported a different connection')
-        during = snapshot()
+        during = snapshot('during')
         result['during'] = during
         if windows:
             original = {i['index'] for i in before['interfaces']}
@@ -1904,7 +1946,7 @@ $v | ConvertTo-Json -Depth 6 -Compress
             if counts['payload'] != first_counts['payload']:
                 raise ValueError('The stopped encrypted peer was bypassed')
         stage = 'restoration'
-        after = snapshot()
+        after = snapshot('after')
         result['after'] = after
         if canonical(after) != canonical(before):
             raise ValueError('Original desktop interfaces, routes or DNS were not restored')
@@ -1959,7 +2001,7 @@ $v | ConvertTo-Json -Depth 6 -Compress
             result['app_exit_code'] = app.wait()
         if 'before' in result and 'after' not in result and app is not None and app.poll() is not None:
             try:
-                result['after'] = snapshot()
+                result['after'] = snapshot('cleanup')
             except BaseException as failure:
                 cleanup.append(type(failure).__name__)
         result['restoration_proved'] = ('before' in result and 'after' in result and
