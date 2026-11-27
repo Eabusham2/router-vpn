@@ -370,7 +370,7 @@ func (p *orderedCandidatePreparation) measureRuntime(ctx context.Context, r *ord
 			return err
 		}
 		if err != nil && p.request.serverResponse && r.selectedReady != nil && r.selectedReady.Progress.Execution == "server" && r.catalog.selectedPlan != nil &&
-			r.catalog.selectedPlan.preparation.SupportsServerResponseCandidate(p.request.Position) {
+			(r.catalog.selectedPlan.preparation.SupportsServerResponseCandidate(p.request.Position) || r.catalog.selectedPlan.preparation.SupportsServerPacketResponseCandidate(p.request.Position)) {
 			return err
 		}
 		if err := r.current(ctx); err != nil {

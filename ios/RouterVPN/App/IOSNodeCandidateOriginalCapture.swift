@@ -3,13 +3,14 @@ import Libbox
 
 struct IOSNodeCandidateResponseNode: Codable, Equatable {
     let id: String, mode: String, kind: String
-    init(id: String, mode: String) { self.id = id; self.mode = mode; kind = "router-vpn" }
+    init(id: String, mode: String, kind: String = "router-vpn") { self.id = id; self.mode = mode; self.kind = kind }
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer().decode([String: String].self)
-        guard Set(value.keys) == ["id", "mode", "kind"], value["kind"] == "router-vpn",
+        guard Set(value.keys) == ["id", "mode", "kind"],
+              value["kind"] == "router-vpn" || value["kind"] == "external" && value["mode"] == "shadowsocks",
               let id = value["id"], !id.isEmpty, let mode = value["mode"],
               ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"].contains(mode) else { throw IOSNodeCandidateOriginalCapture.issue() }
-        self.init(id: id, mode: mode)
+        self.init(id: id, mode: mode, kind: value["kind"]!)
     }
     var object: [String: String] { ["id": id, "mode": mode, "kind": kind] }
 }
@@ -21,10 +22,13 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
     let mode: String
     var measurement: String? = nil
     var candidate_mode: String? = nil
+    var purpose: String? = nil
     var metric: String { measurement ?? "routed-tcp-connect" }
     var pairedFinalResponse: Bool {
-        (candidate_mode == "hysteria2" || IOSMultihopNodeSelection.supportsNativePrefix(candidate_mode ?? "")) && metric == "routed-candidate-response" &&
-            IOSMultihopNodeSelection.supportsNativePrefix(mode) && !node_id.isEmpty
+        purpose == nil && (candidate_mode == "hysteria2" || IOSMultihopNodeSelection.supportsNativePrefix(candidate_mode ?? "")) &&
+            metric == "routed-candidate-response" &&
+            (IOSMultihopNodeSelection.supportsNativePrefix(mode) && !node_id.isEmpty ||
+             IOSMultihopNodeSelection.supportsNativePrefix(candidate_mode ?? "") && mode == "shadowsocks" && node_id.isEmpty)
     }
     func packetSuccessorResponse(in proofs: [Self]) -> Bool {
         pairedFinalResponse && IOSMultihopNodeSelection.supportsNativePrefix(candidate_mode ?? "") &&
@@ -33,7 +37,28 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
     var typedImportedResponse: Bool {
         candidate_mode == nil && metric == "routed-candidate-response" && ["socks5", "http-connect", "https-connect", "openvpn"].contains(mode)
     }
+    func appendResponse(in proofs: [Self]) -> Bool {
+        guard purpose == "draft-prefix-append", metric == "routed-candidate-response",
+              IOSMultihopNodeSelection.supportsNativePrefix(candidate_mode ?? ""),
+              (1..<IOSMultihopNodeSelection.physicalTraversalDepth).contains(proofs.count),
+              position == proofs.count - 1, proofs.last == self,
+              Set(proofs.map(\.profile_id)).count == proofs.count else { return false }
+        let pairedIDs = proofs.map(\.node_id).filter { !$0.isEmpty }
+        guard Set(pairedIDs).count == pairedIDs.count,
+              !proofs[0].node_id.isEmpty, IOSMultihopNodeSelection.supportsNativePrefix(proofs[0].mode) else { return false }
+        return proofs.enumerated().allSatisfy { index, row in
+            row.position == index && !row.profile_id.isEmpty &&
+                (IOSMultihopNodeSelection.supportsNativePrefix(row.mode) && !row.node_id.isEmpty || index > 0 && row.mode == "shadowsocks") &&
+                (index == position ? row == self : row.measurement == nil && row.candidate_mode == nil && row.purpose == nil)
+        }
+    }
     var supported: Bool {
+        if purpose != nil {
+            return purpose == "draft-prefix-append" && metric == "routed-candidate-response" &&
+                IOSMultihopNodeSelection.supportsNativePrefix(candidate_mode ?? "") &&
+                (IOSMultihopNodeSelection.supportsNativePrefix(mode) && !node_id.isEmpty || position > 0 && mode == "shadowsocks") &&
+                (0..<(IOSMultihopNodeSelection.physicalTraversalDepth - 1)).contains(position)
+        }
         if candidate_mode != nil {
             let limit = mode == "wg" && candidate_mode == "wg" ? IOSMultihopNodeSelection.physicalTraversalDepth - 2 : IOSMultihopNodeSelection.maximumNodes - 1
             return pairedFinalResponse && (0..<limit).contains(position)
@@ -46,7 +71,11 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
         }
     }
     func selectedResponse(in proofs: [Self]) -> Bool {
-        guard candidate_mode == nil, proofs.allSatisfy({ $0.candidate_mode == nil }) else { return false }
+        guard purpose == nil, proofs.allSatisfy({ $0.purpose == nil }) else { return false }
+        if candidate_mode != nil {
+            return packetSuccessorResponse(in: proofs) && supported(in: proofs)
+        }
+        guard proofs.allSatisfy({ $0.candidate_mode == nil }) else { return false }
         if metric == "routed-public-candidate-response" || typedImportedResponse { return supported(in: proofs) }
         guard (3...IOSMultihopNodeSelection.physicalTraversalDepth).contains(proofs.count), position > 0, position < proofs.count - 1,
               proofs[position] == self, metric == "routed-candidate-response",
@@ -65,14 +94,23 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
         }
     }
     func supported(in proofs: [Self]) -> Bool {
+        if proofs.contains(where: { $0.purpose != nil }) { return supported && appendResponse(in: proofs) }
         guard supported, proofs.indices.contains(position), position < proofs.count - 1, proofs[position] == self else { return false }
         if pairedFinalResponse {
             let bounded = (2...IOSMultihopNodeSelection.maximumNodes).contains(proofs.count)
+            let privateIDs = proofs.map(\.node_id).filter { !$0.isEmpty }
             guard bounded || IOSMultihopNodeSelection.extendedPairedModes(proofs.map(\.mode), execution: "local"),
-                  Set(proofs.map(\.profile_id)).count == proofs.count, Set(proofs.map(\.node_id)).count == proofs.count,
-                  let final = proofs.last else { return false }
+                  Set(proofs.map(\.profile_id)).count == proofs.count, Set(privateIDs).count == privateIDs.count,
+                  let final = proofs.last, !proofs[0].node_id.isEmpty, !final.node_id.isEmpty else { return false }
             return proofs.enumerated().allSatisfy { index, row in
-                guard row.position == index, !row.profile_id.isEmpty, !row.node_id.isEmpty else { return false }
+                guard row.position == index, !row.profile_id.isEmpty, row.purpose == nil else { return false }
+                if row.node_id.isEmpty {
+                    guard bounded, (3...IOSMultihopNodeSelection.maximumNodes).contains(proofs.count),
+                          index > 0, index < proofs.count - 1, row.mode == "shadowsocks", final.mode == "shadowsocks" else { return false }
+                    return row.candidate_mode == nil
+                        ? row.measurement == nil || row.measurement == "routed-candidate-response"
+                        : row.packetSuccessorResponse(in: proofs)
+                }
                 if index == proofs.count - 1 {
                     return row.measurement == nil && row.candidate_mode == nil &&
                         (["shadowsocks", "hysteria2"].contains(row.mode) || bounded && IOSMultihopNodeSelection.supportsNativePrefix(row.mode))
@@ -129,11 +167,12 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
     }
 
     func connectedFinalResponse(in proofs: [Self]) -> Bool {
-        (typedImportedResponse || pairedFinalResponse) ? position == proofs.count - 2 && supported(in: proofs) : importedEntryFinalResponse(in: proofs)
+        guard purpose == nil else { return false }
+        return (typedImportedResponse || pairedFinalResponse) ? position == proofs.count - 2 && supported(in: proofs) : importedEntryFinalResponse(in: proofs)
     }
 
     private func importedEntryFinalResponse(in proofs: [Self]) -> Bool {
-        guard proofs.count == 3, position == 1, proofs[1] == self,
+        guard proofs.allSatisfy({ $0.purpose == nil }), proofs.count == 3, position == 1, proofs[1] == self,
               metric == "routed-candidate-response", Set(proofs.map(\.profile_id)).count == proofs.count else { return false }
         return proofs.enumerated().allSatisfy { index, row in
             row.position == index && !row.profile_id.isEmpty && row.mode == "shadowsocks" &&
@@ -149,15 +188,19 @@ enum IOSNodeCandidateOriginalCapture {
     case ordinary(IOSNodeChainCapture)
     case socks(IOSNodeChainSOCKSCapture)
     case connect(IOSNodeChainCONNECTCapture)
+    case append(IOSNodeCandidateAppendSource)
 
-    var members: [IOSNodeChainCapture.Member] { switch self { case .ordinary(let v): return v.members; case .socks(let v): return v.members; case .connect(let v): return v.members } }
-    var launchInput: String { switch self { case .ordinary(let v): return v.launchInput; case .socks(let v): return v.source; case .connect(let v): return v.source } }
-    var originalSource: String? { switch self { case .ordinary(let v): return v.originalSource; case .socks(let v): return v.source; case .connect(let v): return v.source } }
-    var sourceSHA256: String { switch self { case .ordinary(let v): return v.sourceSHA256; case .socks(let v): return v.sourceSHA256; case .connect(let v): return v.sourceSHA256 } }
-    var configSHA256: String { switch self { case .ordinary(let v): return v.configSHA256; case .socks(let v): return v.plan.configSHA256(); case .connect(let v): return v.plan.configSHA256() } }
-    var selectionExecution: String { switch self { case .ordinary(let v): return v.selectionExecution; case .socks(let v): return v.selectionExecution; case .connect(let v): return v.selectionExecution } }
-    var strict: Bool { switch self { case .ordinary(let v): return v.strict; case .socks(let v): return v.strict; case .connect(let v): return v.strict } }
-    var homeLANAccess: Bool { switch self { case .ordinary(let v): return v.homeLANAccess; case .socks(let v): return v.homeLANAccess; case .connect(let v): return v.homeLANAccess } }
+    var appendSource: IOSNodeCandidateAppendSource? { if case .append(let value) = self { return value }; return nil }
+    var isAppend: Bool { appendSource != nil }
+
+    var members: [IOSNodeChainCapture.Member] { switch self { case .ordinary(let v): return v.members; case .socks(let v): return v.members; case .connect(let v): return v.members; case .append(let v): return v.members } }
+    var launchInput: String { switch self { case .ordinary(let v): return v.launchInput; case .socks(let v): return v.source; case .connect(let v): return v.source; case .append(let v): return v.source } }
+    var originalSource: String? { switch self { case .ordinary(let v): return v.originalSource; case .socks(let v): return v.source; case .connect(let v): return v.source; case .append(let v): return v.source } }
+    var sourceSHA256: String { switch self { case .ordinary(let v): return v.sourceSHA256; case .socks(let v): return v.sourceSHA256; case .connect(let v): return v.sourceSHA256; case .append(let v): return v.sourceSHA256 } }
+    var configSHA256: String { switch self { case .ordinary(let v): return v.configSHA256; case .socks(let v): return v.plan.configSHA256(); case .connect(let v): return v.plan.configSHA256(); case .append(let v): return v.configSHA256 } }
+    var selectionExecution: String { switch self { case .ordinary(let v): return v.selectionExecution; case .socks(let v): return v.selectionExecution; case .connect(let v): return v.selectionExecution; case .append: return "local" } }
+    var strict: Bool { switch self { case .ordinary(let v): return v.strict; case .socks(let v): return v.strict; case .connect(let v): return v.strict; case .append(let v): return v.strict } }
+    var homeLANAccess: Bool { switch self { case .ordinary(let v): return v.homeLANAccess; case .socks(let v): return v.homeLANAccess; case .connect(let v): return v.homeLANAccess; case .append(let v): return v.homeLANAccess } }
     var preparationKind: String {
         switch self {
         case .ordinary(let capture):
@@ -167,11 +210,13 @@ enum IOSNodeCandidateOriginalCapture {
             return "routervpn-node-chain-candidate-preparation"
         case .socks: return "routervpn-node-chain-socks-candidate-preparation"
         case .connect: return "routervpn-node-chain-connect-candidate-preparation"
+        case .append: return "routervpn-node-chain-candidate-append-preparation"
         }
     }
     var requiresIndependentPrefix: Bool { if case .ordinary = self { return false }; return true }
 
     func canPreparePrefix(at position: Int) -> Bool {
+        if case .append(let source) = self { return position == members.count - 1 && source.prefixes.last?.appendResponse(in: source.prefixes) == true }
         guard selectionExecution == "local", position >= 0, position < members.count - 1 else { return false }
         let prefix = members.prefix(position + 1)
         if prefix.allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) { return true }
@@ -193,7 +238,8 @@ enum IOSNodeCandidateOriginalCapture {
     var preparedCandidatePrefixes: [IOSNodeCandidatePrefix] { makeCandidatePrefixes(for: .prepared) }
 
     private func makeCandidatePrefixes(for purpose: Purpose) -> [IOSNodeCandidatePrefix] {
-        members.enumerated().map { position, member in
+        if case .append(let source) = self { return purpose == .prepared ? source.prefixes : [] }
+        return members.enumerated().map { position, member in
             var prefix = IOSNodeCandidatePrefix(position: position, profile_id: member.id,
                 node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode)
             if member.mode == "shadowsocks", case .ordinary(let capture) = self, selectionExecution == "local" {
@@ -208,6 +254,7 @@ enum IOSNodeCandidateOriginalCapture {
                 case .ordinary(let capture): metric = LibboxRouterNodeChainConnectedCandidatePrefixMeasurement(capture.plan, Int32(position))
                 case .socks(let capture): metric = capture.plan.candidatePrefixMeasurement(Int32(position))
                 case .connect(let capture): metric = capture.plan.candidatePrefixMeasurement(Int32(position))
+                case .append: metric = ""
                 }
                 if metric == "routed-candidate-response" { prefix.measurement = metric }
                 if case .ordinary(let capture) = self, position < members.count - 2 {
@@ -235,13 +282,15 @@ enum IOSNodeCandidateOriginalCapture {
         }
     }
 
-    func close() throws { switch self { case .ordinary(let v): try v.plan.close(); case .socks(let v): try v.plan.close(); case .connect(let v): try v.plan.close() } }
+    func close() throws { switch self { case .ordinary(let v): try v.plan.close(); case .socks(let v): try v.plan.close(); case .connect(let v): try v.plan.close(); case .append: return } }
 
     static func reopen(_ input: String, selectedProfile: [String: Any]) throws -> Self {
         guard !input.isEmpty, input.utf8.count <= IOSNodeChainCapture.maximumInputBytes,
               let source = try JSONSerialization.jsonObject(with: Data(input.utf8)) as? [String: Any] else { throw Self.issue() }
         let value: Self
-        if source["schema"] as? Int == 3 {
+        if source["kind"] as? String == "routervpn-node-chain-candidate-append-source" {
+            value = .append(try IOSNodeCandidateAppendSource.reopen(input, selectedProfile: selectedProfile))
+        } else if source["schema"] as? Int == 3 {
             value = .socks(try IOSNodeChainSOCKSCapture.reopen(input, selectedProfile: selectedProfile))
         } else if source["schema"] as? Int == 4 {
             value = .connect(try IOSNodeChainCONNECTCapture.reopen(input, selectedProfile: selectedProfile))
@@ -256,7 +305,7 @@ enum IOSNodeCandidateOriginalCapture {
     static func reopenConnected(_ input: String, selectedProfile: [String: Any],
                                 sourceSHA256: String, configSHA256: String) throws -> Self {
         let original = try reopen(input, selectedProfile: selectedProfile)
-        guard original.sourceSHA256 == sourceSHA256, original.configSHA256 == configSHA256 else {
+        guard !original.isAppend, original.sourceSHA256 == sourceSHA256, original.configSHA256 == configSHA256 else {
             try? original.close(); throw Self.issue()
         }
         return original
@@ -273,7 +322,7 @@ enum IOSNodeCandidateOriginalCapture {
         defer { try? original.close() }
         if case .ordinary(let source) = original {
             if proofs.contains(where: { $0.pairedFinalResponse }) {
-                guard source.sourceSchema == 1, proofs.filter(\.pairedFinalResponse).allSatisfy({ row in
+                guard source.sourceSchema == 1 || source.sourceSchema == 6, proofs.filter(\.pairedFinalResponse).allSatisfy({ row in
                     guard row.supported(in: proofs) else { return false }
                     if row.packetSuccessorResponse(in: proofs) {
                         return LibboxRouterNodeChainConnectedPacketSuccessorCandidateMode(source.plan, Int32(row.position)) == row.candidate_mode

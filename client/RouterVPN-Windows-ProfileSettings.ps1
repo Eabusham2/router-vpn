@@ -626,18 +626,28 @@ function global:Test-RouterVPNOrderedResponsePrefix {
 function global:Get-RouterVPNOrderedPreparedCandidateMode {
     param($Nodes,[int]$Position,[string]$Execution,$Profiles)
     $count=@($Nodes).Count
-    if($Execution-cne'local'-or$count-lt2-or$count-gt(Get-RouterVPNOrderedPhysicalTraversalDepth)-or$Position-lt0-or$Position-ge$count-1){return ''}
+    $selected=$Execution -cin @('auto','server')
+    if(($Execution-cne'local'-and-not$selected)-or$count-lt2-or$count-gt(Get-RouterVPNOrderedPhysicalTraversalDepth)-or$Position-lt0-or$Position-ge$count-1){return ''}
+    if($selected-and($count-lt3-or$Position-gt$count-3)){return ''}
     $final=[string]$Nodes[-1].mode
     if($final -cnotin @('shadowsocks','hysteria2') -and -not($Position -eq $count-2 -and $count -le 8 -and (Test-RouterVPNOrderedPrefixMode $final))){return ''}
     $index=Get-RouterVPNOrderedProfileIndex $Profiles
     $ids=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $packetReplacement=$Position-lt$count-2
     for($i=0;$i-lt$count;$i++){
-        $node=$Nodes[$i]
-        if([string]$node.id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'-or-not$ids.Add([string]$node.id)-or-not(Test-RouterVPNOrderedPairedOff $index[$node.id])){return ''}
+        $node=$Nodes[$i];$profile=$index[$node.id]
+        if([string]$node.id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'-or-not$ids.Add([string]$node.id)){return ''}
+        if((Get-RouterVPNOrderedValue $profile 'node_kind') -ceq 'external'){
+            if(-not $packetReplacement -or $count -gt 8 -or $i -eq 0 -or $i -eq $count-1 -or $i -eq $Position+1 -or
+                $node.mode -cne 'shadowsocks' -or $final -cne 'shadowsocks' -or -not(Test-RouterVPNOrderedLiteralOff $profile)){return ''}
+            continue
+        }
+        $layersAllowed=$packetReplacement -and $count -le 8 -and $i -le $Position
+        if(-not(Test-RouterVPNOrderedPairedLayer $profile -AllowAuthenticated:$layersAllowed)){return ''}
         if($i-lt$count-1-and-not(Test-RouterVPNOrderedPrefixMode $node.mode)){return ''}
         if($count-gt8-and$node.mode-cne$(if($i-eq$count-1){'shadowsocks'}else{'wg'})){return ''}
     }
-    if($Position-lt$count-2){return [string]$Nodes[$Position+1].mode}
+    if($packetReplacement){return [string]$Nodes[$Position+1].mode}
     if($count -le 8 -and $final -cne 'shadowsocks'){return $final}
     return ''
 }
@@ -1447,3 +1457,71 @@ function global:Show-RouterVPNProfileSettingsDialog {
 # LAN / kill switch / WG-AWG base+fallback / private SOCKS5 / forwarding ownership / startup /
 # connection profile Add + Load + Update + Delete with current mode/CUSTOM layers and exact visible multihop entry/exit/exit transport;
 # profile mutation and persistent Settings Save fail closed while controller status is connected/transitioning or unavailable.
+
+
+function Get-RouterVPNOrderedAppendModes($Profile,[int]$Position){
+ if($Position-lt0){return @()}
+ if(Test-RouterVPNOrderedPairedLayer $Profile -AllowAuthenticated){
+  $modes=@('wg','awg2-fast','awg2-strong')
+  if($Position-gt0-and(Test-RouterVPNOrderedPairedOff $Profile)){$modes+=@('shadowsocks')}
+  return $modes
+ }
+ if($Position-gt0-and(Test-RouterVPNOrderedLiteralOff $Profile)){return @('shadowsocks')}
+ return @()
+}
+function Test-RouterVPNOrderedAppendNodes($Nodes,$Profiles,[int]$Maximum=96){
+ $rows=@($Nodes);if($rows.Count-lt1-or$rows.Count-gt$Maximum){return $false}
+ $index=Get-RouterVPNOrderedProfileIndex $Profiles
+ $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+ for($i=0;$i-lt$rows.Count;$i++){
+  $node=$rows[$i]
+  $keys=if($node-is[Collections.IDictionary]){@($node.Keys)}else{@($node.PSObject.Properties.Name)}
+  if($keys.Count-ne2-or[string]$node.id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'-or
+     -not$seen.Add([string]$node.id)-or
+     [string]$node.mode-cnotin@(Get-RouterVPNOrderedAppendModes $index[[string]$node.id] $i)){return $false}
+ }
+ return $true
+}
+function New-RouterVPNOrderedAppendPayload($Draft,$Store){
+ $id=[string]$Draft.control_id;$nodes=@($Draft.nodes)
+ if($Draft.purpose-cne'draft-prefix-append'-or$Draft.execution-cne'local'-or
+    $Draft.draft_revision-cnotmatch'\A[0-9a-f]{32}\z'-or
+    -not(Test-RouterVPNOrderedPrefixMode ([string]$Draft.next_mode))-or
+    [string]$Store.selected_id-cne$id-or-not(Test-RouterVPNOrderedAppendNodes $nodes $Store.profiles 95)){throw 'Recapture the original Local packet prefix and device selection.'}
+ $index=Get-RouterVPNOrderedProfileIndex $Store.profiles
+ if(-not(Test-RouterVPNOrderedPairedLayer $index[$id] -AllowAuthenticated)){throw 'The selected device control must remain a paired node.'}
+ $tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
+ $ids=@($nodes|ForEach-Object{[string]$_.id});if($id-cnotin$ids){$ids+=@($id)}
+ foreach($key in $ids){
+  $old=Get-RouterVPNOrderedValue $Draft.profile_tokens $key
+  $current=Get-RouterVPNOrderedValue $index[$key] 'profile_token'
+  if([string]$old-cnotmatch'\A[0-9a-f]{64}\z'-or[string]$old-cne[string]$current){throw 'An original prefix or device profile changed. Reopen the editor.'}
+  $tokens.Add($key,$old)
+ }
+ $tokenKeys=if($Draft.profile_tokens-is[Collections.IDictionary]){@($Draft.profile_tokens.Keys)}else{@($Draft.profile_tokens.PSObject.Properties.Name)}
+ if($tokenKeys.Count-ne$tokens.Count){throw 'The captured prefix profile set changed.'}
+ return [ordered]@{schema=1;purpose='draft-prefix-append';execution='local';draft_revision=[string]$Draft.draft_revision;append_position=$nodes.Count;next_mode=[string]$Draft.next_mode;nodes=$nodes;expected_selected_node_id=$id;expected_profile_tokens=$tokens}
+}
+function Convert-RouterVPNOrderedAppendChoice($Draft,$Body,$Choice,$Store){
+ [void](New-RouterVPNOrderedAppendPayload $Draft $Store)
+ $original=@($Draft.nodes);$path=@($Choice.proposed_path);$mode=[string]$Draft.next_mode
+ $id=[string]$Draft.control_id;$index=Get-RouterVPNOrderedProfileIndex $Store.profiles
+ if($Choice.scope-cne'draft-prefix-append'-or$Choice.purpose-cne'draft-prefix-append'-or$Choice.origin-cne'editor-draft'-or
+    $Choice.requested_execution-cne'local'-or$Choice.draft_action-cne'append-measured-hop'-or
+    $Choice.candidate_mode-cne$mode-or$Choice.draft_revision-cne$Body.draft_revision-or
+    $Choice.expected_selected_node_id-cne$id-or$Choice.device_revision-cne(Get-RouterVPNOrderedValue $Body.expected_profile_tokens $id)-or
+    $Choice.chosen-isnot[bool]-or-not$Choice.chosen-or$Choice.native_down-isnot[bool]-or-not$Choice.native_down-or
+    $Choice.append_position-ne$original.Count-or$Choice.prefix_position-ne($original.Count-1)-or
+    $path.Count-ne($original.Count+1)-or$path[-1].id-cne$Choice.candidate_id-or$path[-1].mode-cne$mode-or
+    -not(Test-RouterVPNOrderedAppendNodes $path $Store.profiles)-or-not(Test-RouterVPNOrderedPairedOff $index[[string]$Choice.candidate_id])){
+  throw 'The measured append no longer belongs to this original closed prefix.'
+ }
+ for($i=0;$i-lt$original.Count;$i++){foreach($key in @('id','mode')){if($path[$i].$key-cne$original[$i].$key){throw 'The measured append changed an original prefix node.'}}}
+ $issued=$Choice.expected_profile_tokens;$keys=if($issued-is[Collections.IDictionary]){@($issued.Keys)}else{@($issued.PSObject.Properties.Name)}
+ if($keys.Count-ne$path.Count){throw 'The appended profile expectations changed.'}
+ foreach($node in $path){
+  $token=Get-RouterVPNOrderedValue $issued ([string]$node.id)
+  if([string]$token-cnotmatch'\A[0-9a-f]{64}\z'-or[string]$token-cne[string](Get-RouterVPNOrderedValue $index[[string]$node.id] 'profile_token')){throw 'An appended source changed before adoption.'}
+ }
+ return $path
+}

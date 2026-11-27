@@ -8,6 +8,9 @@ func (p *DesktopNodeCandidatePreparationPolicy) ProtectionMembersSHA256() (strin
 	if p.Validate() != nil {
 		return "", desktopNodeCandidatePreparationError
 	}
+	if p.original.appendSource != nil {
+		return p.appendProtectionMembersSHA256()
+	}
 	original := p.original.original
 	if len(original.proofs) != len(original.nodes) || len(original.nodes) < 2 || len(original.nodes) > NodeChainMaximumNodes && original.ExtendedLocalNodeCount() != len(original.nodes) {
 		return "", desktopNodeCandidatePreparationError

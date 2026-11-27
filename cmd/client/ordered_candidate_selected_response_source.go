@@ -31,12 +31,26 @@ func takeCandidateServerIntent(query url.Values) (bool, bool) {
 	return true, len(values) == 1 && values[0] == "true"
 }
 
+// The exact selected source supplies the raw mode; this descriptor is not a
+// connected or prepared packet capability and cannot choose a different winner.
+func desktopSelectedPacketCandidateMode(launch *desktopNodeLaunch, position int) string {
+	e := desktopNodeChainLaunchExecution(launch)
+	if e == nil || e.preparation == nil || !desktopSelectedCandidateFamily(e) || e.original != launch.chain {
+		return ""
+	}
+	mode := e.preparation.SelectedPacketCandidateMode(position)
+	if !mobilemultihop.NodeChainPrefixMode(mode) {
+		return ""
+	}
+	return mode
+}
+
 func candidateResponseExecutions(prep *mobilemultihop.NodeChainExecutionPreparation, pos int) []string {
 	var owners []string
-	if prep.SupportsCompareLocalResponseCandidate(pos) || prep.SupportsCompareLocalPublicResponseCandidate(pos) {
+	if prep.SupportsCompareLocalResponseCandidate(pos) || prep.SupportsCompareLocalPublicResponseCandidate(pos) || prep.SupportsCompareLocalPacketResponseCandidate(pos) {
 		owners = append(owners, "local")
 	}
-	if prep.SupportsServerResponseCandidate(pos) || prep.SupportsServerPublicResponseCandidate(pos) {
+	if prep.SupportsServerResponseCandidate(pos) || prep.SupportsServerPublicResponseCandidate(pos) || prep.SupportsServerPacketResponseCandidate(pos) {
 		owners = append(owners, "server")
 	}
 	return owners
@@ -136,6 +150,11 @@ func (view *orderedCandidateView) addResponseSource(response map[string]any) {
 	if view.candidateMode != "" {
 		publishOrderedCandidateResponseSource(response, view.candidateMode, view.responseNodes, view.originalFinal)
 		response["view_token"], response["prefix_position"] = view.token, view.position
+		if len(view.responseOwners) > 0 {
+			response["requested_execution"] = view.responseRequested
+			response["selected_execution"], response["selection_epoch"] = view.responseSelected, view.responseEpoch
+			publishCandidateResponseOwners(response, view.responseOwners, view.responseSelected)
+		}
 		return
 	}
 	if len(view.responseNodes) == 0 {

@@ -7,6 +7,7 @@ struct IOSNodeChainEditorView: View {
     @State private var owner: IOSNodeChainEditorOwner?
     @State private var detail = ""
     @State private var execution = "local"
+    @State private var appendMode = "wg"
     @StateObject private var candidates = IOSNodeCandidates()
     @StateObject private var firstHop = IOSViaEntryLatency()
 
@@ -24,12 +25,28 @@ struct IOSNodeChainEditorView: View {
     }
     private struct PrefixRequest: Equatable {
         let position: Int
+        var nextMode: String? = nil
+        var draftRevision: String? = nil
+        var nodes: [IOSMultihopNodeSelection]? = nil
         let id = UUID()
     }
     @State private var request: PrefixRequest?
 
     private var available: [RouterProfile] {
         model.iosNodeChainEditorProfiles(owner: owner)
+    }
+
+    private var pairedAppendSources: [RouterProfile] {
+        IOSNodeChainEditorVisible.unique(available).filter { $0.normalizedNodeKind == "router-vpn" && $0.external == nil }
+    }
+    private func visibleNodes(at position: Int) -> [RouterProfile] {
+        if draft.unfinished {
+            return IOSNodeChainEditorVisible.unique(available).filter { candidate in
+                !IOSNodeCandidateAppendSource.prefixModes(candidate, position: position).isEmpty &&
+                    !draft.nodes.enumerated().contains { $0.offset != position && $0.element.id == candidate.id }
+            }
+        }
+        return IOSNodeChainEditorVisible.candidates(available, nodes: draft.nodes, position: position, execution: execution)
     }
 
     private var finalModes: [String] {
@@ -42,11 +59,29 @@ struct IOSNodeChainEditorView: View {
         let firstScores = firstHopScores
         Form {
             Section("Nodes in connection order") {
-                Text("Each candidate needs 50 routed samples. A qualified paired successor returns authenticated responses using its captured transport. Other eligible packet prefixes measure TCP connections. A Local public-exit route can measure verified HTTPS responses. Use in draft replaces a measured intermediate packet hop or inserts a qualified stream hop. Save a final replacement as a named profile and Load it separately.")
+                if !draft.unfinished {
+                    Menu("Start a prefix-only draft") {
+                        ForEach(pairedAppendSources) { profile in
+                            Menu(profile.name.isEmpty ? profile.id : profile.name) {
+                                ForEach(IOSMultihopNodeSelection.nativePrefixModes, id: \.self) { mode in
+                                    Button(IOSMultihopNodeSelection.transportName(mode)) {
+                                        change {
+                                            try draft.beginPrefix(id: profile.id, mode: mode)
+                                            execution = "local"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }.disabled(owner == nil || pairedAppendSources.isEmpty)
+                }
+                Text(draft.unfinished
+                    ? "This draft contains only the real prefix nodes. Choose the next packet transport and measure candidates through the last prefix. A result can be appended only after the temporary test is disconnected. Choose a real final node before saving."
+                    : "Each candidate needs 50 routed samples. A qualified paired successor returns authenticated responses using its captured transport. Other eligible packet prefixes measure TCP connections. A Local public-exit route can measure verified HTTPS responses. Use in draft replaces a measured intermediate packet hop or inserts a qualified stream hop. Save a final replacement as a named profile and Load it separately.")
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(Array(draft.nodes.enumerated()), id: \.offset) { position, node in
                     VStack(alignment: .leading, spacing: 8) {
-                        if position == draft.nodes.count - 1 {
+                        if !draft.unfinished && position == draft.nodes.count - 1 {
                             LabeledContent("Selected final node", value: available.first(where: { $0.id == node.id })?.name ?? node.id)
                             if let ms = candidates.editorScore(node: node.id, after: position - 1) {
                                 Text(String(format: "Via selected prefix • %.1f ms (%@)", ms, candidates.editorMetricLabel)).font(.caption.monospacedDigit())
@@ -111,7 +146,7 @@ struct IOSNodeChainEditorView: View {
                             } }
                         )) {
                             Text("Choose linked node").tag("")
-                            ForEach(IOSNodeChainEditorVisible.candidates(available, nodes: draft.nodes, position: position, execution: execution)) { candidate in
+                            ForEach(visibleNodes(at: position)) { candidate in
                                 let name = candidate.name.isEmpty ? candidate.id : candidate.name
                                 let first = position == 1 ? firstScores[candidate.id] : nil
                                 let ms = first ?? candidates.editorScore(node: candidate.id, after: position - 1)
@@ -125,10 +160,10 @@ struct IOSNodeChainEditorView: View {
                             get: { draft.nodes[position].mode },
                             set: { mode in change(measureAfter: position) { try draft.chooseMode(mode, at: position) } }
                         )) {
-                            if IOSNodeChainEditorVisible.pairedStreamChoice(draft.nodes, at: position, execution: execution, profiles: available) {
+                            if !draft.unfinished && IOSNodeChainEditorVisible.pairedStreamChoice(draft.nodes, at: position, execution: execution, profiles: available) {
                                 Text("Paired Shadowsocks 2022").tag("shadowsocks")
                             }
-                            ForEach(IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id}), nodeCount: draft.nodes.count, mixedPacket: node.mode != "shadowsocks" && execution == "local" && draft.nodes.dropLast().contains(where: { $0.mode == "shadowsocks" }), selectedPacket: execution != "local" && position == 0 && IOSMultihopNodeSelection.extendedSelectedModeShape(draft.nodes.map(\.mode))), id: \.self) { mode in
+                            ForEach(draft.unfinished ? IOSNodeCandidateAppendSource.prefixModes(available.first(where: { $0.id == node.id }), position: position) : IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id}), nodeCount: draft.nodes.count, mixedPacket: node.mode != "shadowsocks" && execution == "local" && draft.nodes.dropLast().contains(where: { $0.mode == "shadowsocks" }), selectedPacket: execution != "local" && position == 0 && IOSMultihopNodeSelection.extendedSelectedModeShape(draft.nodes.map(\.mode))), id: \.self) { mode in
                                 Text(IOSMultihopNodeSelection.transportName(mode)).tag(mode)
                             }
                             if !IOSMultihopNodeSelection.supportsNativePrefix(node.mode) && !["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(node.mode) {
@@ -142,18 +177,37 @@ struct IOSNodeChainEditorView: View {
                             Button("Measure candidates through node \(position)") { request = PrefixRequest(position: position - 1) }
                                 .buttonStyle(.borderless)
                         }
-                        if position >= draft.firstEditablePrefix && position < draft.nodes.count - 1 { HStack {
+                        if position >= draft.firstEditablePrefix && position < draft.nodes.count - (draft.unfinished ? 0 : 1) { HStack {
                             Button("Earlier") { change { try draft.move(from: position, to: position - 1) } }.disabled(position == draft.firstEditablePrefix)
-                            Button("Later") { change { try draft.move(from: position, to: position + 1) } }.disabled(position >= draft.nodes.count - 2)
+                            Button("Later") { change { try draft.move(from: position, to: position + 1) } }.disabled(position >= draft.nodes.count - (draft.unfinished ? 1 : 2))
                             Spacer()
-                            Button("Remove", role: .destructive) { change { try draft.remove(at: position) } }.disabled(draft.nodes.count <= 2)
+                            Button("Remove", role: .destructive) { change { try draft.remove(at: position) } }.disabled(draft.nodes.count <= (draft.unfinished ? 1 : 2))
                         }.buttonStyle(.borderless) }
                     }
                 }
-                Button("Add preceding node") {
+                Button(draft.unfinished ? "Add prefix node" : "Add preceding node") {
                     change { try draft.append(execution: execution) }
                     if let added = draft.nodes.firstIndex(where: { $0.id.isEmpty }), added > 0 { schedule(after: added - 1) }
                 }.disabled(!draft.canAppend(execution: execution))
+                if draft.unfinished {
+                    Picker("Next packet transport", selection: $appendMode) {
+                        ForEach(IOSMultihopNodeSelection.nativePrefixModes, id: \.self) { mode in
+                            Text(IOSMultihopNodeSelection.transportName(mode)).tag(mode)
+                        }
+                    }
+                    Button("Measure next packet node") {
+                        do {
+                            let nodes = try draft.appendMeasurementPath(profiles: available)
+                            request = PrefixRequest(position: nodes.count - 1, nextMode: appendMode,
+                                draftRevision: draft.revision, nodes: nodes)
+                        } catch { detail = error.localizedDescription }
+                    }.disabled(owner == nil || (try? draft.appendMeasurementPath(profiles: available)) == nil)
+                    Button("Choose selected router as the real final node") {
+                        change { try draft.finishPrefixWithSelectedFinal() }
+                    }.disabled(draft.nodes.contains(where: { $0.id == draft.controlID }) ||
+                        draft.nodes.count >= IOSMultihopNodeSelection.physicalTraversalDepth)
+                    if !detail.isEmpty { Text(detail).font(.caption) }
+                }
             }.disabled(model.profileMutationBlocked || model.iosSpeedLabOwnership.active)
             if firstHop.running || !firstHop.progress.isEmpty && needsFirstPublicHop {
                 Section("First hop measurement") {
@@ -163,13 +217,20 @@ struct IOSNodeChainEditorView: View {
             }
             if candidates.running || request != nil && !firstHop.running && !needsFirstPublicHop {
                 Section("Prefix measurement") {
-                    if candidates.canPrepare || candidates.preparing || !candidates.proposalDescription.isEmpty {
+                    if candidates.canPrepare || candidates.preparing || !candidates.proposalDescription.isEmpty || draft.unfinished && !candidates.scores.isEmpty {
                         IOSCandidateProfileChoices(probe: candidates, useInDraft: { score in
                             do {
-                                guard let position = request?.position else { throw CancellationError() }
+                                guard let selected = request else { throw CancellationError() }
+                                let position = selected.position
                                 try candidates.useInDraft(score) { proposal in
                                     guard let compiled = proposal.orderedNodes else { throw CancellationError() }
-                                    try draft.insertMeasured(score.id, after: position, compiled: compiled, replacingPacketSuccessor: proposal.replacesPacketSuccessor)
+                                    if proposal.appendsPacketNode {
+                                        guard let nodes = selected.nodes, let revision = selected.draftRevision,
+                                              let mode = selected.nextMode else { throw CancellationError() }
+                                        try draft.appendMeasured(score.id, compiled: compiled, original: nodes, draftRevision: revision, mode: mode)
+                                    } else {
+                                        try draft.insertMeasured(score.id, after: position, compiled: compiled, replacingPacketSuccessor: proposal.replacesPacketSuccessor)
+                                    }
                                 }
                                 request = nil
                                 detail = "Applied the measured node to this draft."
@@ -183,6 +244,7 @@ struct IOSNodeChainEditorView: View {
                     }
                 }
             }
+            if !draft.unfinished {
             Section("Execution") {
                 Picker("Execution", selection: $execution) {
                     Text("Local").tag("local")
@@ -207,12 +269,27 @@ struct IOSNodeChainEditorView: View {
                 }.disabled(!draft.canSave || owner == nil)
                 if !detail.isEmpty { Text(detail).font(.caption) }
             }.disabled(model.profileMutationBlocked || model.iosSpeedLabOwnership.active)
+            }
         }
         .task(id: request) {
             guard let request else { return }
             await candidates.finishEditorComparison()
             guard !Task.isCancelled, self.request == request, let owner else { return }
             do {
+                if let nextMode = request.nextMode {
+                    guard draft.unfinished, execution == "local", let nodes = request.nodes,
+                          let revision = request.draftRevision, draft.nodes == nodes, draft.revision == revision,
+                          request.position == nodes.count - 1 else { throw CancellationError() }
+                    try model.requireIOSNodeChainAppendSources(owner, nodes: nodes)
+                    try candidates.startEditorAppend(model: model, nodes: nodes, editorOwner: owner, nextMode: nextMode,
+                        draftRevision: revision) {
+                        guard self.request == request, self.draft.unfinished, self.draft.nodes == nodes,
+                              self.draft.revision == revision, self.execution == "local", self.appendMode == nextMode else { throw CancellationError() }
+                        try model.requireIOSNodeChainAppendSources(owner, nodes: nodes)
+                    }
+                    return
+                }
+                guard !draft.unfinished else { throw CancellationError() }
                 if request.position == 0 && needsFirstPublicHop {
                     let offered = IOSNodeChainEditorVisible.candidates(available, nodes: draft.nodes, position: 1, execution: execution)
                         .filter(IOSImportedShadowsocksSource.eligibleLiteral)
@@ -231,6 +308,7 @@ struct IOSNodeChainEditorView: View {
             }
         }
         .onChange(of: execution) { _, _ in candidates.cancel(); firstHop.cancel(); request = nil }
+        .onChange(of: appendMode) { _, _ in candidates.cancel(); request = nil }
         .onDisappear { candidates.cancel(); firstHop.cancel() }
         .navigationTitle("Ordered nodes")
         .onAppear {
@@ -243,6 +321,7 @@ struct IOSNodeChainEditorView: View {
     }
 
     private func schedule(after position: Int) {
+        guard !draft.unfinished else { return }
         if position == 0 && needsFirstPublicHop || (try? draft.measurementPath(through: position, execution: execution, profiles: available)) != nil {
             request = PrefixRequest(position: position)
         }

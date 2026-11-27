@@ -293,74 +293,6 @@ def preflight_pt_files(vendor, content):
     return previous
 
 
-def pt_network_startup_source(vendor, source):
-    """Join admitted native callbacks before publishing the started owner.
-
-    Validate complete pinned lifecycle methods, including the separately owned
-    strategy atomic edits. A bypassed join or changed callback cannot be silently
-    overwritten by a later cache preparation.
-    """
-    source = source.replace('\r\n', '\n')
-    original = subprocess.check_output(['git', '-C', str(vendor), 'show', PIN+':route/network.go']).decode().replace('\r\n', '\n')
-
-    def method(text, name):
-        marker = 'func (r *NetworkManager) '+name
-        if text.count(marker) != 1:
-            raise ValueError('Desktop Tor native network lifecycle boundary changed')
-        start = text.index(marker)
-        end = text.index('\n}\n', start)+2
-        return text[start:end]
-
-    start = method(original, 'Start(').replace('\t\tr.started = true\n', '\t\tr.started.Store(true)\n')
-    joined = start.replace('\t\tr.started.Store(true)\n',
-        '\t\tif err := r.routerVPNStartup.start(r.ctx, func() {\n'
-        '\t\t\tr.started.Store(true)\n'
-        '\t\t}); err != nil {\n\t\t\treturn err\n\t\t}\n')
-    close = method(original, 'Close(').replace('Close() error {\n', 'Close() error {\n\tr.started.Store(false)\n')
-    stopped = close.replace('\tr.started.Store(false)\n',
-        '\tr.started.Store(false)\n'
-        '\tr.routerVPNStartup.stop(func() { r.started.Store(false) })\n')
-    interface = method(original, 'notifyInterfaceUpdate(')
-    admitted = interface.replace('\tr.pauseManager.NetworkWake()\n',
-        '\tfinish, accepted := r.routerVPNStartup.begin()\n'
-        '\tif !accepted {\n\t\treturn\n\t}\n'
-        '\tr.pauseManager.NetworkWake()\n').replace('\t\tdefer updateCancel()\n',
-        '\t\tdefer finish()\n\t\tdefer updateCancel()\n')
-    power = method(original, 'notifyWindowsPowerEvent(')
-    power_admitted = power.replace('\tcase winpowrprof.EVENT_SUSPEND:\n',
-        '\tcase winpowrprof.EVENT_SUSPEND:\n'
-        '\t\tfinish, accepted := r.routerVPNStartup.begin()\n'
-        '\t\tif !accepted {\n\t\t\treturn\n\t\t}\n\t\tdefer finish()\n').replace(
-        '\tcase winpowrprof.EVENT_RESUME_AUTOMATIC:\n',
-        '\tcase winpowrprof.EVENT_RESUME_AUTOMATIC:\n'
-        '\t\tfinish, accepted := r.routerVPNStartup.begin()\n'
-        '\t\tif !accepted {\n\t\t\treturn\n\t\t}\n').replace(
-        '\t\t\tdefer updateCancel()\n', '\t\t\tdefer finish()\n\t\t\tdefer updateCancel()\n')
-    for name, before, after in (('Start(', start, joined), ('Close(', close, stopped),
-                                ('notifyInterfaceUpdate(', interface, admitted),
-                                ('notifyWindowsPowerEvent(', power, power_admitted)):
-        actual = method(source, name)
-        if actual not in (before, after):
-            raise ValueError('Desktop Tor native network startup differs from its exact preparation')
-        source = source.replace(actual, after, 1)
-    field = '\tstarted                  atomic.Bool\n'
-    owned = '\trouterVPNStartup         routerVPNNetworkStartup\n'+field
-    if source.count(field) != 1 or ('routerVPNStartup ' in source and source.count(owned) != 1):
-        raise ValueError('Desktop Tor native network startup field differs')
-    if owned not in source:
-        source = source.replace(field, owned, 1)
-    return source.encode()
-
-
-def prepare_network_startup(vendor):
-    path = TOR.destination(vendor, 'route/network.go')
-    original = path.read_bytes()
-    prepared = pt_network_startup_source(vendor, original.decode())
-    if path.read_bytes() != original:
-        raise ValueError('Desktop Tor native network changed before startup adoption')
-    write(vendor, 'route/network.go', prepared)
-
-
 def prepare_desktop_pt(vendor, go='go', *, env=None):
     vendor = checked_vendor(vendor)
     content = pt_copies()
@@ -498,7 +430,6 @@ def prepare(vendor, go='go', *, env=None):
     MTU.prepare(vendor, mobile=False)
     DESKTOP_MTU.prepare(vendor)
     STRATEGY.prepare(vendor, mobile=False)
-    prepare_network_startup(vendor)
     NODE_CHAIN.prepare(vendor, mobile=False)
     EXTERNAL.prepare(vendor, mobile=False)
     prepare_node_capture(vendor)

@@ -168,22 +168,22 @@ func (c *NodeChain) compareLocalResponsePrefix(position int) bool {
 }
 
 func (r *NodeChainExecutionRuntime) NewEntryCandidatePlanContext(ctx context.Context, position int, inventory string) (*NodeChainExecutionCandidatePlan, error) {
-	return r.newExecutionCandidatePlanContext(ctx, position, inventory, false)
+	return r.newExecutionCandidatePlanContext(ctx, position, inventory, false, false)
 }
 
 // NewLocalCandidatePlanContext borrows only the already selected Local winner.
 // It does not open a Local graph or rerun Compare. Interior packet admission
 // still belongs to the original family's packet candidate compiler.
 func (r *NodeChainExecutionRuntime) NewLocalCandidatePlanContext(ctx context.Context, position int, inventory string) (*NodeChainExecutionCandidatePlan, error) {
-	return r.newExecutionCandidatePlanContext(ctx, position, inventory, true)
+	return r.newExecutionCandidatePlanContext(ctx, position, inventory, true, false)
 }
 
-func (r *NodeChainExecutionRuntime) newExecutionCandidatePlanContext(ctx context.Context, position int, inventory string, localInterior bool) (*NodeChainExecutionCandidatePlan, error) {
+func (r *NodeChainExecutionRuntime) newExecutionCandidatePlanContext(ctx context.Context, position int, inventory string, localInterior, packetResponse bool) (*NodeChainExecutionCandidatePlan, error) {
 	mode, modeErr := candidateInventoryResponseMode(inventory)
-	if modeErr != nil || mode != "" {
+	if modeErr != nil || packetResponse && !NodeChainPrefixMode(mode) || !packetResponse && mode != "" {
 		return nil, nodeChainExecutionError
 	}
-	if ctx == nil || ctx.Err() != nil || r == nil || (!localInterior && position != 0) || (localInterior && position <= 0) || r.projection == nil || r.projection.validateCapture() != nil {
+	if ctx == nil || ctx.Err() != nil || r == nil || (!localInterior && position != 0) || (localInterior && (position < 0 || position == 0 && !packetResponse)) || r.projection == nil || r.projection.validateCapture() != nil {
 		return nil, nodeChainExecutionError
 	}
 	r.mu.Lock()
@@ -200,7 +200,12 @@ func (r *NodeChainExecutionRuntime) newExecutionCandidatePlanContext(ctx context
 	}
 	var plan *NodeChainCandidatePlan
 	var err error
-	if localInterior && r.projection.preparation.SupportsCompareLocalPublicResponseCandidate(position) {
+	if packetResponse {
+		if !localInterior || trial.execution != "local" || !r.projection.preparation.SupportsCompareLocalPacketResponseCandidate(position) || r.projection.preparation.SelectedPacketCandidateMode(position) != mode {
+			return nil, nodeChainExecutionError
+		}
+		plan, err = r.projection.selectedPacketCandidatePlan(position, inventory)
+	} else if localInterior && r.projection.preparation.SupportsCompareLocalPublicResponseCandidate(position) {
 		if r.projection.policy.externalFinal != r.projection.preparation.externalFinal {
 			return nil, nodeChainExecutionError
 		}
@@ -249,7 +254,9 @@ func (p *NodeChainExecutionCandidatePlan) digest() string {
 		return ""
 	}
 	kind := "routervpn-selected-execution-entry-candidates-v1"
-	if p.plan.measurement == hopmeasure.CandidatePrivateResponseMeasurement {
+	if p.plan.responseMode != "" {
+		kind = "routervpn-selected-local-packet-response-candidates-v1"
+	} else if p.plan.measurement == hopmeasure.CandidatePrivateResponseMeasurement {
 		kind = "routervpn-selected-compare-local-private-response-candidates-v1"
 	} else if p.plan.measurement == hopmeasure.CandidatePublicResponseMeasurement {
 		kind = "routervpn-selected-compare-local-public-response-candidates-v1"
@@ -286,6 +293,9 @@ func (p *NodeChainExecutionCandidatePlan) validate() error {
 // Entry and Local-interior plans share ownership, not admission. The sealed
 // kind and original packet plan prevent either constructor from widening the other.
 func (p *NodeChainExecutionCandidatePlan) validPosition() bool {
+	if p.plan.responseMode != "" {
+		return p.localInterior && p.trial.execution == "local" && p.preparation.SupportsCompareLocalPacketResponseCandidate(p.plan.prefix.Position) && p.preparation.SelectedPacketCandidateMode(p.plan.prefix.Position) == p.plan.responseMode
+	}
 	if p.plan.measurement == hopmeasure.CandidatePublicResponseMeasurement {
 		return p.localInterior && p.trial.execution == "local" && p.preparation.SupportsCompareLocalPublicResponseCandidate(p.plan.prefix.Position)
 	}

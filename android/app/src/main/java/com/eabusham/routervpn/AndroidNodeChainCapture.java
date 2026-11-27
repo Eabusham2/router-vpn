@@ -18,6 +18,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static final int MAX_INPUT = 40 * 1024 * 1024;
     static final String SESSION_FILE = "routervpn-node-chain.json";
     final RouterNodeChain plan;
+    final AndroidNodeCandidateAppendSource append;
     final AndroidNodeChainSOCKSCapture socks;
     final AndroidNodeChainCONNECTCapture connect;
     final String sourceInput, launchInput, config, sourceSHA256, configSHA256, selectionExecution;
@@ -48,6 +49,33 @@ final class AndroidNodeChainCapture implements AutoCloseable {
             } else if(!List.of("wg","awg2-fast","awg2-strong").contains(modes.get(i)))return false;
         }
         return true;
+    }
+
+    // Chooser/reservation preview only. The original native mode classifier
+    // and one-row FitsSource still admit the complete captured graph.
+    static boolean localPacketResponsePrefix(List<AndroidNodeStore.ChainSource> sources,List<String> modes,int prefix,String execution) {
+        if(!"local".equals(execution)||sources.size()!=modes.size()||sources.size()<3||sources.size()>8
+                ||prefix<0||prefix>=sources.size()-2)return false;
+        try {
+            int last=sources.size()-1;
+            if(sources.get(0).imported||sources.get(last).imported
+                    ||!pairedPacketWithoutStartLayer(sources.get(prefix+1),modes.get(prefix+1))
+                    ||!List.of("shadowsocks","hysteria2").contains(modes.get(last))
+                    ||!List.of("","off").contains(sources.get(last).profile().optString("start_layer","off")))return false;
+            requireCompleteShape(sources,modes,execution);
+            for(int i=0;i<last;i++) {
+                AndroidNodeStore.ChainSource member=sources.get(i);
+                if(member.imported) {
+                    if(i==0||i==prefix+1||!"shadowsocks".equals(modes.get(i))||!"shadowsocks".equals(modes.get(last)))return false;
+                    requireLiteralImportedSS(member);
+                } else {
+                    if(!NativeSingBoxController.nativeWireGuardFamily(modes.get(i)))return false;
+                    String layer=member.profile().optString("start_layer","off");
+                    if(i>prefix?!List.of("","off").contains(layer):!List.of("","off","aes-256-gcm","aes-256-gcm+xor-whitening").contains(layer))return false;
+                }
+            }
+            return true;
+        }catch(Exception unavailable){return false;}
     }
 
     static boolean responsePrefix(List<AndroidNodeStore.ChainSource> sources,List<String> modes,int prefix,String execution) {
@@ -147,7 +175,20 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     }
 
     static AndroidNodeChainCapture compile(AndroidNodeStore.ChainCapture original,int candidatePrefix) throws Exception {
+        if(original!=null&&original.appendDraft())throw new IllegalStateException("An unfinished prefix cannot compile as a complete ordered connection.");
         return compileInputs(original,memberInputs(original,candidatePrefix));
+    }
+
+    static AndroidNodeChainCapture compileAppend(android.content.Context context,AndroidNodeStore.ChainCapture original)throws Exception {
+        return new AndroidNodeChainCapture(new AndroidNodeCandidateAppendSource(context,original));
+    }
+    private AndroidNodeChainCapture(AndroidNodeCandidateAppendSource append)throws Exception {
+        this.append=append;original=append.original;plan=null;socks=null;connect=null;
+        sourceInput=append.source;launchInput=append.source;config=append.config;
+        sourceSHA256=append.sourceSHA256;configSHA256=append.configSHA256;
+        memberInputs=append.memberInputs;identityInputs=append.identityInputs;
+        selectionExecution="local";openVPN=false;multipleImported=false;externalFinal=false;
+        strict=append.strict;homeLANAccess=append.homeLANAccess;append.requireCurrent();
     }
 
     private Object selectedCandidatePurpose;
@@ -193,7 +234,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
 
     private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture original, List<String> inputs, List<String> identities, String source, RouterNodeChain plan) throws Exception {
         if (plan == null) throw new IllegalStateException("The native ordered compiler returned no source owner.");
-        this.original = original; this.plan = plan; socks = null; connect = null;
+        this.original = original; this.plan = plan; append = null; socks = null; connect = null;
         int schema = sourceSchema(original.members,original.modes);
         openVPN = schema == 5; multipleImported = schema == 6; externalFinal = schema == 8; selectionExecution = original.execution;
         if (inputs.size() != original.members.size()) throw new IllegalStateException("The native input omitted an original ordered member.");
@@ -232,7 +273,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     }
 
     private AndroidNodeChainCapture(AndroidNodeStore.ChainCapture original, List<String> inputs, List<String> identities, String source) throws Exception {
-        this.original=original; plan=null; openVPN=false; multipleImported=false; externalFinal=false; selectionExecution=original.execution;
+        this.original=original; plan=null; append=null; openVPN=false; multipleImported=false; externalFinal=false; selectionExecution=original.execution;
         boolean isCONNECT=sourceSchema(original.members,original.modes)==4;
         int count=original.members.size();
         if (!"local".equals(selectionExecution) && !(java.util.Arrays.asList("server","auto").contains(selectionExecution) && count>=3&&count<=8)) throw new IllegalStateException("SOCKS5 and CONNECT Server or Compare require three to eight complete original nodes.");
@@ -681,18 +722,19 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     }
 
     JSONObject controlProfile() throws Exception { return original.control.profile(); }
-    JSONObject finalProfile() throws Exception { return original.members.get(original.members.size() - 1).profile(); }
+    JSONObject finalProfile() throws Exception { return append!=null?original.control.profile():original.members.get(original.members.size() - 1).profile(); }
     int executionLastLimit() { return original.executionLastLimit(); }
     boolean ownsSource(AndroidNodeStore.ChainCapture source) { return original == source; }
     void requireCurrent() throws Exception {
         original.requireCurrent();
+        if(append!=null)append.requireCurrent();
         if(selectedCandidatePurpose!=null)original.requireSelectedCandidatePurpose(selectedCandidatePurpose);
     }
     void requireHistoryCurrent(AndroidNodeStore.HistoryReadback readback) throws Exception {
         if (readback == null) throw new IllegalStateException("The original history source readback is missing.");
         readback.require(original);
     }
-    @Override public void close() throws Exception { if(connect!=null)connect.close();else if(socks!=null)socks.close();else plan.close(); }
+    @Override public void close() throws Exception { if(append!=null)return;if(connect!=null)connect.close();else if(socks!=null)socks.close();else plan.close(); }
 
     private static String bounded(String value, int limit) {
         if (value == null || value.isEmpty() || value.getBytes(StandardCharsets.UTF_8).length > limit) throw new IllegalStateException("The complete ordered private source exceeds its bound.");

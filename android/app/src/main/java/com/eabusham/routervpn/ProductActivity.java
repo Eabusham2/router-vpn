@@ -830,33 +830,88 @@ public final class ProductActivity extends Activity {
     }
 
     private AlertDialog orderedEditorDialog;
-    private void showOrderedEditor(AndroidOrderedPathSelection draft){
+    private void showOrderedEditor(AndroidOrderedPathSelection draft) {
         try {
             if(mutationBusy())throw new IllegalStateException("Finish the current VPN operation before editing its ordered nodes.");
             draft.requireCurrent();List<AndroidOrderedPathSelection.Member> members=draft.members();
-            List<String> labels=new ArrayList<>();
+            List<String> labels=new ArrayList<>();List<Integer> actions=new ArrayList<>();
             for(int i=0;i<members.size();i++) {
                 AndroidOrderedPathSelection.Member member=members.get(i);
                 String name=member.source.profile().optString("name",member.source.profileId);
-                labels.add((i+1)+". "+name+" • "+(i==members.size()-1?"Final • "+AndroidOrderedPathSelection.finalModeTitle(member.mode):AndroidOrderedPathSelection.prefixModeTitle(member.mode)));
+                labels.add((i+1)+". "+name+" • "+(!draft.unfinished()&&i==members.size()-1?"Final • "+AndroidOrderedPathSelection.finalModeTitle(member.mode):AndroidOrderedPathSelection.prefixModeTitle(member.mode)));
+                actions.add(i);
             }
-            if(members.isEmpty())labels.add("Choose final Router node");
-            else if(draft.canAddPrefix())labels.add("Add another intermediate node");
+            if(draft.unfinished()) {
+                if(draft.canAddPrefix()){labels.add("Add a packet prefix node");actions.add(-2);}
+                if(!members.isEmpty()&&members.size()<AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH){labels.add("Measure next packet node");actions.add(-4);}
+                if(!members.isEmpty()){labels.add("Choose final Router node");actions.add(-1);}
+            } else {
+                if(members.isEmpty()){labels.add("Choose final Router node");actions.add(-1);}
+                else if(draft.canAddPrefix()){labels.add("Add another intermediate node");actions.add(-2);}
+                labels.add("Start a prefix-only draft");actions.add(-3);
+            }
             if(orderedEditorDialog!=null && orderedEditorDialog.isShowing())orderedEditorDialog.dismiss();
-            orderedEditorDialog=choiceDialog("Ordered Router path","Start with two nodes. Tap a hop to edit it or measure candidates through a supported prefix. Save path keeps your choice for Connect.\n\n"
+            String help=draft.unfinished()
+                    ?"This draft contains only the real prefix shown above. Choose the next WireGuard or AmneziaWG mode, measure its candidates through this prefix, and apply a result after the temporary VPN has stopped. Choose a real final node before saving a complete path. The selected saved connection stays unchanged until Save."
+                    :"Start with two nodes. Tap a hop to edit it or measure candidates through a supported prefix. Save path keeps your choice for Connect.\n\n"
                     +"Most paths support two to eight nodes. Longer Local paths can use paired WireGuard hops, or begin with paired WireGuard or AmneziaWG hops followed by imported and paired Shadowsocks 2022 streams. These paths end at a paired Shadowsocks 2022 node and require Start Layer Off. The native source, MTU and traversal limits apply.\n\n"
-                    +"A three-node Local path can start with two distinct saved Shadowsocks 2022 nodes with literal IPs and Start Layer Off. It ends at a paired Shadowsocks 2022 node.")
+                    +"A three-node Local path can start with two distinct saved Shadowsocks 2022 nodes with literal IPs and Start Layer Off. It ends at a paired Shadowsocks 2022 node.";
+            orderedEditorDialog=choiceDialog(draft.unfinished()?"Unfinished Router prefix":"Ordered Router path",help)
                     .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
-                        if(members.isEmpty()){chooseOrderedNode(draft,true);return;}
-                        if(w==members.size()){chooseOrderedNode(draft,false);return;}
-                        if(w==members.size()-1){chooseOrderedNode(draft,true);return;}
-                        editOrderedPrefix(draft,w);
-                    }).setNeutralButton("Execution: "+AndroidOrderedPathSelection.executionTitle(draft.execution()),(d,w)->chooseOrderedExecution(draft))
-                    .setPositiveButton("Save path",(d,w)->{
+                        int action=actions.get(w);
+                        if(action==-4){measureOrderedAppend(draft);return;}
+                        if(action==-3){chooseOrderedPrefixStart(draft);return;}
+                        if(action==-2){chooseOrderedNode(draft,false);return;}
+                        if(action==-1||!draft.unfinished()&&action==members.size()-1){chooseOrderedNode(draft,true);return;}
+                        editOrderedPrefix(draft,action);
+                    }).setNeutralButton(draft.unfinished()?"Start over":"Execution: "+AndroidOrderedPathSelection.executionTitle(draft.execution()),
+                            (d,w)->{if(draft.unfinished())chooseOrderedPrefixStart(draft);else chooseOrderedExecution(draft);})
+                    .setPositiveButton(draft.unfinished()?"Choose final":"Save path",(d,w)->{
+                        if(draft.unfinished()){if(draft.members().isEmpty())chooseOrderedPrefixStart(draft);else chooseOrderedNode(draft,true);return;}
                         try{if(mutationBusy())throw new IllegalStateException("The VPN state changed before saving the ordered path.");draft.save();refreshAll();statusView.setText("Ordered path saved. Press Connect to prove every selected node.");}
                         catch(Exception error){toast(safe(error));}
                     }).setNegativeButton("Cancel",null).show();
         } catch(Exception error) { toast(safe(error)); }
+    }
+
+    private void chooseOrderedPrefixStart(AndroidOrderedPathSelection draft) {
+        try {
+            if(mutationBusy())throw new IllegalStateException("Finish the current VPN operation before starting a prefix draft.");
+            List<AndroidNodeStore.Node> choices=draft.prefixStartChoices();List<String> labels=new ArrayList<>();
+            for(AndroidNodeStore.Node node:choices)labels.add(node.name);
+            if(choices.isEmpty())throw new IllegalStateException("Add a paired WireGuard or AmneziaWG source before starting a prefix draft.");
+            choiceDialog("Start an unfinished prefix","Choose the first real node. This replaces only the open editor draft; the saved connection remains unchanged.")
+                    .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
+                        try {
+                            String id=choices.get(w).id;List<String> modes=draft.prefixStartModes(id);List<String> titles=new ArrayList<>();
+                            for(String mode:modes)titles.add(AndroidOrderedPathSelection.prefixModeTitle(mode));
+                            choiceDialog("First prefix transport","Keep this node's exact saved transport and Start Layer.")
+                                    .setItems(titles.toArray(new CharSequence[0]),(m,index)->{
+                                        try{if(mutationBusy())throw new IllegalStateException("The VPN state changed before starting the draft.");draft.beginPrefix(id,modes.get(index));showOrderedEditor(draft);}
+                                        catch(Exception error){toast(safe(error));}
+                                    }).setNegativeButton("Back",(m,index)->showOrderedEditor(draft)).show();
+                        } catch(Exception error){toast(safe(error));}
+                    }).setNegativeButton("Back",(d,w)->showOrderedEditor(draft)).show();
+        } catch(Exception error){toast(safe(error));}
+    }
+
+    private void measureOrderedAppend(AndroidOrderedPathSelection draft) {
+        try {
+            if(mutationBusy())throw new IllegalStateException("Stop the current VPN before measuring the next packet node.");
+            draft.requireCurrent();
+            List<String> modes=List.of("wg","awg2-fast","awg2-strong");List<String> labels=new ArrayList<>();
+            for(String mode:modes)labels.add(AndroidOrderedPathSelection.prefixModeTitle(mode));
+            choiceDialog("Next packet transport","Measure saved candidates in this exact mode through the unfinished prefix. Applying a result adds one node after the last prefix.")
+                    .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
+                        try {
+                            if(mutationBusy())throw new IllegalStateException("The VPN state changed before prefix measurement.");
+                            var capture=draft.candidateAppendCapture(modes.get(w));int position=draft.members().size()-1;
+                            showOrderedEditor(draft);detachCandidatePreparation();
+                            preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater,this::continueOrderedDraft);
+                            preparedCandidateDialog.showDraft(capture,position,draft);
+                        } catch(Exception error){toast(safe(error));}
+                    }).setNegativeButton("Back",(d,w)->showOrderedEditor(draft)).show();
+        } catch(Exception error){toast(safe(error));}
     }
 
     private void chooseOrderedExecution(AndroidOrderedPathSelection draft){
@@ -927,7 +982,7 @@ public final class ProductActivity extends Activity {
         int firstEditable=draft.members().get(draft.members().size()-1).source.imported?1:0;
         if(position>firstEditable){actions.add("Move earlier");destinations.add(position-1);}
         if(position>=firstEditable){
-            if(position<draft.members().size()-2){actions.add("Move later");destinations.add(position+1);}
+            if(position<draft.members().size()-(draft.unfinished()?1:2)){actions.add("Move later");destinations.add(position+1);}
             actions.add("Remove this intermediate node");destinations.add(-1);
         }
         actions.add("Change transport");destinations.add(-2);

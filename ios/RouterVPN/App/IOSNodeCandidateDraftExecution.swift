@@ -7,6 +7,8 @@ import Foundation
     let prefixes: [IOSNodeCandidatePrefix]
     let position: Int
     private let request: String, requested: String, positions: [Int]
+    private let winnerPrefixes: [String: [IOSNodeCandidatePrefix]]
+    private let winnerPositions: [String: [Int]]
     private let deviceMTU: IOSDeviceMTUPreference
     private let originalLast: Data?
     private let draftBundle: Data
@@ -23,12 +25,9 @@ import Foundation
               execution.launchInput == execution.ordinaryLaunchInput else { throw CancellationError() }
         _ = try IOSRuntimeSelector.selectNodeChain(route)
         launchInput = execution.launchInput; sourceSHA256 = execution.sourceSHA256; configSHA256 = execution.configSHA256
-        let responses = execution.responsePositions(for: execution.requested == "server" ? "server" : "local")
-        prefixes = execution.members.enumerated().map { position, member in
-            IOSNodeCandidatePrefix(position: position, profile_id: member.id,
-                node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode,
-                measurement: responses.contains(position) ? execution.candidateResponseMetric : nil)
-        }
+        prefixes = execution.candidatePrefixes(for: execution.requested == "server" ? "server" : "local")
+        winnerPrefixes = ["local": execution.candidatePrefixes(for: "local"), "server": execution.candidatePrefixes(for: "server")]
+        winnerPositions = ["local": execution.candidatePositions(for: "local"), "server": execution.candidatePositions(for: "server")]
         draftBundle = try IOSNodeUsage.canonical(bundle)
         self.position = position; self.request = request
         requested = execution.requested; positions = execution.candidatePositions(for: execution.requested == "server" ? "server" : "local")
@@ -78,7 +77,8 @@ import Foundation
 
     func requireInformation(_ info: IOSNodeCandidates.Info, owner: String, position: Int) throws {
         guard !liveInvalidated, session != nil, let winner, owner == request, position == self.position,
-              info.proofs == prefixes, info.candidate_positions == positions,
+              let expectedPrefixes = winnerPrefixes[winner], let expectedPositions = winnerPositions[winner],
+              expectedPositions.contains(position), info.proofs == expectedPrefixes, info.candidate_positions == expectedPositions,
               info.requested_execution == requested, info.execution == winner,
               info.source_sha256 == sourceSHA256, info.proposal_source_sha256 == sourceSHA256,
               info.proposal_config_sha256 == configSHA256,

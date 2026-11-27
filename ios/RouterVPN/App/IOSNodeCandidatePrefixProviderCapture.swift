@@ -45,8 +45,12 @@ struct IOSNodeCandidatePrefixProviderCapture {
               let selected = profiles.first(where: { $0["id"] as? String == id }) else { throw IOSNodeCandidatePrefixCapture.issue() }
         let original = try IOSNodeCandidateOriginalCapture.reopen(originalInput, selectedProfile: selected)
         defer { try? original.close() }
-        guard number.intValue < original.members.count - 1 else { throw IOSNodeCandidatePrefixCapture.issue() }
-        if number.intValue >= IOSMultihopNodeSelection.maximumNodes - 1 {
+        guard number.intValue < original.members.count - (original.isAppend ? 0 : 1),
+              original.canPreparePrefix(at: number.intValue) else { throw IOSNodeCandidatePrefixCapture.issue() }
+        if let append = original.appendSource {
+            guard number.intValue == append.members.count - 1 else { throw IOSNodeCandidatePrefixCapture.issue() }
+            try append.requireDeviceCurrent()
+        } else if number.intValue >= IOSMultihopNodeSelection.maximumNodes - 1 {
             guard case .ordinary(let source) = original, source.selectionExecution == "local",
                   Int(source.plan.extendedLocalNodeCount()) == source.members.count else { throw IOSNodeCandidatePrefixCapture.issue() }
             let modes = source.members.map(\.mode)
@@ -66,6 +70,7 @@ struct IOSNodeCandidatePrefixProviderCapture {
         }
         let selectedOwner: IOSNodeChainCapture.Member?
         if case .ordinary(let capture) = original { selectedOwner = capture.controlMember }
+        else if let append = original.appendSource { selectedOwner = append.device }
         else { selectedOwner = original.members.last }
         guard let final = selectedOwner, final.id == id,
               let assets = root["profiles"] as? [String: [String: String]],
@@ -85,6 +90,7 @@ struct IOSNodeCandidatePrefixProviderCapture {
     func storeCandidatesClosed() throws { try publication.storeClosed(epoch: epoch, request: source.request) }
 
     func requireCurrent() throws {
+        try capture.appendDeviceMTU?.requireCurrent()
         guard !publication.closed(epoch: epoch, request: source.request), publication.current(source) else {
             throw IOSNodeCandidatePrefixCapture.issue()
         }

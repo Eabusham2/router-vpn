@@ -757,3 +757,10 @@ func nodeChainServerCarrierEvent(message syscall.NetlinkMessage, target Physical
 func NewNodeChainMultipleImportedServerCarrierContext(ctx, lifetime context.Context, source string) (*NodeChainServerCarrier, error) {
 	return newNodeChainServerCarrierContext(ctx, lifetime, source, 6)
 }
+
+func newNodeChainServerFirstCandidateCarrierContext(ctx, lifetime context.Context, source string, family int) (*NodeChainServerCarrier, error) {
+	if family != 0 && family != 6 {
+		return nil, nodeChainServerCarrierError
+	}
+	return newNodeChainServerCarrierContext(ctx, lifetime, source, family)
+}

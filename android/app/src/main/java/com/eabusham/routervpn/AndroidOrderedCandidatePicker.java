@@ -113,7 +113,7 @@ final class AndroidOrderedCandidatePicker implements AndroidNodeCandidatePrepara
         for(AndroidOrderedPathSelection.Member member:path){sources.add(member.source);modes.add(member.mode);}
         response=AndroidNodeChainCapture.responsePrefix(sources,modes,prefix,draft.execution());
         publicResponse=response && path.get(path.size()-1).source.imported;
-        eligible=prefix>=0&&List.of("local","server","auto").contains(draft.execution())
+        eligible=!draft.unfinished()&&prefix>=0&&List.of("local","server","auto").contains(draft.execution())
                 && (!response || local || finalNode)
                 &&(response||List.of("wg","awg2-fast","awg2-strong").contains(path.get(prefix).mode));
         saved=eligible&&local?draft.matchingSavedPath():null;first=null;

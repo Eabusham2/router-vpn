@@ -56,6 +56,8 @@ func (c NodeChainExecutionCandidateStopCapture) validate() error {
 		q.Position >= len(c.lease.Source.Members) || q.Schema == 1 && (!NodeChainPrefixMode(c.lease.Source.Members[q.Position-1].Mode) || c.lease.Source.Members[q.Position-1].NodeKind != "") ||
 		q.Schema == 2 && !c.lease.Source.CandidateResponsePrefix(q.Position) ||
 		q.Schema == 3 && !c.lease.Source.PublicCandidateResponsePrefix(q.Position) ||
+		q.Schema == 4 && !c.lease.Source.PacketCandidateResponsePrefix(q.Position, q.CandidateMode) ||
+		q.Schema == 5 && !c.lease.Source.FirstPacketCandidateResponse(q.CandidateMode) ||
 		!exactID.MatchString(c.entryTag) || !exactID.MatchString(c.selectedTag) || c.address != u.Host || c.token == "" ||
 		!nodeChainIdentityText(c.identity.EngineID) || !nodeChainIdentityText(c.identity.SessionID) || !nodeChainIdentityText(c.identity.NetworkID) ||
 		!proofID.MatchString(c.identity.ConfigSHA256) || c.seal == "" || c.seal != c.digest() {

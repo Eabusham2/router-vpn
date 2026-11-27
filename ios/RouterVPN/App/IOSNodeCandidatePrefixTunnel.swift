@@ -37,6 +37,7 @@ import Foundation
               activeSessionIdentity == nil, !iosUserDisconnectInProgress,
               !IOSMTUMeasurementGate.current.isEmpty else { throw CancellationError() }
         let deviceMTU = try IOSDeviceMTUPreference.current()
+        guard capture.appendDeviceMTU == nil || capture.appendDeviceMTU == deviceMTU else { throw CancellationError() }
         var config = try IOSNodeCandidatePrefixProviderCapture.configuration(capture: capture,
             bundle: JSONEncoder().encode(bundle), owner: owner, epoch: epoch, request: request)
         config[IOSDeviceMTUPreference.key] = deviceMTU.token
@@ -98,7 +99,10 @@ import Foundation
                     connectedAt: date, generation: generation, owner: owner, strict: capture.strict, homeLANAccess: capture.homeLANAccess)
                 try binding.require(self); try current()
                 if capture.metadata.measurement == "routed-public-candidate-response" { message = "Testing public HTTPS through the selected Shadowsocks 2022 prefix" }
-                else if let carrier = capture.metadata.candidate_mode { message = "Testing the selected packet prefix for a \(carrier) final replacement" }
+                else if let carrier = capture.metadata.candidate_mode {
+                    message = capture.isAppend ? "Testing the next \(carrier) packet node through this prefix" :
+                        "Testing the selected prefix for a \(carrier) replacement"
+                }
                 else { message = capture.metadata.measurement == "routed-candidate-response" ? "Testing the selected Shadowsocks 2022 prefix" : "Testing the selected packet prefix" }
                 return binding
             case .connecting, .reasserting: entered = true

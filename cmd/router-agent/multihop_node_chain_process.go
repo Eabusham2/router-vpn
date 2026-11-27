@@ -30,6 +30,7 @@ type relayNodeChainExecRunner struct {
 	registered             []multihoprelay.NodeChainDescriptor
 	coreInfo               os.FileInfo
 	coreSHA                string
+	packetKeys             relayNodeChainPacketKeyLedger
 }
 
 func installedRelayRunner(cfg multihoprelay.Config, node string) (multihoprelay.Runner, error) {
@@ -183,6 +184,15 @@ func (r *relayNodeChainExecRunner) StartChain(ctx context.Context, capture multi
 	}
 	p.original = original
 	p.responseSource = r.originalCandidateSource
+	p.packetKeys = &r.packetKeys
+	keys, keyErr := policy.PacketRuntimeKeys()
+	if keyErr != nil {
+		return p, bad
+	}
+	p.packetBase, keyErr = r.packetKeys.reserve(p, nil, keys)
+	if keyErr != nil {
+		return p, bad
+	}
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return p, bad
@@ -236,6 +246,8 @@ func (r *relayNodeChainExecRunner) StartChain(ctx context.Context, capture multi
 
 type relayNodeChainProcess struct {
 	candidateOwnerSelf     *relayNodeChainProcess
+	packetKeys             *relayNodeChainPacketKeyLedger
+	packetBase             *relayNodeChainPacketKeyReservation
 	responseSource         func(context.Context, multihoprelay.NodeChainCandidateCapture) (string, func() bool, error)
 	candidateMu            sync.Mutex
 	candidate              *relayNodeChainCandidateOperation
@@ -528,6 +540,12 @@ func (p *relayNodeChainProcess) cleanup() error {
 			return bad
 		}
 		p.root = nil
+	}
+	if p.packetBase != nil {
+		if p.packetKeys == nil || p.packetKeys.release(p.packetBase, p, nil) != nil {
+			return bad
+		}
+		p.packetBase = nil
 	}
 	p.cleaned = true
 	return nil

@@ -99,13 +99,13 @@ func (p *NodeChainCandidatePreparation) AllowsDial(tag, address string) bool {
 		return false
 	}
 	for position, proof := range p.proofs {
-		if p.original.importedSSMemberAt(position) != nil {
+		if p.importedPrefix(position) != nil {
 			if proof.Tag == tag && address == "1.1.1.1:443" {
 				return true
 			}
 			continue
 		}
-		api, err := privateAPI(predecessorText(p.original.nodes[position].profile, "router_api"))
+		api, err := privateAPI(predecessorText(p.prefixNode(position).profile, "router_api"))
 		if err == nil && proof.Tag == tag && api.Host == address {
 			return true
 		}
@@ -144,13 +144,13 @@ func (r *NodeChainCandidatePreparationRuntime) provePrefixes(parent context.Cont
 	}
 	for position, proof := range r.preparation.proofs {
 		ctx, cancel := context.WithTimeout(parent, 5*time.Second)
-		node := r.preparation.original.nodes[position]
+		node := r.preparation.prefixNode(position)
 		interval, err := startInterval()
 		if err != nil {
 			cancel()
 			return err
 		}
-		if member := r.preparation.original.importedSSMemberAt(position); member != nil {
+		if member := r.preparation.importedPrefix(position); member != nil {
 			err = proveExternalPublicIP(ctx, r.dialProof, proof.Tag, member.selection.ExpectedPublicIP, r.testTLS)
 		} else {
 			var data []byte
@@ -186,7 +186,7 @@ func (r *NodeChainCandidatePreparationRuntime) provePrefixes(parent context.Cont
 				return nodeChainCandidatePreparationError
 			}
 			progress := NodeChainPrefixProgress{Position: position, ProfileID: proof.ProfileID, ResponseMS: elapsed, Proven: true}
-			if r.preparation.original.importedSSMemberAt(position) != nil && proof.Kind == "public-path" {
+			if r.preparation.importedPrefix(position) != nil && proof.Kind == "public-path" {
 				progress.Kind = "public-path"
 				progress.Label = "Cumulative prefix path through custom node to public HTTPS edge"
 			}

@@ -28,6 +28,8 @@ type relayNodeChainCandidateOperation struct {
 	responseFile                string
 	responseFileOwner           os.FileInfo
 	responseCurrent             func() bool
+	packetKeys                  *relayNodeChainPacketKeyReservation
+	pairing                     string
 }
 
 func (p *relayNodeChainProcess) NewCandidateOperation(ctx context.Context, c multihoprelay.NodeChainCandidateCapture) (multihoprelay.NodeChainCandidateOperation, error) {
@@ -71,13 +73,13 @@ func (op *relayNodeChainCandidateOperation) Prepare(ctx context.Context) (multih
 	bounded, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(op.ctx, cancel)
 	defer func() { stop(); cancel() }()
-	if op.capture.Request.Schema == 2 || op.capture.Request.Schema == 3 {
+	if op.capture.Request.Schema == 2 || op.capture.Request.Schema == 3 || op.capture.Request.IsPacketResponse() {
 		if err := op.prepareResponseSource(bounded); err != nil {
 			return multihoprelay.NodeChainCandidateReceipt{}, err
 		}
 	}
 	response, err := op.process.candidateRequest(bounded, "candidate-prepare", op.capture)
-	if err != nil || response.Receipt == nil || !op.original() || op.ctx.Err() != nil || op.responseCurrent != nil && !op.responseCurrent() {
+	if err != nil || response.Receipt == nil || !op.original() || op.ctx.Err() != nil || op.responseCurrent != nil && !op.responseCurrent() || !op.packetReceiptCurrent(response.Receipt) {
 		return multihoprelay.NodeChainCandidateReceipt{}, multihoprelay.ErrUnavailable
 	}
 	return *response.Receipt, nil
@@ -105,7 +107,7 @@ func (op *relayNodeChainCandidateOperation) Snapshot(ctx context.Context) (multi
 		return multihoprelay.NodeChainCandidateReceipt{}, multihoprelay.ErrOwnership
 	}
 	response, err := op.process.candidateRequest(bounded, "candidate-status", op.capture)
-	if err != nil || response.Receipt == nil || !op.original() || op.ctx.Err() != nil || op.responseCurrent != nil && !op.responseCurrent() {
+	if err != nil || response.Receipt == nil || !op.original() || op.ctx.Err() != nil || op.responseCurrent != nil && !op.responseCurrent() || !op.packetReceiptCurrent(response.Receipt) {
 		return multihoprelay.NodeChainCandidateReceipt{}, multihoprelay.ErrUnavailable
 	}
 	return *response.Receipt, nil
@@ -196,6 +198,12 @@ func (op *relayNodeChainCandidateOperation) Close(ctx context.Context) error {
 	defer op.process.candidateMu.Unlock()
 	if op.process.candidate != op {
 		return multihoprelay.ErrOwnership
+	}
+	if op.packetKeys != nil {
+		if op.process.packetKeys == nil || op.process.packetKeys.release(op.packetKeys, op.process, op) != nil {
+			return multihoprelay.ErrOwnership
+		}
+		op.packetKeys = nil
 	}
 	op.mu.Lock()
 	op.drained = true
@@ -311,7 +319,22 @@ func (op *relayNodeChainCandidateOperation) prepareResponseSource(ctx context.Co
 	if err != nil || current == nil || !current() {
 		return multihoprelay.ErrUnavailable
 	}
-	if op.capture.Request.Schema == 3 {
+	if op.capture.Request.IsPacketResponse() {
+		var responder *mobilemultihop.NodeChainServerPacketCandidateResponder
+		responder, err = mobilemultihop.NewNodeChainServerPacketCandidateResponder(op.capture, input)
+		if err == nil {
+			var keys []string
+			keys, err = responder.PacketKeys()
+			if err == nil && p.packetKeys != nil {
+				op.packetKeys, err = p.packetKeys.reserve(p, op, keys)
+				if err == nil {
+					op.pairing = responder.PairingSHA256()
+				}
+			} else {
+				err = multihoprelay.ErrOwnership
+			}
+		}
+	} else if op.capture.Request.Schema == 3 {
 		_, err = mobilemultihop.NewNodeChainServerPublicCandidateResponder(op.capture, input)
 	} else {
 		_, err = mobilemultihop.NewNodeChainServerCandidateResponder(op.capture, input)
@@ -348,4 +371,14 @@ func (op *relayNodeChainCandidateOperation) prepareResponseSource(ctx context.Co
 		return multihoprelay.ErrOwnership
 	}
 	return nil
+}
+
+func (op *relayNodeChainCandidateOperation) packetReceiptCurrent(receipt *multihoprelay.NodeChainCandidateReceipt) bool {
+	if receipt == nil {
+		return false
+	}
+	if !op.capture.Request.IsPacketResponse() {
+		return receipt.PairingSHA256 == ""
+	}
+	return op.packetKeys != nil && op.pairing != "" && receipt.PairingSHA256 == op.pairing
 }

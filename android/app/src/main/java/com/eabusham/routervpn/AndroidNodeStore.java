@@ -166,6 +166,7 @@ final class AndroidNodeStore {
         final List<ChainSource> members;
         final List<String> modes;
         final String execution;
+        final String appendMode,appendRevision;
         private final AndroidNodeStore owner;
         private final long generation;
         private final ChainCatalog draftCatalog;
@@ -179,7 +180,13 @@ final class AndroidNodeStore {
         }
         private ChainCapture(AndroidNodeStore owner,ChainSource control,List<ChainSource> members,List<String> modes,String execution,
                              ChainCatalog draftCatalog,int draftPrefix,java.util.function.BooleanSupplier draftCurrent,String draftReferences) {
+            this(owner,control,members,modes,execution,draftCatalog,draftPrefix,draftCurrent,draftReferences,"","");
+        }
+        private ChainCapture(AndroidNodeStore owner,ChainSource control,List<ChainSource> members,List<String> modes,String execution,
+                             ChainCatalog draftCatalog,int draftPrefix,java.util.function.BooleanSupplier draftCurrent,String draftReferences,
+                             String appendMode,String appendRevision) {
             this.owner=owner;this.control=control;generation=selectionGeneration;this.execution=execution;
+            this.appendMode=appendMode;this.appendRevision=appendRevision;
             this.members=Collections.unmodifiableList(new ArrayList<>(members));this.modes=Collections.unmodifiableList(new ArrayList<>(modes));
             this.draftCatalog=draftCatalog;this.draftPrefix=draftPrefix;this.draftCurrent=draftCurrent;this.draftReferences=draftReferences;
         }
@@ -206,6 +213,11 @@ final class AndroidNodeStore {
             } catch(Exception invalid) { return false; }
         }
         boolean measurementOnly(){return draftCatalog!=null;}
+        boolean appendDraft(){return measurementOnly()&&!appendMode.isEmpty();}
+        String deviceRevision()throws Exception {
+            requireCurrent();
+            return "android-device-"+generation+"-"+AndroidTorProfile.digest(control.bytes());
+        }
         boolean selectedCandidateDraft(){return measurementOnly()&&java.util.Arrays.asList("server","auto").contains(execution);}
         void requirePurpose(int prefix){
             if(selectedCandidateDraft()||measurementOnly()&&prefix!=draftPrefix)throw new IllegalStateException("The draft belongs only to its captured candidate measurement purpose.");
@@ -295,6 +307,9 @@ final class AndroidNodeStore {
         }
         ChainCapture captureCandidateDraft(List<ChainSource> sources,List<String> modes,int prefix,java.util.function.BooleanSupplier current) throws Exception {
             return owner.captureCandidateDraft(this,sources,modes,prefix,current);
+        }
+        ChainCapture captureCandidateAppend(List<ChainSource> sources,List<String> modes,String nextMode,String revision,java.util.function.BooleanSupplier current)throws Exception {
+            return owner.captureCandidateAppend(this,sources,modes,nextMode,revision,current);
         }
         ChainCapture captureSelectedCandidateDraft(List<ChainSource> sources,List<String> modes,int prefix,String execution,java.util.function.BooleanSupplier current) throws Exception {
             return owner.captureSelectedCandidateDraft(this,sources,modes,prefix,execution,current);
@@ -616,6 +631,31 @@ final class AndroidNodeStore {
             originals.add(original);refs.put(new JSONObject().put("id",original.profileId).put("mode",mode));
         }
         ChainCapture captured=new ChainCapture(this,catalog.source(catalog.selectedId),originals,modes,"local",catalog,prefix,current,refs.toString());
+        captured.requireCurrent();return captured;
+    } }
+
+    /** A genuine unfinished prefix has no route-final or selected execution authority. */
+    private synchronized ChainCapture captureCandidateAppend(ChainCatalog catalog,List<ChainSource> sources,List<String> modes,
+            String nextMode,String revision,java.util.function.BooleanSupplier current)throws Exception { synchronized(STORE_LOCK) {
+        requireChainCatalog(catalog);
+        if(current==null||!current.getAsBoolean()||sources.isEmpty()||sources.size()>=PHYSICAL_TRAVERSAL_DEPTH
+                ||sources.size()!=modes.size()||!List.of("wg","awg2-fast","awg2-strong").contains(nextMode)
+                ||revision==null||!revision.matches("[A-Za-z0-9_.-]{1,128}"))
+            throw new IllegalStateException("The unfinished draft or next packet mode changed.");
+        ChainSource device=catalog.source(catalog.selectedId);
+        device.requirePairedIdentity();
+        List<ChainSource> originals=new ArrayList<>();JSONArray refs=new JSONArray();
+        Set<String> ids=new HashSet<>(),proofs=new HashSet<>();long bytes=device.bytes().length;
+        for(int i=0;i<sources.size();i++) {
+            ChainSource expected=sources.get(i),original=catalog.source(expected.id);String mode=modes.get(i);
+            if(!java.util.Arrays.equals(original.bytes(),expected.bytes())
+                    ||!ids.add(original.profileId)||!proofs.add(original.identityKey()))
+                throw new IllegalStateException("Each unfinished prefix position needs its own original source.");
+            AndroidNodeCandidateAppendSource.requirePrefixMember(original,mode,i);
+            bytes+=original.bytes().length;if(bytes>MAX_CHAIN_SOURCE)throw new IllegalStateException("The unfinished draft exceeds its private source bound.");
+            originals.add(original);refs.put(new JSONObject().put("id",original.profileId).put("mode",mode));
+        }
+        ChainCapture captured=new ChainCapture(this,device,originals,modes,"local",catalog,sources.size()-1,current,refs.toString(),nextMode,revision);
         captured.requireCurrent();return captured;
     } }
 

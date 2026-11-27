@@ -60,7 +60,7 @@ func orderedCandidateLaunchPurposeLocked(a *app, launch *desktopNodeLaunch) (*or
 	if launch != nil && launch.candidatePrefix != nil {
 		prefix := launch.candidatePrefix
 		p := prefix.preparation
-		if launch.chain != nil || p == nil || p.prefixPreparation == nil || a == nil || p.app != a || p.launch != launch || p.selection.Native != prefix.selection.Native || p.request.Scope != orderedCandidateSavedPrefixScope {
+		if launch.chain != nil || p == nil || p.prefixPreparation == nil || a == nil || p.app != a || p.launch != launch || p.selection.Native != prefix.selection.Native || !p.closedPurposeCurrent() {
 			return nil, errors.New("candidate prefix purpose belongs to another original owner")
 		}
 		return p, p.currentLocked()

@@ -9,6 +9,10 @@ import (
 )
 
 func applyNodeChainMemberMTUWithServerScope(nodes []nodeChainGraphMember, closures []*externalPredecessor, server *nodeChainMultipleImportedServerScope) error {
+	return applyNodeChainMemberMTUWithAppendScope(nodes, closures, server, nil)
+}
+
+func applyNodeChainMemberMTUWithAppendScope(nodes []nodeChainGraphMember, closures []*externalPredecessor, server *nodeChainMultipleImportedServerScope, appendScope *nodeChainAppendGraphScope) error {
 	if server != nil && server.validateCompilation(nodes, closures) != nil {
 		return nodeChainServerError
 	}
@@ -22,12 +26,12 @@ func applyNodeChainMemberMTUWithServerScope(nodes []nodeChainGraphMember, closur
 		if err := nodeMultihopMTU(closures[i-1], closures[i], selection, envelope, nodes[i].mode); err != nil {
 			return err
 		}
-		// Only schema six can place a paired packet interface after an
-		// independently imported SS member. Its packet budget crosses the
-		// complete captured proxy path, not that proxy's OS TUN baseline.
-		if nodes[i-1].imported && nodes[i-1].mode == "shadowsocks" && NodeChainPrefixMode(nodes[i].mode) &&
+		// The complete imported source or distinct append scope retains every
+		// SS member crossed before the next packet interface. Its packet budget
+		// uses that complete proxy path, not the proxy's OS TUN baseline.
+		if (nodes[i-1].imported || appendScope != nil) && nodes[i-1].mode == "shadowsocks" && NodeChainPrefixMode(nodes[i].mode) &&
 			(server == nil || !server.firstPhysicalPacket(i)) {
-			if err := applyNodeChainImportedPacketMTU(nodes, closures, i); err != nil {
+			if err := applyNodeChainCapturedStreamPacketMTU(nodes, closures, i, appendScope); err != nil {
 				return err
 			}
 		}

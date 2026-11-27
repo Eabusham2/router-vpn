@@ -11,10 +11,10 @@ import (
 )
 
 func prepareDesktopCandidatePrefixHost(ctx context.Context, p *orderedCandidatePreparation) (*desktopNodeLaunch, error) {
-	if p == nil || p.prefixPreparation == nil || p.request.Scope != orderedCandidateSavedPrefixScope {
+	if p == nil || !p.closedPurposeCurrent() {
 		return nil, errors.New("prefix host requires its captured closed preparation")
 	}
-	capture, err := captureDesktopNodeChainHostContext(ctx, p.app, p.selection)
+	capture, err := captureDesktopCandidatePrefixHostContext(ctx, p)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +164,7 @@ func (p *orderedCandidatePreparation) startPrefixRuntime(ctx context.Context, r 
 	}
 	r.transition = false
 	// This remains the original source-only full graph, never a native graph.
-	r.catalog, err = captureDesktopNodeChainCandidateSourcesForScope(ctx, p.app, p.inventory.launch, p.request.Position, p.request.CandidateIDs, orderedCandidateSavedPrefixScope)
+	r.catalog, err = p.recaptureCandidateSources(ctx)
 	if err != nil || !orderedCandidateSameInventory(p.inventory, r.catalog) {
 		return r, errors.Join(err, errors.New("prefix preparation changed its captured saved inventory"))
 	}

@@ -23,6 +23,7 @@ type NodeChainExecutionRemoteCandidateOwner interface {
 }
 
 type NodeChainExecutionRemoteCandidatePlan struct {
+	firstPacket   bool
 	self          *NodeChainExecutionRemoteCandidatePlan
 	runtime       *NodeChainExecutionRuntime
 	projection    *NodeChainExecutionProjection
@@ -34,24 +35,28 @@ type NodeChainExecutionRemoteCandidatePlan struct {
 }
 
 func (r *NodeChainExecutionRuntime) NewRemoteCandidatePlanContext(ctx context.Context, position int, inventory string) (*NodeChainExecutionRemoteCandidatePlan, error) {
-	return r.remoteCandidatePlanContext(ctx, position, inventory, hopmeasure.CandidateTCPMeasurement)
+	return r.remoteCandidatePlanContext(ctx, position, inventory, false, hopmeasure.CandidateTCPMeasurement)
 }
 
 // NewRemoteResponseCandidatePlanContext can acquire only the selected original
 // Server trial's provisioned stream challenge operation.
 func (r *NodeChainExecutionRuntime) NewRemoteResponseCandidatePlanContext(ctx context.Context, position int, inventory string) (*NodeChainExecutionRemoteCandidatePlan, error) {
-	return r.remoteCandidatePlanContext(ctx, position, inventory, hopmeasure.CandidatePrivateResponseMeasurement)
+	return r.remoteCandidatePlanContext(ctx, position, inventory, false, hopmeasure.CandidatePrivateResponseMeasurement)
 }
 func (r *NodeChainExecutionRuntime) NewRemotePublicResponseCandidatePlanContext(ctx context.Context, position int, inventory string) (*NodeChainExecutionRemoteCandidatePlan, error) {
-	return r.remoteCandidatePlanContext(ctx, position, inventory, hopmeasure.CandidatePublicResponseMeasurement)
+	return r.remoteCandidatePlanContext(ctx, position, inventory, false, hopmeasure.CandidatePublicResponseMeasurement)
 }
 
-func (r *NodeChainExecutionRuntime) remoteCandidatePlanContext(ctx context.Context, position int, inventory, measurement string) (*NodeChainExecutionRemoteCandidatePlan, error) {
+func (r *NodeChainExecutionRuntime) remoteCandidatePlanContext(ctx context.Context, position int, inventory string, packetResponse bool, measurement string) (*NodeChainExecutionRemoteCandidatePlan, error) {
+	return r.remoteCandidatePlanPurposeContext(ctx, position, inventory, packetResponse, false, measurement)
+}
+
+func (r *NodeChainExecutionRuntime) remoteCandidatePlanPurposeContext(ctx context.Context, position int, inventory string, packetResponse, firstPacket bool, measurement string) (*NodeChainExecutionRemoteCandidatePlan, error) {
 	mode, modeErr := candidateInventoryResponseMode(inventory)
-	if modeErr != nil || mode != "" {
+	if modeErr != nil || packetResponse && !NodeChainPrefixMode(mode) || !packetResponse && mode != "" {
 		return nil, nodeChainExecutionError
 	}
-	if ctx == nil || r == nil || position < 1 || r.engine == nil || !reflect.TypeOf(r.engine).Comparable() {
+	if ctx == nil || r == nil || firstPacket && (!packetResponse || position != 0) || !firstPacket && position < 1 || r.engine == nil || !reflect.TypeOf(r.engine).Comparable() {
 		return nil, nodeChainExecutionError
 	}
 	if err := r.HealthyContext(ctx); err != nil {
@@ -71,7 +76,16 @@ func (r *NodeChainExecutionRuntime) remoteCandidatePlanContext(ctx context.Conte
 	descriptor := r.projection.policy.Descriptor()
 	var packet *NodeChainCandidatePlan
 	var err error
-	if measurement == hopmeasure.CandidatePublicResponseMeasurement {
+	if packetResponse {
+		supported := descriptor.PacketCandidateResponsePrefix(position, mode)
+		if firstPacket {
+			supported = descriptor.FirstPacketCandidateResponse(mode)
+		}
+		if !r.projection.preparation.SupportsServerPacketResponseCandidate(position) || !supported || r.projection.preparation.SelectedPacketCandidateMode(position) != mode {
+			return nil, nodeChainExecutionError
+		}
+		packet, err = r.projection.selectedPacketCandidatePlan(position, inventory)
+	} else if measurement == hopmeasure.CandidatePublicResponseMeasurement {
 		original := r.projection.policy.local
 		if !descriptor.PublicCandidateResponsePrefix(position) || !r.projection.preparation.SupportsServerPublicResponseCandidate(position) || r.projection.policy.externalFinal != r.projection.preparation.externalFinal {
 			return nil, nodeChainExecutionError
@@ -104,9 +118,16 @@ func (r *NodeChainExecutionRuntime) remoteCandidatePlanContext(ctx context.Conte
 	if measurement != hopmeasure.CandidateTCPMeasurement && packet.measurement != measurement || measurement == hopmeasure.CandidateTCPMeasurement && packet.measurement != "" {
 		return nil, nodeChainExecutionError
 	}
-	p := &NodeChainExecutionRemoteCandidatePlan{runtime: r, projection: r.projection, trial: trial, identity: identity, engine: r.engine, packet: packet}
+	p := &NodeChainExecutionRemoteCandidatePlan{firstPacket: firstPacket, runtime: r, projection: r.projection, trial: trial, identity: identity, engine: r.engine, packet: packet}
 	p.self = p
-	raw, _ := json.Marshal([]any{"routervpn-node-chain-remote-candidate-v1", identity, trial.id, trial.execution, trial.tag, trial.selectionEpoch, packet.capture})
+	domain := "routervpn-node-chain-remote-candidate-v1"
+	if packetResponse {
+		domain = "routervpn-selected-server-packet-response-candidate-v4"
+	}
+	if firstPacket {
+		domain = "routervpn-selected-server-first-packet-response-candidate-v5"
+	}
+	raw, _ := json.Marshal([]any{domain, identity, trial.id, trial.execution, trial.tag, trial.selectionEpoch, packet.capture})
 	p.capture = externalDigest(raw)
 	clear(raw)
 	p.seal = p.digest()
@@ -116,12 +137,12 @@ func (p *NodeChainExecutionRemoteCandidatePlan) digest() string {
 	if p == nil || p.packet == nil || p.projection == nil {
 		return ""
 	}
-	raw, _ := json.Marshal([]any{p.projection.SourceSHA256(), p.projection.ConfigSHA256(), p.identity, p.trial.id, p.trial.execution, p.trial.tag, p.trial.selectionEpoch, p.packet.capture, p.packet.digest(), p.capture})
+	raw, _ := json.Marshal([]any{p.projection.SourceSHA256(), p.projection.ConfigSHA256(), p.identity, p.trial.id, p.trial.execution, p.trial.tag, p.trial.selectionEpoch, p.packet.capture, p.packet.digest(), p.capture, p.firstPacket})
 	defer clear(raw)
 	return externalDigest(raw)
 }
 func (p *NodeChainExecutionRemoteCandidatePlan) current(ctx context.Context) error {
-	if p == nil || p.self != p || ctx == nil || p.runtime == nil || p.projection == nil || p.projection.policy == nil || p.trial == nil || p.packet == nil || p.packet.chain != p.projection.policy.local || p.packet.validate() != nil || p.seal == "" || p.seal != p.digest() || p.runtime.projection != p.projection || p.engine == nil || p.runtime.engine == nil || !reflect.TypeOf(p.engine).Comparable() || !reflect.TypeOf(p.runtime.engine).Comparable() || p.runtime.engine != p.engine || p.trial.execution != "server" {
+	if p == nil || p.self != p || ctx == nil || p.runtime == nil || p.projection == nil || p.projection.policy == nil || p.trial == nil || p.packet == nil || p.packet.chain != p.projection.policy.local || p.firstPacket && (p.packet.prefix.Position != 0 || !NodeChainPrefixMode(p.packet.responseMode)) || !p.firstPacket && p.packet.prefix.Position < 1 || p.packet.validate() != nil || p.seal == "" || p.seal != p.digest() || p.runtime.projection != p.projection || p.engine == nil || p.runtime.engine == nil || !reflect.TypeOf(p.engine).Comparable() || !reflect.TypeOf(p.runtime.engine).Comparable() || p.runtime.engine != p.engine || p.trial.execution != "server" {
 		return nodeChainExecutionError
 	}
 	p.runtime.mu.Lock()
@@ -539,4 +560,16 @@ func (e *nodeChainExecutionRemoteCandidateEngine) publicResponse(ctx context.Con
 		return 0, nodeChainExecutionError
 	}
 	return elapsed, ctx.Err()
+}
+
+// NewRemotePacketResponseCandidatePlanContext holds the already selected Server
+// trial. The agent must resolve the referenced independent operator pair.
+func (r *NodeChainExecutionRuntime) NewRemotePacketResponseCandidatePlanContext(ctx context.Context, position int, inventory string) (*NodeChainExecutionRemoteCandidatePlan, error) {
+	return r.remoteCandidatePlanContext(ctx, position, inventory, true, hopmeasure.CandidatePrivateResponseMeasurement)
+}
+
+// This separate operation keeps the original entry and acquires the registered
+// candidate physical carrier. Existing suffix constructors reject position zero.
+func (r *NodeChainExecutionRuntime) NewRemoteFirstPacketResponseCandidatePlanContext(ctx context.Context, position int, inventory string) (*NodeChainExecutionRemoteCandidatePlan, error) {
+	return r.remoteCandidatePlanPurposeContext(ctx, position, inventory, true, true, hopmeasure.CandidatePrivateResponseMeasurement)
 }

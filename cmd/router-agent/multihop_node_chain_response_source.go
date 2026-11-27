@@ -6,12 +6,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"router-vpn/internal/multihoprelay"
 )
 
 func (r *relayNodeChainExecRunner) originalCandidateSource(ctx context.Context, c multihoprelay.NodeChainCandidateCapture) (string, func() bool, error) {
-	if r == nil || ctx == nil || ctx.Err() != nil || c.Validate() != nil || (c.Request.Schema != 2 && c.Request.Schema != 3) {
+	if r == nil || ctx == nil || ctx.Err() != nil || c.Validate() != nil || (c.Request.Schema != 2 && c.Request.Schema != 3 && !c.Request.IsPacketResponse()) {
 		return "", nil, multihoprelay.ErrUnavailable
 	}
 	knownID := false
@@ -30,7 +31,11 @@ func (r *relayNodeChainExecRunner) originalCandidateSource(ctx context.Context, 
 				continue
 			}
 			knownID = true
-			if member.Mode != "shadowsocks" || member.StartLayer != "off" ||
+			if c.Request.IsPacketResponse() {
+				if member.Mode != c.Request.CandidateMode || member.StartLayer != "off" || member.NodeKind != "" {
+					continue
+				}
+			} else if member.Mode != "shadowsocks" || member.StartLayer != "off" ||
 				c.Request.Schema == 2 && member.NodeKind != "" ||
 				c.Request.Schema == 3 && (member.NodeKind != "external" || member.ProofKind != "public-path" || member.SourceSHA256 != c.Request.CandidateSourceSHA256) {
 				continue
@@ -52,7 +57,9 @@ func (r *relayNodeChainExecRunner) originalCandidateSource(ctx context.Context, 
 				return "", nil, multihoprelay.ErrUnavailable
 			}
 			var input string
-			if c.Request.Schema == 3 {
+			if c.Request.IsPacketResponse() {
+				input, err = policy.CandidatePacketResponseInput(c)
+			} else if c.Request.Schema == 3 {
 				input, err = policy.PublicCandidateResponseInput(c)
 			} else {
 				input, err = policy.CandidateResponseInput(c)
@@ -101,4 +108,68 @@ func readNodeChainRegistration(path string, previous os.FileInfo) ([]byte, os.Fi
 		return nil, nil, multihoprelay.ErrOwnership
 	}
 	return raw, before, nil
+}
+
+// The original runner owns every live worker and candidate reservation. A failed
+// native close cannot free peer identities for another worker or operation.
+type relayNodeChainPacketKeyReservation struct {
+	self      *relayNodeChainPacketKeyReservation
+	ledger    *relayNodeChainPacketKeyLedger
+	process   *relayNodeChainProcess
+	operation *relayNodeChainCandidateOperation
+	keys      []string
+}
+type relayNodeChainPacketKeyLedger struct {
+	mu     sync.Mutex
+	owners map[*relayNodeChainPacketKeyReservation]bool
+}
+
+func (r *relayNodeChainPacketKeyLedger) reserve(p *relayNodeChainProcess, op *relayNodeChainCandidateOperation, keys []string) (*relayNodeChainPacketKeyReservation, error) {
+	if r == nil || p == nil || p.candidateOwnerSelf != p || p.packetKeys != r || op != nil && (op.self != op || op.process != p) {
+		return nil, multihoprelay.ErrOwnership
+	}
+	unique := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		if key == "" || unique[key] {
+			return nil, multihoprelay.ErrOwnership
+		}
+		unique[key] = true
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.owners == nil {
+		r.owners = make(map[*relayNodeChainPacketKeyReservation]bool)
+	}
+	if op != nil && (p.packetBase == nil || !r.owners[p.packetBase] || p.packetBase.process != p || p.packetBase.operation != nil) {
+		return nil, multihoprelay.ErrOwnership
+	}
+	for original := range r.owners {
+		if original.process == p && original.operation == op {
+			return nil, multihoprelay.ErrBusy
+		}
+		if original.operation == nil && op == nil {
+			continue
+		} // Existing full-worker sharing is unchanged.
+		for _, key := range original.keys {
+			if unique[key] {
+				return nil, multihoprelay.ErrBusy
+			}
+		}
+	}
+	owner := &relayNodeChainPacketKeyReservation{ledger: r, process: p, operation: op, keys: append([]string(nil), keys...)}
+	owner.self = owner
+	r.owners[owner] = true
+	return owner, nil
+}
+func (r *relayNodeChainPacketKeyLedger) release(owner *relayNodeChainPacketKeyReservation, p *relayNodeChainProcess, op *relayNodeChainCandidateOperation) error {
+	if r == nil || owner == nil || owner.self != owner || owner.ledger != r || owner.process != p || owner.operation != op {
+		return multihoprelay.ErrOwnership
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.owners[owner] {
+		return multihoprelay.ErrOwnership
+	}
+	delete(r.owners, owner)
+	return nil
 }

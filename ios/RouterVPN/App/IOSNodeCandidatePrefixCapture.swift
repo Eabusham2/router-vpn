@@ -22,6 +22,7 @@ struct IOSNodeCandidatePrefixCapture {
         let schema: Int, prefix_position: Int
         let measurement: String?
         let candidate_mode: String?
+        let purpose: String?, append_source_metadata_sha256: String?
         let prefix_id: String, capture_sha256: String, source_sha256: String, config_sha256: String, original_source_sha256: String
         let targets: [Target]
         let prefixes: [Prefix]
@@ -37,8 +38,11 @@ struct IOSNodeCandidatePrefixCapture {
     let metadata: Metadata
     let responseSourceNodes: [IOSNodeCandidateResponseNode]?
     var responseMode: String? { metadata.candidate_mode }
+    var appendSourceMetadataSHA256: String? { metadata.append_source_metadata_sha256 }
+    var isAppend: Bool { metadata.purpose == "draft-prefix-append" }
     let strict: Bool
     let homeLANAccess: Bool
+    let appendDeviceMTU: IOSDeviceMTUPreference?
     var config: String { native.config() }
     var sourceSHA256: String { metadata.source_sha256 }
     var configSHA256: String { metadata.config_sha256 }
@@ -52,7 +56,7 @@ struct IOSNodeCandidatePrefixCapture {
     static func compile(original: IOSNodeCandidateOriginalCapture, position: Int, inventory: String) throws -> Self {
         guard original.selectionExecution == "local", let source = original.originalSource,
               !source.isEmpty, source.utf8.count <= IOSNodeChainCapture.maximumInputBytes,
-              position >= 0, position < original.members.count - 1,
+              position >= 0, position < original.members.count - (original.isAppend ? 0 : 1),
               original.canPreparePrefix(at: position),
               !inventory.isEmpty, inventory.utf8.count <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw issue() }
         var failure: NSError?
@@ -61,6 +65,7 @@ struct IOSNodeCandidatePrefixCapture {
         case .ordinary: created = LibboxNewRouterNodeChainCandidatePreparation(source, Int32(position), inventory, &failure)
         case .socks: created = LibboxNewRouterNodeChainSOCKSCandidatePreparation(source, Int32(position), inventory, &failure)
         case .connect: created = LibboxNewRouterNodeChainCONNECTCandidatePreparation(source, Int32(position), inventory, &failure)
+        case .append: created = LibboxNewRouterNodeChainCandidateAppendPreparation(source, inventory, &failure)
         }
         guard failure == nil, let created else { try? created?.close(); throw failure ?? issue() }
         do { return try Self(native: created, original: original, position: position, inventory: inventory) }
@@ -87,7 +92,7 @@ struct IOSNodeCandidatePrefixCapture {
 
     private init(native: LibboxRouterNodeChainCandidatePreparation, original: IOSNodeCandidateOriginalCapture,
                  position: Int, inventory: String) throws {
-        guard original.selectionExecution == "local", position >= 0, position < original.members.count - 1,
+        guard original.selectionExecution == "local", position >= 0, position < original.members.count - (original.isAppend ? 0 : 1),
               let offered = try JSONSerialization.jsonObject(with: Data(inventory.utf8)) as? [String: Any] else { throw Self.issue() }
         let responseMode = offered["response_mode"] as? String
         guard offered["response_mode"] == nil || responseMode?.isEmpty == false else { throw Self.issue() }
@@ -102,11 +107,34 @@ struct IOSNodeCandidatePrefixCapture {
               source["kind"] as? String == original.preparationKind,
               Self.integer(source["schema"]) == 1, Self.integer(source["prefix_position"]) == position,
               source["inventory"] as? String == inventory else { throw Self.issue() }
-        var pages = try IOSCandidateMetadataPages(raw, inventoryBytes: inventory.utf8.count, legacyLimit: 65536, family: .preparation)
+        var pages = try IOSCandidateMetadataPages(raw, inventoryBytes: inventory.utf8.count, legacyLimit: 65536,
+                                                  family: original.isAppend ? .appendPreparation : .preparation)
         while let offset = pages.nextOffset { try pages.append(native.metadataPage(offset)) }
-        let value = try JSONDecoder().decode(Metadata.self, from: pages.result())
+        var metadataBytes = try pages.result()
+        if let append = original.appendSource {
+            let originalMetadata = native.appendSourceMetadata()
+            guard native.isAppend(), Int(native.appendPosition()) == original.members.count,
+                  source["prefix_source"] as? String == append.source,
+                  Self.integer(source["append_position"]) == original.members.count,
+                  originalMetadata == append.metadata,
+                  let retained = try JSONSerialization.jsonObject(with: Data(originalMetadata.utf8)) as? [String: Any],
+                  var body = try JSONSerialization.jsonObject(with: metadataBytes) as? [String: Any],
+                  body["append_source_metadata_sha256"] as? String == append.metadataSHA256,
+                  Self.integer(body["prefix_count"]) == original.members.count,
+                  Self.integer(body["append_position"]) == original.members.count,
+                  body["purpose"] as? String == "draft-prefix-append" else { throw Self.issue() }
+            for key in ["draft_revision","device_revision","device_source_sha256","device_mtu_revision","candidate_mode"] {
+                guard let expected = retained[key] as? String, body[key] as? String == expected else { throw Self.issue() }
+            }
+            // The complete original proof/MTU description is independently
+            // source-bound; native pages carry its exact digest, not repeated rows.
+            body["prefixes"] = retained["prefixes"]; body["mtu"] = retained["mtu"]
+            metadataBytes = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
+        } else if native.isAppend() { throw Self.issue() }
+        let value = try JSONDecoder().decode(Metadata.self, from: metadataBytes)
         guard (value.measurement ?? "routed-tcp-connect") == prefixes[position].metric,
-              value.candidate_mode == responseMode,
+              value.candidate_mode == responseMode, value.purpose == (original.isAppend ? "draft-prefix-append" : nil),
+              value.append_source_metadata_sha256 == original.appendSource?.metadataSHA256,
               value.schema == 1, value.prefix_position == position, value.prefix_id == original.members[position].id,
               value.source_sha256 == native.sourceSHA256(), value.config_sha256 == native.configSHA256(),
               value.capture_sha256 == native.captureSHA256(), value.original_source_sha256 == native.originalSourceSHA256(),
@@ -116,13 +144,33 @@ struct IOSNodeCandidatePrefixCapture {
               value.mtu_measurement == "configured-bounds-only", value.prefixes.count == position + 1,
               !value.targets.isEmpty, Set(value.targets.map(\.id)).count == value.targets.count,
               value.targets.allSatisfy({ !$0.id.isEmpty && $0.id.utf8.count <= 128 && Self.digest($0.source_sha256) }) else { throw Self.issue() }
+        var appendProofs: [Metadata.Prefix] = [], appendOutbounds: [[String: Any]] = []
+        if let append = original.appendSource, append.members.contains(where: { $0.mode == "shadowsocks" }) {
+            guard let retained = try JSONSerialization.jsonObject(with: Data(append.metadata.utf8)) as? [String: Any],
+                  let rows = retained["prefixes"] as? [[String: Any]], rows.count == value.prefixes.count,
+                  let graph = try JSONSerialization.jsonObject(with: Data(append.config.utf8)) as? [String: Any],
+                  let outbounds = graph["outbounds"] as? [[String: Any]] else { throw Self.issue() }
+            appendProofs = try JSONDecoder().decode([Metadata.Prefix].self, from: JSONSerialization.data(withJSONObject: rows, options: [.sortedKeys]))
+            appendOutbounds = outbounds
+        }
         for (index, prefix) in value.prefixes.enumerated() {
             let member = original.members[index]
             let layer = member.profile["start_layer"] as? String ?? "off"
             guard prefix.position == index, prefix.profile_id == member.id, prefix.mode == member.mode,
                   prefix.start_layer == (layer.isEmpty ? "off" : layer), Self.digest(prefix.source_sha256),
                   !prefix.tag.isEmpty else { throw Self.issue() }
-            if member.mode == "shadowsocks" {
+            if original.isAppend && member.mode == "shadowsocks" {
+                guard index > 0, prefix.start_layer == "off", value.measurement == "routed-candidate-response",
+                      appendProofs.indices.contains(index), appendProofs[index] == prefix,
+                      appendOutbounds.filter({ $0["tag"] as? String == prefix.tag && $0["type"] as? String == "shadowsocks" }).count == 1 else { throw Self.issue() }
+                if member.profile["node_kind"] as? String == "external" {
+                    guard prefix.node_id.isEmpty, prefix.node_kind == "external", prefix.kind == "public-path" else { throw Self.issue() }
+                } else {
+                    guard member.profile["node_kind"] as? String == "router-vpn", member.profile["external"] == nil,
+                          !prefix.node_id.isEmpty, prefix.node_id == member.profile["node_proof_id"] as? String,
+                          prefix.node_kind == nil, prefix.kind == nil else { throw Self.issue() }
+                }
+            } else if member.mode == "shadowsocks" {
                 guard index > 0, prefix.start_layer == "off", case .ordinary(let capture) = original else { throw Self.issue() }
                 let retained: String? = LibboxRouterNodeChainCandidatePrefixProof(capture.plan, Int32(index))
                 guard let retained, try JSONDecoder().decode(Metadata.Prefix.self, from: Data(retained.utf8)) == prefix,
@@ -156,7 +204,10 @@ struct IOSNodeCandidatePrefixCapture {
         guard value.mtu.ceiling == value.mtu.prefixes.map(\.ceiling).min() else { throw Self.issue() }
         self.native = native; launchInput = launch; originalLaunchInput = original.launchInput
         self.inventory = inventory; metadata = value; strict = original.strict; homeLANAccess = original.homeLANAccess
-        responseSourceNodes = responseMode == nil ? nil : original.members.map { IOSNodeCandidateResponseNode(id: $0.id, mode: $0.mode) }
+        appendDeviceMTU = original.appendSource?.deviceMTU
+        responseSourceNodes = responseMode == nil ? nil : original.members.map {
+            IOSNodeCandidateResponseNode(id: $0.id, mode: $0.mode, kind: $0.profile["node_kind"] as? String ?? "router-vpn")
+        }
     }
 
     private static func integer(_ value: Any?) -> Int? {

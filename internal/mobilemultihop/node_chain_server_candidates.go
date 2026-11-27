@@ -6,6 +6,7 @@ import "router-vpn/internal/multihoprelay"
 // compiled from the original private server policy. It is not a proof exception.
 // Native admission still needs the original worker, operation and live endpoint.
 type NodeChainServerCandidateTarget struct {
+	firstPacket    bool
 	publicOriginal *nodeChainServerPublicCandidateTarget
 	self           *NodeChainServerCandidateTarget
 	policy         *NodeChainServerPolicy
@@ -46,7 +47,22 @@ func (p *NodeChainServerPolicy) originalCandidateTarget(c multihoprelay.NodeChai
 	var socks *nodeChainSOCKSMember
 	var connect *nodeChainCONNECTMember
 	var openvpn *nodeChainOpenVPNMember
-	if c.Request.Schema == 3 {
+	if c.Request.Schema == 4 {
+		if !p.descriptor.PacketCandidateResponsePrefix(c.Request.Position, c.Request.CandidateMode) {
+			return nil, nodeChainServerError
+		}
+		// Packet members bind public keys; their descriptor source hash is
+		// intentionally empty. The sealed original prefix proof carries the
+		// complete private node source. Imported members carry their own hash.
+		if c.Member.NodeKind == "external" {
+			stream = p.importedSSMemberAt(index)
+			if node != nil || stream == nil || stream.source != c.Member.SourceSHA256 || stream.hostname != nil {
+				return nil, nodeChainServerError
+			}
+		} else if node == nil || !NodeChainPrefixMode(node.mode) || node.source != p.proofs[index].SourceSHA256 {
+			return nil, nodeChainServerError
+		}
+	} else if c.Request.Schema == 3 {
 		if !p.descriptor.PublicCandidateResponsePrefix(c.Request.Position) || p.externalFinal == nil {
 			return nil, nodeChainServerError
 		}
@@ -99,7 +115,11 @@ func (p *NodeChainServerPolicy) originalCandidateTarget(c multihoprelay.NodeChai
 	// No Destinations: an original API/DNS proof exception must never override
 	// the selected application LAN/IPv6 policy for an arbitrary candidate.
 	policy := NodeChainServerFrontRoute{Final: true, BlockIPv6: p.blockIPv6, BlockedCIDRs: append([]string(nil), p.blockedCIDRs...)}
-	if !policy.AllowsDestination("tcp", c.Request.Address) {
+	network := "tcp"
+	if c.Request.Schema == 4 {
+		network = "udp"
+	}
+	if !policy.AllowsDestination(network, c.Request.Address) {
 		return nil, nodeChainServerError
 	}
 	target := &NodeChainServerCandidateTarget{policy: p, node: node, stream: stream, socks: socks, connect: connect, openvpn: openvpn, capture: c.Clone(), tag: p.proofs[index].Tag}
@@ -113,6 +133,15 @@ func (p *NodeChainServerPolicy) originalCandidateTarget(c multihoprelay.NodeChai
 func (t *NodeChainServerCandidateTarget) Read(p *NodeChainServerPolicy, c multihoprelay.NodeChainCandidateCapture) (string, string, error) {
 	if t == nil || t.self != t || p == nil || p != t.policy {
 		return "", "", nodeChainServerError
+	}
+	if t.firstPacket || c.Request.Schema == 5 {
+		fresh, err := p.FirstPacketResponseCandidateTarget(c)
+		want, before := t.capture.Digest()
+		got, after := c.Digest()
+		if err != nil || before != nil || after != nil || want != got || !t.firstPacket || fresh.node != t.node || t.tag != "" {
+			return "", "", nodeChainServerError
+		}
+		return "", t.capture.Request.Address, nil
 	}
 	if t.publicOriginal != nil || c.Request.Schema == 3 {
 		return t.readPublicCandidate(p, c)
@@ -128,4 +157,29 @@ func (t *NodeChainServerCandidateTarget) Read(p *NodeChainServerPolicy, c multih
 		return "", "", nodeChainServerError
 	}
 	return t.tag, t.capture.Request.Address, nil
+}
+
+func (p *NodeChainServerPolicy) PacketResponseCandidateTarget(c multihoprelay.NodeChainCandidateCapture) (*NodeChainServerCandidateTarget, error) {
+	if c.Request.Schema != 4 {
+		return nil, nodeChainServerError
+	}
+	return p.originalCandidateTarget(c)
+}
+
+// The first Server suffix has no preceding Server outbound. Its separate
+// candidate request acquires a new, source-bound physical carrier in Prepare.
+func (p *NodeChainServerPolicy) FirstPacketResponseCandidateTarget(c multihoprelay.NodeChainCandidateCapture) (*NodeChainServerCandidateTarget, error) {
+	if p == nil || c.Request.Schema != 5 || c.Validate() != nil || p.validateCapture() != nil || !p.descriptor.FirstPacketCandidateResponse(c.Request.CandidateMode) {
+		return nil, nodeChainServerError
+	}
+	if _, err := p.binding(c.Lease); err != nil {
+		return nil, err
+	}
+	route := NodeChainServerFrontRoute{Final: true, BlockIPv6: p.blockIPv6, BlockedCIDRs: append([]string(nil), p.blockedCIDRs...)}
+	if !route.AllowsDestination("udp", c.Request.Address) || len(p.nodes) < 2 || p.nodes[0] == nil {
+		return nil, nodeChainServerError
+	}
+	target := &NodeChainServerCandidateTarget{firstPacket: true, policy: p, node: p.nodes[0], capture: c.Clone()}
+	target.self = target
+	return target, nil
 }

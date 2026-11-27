@@ -244,7 +244,7 @@ func (m *routerVPNDesktopExecutionMeasurement) newSelectedCandidate(ctx context.
 	op := &routerVPNSelectedCandidateOperation{owner: m, input: input}
 	q := &op.request
 	now := time.Now()
-	if !routerVPNSelectedCandidateDecode(input.raw, q, 11) || q.Schema != 1 || q.Operation != "selected-packet-candidate-50" && q.Operation != "selected-local-private-response-50" && q.Operation != "selected-server-private-response-50" && q.Operation != "selected-local-public-response-50" && q.Operation != "selected-server-public-response-50" ||
+	if !routerVPNSelectedCandidateDecode(input.raw, q, 11) || q.Schema != 1 || q.Operation != "selected-packet-candidate-50" && q.Operation != "selected-local-private-response-50" && q.Operation != "selected-server-private-response-50" && q.Operation != "selected-local-public-response-50" && q.Operation != "selected-server-public-response-50" && q.Operation != "selected-local-packet-response-50" && q.Operation != "selected-server-packet-response-50" ||
 		!routerVPNExternalSession.MatchString(q.Request) || q.Request == m.owner.candidateLast || m.owner.candidateGeneration == ^uint64(0) ||
 		q.Generation != m.owner.candidateGeneration+1 || q.Deadline <= 0 || q.Deadline > now.Add(hopmeasure.RequestTimeout).UnixMilli() ||
 		!routerVPNExternalSource.MatchString(q.InventorySHA) || !routerVPNExternalSource.MatchString(q.Path) || q.Position < 0 || q.Candidate == "" ||
@@ -269,8 +269,15 @@ func (m *routerVPNDesktopExecutionMeasurement) newSelectedCandidate(ctx context.
 	if err != nil || routerVPNSelectedCandidateDigest(op.source.raw) != q.InventorySHA {
 		return op, routerVPNExternalFailure
 	}
+	packetResponse := q.Operation == "selected-local-packet-response-50" || q.Operation == "selected-server-packet-response-50"
+	inventoryFields := 3
+	if packetResponse {
+		inventoryFields = 4
+	}
 	var inv mobilemultihop.NodeChainCandidateInventory
-	if !routerVPNSelectedCandidateDecode(op.source.raw, &inv, 3) || inv.Schema != 1 || inv.Revision == "" {
+	if !routerVPNSelectedCandidateDecode(op.source.raw, &inv, inventoryFields) || inv.Schema != 1 || inv.Revision == "" ||
+		packetResponse && (!mobilemultihop.NodeChainPrefixMode(inv.ResponseMode) || inv.ResponseMode != m.owner.prep.SelectedPacketCandidateMode(q.Position)) ||
+		!packetResponse && inv.ResponseMode != "" {
 		return op, routerVPNExternalFailure
 	}
 	if op.inputCurrent(ctx) != nil {
@@ -286,17 +293,29 @@ func (m *routerVPNDesktopExecutionMeasurement) newSelectedCandidate(ctx context.
 	serverResponse := m.owner.prep.SupportsServerResponseCandidate(q.Position)
 	localPublic := m.owner.prep.SupportsCompareLocalPublicResponseCandidate(q.Position)
 	serverPublic := m.owner.prep.SupportsServerPublicResponseCandidate(q.Position)
+	localPacket := m.owner.prep.SupportsCompareLocalPacketResponseCandidate(q.Position)
+	serverPacket := m.owner.prep.SupportsServerPacketResponseCandidate(q.Position)
 	winner := m.runtime.Progress().Execution
 	response := q.Operation != "selected-packet-candidate-50"
 	if q.Operation == "selected-local-private-response-50" && (!localResponse || winner != "local") ||
 		q.Operation == "selected-server-private-response-50" && (!serverResponse || winner != "server") ||
 		q.Operation == "selected-local-public-response-50" && (!localPublic || winner != "local") ||
 		q.Operation == "selected-server-public-response-50" && (!serverPublic || winner != "server") ||
+		q.Operation == "selected-local-packet-response-50" && (!localPacket || winner != "local") ||
+		q.Operation == "selected-server-packet-response-50" && (!serverPacket || winner != "server") ||
 		!response && (localResponse || serverResponse || localPublic || serverPublic) {
 		return op, routerVPNExternalFailure
 	}
 	var capture, metadata string
-	if q.Position == 0 {
+	if q.Operation == "selected-local-packet-response-50" {
+		op.local, err = m.runtime.NewLocalPacketResponseCandidatePlanContext(ctx, q.Position, string(op.source.raw))
+	} else if q.Operation == "selected-server-packet-response-50" {
+		if q.Position == 0 {
+			op.remote, err = m.runtime.NewRemoteFirstPacketResponseCandidatePlanContext(ctx, q.Position, string(op.source.raw))
+		} else {
+			op.remote, err = m.runtime.NewRemotePacketResponseCandidatePlanContext(ctx, q.Position, string(op.source.raw))
+		}
+	} else if q.Position == 0 {
 		op.local, err = m.runtime.NewEntryCandidatePlanContext(ctx, 0, string(op.source.raw))
 	} else if q.Operation == "selected-server-public-response-50" {
 		op.remote, err = m.runtime.NewRemotePublicResponseCandidatePlanContext(ctx, q.Position, string(op.source.raw))
@@ -319,12 +338,13 @@ func (m *routerVPNDesktopExecutionMeasurement) newSelectedCandidate(ctx context.
 		return op, routerVPNExternalFailure
 	}
 	var public struct {
-		Measurement string `json:"measurement"`
-		Targets     []struct {
+		CandidateMode string `json:"candidate_mode"`
+		Measurement   string `json:"measurement"`
+		Targets       []struct {
 			ID string `json:"id"`
 		} `json:"targets"`
 	}
-	if !routerVPNExternalSource.MatchString(capture) || json.Unmarshal([]byte(metadata), &public) != nil || response && public.Measurement != op.measurementKind() || !response && public.Measurement != "" {
+	if !routerVPNExternalSource.MatchString(capture) || json.Unmarshal([]byte(metadata), &public) != nil || public.CandidateMode != inv.ResponseMode || response && public.Measurement != op.measurementKind() || !response && public.Measurement != "" {
 		return op, routerVPNExternalFailure
 	}
 	found := false
@@ -553,7 +573,7 @@ func (op *routerVPNSelectedCandidateOperation) poll(ctx context.Context) error {
 	}
 	if success && status.Results[0].CandidateDisposition != "" {
 		row := status.Results[0]
-		private := op.request.Operation == "selected-server-private-response-50" && row.Kind == "private-agent-response"
+		private := (op.request.Operation == "selected-server-private-response-50" || op.request.Operation == "selected-server-packet-response-50") && row.Kind == "private-agent-response"
 		public := op.request.Operation == "selected-server-public-response-50" && row.Kind == "public-exit-response"
 		if !private && !public || row.CandidateDisposition != hopmeasure.CandidateNotRegistered || row.Role != "candidate" ||
 			row.Failure != hopmeasure.ErrCandidateNotRegistered.Error() || row.Ready || row.Benchmark != nil || row.Response != nil || row.Idle != nil || row.Upload != nil || row.Download != nil {
@@ -600,7 +620,7 @@ func (op *routerVPNSelectedCandidateOperation) measurementKind() string {
 	switch op.request.Operation {
 	case "selected-local-public-response-50", "selected-server-public-response-50":
 		return hopmeasure.CandidatePublicResponseMeasurement
-	case "selected-local-private-response-50", "selected-server-private-response-50":
+	case "selected-local-private-response-50", "selected-server-private-response-50", "selected-local-packet-response-50", "selected-server-packet-response-50":
 		return hopmeasure.CandidatePrivateResponseMeasurement
 	default:
 		return hopmeasure.CandidateTCPMeasurement

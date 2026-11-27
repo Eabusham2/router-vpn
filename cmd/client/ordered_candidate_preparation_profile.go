@@ -174,6 +174,14 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 		http.Error(w, "an original completed result, exact candidate/path and explicit profile name are required", 400)
 		return
 	}
+	if scope == orderedCandidateAppendScope {
+		if !draftChoice || draftSave || q.Name != "" {
+			http.Error(w, "an incomplete prefix may only append its measured node to the original editor", 400)
+			return
+		}
+		a.chooseOrderedCandidateAppend(w, request, q)
+		return
+	}
 	ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
 	defer cancel()
 	if !a.operationMu.TryLock() {
@@ -266,6 +274,14 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 		if job.view.originalFinal != nil {
 			if draftChoice || desktopFinalCandidateSourceMode(p.inventory.launch, p.request.Position) != job.view.candidateMode {
 				http.Error(w, "paired final responses require their original captured mode and a named next-connection profile", 409)
+				return
+			}
+		} else if p.request.Scope == orderedCandidateSelectedDraftScope {
+			if p.request.draft == nil || p.runtime == nil || p.runtime.catalog == nil || p.runtime.selectedReady == nil ||
+				p.runtime.selectedReady.SelectionEpoch == 0 || p.runtime.catalog.selectedPlan == nil ||
+				p.runtime.catalog.selectedPlan.candidateMode() != job.view.candidateMode ||
+				desktopSelectedPacketCandidateMode(p.inventory.launch, p.request.Position) != job.view.candidateMode {
+				http.Error(w, "the original selected packet response source changed", 409)
 				return
 			}
 		} else if p.prefixPreparation == nil || p.request.Scope != orderedCandidateSavedPrefixScope ||
@@ -482,5 +498,178 @@ func (a *app) completePreparedProfileResponse(w http.ResponseWriter, owner *viaE
 	response["proposed_path"] = append([]common.MultihopNodeSelection(nil), job.savedRequest.ProposedPath...)
 	response["note"] = "Saved a separate profile for the next connection. The temporary VPN is DOWN."
 	control.mu.Unlock()
+	viaEntryJSON(w, response)
+}
+
+// A measured append is an in-memory editor proposal. The original source is
+// compiled prospectively again, then all native and observer ownership joins
+// before any append is released. No profile or selected-final authority is made.
+func (a *app) chooseOrderedCandidateAppend(w http.ResponseWriter, request *http.Request, q orderedCandidateSaveRequest) {
+	ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
+	defer cancel()
+	if !a.operationMu.TryLock() {
+		http.Error(w, "another operation owns append adoption", 409)
+		return
+	}
+	defer a.operationMu.Unlock()
+	control := viaEntryControlFor(a)
+	if err := desktopnetwork.LockContext(ctx, &control.mu); err != nil {
+		http.Error(w, err.Error(), 408)
+		return
+	}
+	owner := control.owner
+	if owner == nil || owner.id != q.RequestID || owner.prepared == nil || owner.prepared.view == nil ||
+		owner.prepared.view.token != q.ViewToken || owner.prepared.view.scopeValue() != orderedCandidateAppendScope ||
+		owner.prepared.view.append == nil || owner.prepared.view.draft != nil {
+		control.mu.Unlock()
+		http.Error(w, "original append result is unavailable", 409)
+		return
+	}
+	job := owner.prepared
+	offered := false
+	for _, choice := range job.view.candidates {
+		if choice.ID == q.CandidateID && choice.DraftAction == orderedCandidateDraftAppendAction && choice.ProposalAction == "" &&
+			choice.SaveReason == "" && reflect.DeepEqual(choice.Proposal, q.ProposedPath) && reflect.DeepEqual(choice.DraftProposal, q.ProposedPath) {
+			offered = true
+			break
+		}
+	}
+	control.mu.Unlock()
+	if !offered {
+		http.Error(w, "append differs from its original measured proposal", 409)
+		return
+	}
+	if err := desktopnetwork.LockContext(ctx, &owner.closeMu); err != nil {
+		http.Error(w, err.Error(), 408)
+		return
+	}
+	defer owner.closeMu.Unlock()
+	if err := desktopnetwork.LockContext(ctx, &control.mu); err != nil {
+		http.Error(w, err.Error(), 408)
+		return
+	}
+	valid := control.owner == owner && preparedCandidateAdoptableLocked(owner, q, time.Now())
+	control.mu.Unlock()
+	p := job.preparation
+	if !valid || p == nil || !p.closedPurposeCurrent() || p.request.append != job.view.append || p.request.draft != nil ||
+		p.prefixPreparation == nil || !p.prefixPreparation.IsAppend() || p.prefixPreparation.CandidateMode() != job.view.candidateMode ||
+		job.view.appendSource == nil || p.selection.Native.source != job.view.appendSource.SourceSHA {
+		http.Error(w, "append requires its original completed native DOWN result", 409)
+		return
+	}
+	if err := p.reviewCurrent(ctx); err != nil {
+		http.Error(w, err.Error(), 409)
+		return
+	}
+	compiled, err := captureDesktopAppendCandidateSources(ctx, a, p.selection, p.inventory.launch, []string{q.CandidateID})
+	if err != nil || compiled == nil || compiled.prefixPreparation == nil || !compiled.prefixPreparation.IsAppend() ||
+		compiled.prefixPreparation.OriginalSourceSHA256() != p.selection.Native.source || compiled.candidateMode != job.view.candidateMode ||
+		compiled.revision != p.revision || compiled.profiles[q.CandidateID] != p.inventory.profiles[q.CandidateID] {
+		http.Error(w, "the exact appended packet source no longer compiles through the retained prefix", 409)
+		return
+	}
+	nodes := append(append([]common.MultihopNodeSelection(nil), p.request.append.Nodes...), common.MultihopNodeSelection{ID: q.CandidateID, Mode: job.view.candidateMode})
+	if !reflect.DeepEqual(nodes, q.ProposedPath) {
+		http.Error(w, "append changed the original prefix or requested raw mode", 409)
+		return
+	}
+	if err := p.reviewCurrent(ctx); err != nil {
+		http.Error(w, err.Error(), 409)
+		return
+	}
+	release, err := a.lockCandidatePublicationContext(ctx, control)
+	if err != nil {
+		http.Error(w, err.Error(), 409)
+		return
+	}
+	check := func() error {
+		if ctx.Err() != nil || control.owner != owner || !preparedCandidateAdoptableLocked(owner, q, time.Now()) ||
+			a.validateDesktopProfileExpectationsLocked(p.request.append.desktopProfileExpectations, p.request.append.requiredIDs(), true) != nil {
+			return errors.New("original append source changed before editor adoption")
+		}
+		candidate, found := a.profileByIDLocked(q.CandidateID)
+		if !found || p.inventory.profiles[q.CandidateID] != publicProfileToken(candidate) {
+			return errors.New("original append candidate changed")
+		}
+		if err := p.reviewBoundaryLocked(); err != nil {
+			return err
+		}
+		if err := errors.Join(p.savedInventoryFilesCurrent(ctx), validateDesktopCandidateSavedSelection(ctx, p.selection, a.profiles.Profiles)); err != nil {
+			return err
+		}
+		return p.runtime.cohort.CurrentContext(ctx)
+	}
+	if err := check(); err != nil {
+		release()
+		http.Error(w, err.Error(), 409)
+		return
+	}
+	tokens := make(map[string]string, len(nodes))
+	for _, node := range nodes {
+		profile, found := a.profileByIDLocked(node.ID)
+		if !found {
+			release()
+			http.Error(w, "an append prefix member disappeared", 409)
+			return
+		}
+		tokens[node.ID] = publicProfileToken(profile)
+	}
+	deviceID := p.selection.Control.ID
+	deviceToken := p.request.append.ExpectedProfileTokens[deviceID]
+	job.accepted = false
+	release()
+	cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+	cleanupErr := p.retireOriginal(cleanup, false)
+	stop()
+	control.mu.Lock()
+	owner.drained = cleanupErr == nil
+	if cleanupErr != nil {
+		job.cleanupError = "Original append observer cleanup remains pending; Cancel retries the retained owner."
+	}
+	control.mu.Unlock()
+	if cleanupErr != nil {
+		http.Error(w, "append delivery requires complete original cleanup", 409)
+		return
+	}
+	defer func() {
+		a.mu.Lock()
+		if a.candidatePreparation == p {
+			a.candidatePreparation = nil
+		}
+		a.mu.Unlock()
+	}()
+	if err := p.savedSourcesCurrent(ctx); err != nil {
+		http.Error(w, "append source or network changed during cleanup", 409)
+		return
+	}
+	release, err = a.lockCandidatePublicationContext(ctx, control)
+	if err != nil {
+		http.Error(w, err.Error(), 409)
+		return
+	}
+	defer release()
+	valid = control.owner == owner && !owner.cancelled && owner.drained && job.nativeDown &&
+		time.Now().Before(job.expires) && p.draftDeliveryCurrentLocked() && a.profiles.SelectedID == deviceID &&
+		a.validateDesktopProfileExpectationsLocked(p.request.append.desktopProfileExpectations, p.request.append.requiredIDs(), true) == nil
+	device, found := a.profileByIDLocked(deviceID)
+	valid = valid && found && publicProfileToken(device) == deviceToken
+	for _, node := range nodes {
+		current, found := a.profileByIDLocked(node.ID)
+		valid = valid && found && publicProfileToken(current) == tokens[node.ID]
+	}
+	if !valid {
+		http.Error(w, "append was cancelled, expired or changed before delivery", 409)
+		return
+	}
+	if err := errors.Join(p.savedInventoryFilesCurrent(ctx), validateDesktopCandidateSavedSelection(ctx, p.selection, a.profiles.Profiles)); err != nil {
+		p.invalidate()
+		http.Error(w, "append linked source changed before delivery", 409)
+		return
+	}
+	response := orderedCandidatePreparedResponseLocked(owner, time.Now())
+	response["chosen"], response["candidate_id"], response["proposed_path"] = true, q.CandidateID, nodes
+	response["draft_action"] = orderedCandidateDraftAppendAction
+	response["expected_selected_node_id"], response["expected_profile_tokens"] = deviceID, tokens
+	response["device_revision"] = deviceToken
 	viaEntryJSON(w, response)
 }

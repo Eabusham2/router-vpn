@@ -19,7 +19,7 @@ type orderedCandidatePreparedRequestEnvelope struct {
 
 func orderedCandidatePreparedPurposeResponse(response map[string]any, scope string) map[string]any {
 	response["scope"] = scope
-	if scope == orderedCandidateSavedPrefixScope {
+	if orderedCandidateClosedScope(scope) {
 		response["application_open"], response["dns_open"], response["proof_scope"] = false, false, "selected-prefix"
 	}
 	return response
@@ -77,16 +77,29 @@ func (a *app) orderedCandidatePreparedCatalogWithNetwork(w http.ResponseWriter, 
 	defer cancel()
 	var view *orderedCandidatePreparedView
 	if isDraft {
-		if (scope != orderedCandidateSavedPrefixScope && scope != orderedCandidateSelectedDraftScope) || scope == orderedCandidateSavedPrefixScope && !orderedCandidatePrefixPlatformSupported() {
-			http.Error(w, "the requested draft measurement scope is unavailable", http.StatusConflict)
-			return
+		if scope == orderedCandidateAppendScope {
+			if serverResponse || !orderedCandidatePrefixPlatformSupported() {
+				http.Error(w, "append measurement requires the closed Local prefix controller", 409)
+				return
+			}
+			appendRequest, decodeErr := decodeOrderedCandidateAppendRequest(http.MaxBytesReader(w, request.Body, multihopConnectRequestLimit))
+			if decodeErr != nil || position != appendRequest.AppendPosition-1 {
+				http.Error(w, "an exact incomplete prefix, next packet mode and device source are required", 400)
+				return
+			}
+			view, err = captureOrderedCandidateAppendView(ctx, a, position, appendRequest, observe)
+		} else {
+			if (scope != orderedCandidateSavedPrefixScope && scope != orderedCandidateSelectedDraftScope) || scope == orderedCandidateSavedPrefixScope && !orderedCandidatePrefixPlatformSupported() {
+				http.Error(w, "the requested draft measurement scope is unavailable", http.StatusConflict)
+				return
+			}
+			draft, decodeErr := decodeMultihopConnectRequest(http.MaxBytesReader(w, request.Body, multihopConnectRequestLimit))
+			if decodeErr != nil || !orderedCandidateDraftScopeMatches(scope, &draft) {
+				http.Error(w, "an exact editor draft with matching execution and original public source tokens is required", 400)
+				return
+			}
+			view, err = captureOrderedCandidatePreparedSelection(candidateServerIntent(ctx, serverResponse), a, position, scope, &draft, observe)
 		}
-		draft, decodeErr := decodeMultihopConnectRequest(http.MaxBytesReader(w, request.Body, multihopConnectRequestLimit))
-		if decodeErr != nil || !orderedCandidateDraftScopeMatches(scope, &draft) {
-			http.Error(w, "an exact editor draft with matching execution and original public source tokens is required", 400)
-			return
-		}
-		view, err = captureOrderedCandidatePreparedSelection(candidateServerIntent(ctx, serverResponse), a, position, scope, &draft, observe)
 	} else {
 		view, err = captureOrderedCandidatePreparedViewScope(ctx, a, position, scope, observe)
 	}
@@ -120,12 +133,16 @@ func (a *app) orderedCandidatePreparedCatalogWithNetwork(w http.ResponseWriter, 
 		"expires_at": view.expires.UnixMilli(), "prefix_position": view.position, "prefixes": view.prefixes,
 		"candidates": view.candidates, "samples": 50, "measurement": metric,
 		"note": note}, scope)
-	addOrderedPublicCandidateSource(response, view.selection, view.position, metric)
+	if view.append == nil {
+		addOrderedPublicCandidateSource(response, view.selection, view.position, metric)
+	}
 	view.addResponseSource(response)
 	if isDraft {
 		response["origin"] = "editor-draft"
-		response["requested_execution"] = view.draft.Execution
-		if len(view.responseOwners) > 0 {
+		response["requested_execution"] = view.requestedExecution()
+		if view.append != nil {
+			response["note"] = "Measure 50 authenticated responses through this exact incomplete prefix. The temporary path closes before Choose appends the node to the editor; choose a real final before saving a complete connection."
+		} else if len(view.responseOwners) > 0 {
 			publishCandidateResponseOwners(response, view.responseOwners, "")
 			publishSelectedResponseSource(response, metric, view.responseNodes)
 			if metric == hopmeasure.CandidatePublicResponseMeasurement {
@@ -175,7 +192,7 @@ func (a *app) orderedCandidatePreparedRequest(w http.ResponseWriter, request *ht
 		return
 	}
 	view := control.preparedView
-	valid := view != nil && (view.draft != nil) == (request.URL.Path == "/api/multihop/draft-candidates") && view.token == q.ViewToken && view.scopeValue() == scope && view.position == q.PrefixPosition && time.Now().Before(view.expires)
+	valid := view != nil && view.isDraft() == (request.URL.Path == "/api/multihop/draft-candidates") && view.token == q.ViewToken && view.scopeValue() == scope && view.position == q.PrefixPosition && time.Now().Before(view.expires)
 	if valid {
 		valid = reserveOrderedCandidatePreparedAdmissionLocked(control, q.RequestID, view) == nil
 	}
@@ -188,7 +205,7 @@ func (a *app) orderedCandidatePreparedRequest(w http.ResponseWriter, request *ht
 	defer stopAdmission()
 	lifetime, stopLifetime := context.WithTimeout(context.Background(), viaEntryRequestTimeout)
 	p, err := beginOrderedCandidatePreparationWithLifetime(admission, lifetime, a,
-		orderedCandidatePreparationRequest{draft: view.draft, serverResponse: view.catalog.serverResponse, Scope: scope, RequestID: q.RequestID, Position: q.PrefixPosition, CandidateIDs: q.CandidateIDs, Samples: q.Samples}, physicalNetworkIdentityContext)
+		orderedCandidatePreparationRequest{draft: view.draft, append: view.append, serverResponse: view.catalog.serverResponse, Scope: scope, RequestID: q.RequestID, Position: q.PrefixPosition, CandidateIDs: q.CandidateIDs, Samples: q.Samples}, physicalNetworkIdentityContext)
 	if err != nil {
 		stopLifetime()
 		http.Error(w, err.Error(), 409)
@@ -310,7 +327,7 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 			response["proposal_action"], response["candidate_id"], response["proposed_path"] = job.savedAction, job.savedCandidate, job.savedRequest.ProposedPath
 		}
 	}
-	if job.view.draft != nil {
+	if job.view.isDraft() {
 		response["origin"] = "editor-draft"
 	}
 	return orderedCandidatePreparedPurposeResponse(response, job.view.scopeValue())
@@ -362,7 +379,7 @@ func (a *app) orderedCandidatePreparedStatus(w http.ResponseWriter, request *htt
 	}
 	owner := control.owner
 	if owner == nil || owner.id != ids[0] || owner.prepared == nil || owner.prepared.view == nil ||
-		(owner.prepared.view.draft != nil) != (request.URL.Path == "/api/multihop/draft-candidates") {
+		owner.prepared.view.isDraft() != (request.URL.Path == "/api/multihop/draft-candidates") {
 		control.mu.Unlock()
 		http.Error(w, "original temporary candidate job is no longer retained", 409)
 		return

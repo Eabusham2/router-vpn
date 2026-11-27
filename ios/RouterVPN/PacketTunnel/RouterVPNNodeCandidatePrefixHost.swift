@@ -192,6 +192,10 @@ final class RouterVPNNodeCandidatePrefixHost: NSObject, LibboxRouterNodeChainCan
         if let mode = input.capture.responseMode, let source = input.capture.responseSourceNodes {
             body["candidate_mode"] = mode
             body["response_source_nodes"] = source.map(\.object)
+            if let digest = input.capture.appendSourceMetadataSHA256 {
+                body["candidate_purpose"] = "draft-prefix-append"
+                body["append_source_metadata_sha256"] = digest
+            }
         }
         guard let data = try? JSONSerialization.data(withJSONObject: body), data.count <= 131072 else { return nil }
         if values["closed"] as? Bool != true, (try? requirePrepared()) == nil { return nil }

@@ -306,6 +306,11 @@ func (s *Session) launchUI(tray, selfTest bool, uiPID uint32, uiTicks int64) (*g
 	g := &gui{pipe: pipe, done: make(chan error, 1), ready: make(chan struct{})}
 	s.guis = append(s.guis, g)
 	environment := s.environment
+	if selfTest && !tray && os.Getenv("ROUTERVPN_CONNECTION_SELF_TEST") == "1" {
+		// Only the original self-test App receives the fixed fixture switch.
+		// Its data directory and authenticated bridge remain the captured ones.
+		environment = append(slices.Clone(environment), "ROUTERVPN_CONNECTION_SELF_TEST=1")
+	}
 	launch := windowscontroller.LaunchGUIChild
 	if selfTest && !tray && os.Getenv("ROUTERVPN_CAPTURE_SELF_TEST_LAYOUT") == "1" {
 		launch = windowscontroller.LaunchGUIChildSelfTest
@@ -345,6 +350,14 @@ func (s *Session) RunUI(selfTest bool) error {
 	defer s.runMu.Unlock()
 	if s.ctx.Err() != nil {
 		return context.Cause(s.ctx)
+	}
+	if selfTest && os.Getenv("ROUTERVPN_CONNECTION_SELF_TEST") == "1" {
+		// Independent of the WPF dispatcher: cancellation unwinds RunUI and
+		// enters the normal authenticated Close/join path in the launcher.
+		watchdog := time.AfterFunc(180*time.Second, func() {
+			s.cancel(errors.New("the desktop connection self-test exceeded its original session deadline"))
+		})
+		defer watchdog.Stop()
 	}
 	if selfTest {
 		response, err := s.client.Request(s.ctx, http.MethodGet, "/api/logical-modes", nil, 1<<20)

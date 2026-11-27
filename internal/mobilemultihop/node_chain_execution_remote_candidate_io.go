@@ -16,6 +16,7 @@ import (
 )
 
 type nodeChainExecutionRemoteOperation struct {
+	pairing                  string // assigned and rechecked only while holding the original operation gate
 	engine                   *nodeChainExecutionRemoteCandidateEngine
 	target                   hopmeasure.CandidateTarget
 	attempt                  *nodeChainExecutionAttempt
@@ -82,7 +83,19 @@ func (op *nodeChainExecutionRemoteOperation) initialize(ctx context.Context) err
 		return err
 	}
 	q := multihoprelay.NodeChainCandidateRequest{Schema: 1, Lease: request, OwnerID: lease.OwnerID, CaptureSHA256: digest, Operation: operation, ExecutionSHA256: e.plan.identity.SourceSHA256, Trial: s.id, SelectionEpoch: s.selectionEpoch, InventorySHA256: externalDigest([]byte(e.plan.packet.inventory)), Position: e.plan.packet.prefix.Position, CandidateID: op.target.ID, CandidateSourceSHA256: op.target.SourceSHA256, Address: op.target.Address, DeadlineAt: deadline.UnixMilli(), Password: password}
-	if e.plan.packet.measurement == hopmeasure.CandidatePrivateResponseMeasurement {
+	if e.plan.packet.responseMode != "" {
+		q.Schema = 4
+		if e.plan.firstPacket {
+			q.Schema = 5
+		}
+		q.CandidateMode = e.plan.packet.responseMode
+		for _, response := range e.plan.packet.responses {
+			if response.Target == op.target {
+				q.CandidateClientPublicKey = response.ClientKey
+				break
+			}
+		}
+	} else if e.plan.packet.measurement == hopmeasure.CandidatePrivateResponseMeasurement {
 		q.Schema = 2
 	} else if e.plan.packet.measurement == hopmeasure.CandidatePublicResponseMeasurement {
 		q.Schema = 3
@@ -172,7 +185,7 @@ func (op *nodeChainExecutionRemoteOperation) verify(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if method == "PUT" && (op.capture.request.Schema == 2 || op.capture.request.Schema == 3) {
+		if method == "PUT" && (op.capture.request.Schema == 2 || op.capture.request.Schema == 3 || op.capture.request.IsPacketResponse()) {
 			if multihoprelay.DecodeNodeChainCandidateAbsenceReceipt(raw, op.capture.lease, op.capture.request, op.capture.token, time.Now()) == nil {
 				if err := op.engine.current(call); err != nil {
 					return err
@@ -187,13 +200,22 @@ func (op *nodeChainExecutionRemoteOperation) verify(ctx context.Context) error {
 		}
 		capture := op.native
 		if !op.prepared {
-			capture = multihoprelay.NodeChainCandidateCapture{Schema: 1, Lease: op.capture.lease.Clone(), Request: op.capture.request.Clone(), Member: op.capture.lease.Source.Members[op.capture.request.Position-1], OperationOwnerID: receipt.OperationOwnerID}
+			capture, err = multihoprelay.RestoreNodeChainCandidateCapture(op.capture.lease, op.capture.request, receipt.OperationOwnerID)
+			if err != nil {
+				return err
+			}
 		}
 		op.mu.Lock()
 		dials := op.dials
 		op.mu.Unlock()
 		if receipt.Validate(capture) != nil || !receipt.Prepared || receipt.Retired || receipt.Drained || receipt.Accepted != dials {
 			return nodeChainExecutionError
+		}
+		if op.capture.request.IsPacketResponse() {
+			if op.pairing != "" && op.pairing != receipt.PairingSHA256 {
+				return nodeChainExecutionError
+			}
+			op.pairing = receipt.PairingSHA256
 		}
 		if !receipt.InFlight {
 			op.native = capture

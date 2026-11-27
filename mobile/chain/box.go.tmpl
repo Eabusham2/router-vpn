@@ -52,15 +52,17 @@ func routerVPNNodeChainOptionsDigest(ctx context.Context, options option.Options
 // It owns no process, listener, TUN, or protection teardown. The original host
 // cancels and joins chain proofs before retiring that same native connection.
 type routerVPNNodeChainObservation struct {
-	instance *Box
-	dns      mobilemultihop.NodeChainDNSCapture
-	finalTag string
-	identity mobilemultihop.NodeChainIdentity
-	current  func(context.Context) error
-	inbound  adapter.Inbound
-	resolver adapter.DNSTransport
-	selector *group.Selector
-	prefixes map[string]adapter.Outbound
+	instance         *Box
+	dns              mobilemultihop.NodeChainDNSCapture
+	finalTag         string
+	identity         mobilemultihop.NodeChainIdentity
+	current          func(context.Context) error
+	inbound          adapter.Inbound
+	resolver         adapter.DNSTransport
+	selector         *group.Selector
+	prefixes         map[string]adapter.Outbound
+	closureOutbounds map[string]adapter.Outbound
+	closureResolvers map[string]adapter.DNSTransport
 }
 
 // A private observation core is shared by separately typed source adapters.
@@ -167,7 +169,8 @@ func (s *Box) routerVPNNewNodeChainObservation(ctx context.Context, config strin
 		return nil, errors.New("ordered chain source differs from the running native graph")
 	}
 	engine := &routerVPNNodeChainObservation{instance: s, dns: dns, finalTag: finalTag, current: current,
-		prefixes: make(map[string]adapter.Outbound),
+		prefixes: make(map[string]adapter.Outbound), closureOutbounds: make(map[string]adapter.Outbound),
+		closureResolvers: make(map[string]adapter.DNSTransport),
 		identity: mobilemultihop.NodeChainIdentity{EngineID: fmt.Sprintf("%p", s), SessionID: session,
 			SourceSHA256: sourceSHA256, ConfigSHA256: configSHA256}}
 	inbounds, err := adapter.RouterVPNInboundsContext(ctx, s.inbound)
@@ -186,6 +189,38 @@ func (s *Box) routerVPNNewNodeChainObservation(ctx context.Context, config strin
 			return nil, errors.Join(err, errors.New("ordered chain prefix is not its captured native outbound"))
 		}
 		engine.prefixes[tag] = outbound
+	}
+	// A retained packet may dial through its original AES/XOR owner, and an
+	// imported prefix may retain a separate resolver. Observe those original
+	// native objects too; their tags never become additional dial permissions.
+	var closureTags []string
+	for _, row := range compiled.Outbounds {
+		closureTags = append(closureTags, row.Tag)
+	}
+	for _, row := range compiled.Endpoints {
+		closureTags = append(closureTags, row.Tag)
+	}
+	for _, tag := range closureTags {
+		if engine.prefixes[tag] != nil || tag == mobilemultihop.SelectorTag {
+			continue
+		}
+		outbound, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, tag)
+		if err != nil || !found || outbound == nil || tag == "" || engine.closureOutbounds[tag] != nil {
+			return nil, errors.Join(err, errors.New("ordered chain lost a captured native closure owner"))
+		}
+		engine.closureOutbounds[tag] = outbound
+	}
+	if compiled.DNS != nil {
+		for _, row := range compiled.DNS.Servers {
+			if row.Tag == dns.ResolverTag {
+				continue
+			}
+			resolver, found, err := adapter.RouterVPNTransportContext(ctx, s.dnsTransport, row.Tag)
+			if err != nil || !found || resolver == nil || row.Tag == "" || engine.closureResolvers[row.Tag] != nil {
+				return nil, errors.Join(err, errors.New("ordered chain lost a captured native closure resolver"))
+			}
+			engine.closureResolvers[row.Tag] = resolver
+		}
 	}
 	outbound, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, mobilemultihop.SelectorTag)
 	selector, ok := outbound.(*group.Selector)
@@ -248,6 +283,18 @@ func (e *routerVPNNodeChainObservation) ObserveChainContext(ctx context.Context)
 		actual, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, tag)
 		if err != nil || !found || actual != expected {
 			return empty, errors.Join(err, errors.New("ordered native prefix owner changed"))
+		}
+	}
+	for tag, expected := range e.closureOutbounds {
+		actual, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, tag)
+		if err != nil || !found || actual != expected {
+			return empty, errors.Join(err, errors.New("ordered native closure owner changed"))
+		}
+	}
+	for tag, expected := range e.closureResolvers {
+		actual, found, err := adapter.RouterVPNTransportContext(ctx, s.dnsTransport, tag)
+		if err != nil || !found || actual != expected {
+			return empty, errors.Join(err, errors.New("ordered native closure resolver changed"))
 		}
 	}
 	selector, found, err := adapter.RouterVPNOutboundContext(ctx, s.outbound, mobilemultihop.SelectorTag)

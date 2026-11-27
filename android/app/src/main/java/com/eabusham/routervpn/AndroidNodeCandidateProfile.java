@@ -29,12 +29,17 @@ final class AndroidNodeCandidateProfile {
     private final List<String> modes=new ArrayList<>();
     private final String execution;
     private final boolean preparedPacketReplacement;
+    private final boolean preparedPacketAppend;
     final String description;
     AndroidNodeCandidateProfile(AndroidNodeCandidateMeasurement operation,AndroidNodeCandidateResult result)throws Exception {
         this(operation,result,null,false);
     }
     static AndroidNodeCandidateProfile captureTemporary(AndroidNodeCandidateMeasurement operation,AndroidNodeCandidateResult result,SavedResultAuthority authority)throws Exception {
         if(authority==null)throw new IllegalArgumentException("The original temporary preparation authority is required.");
+        if(operation.catalog.originalSource.appendDraft()) {
+            operation.requireResult(result);
+            throw new ProposalUnavailable("Apply this measured node to the unfinished prefix, then choose a real final node before saving.");
+        }
         return new AndroidNodeCandidateProfile(operation,result,authority,false);
     }
     static AndroidNodeCandidateProfile captureDraftInsertion(AndroidNodeCandidateMeasurement operation, AndroidNodeCandidateResult result,
@@ -42,7 +47,8 @@ final class AndroidNodeCandidateProfile {
         AndroidNodeCandidateCatalog catalog = operation.catalog;
         if (!catalog.originalSource.measurementOnly() || !java.util.List.of("routed-candidate-response","routed-public-candidate-response").contains(catalog.measurement)) return null;
         catalog.originalSource.requireCandidatePurpose(catalog.prefix);
-        if (catalog.preparedResponse()) {
+        if(catalog.preparedAppendResponse())return new AndroidNodeCandidateProfile(operation,result,authority,true);
+        if (catalog.preparedResponse() || catalog.selectedPacketResponse()) {
             if (catalog.prefix == catalog.originalSource.members.size() - 2)
                 throw new ProposalUnavailable("Save this measured final as a named profile; the draft keeps its selected final node.");
             if (named != null && named.preparedPacketReplacement && named.sources.size() == catalog.originalSource.members.size()) return named;
@@ -67,18 +73,31 @@ final class AndroidNodeCandidateProfile {
         if(!selected.input.equals(actual))throw new IllegalStateException("The measured source changed before proposal.");
         AndroidNodeStore.ChainCapture original=catalog.originalSource;
         int replacement=catalog.prefix+1;
+        if(original.appendDraft()) {
+            if(authority==null||!retainFinal||!catalog.preparedAppendResponse()||replacement!=original.members.size()
+                    ||!candidateMode.equals(original.appendMode)||candidate.imported||catalog.session.capture.append==null
+                    ||!catalog.session.capture.append.fits(actual))throw new IllegalStateException("The measured append lost its original prefix or next-mode authority.");
+            execution="local";preparedPacketReplacement=false;preparedPacketAppend=true;
+            sources.addAll(original.members);modes.addAll(original.modes);sources.add(candidate);modes.add(candidateMode);
+            StringBuilder preview=new StringBuilder();
+            for(int i=0;i<sources.size();i++){if(i>0)preview.append(" → ");preview.append(sources.get(i).profileId).append(" (").append(modes.get(i)).append(")");}
+            description=preview+" • unfinished prefix";requireCurrent();return;
+        }
+        preparedPacketAppend=false;
         if(original==null||replacement<1||replacement>=original.members.size()||original.members.size()!=original.modes.size())
             throw new IllegalStateException("The measured prefix has no original next-hop position.");
         execution=original.execution;
         boolean preparedResponse=authority!=null&&catalog.preparedResponse();
+        boolean selectedPacketResponse=catalog.selectedPacketResponse();
         boolean finalResponse=authority==null&&catalog.connectedFinalResponse()||preparedResponse&&replacement==original.members.size()-1;
-        boolean packetResponse=authority==null&&catalog.connectedPacketResponse()||preparedResponse&&replacement<original.members.size()-1;
+        boolean packetResponse=selectedPacketResponse||authority==null&&catalog.connectedPacketResponse()||preparedResponse&&replacement<original.members.size()-1;
         boolean typedFinal=!catalog.responseMode.isEmpty()&&!packetResponse;
-        preparedPacketReplacement=preparedResponse&&packetResponse;
+        preparedPacketReplacement=packetResponse&&(preparedResponse||authority!=null&&selectedPacketResponse);
         if(!catalog.responseMode.isEmpty()){
-            if(retainFinal||!"local".equals(execution)||!candidateMode.equals(original.modes.get(replacement))
+            if(retainFinal||!("local".equals(execution)||selectedPacketResponse)||!candidateMode.equals(original.modes.get(replacement))
                     ||!(packetResponse||finalResponse))throw new IllegalStateException("The response carrier lost its original successor.");
-            boolean fits=preparedResponse?Libbox.routerNodeChainPreparedCandidateInputFitsSource(catalog.session.capture.plan,catalog.prefix,actual):
+            boolean fits=selectedPacketResponse?catalog.executionOwner.selectedPacketCandidateInputFitsSource(catalog.prefix,actual):
+                    preparedResponse?Libbox.routerNodeChainPreparedCandidateInputFitsSource(catalog.session.capture.plan,catalog.prefix,actual):
                     packetResponse?Libbox.routerNodeChainPacketSuccessorCandidateFitsSource(catalog.session.capture.plan,catalog.prefix,actual):
                     Libbox.routerNodeChainResponseCandidateInputSupported(actual,catalog.responseMode);
             if(!fits)throw new IllegalStateException("This candidate cannot replace the original measured successor.");
@@ -201,6 +220,7 @@ final class AndroidNodeCandidateProfile {
         savedAuthority.requireCurrent(result);
     }
     AndroidConnectionProfileStore.Record save(Context context,String name)throws Exception {
+        if(preparedPacketAppend)throw new IllegalStateException("Choose a real final before saving an appended prefix.");
         synchronized(operation){
             requireSavedCurrent();AndroidConnectionProfileStore store=new AndroidConnectionProfileStore(context,new AndroidNodeStore(context),new AndroidStandardExitStore(context));
             return store.appendOrderedProposal(name,sources,modes,execution,()->{try{requireSavedCurrent();}catch(Exception stale){throw new IllegalStateException("Retest this original candidate before saving.",stale);}});
@@ -213,7 +233,12 @@ final class AndroidNodeCandidateProfile {
                     || sources.size() != catalog.originalSource.members.size() + (preparedPacketReplacement ? 0 : 1))
                 throw new IllegalStateException("This measurement has no complete proposal for the current draft.");
             requireSavedCurrent();
-            if(preparedPacketReplacement)
+            if(preparedPacketAppend) {
+                AndroidNodeStore.ChainSource candidate=sources.get(catalog.prefix+1);
+                String input=AndroidNodeChainCapture.memberInput(candidate,modes.get(catalog.prefix+1),candidate.profile());
+                if(catalog.session.capture.append==null||!catalog.session.capture.append.fits(input))throw new IllegalStateException("The original append no longer fits its captured prefix.");
+                draft.appendMeasured(catalog.originalSource,candidate,modes.get(catalog.prefix+1),()->result.current(System.currentTimeMillis()));
+            } else if(preparedPacketReplacement)
                 draft.replaceMeasured(catalog.originalSource,catalog.prefix,sources.get(catalog.prefix + 1),modes.get(catalog.prefix + 1),()->result.current(System.currentTimeMillis()));
             else draft.insertMeasured(catalog.originalSource,catalog.prefix,sources.get(catalog.prefix + 1),()->result.current(System.currentTimeMillis()));
             return catalog.prefix + 1;

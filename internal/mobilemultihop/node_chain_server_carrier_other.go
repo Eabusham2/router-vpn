@@ -25,3 +25,7 @@ func NewNodeChainOpenVPNServerCarrierContext(ctx, lifetime context.Context, sour
 func NewNodeChainMultipleImportedServerCarrierContext(ctx, lifetime context.Context, source string) (*NodeChainServerCarrier, error) {
 	return nil, nodeChainServerCarrierError
 }
+
+func newNodeChainServerFirstCandidateCarrierContext(ctx, lifetime context.Context, source string, family int) (*NodeChainServerCarrier, error) {
+	return nil, nodeChainServerCarrierError
+}

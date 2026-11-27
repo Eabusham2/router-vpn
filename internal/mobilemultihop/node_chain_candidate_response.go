@@ -112,8 +112,8 @@ func parseCandidateNativeResponseSource(input, mode string) (candidateResponseSo
 // The active prefix cannot be resized to accommodate a replacement candidate.
 func (c *NodeChain) candidatePacketOptions(position int, input string) (string, error) {
 	candidate, err := ParseNodeLaunchInput(input)
-	if err != nil {
-		return "", err
+	if err != nil || candidate == nil || c == nil {
+		return "", errors.Join(err, nodeChainCandidatePreparationError)
 	}
 	nodes := append([]*NodeProfile(nil), c.nodes...)
 	successor := position + 1
@@ -121,23 +121,34 @@ func (c *NodeChain) candidatePacketOptions(position int, input string) (string, 
 		return "", nodeChainCandidatePreparationError
 	}
 	nodes[successor] = candidate
-	config, proofs, _, physical, err := compileNodeChain(nodes)
-	if err != nil || !reflect.DeepEqual(physical, c.physical) {
+	var config string
+	var proofs []NodeChainProof
+	var physical []PhysicalEgress
+	if c.importedNodes != nil {
+		// Keep the exact registry and every original imported policy. A paired
+		// successor is replaced; no imported source is decoded as a Router node.
+		if c.ConnectedPacketSuccessorCandidateMode(position) != candidate.mode {
+			return "", nodeChainCandidatePreparationError
+		}
+		config, proofs, _, physical, err = c.importedNodes.compile(nodes)
+	} else {
+		config, proofs, _, physical, err = compileNodeChain(nodes)
+	}
+	if err != nil || !reflect.DeepEqual(physical, c.physical) || len(proofs) != len(c.proofs) ||
+		!reflect.DeepEqual(proofs[:successor], c.proofs[:successor]) {
 		return "", nodeChainCandidatePreparationError
 	}
-	original, err := packetCandidateEndpoints(c.config)
+	original, err := candidatePrefixClosure(c.config, c.proofs[:successor])
 	if err != nil {
 		return "", err
+	}
+	prospectivePrefix, err := candidatePrefixClosure(config, proofs[:successor])
+	if err != nil || !reflect.DeepEqual(original, prospectivePrefix) {
+		return "", nodeChainCandidatePreparationError
 	}
 	prospective, err := packetCandidateEndpoints(config)
 	if err != nil {
 		return "", err
-	}
-	for i, proof := range proofs[:successor] {
-		old, next := original[proof.Tag], prospective[proof.Tag]
-		if proof != c.proofs[i] || old == nil || next == nil || old["mtu"] != next["mtu"] {
-			return "", nodeChainCandidatePreparationError
-		}
 	}
 	endpoint := prospective[proofs[successor].Tag]
 	if endpoint == nil || endpoint["type"] != nodeChainPrefixType(candidate.mode) || endpoint["detour"] != proofs[position].Tag {
@@ -150,6 +161,59 @@ func (c *NodeChain) candidatePacketOptions(position int, input string) (string, 
 	endpoint["tag"] = "proxy"
 	raw, err := json.Marshal(endpoint)
 	return string(raw), err
+}
+
+// Compare complete compiler-owned prefix transport and resolver closures. An
+// imported SS proof is an outbound, and a packet's Start Layer has its own
+// outbound and credentials; neither can be reduced to an endpoint MTU check.
+// The caller supplies proofs from its already validated original source.
+func candidatePrefixClosure(config string, proofs []NodeChainProof) (map[string]any, error) {
+	var graph struct {
+		Outbounds []map[string]any `json:"outbounds"`
+		Endpoints []map[string]any `json:"endpoints"`
+		DNS       struct {
+			Servers []map[string]any `json:"servers"`
+		} `json:"dns"`
+	}
+	if len(config) > 4<<20 || json.Unmarshal([]byte(config), &graph) != nil || len(proofs) == 0 {
+		return nil, nodeChainCandidatePreparationError
+	}
+	result := make(map[string]any)
+	for i, proof := range proofs {
+		if proof.Position != i || len(proof.SourceSHA256) != 64 || proof.Tag == "" {
+			return nil, nodeChainCandidatePreparationError
+		}
+		for _, family := range []struct {
+			name, namespace string
+			rows            []map[string]any
+		}{
+			{"outbounds", "node", graph.Outbounds},
+			{"endpoints", "node", graph.Endpoints},
+			{"dns", "dns", graph.DNS.Servers},
+		} {
+			// Every row name comes from compileNodeChainGraph and the same
+			// original full source hash; this projection grants no dial access.
+			prefix := nodeChainNamespace(i, proof.SourceSHA256, family.namespace, "")
+			prefix = prefix[:len(prefix)-12]
+			for _, row := range family.rows {
+				tag := predecessorText(row, "tag")
+				if !strings.HasPrefix(tag, prefix) {
+					continue
+				}
+				key := family.name + "/" + tag
+				if _, exists := result[key]; exists {
+					return nil, nodeChainCandidatePreparationError
+				}
+				result[key] = row
+			}
+		}
+		_, outbound := result["outbounds/"+proof.Tag]
+		_, endpoint := result["endpoints/"+proof.Tag]
+		if outbound == endpoint {
+			return nil, nodeChainCandidatePreparationError
+		}
+	}
+	return result, nil
 }
 
 func candidateUnboundPacket(endpoint map[string]any) bool {
@@ -175,22 +239,44 @@ func packetCandidateEndpoints(config string) (map[string]map[string]any, error) 
 // This source readback grants no carrier. Connected and prepared owners are acquired separately.
 func (c *NodeChain) ConnectedPacketSuccessorCandidateMode(position int) string {
 	if c == nil || c.validateCapture() != nil || len(c.nodes) < 3 || len(c.nodes) > NodeChainExtendedLocalMaximumNodes ||
-		position < 0 || position >= len(c.nodes)-2 || c.importedNodes != nil || c.importedMiddle != nil || c.openVPNMiddle != nil ||
+		position < 0 || position >= len(c.nodes)-2 || c.importedMiddle != nil || c.openVPNMiddle != nil ||
 		c.socksSource != nil || c.connectSource != nil {
 		return ""
 	}
 	if len(c.nodes) > NodeChainMaximumNodes && c.ExtendedPairedLocalNodeCount() != len(c.nodes) {
 		return ""
 	}
+	if c.importedNodes != nil && (c.importedNodes.customEntry || c.importedNodes.externalFinal || len(c.nodes) > NodeChainMaximumNodes) {
+		return ""
+	}
+	successor := c.nodes[position+1]
+	if successor == nil || !NodeChainPrefixMode(successor.mode) || c.proofs[position+1].StartLayer != "off" {
+		return ""
+	}
 	for i, node := range c.nodes {
 		proof := c.proofs[i]
-		if node == nil || proof.NodeKind != "" || proof.Kind != "" || proof.StartLayer != "off" || !proofID.MatchString(proof.NodeID) ||
+		if node == nil {
+			member := c.importedSSMemberAt(i)
+			if c.importedNodes == nil || member == nil || member.hostname != nil || i == 0 || i == len(c.nodes)-1 ||
+				proof.NodeKind != "external" || proof.Kind != "public-path" || proof.Mode != "shadowsocks" ||
+				proof.StartLayer != "off" || proof.SourceSHA256 != member.source {
+				return ""
+			}
+			continue
+		}
+		if proof.NodeKind != "" || proof.Kind != "" || !proofID.MatchString(proof.NodeID) ||
 			proof.SourceSHA256 != node.SourceSHA256() || i < len(c.nodes)-1 && !NodeChainPrefixMode(proof.Mode) ||
 			i == len(c.nodes)-1 && proof.Mode != "shadowsocks" && proof.Mode != "hysteria2" {
 			return ""
 		}
+		// Only an already retained prefix may carry a Start Layer. This
+		// purpose never changes the successor's layer or a suffix member.
+		if proof.StartLayer != "off" && (i > position ||
+			proof.StartLayer != "aes-256-gcm" && proof.StartLayer != "aes-256-gcm+xor-whitening") {
+			return ""
+		}
 	}
-	return c.proofs[position+1].Mode
+	return successor.mode
 }
 
 func (c *NodeChain) candidateNativeResponseModeAt(position int) string {
@@ -311,6 +397,11 @@ func (r *candidatePacketRun) Close() error {
 		if r.endpoint != nil {
 			r.closeErr = r.endpoint.Close()
 		}
+		// Failed retirement retains the original key reservation and endpoint.
+		// A different request must not move a peer while that owner is unjoined.
+		if r.closeErr != nil {
+			return
+		}
 		mu, keys := r.request.reservations()
 		mu.Lock()
 		defer mu.Unlock()
@@ -341,6 +432,7 @@ type NodeChainCandidatePacketRequest struct {
 	engine         *nodeChainCandidateEngine
 	prepared       *NodeChainCandidatePreparationRuntime
 	preparedReader NodeChainPreparedPacketEngine
+	selected       *nodeChainExecutionEntryCandidateEngine
 	response       candidateResponseSource
 }
 
@@ -356,8 +448,8 @@ func (r *NodeChainCandidatePacketRequest) source(identity NodeChainIdentity) (No
 }
 
 func (r *NodeChainCandidatePacketRequest) Read(ctx context.Context, reader NodeChainEngine, original *NodeChain) (NodeChainIdentity, string, string, error) {
-	if r == nil || r.self != r || r.engine == nil || r.prepared != nil || reader == nil || !reflect.TypeOf(reader).Comparable() || reader != r.engine.reader ||
-		original == nil || original != r.engine.active || r.plan == nil || r.plan != r.engine.plan || r.plan.preparedNativeResponse || original != r.plan.chain {
+	if r == nil || r.self != r || r.engine == nil || r.prepared != nil || r.selected != nil || reader == nil || !reflect.TypeOf(reader).Comparable() || reader != r.engine.reader ||
+		original == nil || original != r.engine.active || r.plan == nil || r.plan != r.engine.plan || r.plan.preparedNativeResponse || original != r.plan.chain || r.plan.appendSource != nil {
 		return NodeChainIdentity{}, "", "", hopmeasure.ErrStale
 	}
 	if _, err := r.engine.current(ctx); err != nil {
@@ -367,9 +459,15 @@ func (r *NodeChainCandidatePacketRequest) Read(ctx context.Context, reader NodeC
 }
 
 func (r *NodeChainCandidatePacketRequest) ReadPrepared(ctx context.Context, reader NodeChainPreparedPacketEngine, original *NodeChainCandidatePreparation) (NodeChainIdentity, string, string, error) {
-	if r == nil || r.self != r || r.engine != nil || r.prepared == nil || reader == nil || !reflect.TypeOf(reader).Comparable() || reader != r.preparedReader ||
+	if r == nil || r.self != r || r.engine != nil || r.prepared == nil || r.selected != nil || reader == nil || !reflect.TypeOf(reader).Comparable() || reader != r.preparedReader ||
 		original == nil || original != r.prepared.preparation || r.plan == nil || !r.plan.preparedNativeResponse || original.candidates != r.plan {
 		return NodeChainIdentity{}, "", "", hopmeasure.ErrStale
+	}
+	if original.appendSource != nil || r.plan.appendSource != nil {
+		if original.appendSource == nil || original.appendSource != r.plan.appendSource ||
+			original.original != nil || r.plan.chain != nil || original.validateAppend() != nil || r.plan.validateAppend() != nil {
+			return NodeChainIdentity{}, "", "", hopmeasure.ErrStale
+		}
 	}
 	native, err := r.prepared.retainedPacketEngine(ctx)
 	if err != nil || native != reader {
@@ -392,6 +490,12 @@ func (r *NodeChainCandidatePacketRequest) ReadPrepared(ctx context.Context, read
 
 func (r *NodeChainCandidatePacketRequest) current(ctx context.Context) (NodeChainIdentity, string, string, error) {
 	if r != nil && r.self == r {
+		if r.selected != nil {
+			if r.selected.plan == nil {
+				return NodeChainIdentity{}, "", "", hopmeasure.ErrStale
+			}
+			return r.ReadSelected(ctx, r.selected.plan.native, r.selected.plan.projection)
+		}
 		if r.prepared != nil {
 			return r.ReadPrepared(ctx, r.preparedReader, r.prepared.preparation)
 		}
@@ -408,7 +512,9 @@ func (r *NodeChainCandidatePacketRequest) dial(ctx context.Context) (net.Conn, e
 	}
 	var connection net.Conn
 	var err error
-	if r.prepared != nil {
+	if r.selected != nil {
+		connection, err = r.selected.dialPacket(ctx, r)
+	} else if r.prepared != nil {
 		connection, err = r.preparedReader.DialPreparedCandidatePacketContext(ctx, r)
 	} else {
 		reader, ok := r.engine.reader.(NodeChainCandidatePacketEngine)
@@ -423,6 +529,9 @@ func (r *NodeChainCandidatePacketRequest) dial(ctx context.Context) (net.Conn, e
 }
 
 func (r *NodeChainCandidatePacketRequest) reservations() (*sync.Mutex, *map[string]*candidatePacketRun) {
+	if r.selected != nil {
+		return &r.selected.plan.runtime.mu, &r.selected.plan.runtime.candidatePacketKeys
+	}
 	if r.prepared != nil {
 		return &r.prepared.mu, &r.prepared.candidatePacketKeys
 	}
@@ -432,7 +541,13 @@ func (r *NodeChainCandidatePacketRequest) reservations() (*sync.Mutex, *map[stri
 
 func (r *NodeChainCandidatePacketRequest) reserve(ctx context.Context) (hopmeasure.CandidateResponseRun, error) {
 	run := &candidatePacketRun{ctx: ctx, request: r}
-	if r.prepared != nil {
+	if r.selected != nil {
+		reader, ok := r.selected.plan.native.(NodeChainSelectedPacketEngine)
+		if !ok {
+			return nil, hopmeasure.ErrStale
+		}
+		run.open = reader.OpenSelectedCandidateEndpointContext
+	} else if r.prepared != nil {
 		run.open = r.preparedReader.OpenPreparedCandidateEndpointContext
 	} else {
 		reader, ok := r.engine.reader.(NodeChainCandidateEndpointEngine)
@@ -446,7 +561,12 @@ func (r *NodeChainCandidatePacketRequest) reserve(ctx context.Context) (hopmeasu
 		return nil, err
 	}
 	defer mu.Unlock()
-	if r.prepared != nil {
+	if r.selected != nil {
+		p := r.selected.plan
+		if p.runtime.closed || p.runtime.retired.Load() || p.runtime.active != p.trial || p.runtime.identity != p.identity || p.runtime.engine != p.native || p.trial.execution != "local" || p.trial.lifetime.Err() != nil {
+			return nil, hopmeasure.ErrStale
+		}
+	} else if r.prepared != nil {
 		if r.prepared.retired || r.prepared.lifetime == nil || r.prepared.lifetime.Err() != nil {
 			return nil, hopmeasure.ErrStale
 		}
@@ -630,6 +750,11 @@ func (p *NodeChainCandidatePlan) ResponseCandidateDepth(position int, id, tag st
 		p.prefix.Position != position || p.prefix.ProfileID != id || p.prefix.Tag != tag {
 		return 0
 	}
+	if p.appendSource != nil {
+		// This depth belongs exclusively to the sealed incomplete prefix and
+		// its one prospective packet append, never to a complete NodeChain.
+		return len(p.appendSource.nodes) + 1
+	}
 	// Only the existing independently owned all-WG-to-SS Local capture grants
 	// a deeper native packet session. Its complete original compiler and
 	// replacement compiler retain every prefix, suffix and MTU policy.
@@ -679,6 +804,14 @@ func (p *NodeChainCandidatePlan) newService(ctx context.Context, engine hopmeasu
 		var base NodeChainCandidatePacketRequest
 		base.plan = p
 		switch owner := engine.(type) {
+		case *nodeChainExecutionEntryCandidateEngine:
+			if p.preparedNativeResponse || owner.plan == nil || owner.plan.plan != p || owner.plan.trial.execution != "local" || !NodeChainPrefixMode(p.responseMode) {
+				return nil, hopmeasure.ErrStale
+			}
+			if _, ok := owner.plan.native.(NodeChainSelectedPacketEngine); !ok {
+				return nil, hopmeasure.ErrStale
+			}
+			base.selected = owner
 		case *nodeChainCandidateEngine:
 			if p.preparedNativeResponse || owner.plan != p {
 				return nil, hopmeasure.ErrStale
@@ -720,7 +853,8 @@ func (p *NodeChainCandidatePlan) newService(ctx context.Context, engine hopmeasu
 				}
 				return request.reserve(ctx)
 			}
-			if len(p.chain.proofs) > NodeChainMaximumNodes {
+			if p.appendSource != nil && len(p.appendSource.nodes)+1 > NodeChainMaximumNodes ||
+				p.chain != nil && len(p.chain.proofs) > NodeChainMaximumNodes {
 				return hopmeasure.NewExtendedResponseRunContext(ctx, engine, prefix, p.targets, NodeChainInputLimit, p, open)
 			}
 			return hopmeasure.NewCapturedResponseRunContext(ctx, engine, prefix, p.targets, NodeChainInputLimit, open)

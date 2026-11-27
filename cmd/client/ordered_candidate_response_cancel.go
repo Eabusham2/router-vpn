@@ -163,6 +163,11 @@ func writeOrderedCandidateResponseCancel(w http.ResponseWriter, c *viaEntryContr
 	}
 	if admission.candidateMode != "" {
 		publishOrderedCandidateResponseSource(response, admission.candidateMode, admission.nodes, admission.originalFinal)
+		if len(admission.owners) > 0 {
+			response["requested_execution"], response["selected_execution"] = admission.requested, admission.selected
+			response["selection_epoch"] = admission.epoch
+			publishCandidateResponseOwners(response, admission.owners, admission.selected)
+		}
 	} else {
 		response["requested_execution"], response["required_selected_execution"] = "auto", "local"
 		response["selected_execution"], response["selection_epoch"] = "local", admission.epoch

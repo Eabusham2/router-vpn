@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobilemultihop"
 )
@@ -21,6 +22,7 @@ import (
 type orderedCandidatePreparationRequest struct {
 	serverResponse bool
 	draft          *multihopConnectRequest
+	append         *orderedCandidateAppendRequest
 	Scope          string
 	RequestID      string
 	Position       int
@@ -65,7 +67,7 @@ func beginOrderedCandidatePreparationWithLifetime(ctx, lifetime context.Context,
 	if err != nil {
 		return nil, err
 	}
-	if scope == orderedCandidateSavedPrefixScope && !orderedCandidatePrefixPlatformSupported() {
+	if orderedCandidateClosedScope(scope) && !orderedCandidatePrefixPlatformSupported() {
 		return nil, errors.New("candidate prefix native platform admission is unavailable")
 	}
 	return beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime, a, q, observe)
@@ -88,6 +90,9 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 		return nil, scopeErr
 	}
 	q.Scope = scope
+	if (scope == orderedCandidateAppendScope) != (q.append != nil) || q.append != nil && (q.draft != nil || q.serverResponse || q.append.validate() != nil || q.Position != q.append.AppendPosition-1) {
+		return nil, errors.New("append admission requires its exclusive original request")
+	}
 	if ctx == nil || ctx.Err() != nil || lifetime == nil || lifetime.Err() != nil || a == nil || observe == nil || !validViaEntryRequestID(q.RequestID) ||
 		q.Samples != 50 || q.Position < 0 || q.Position >= mobilemultihop.NodeChainExtendedLocalMaximumNodes || len(q.CandidateIDs) < 1 {
 		return nil, errors.New("temporary candidates require an original caller, saved IDs and exactly 50 samples")
@@ -124,7 +129,13 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 		return nil, errors.New("temporary candidate admission is not idle, was cancelled, or still owns cleanup")
 	}
 	control, found := a.profileByIDLocked(a.profiles.SelectedID)
-	nodes, nodesErr := a.candidatePreparationNodesLocked(scope, control, q.draft)
+	var nodes []common.MultihopNodeSelection
+	var nodesErr error
+	if q.append != nil {
+		nodes, nodesErr = a.candidateAppendNodesLocked(q.append, scope)
+	} else {
+		nodes, nodesErr = a.candidatePreparationNodesLocked(scope, control, q.draft)
+	}
 	if !found || nodesErr != nil {
 		release()
 		return nil, errors.Join(nodesErr, errors.New("temporary candidates require the selected complete Local graph"))
@@ -132,7 +143,7 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 	// A closed packet-prefix purpose never launches the saved typed suffix.
 	// Its own platform admission and exact prefix source checks apply instead;
 	// complete-path preparation must still prove the typed native capability.
-	if scope != orderedCandidateSavedPrefixScope && (desktopNodeChainHasSOCKS(nodes) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainHasCONNECT(nodes) && !nativeNodeChainCONNECTPlatformSupported()) {
+	if !orderedCandidateClosedScope(scope) && (desktopNodeChainHasSOCKS(nodes) && !nativeNodeChainSOCKSPlatformSupported() || desktopNodeChainHasCONNECT(nodes) && !nativeNodeChainCONNECTPlatformSupported()) {
 		release()
 		return nil, errors.New("typed ordered candidate preparation awaits installed native platform acceptance")
 	}
@@ -148,11 +159,15 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 	if err != nil || network == "" {
 		return nil, errors.Join(err, errors.New("temporary candidate physical network is unavailable"))
 	}
-	selection, err := resolveDesktopNodeChainSelection(control, profiles, nodes, orderedCandidateDraftExecution(q.draft))
-	if err != nil {
-		return nil, err
+	var selection multihopSelection
+	if q.append != nil {
+		selection, err = captureDesktopCandidateAppendSelection(ctx, clientRoot(a), control, profiles, q.append, deviceMTU)
+	} else {
+		selection, err = resolveDesktopNodeChainSelection(control, profiles, nodes, orderedCandidateDraftExecution(q.draft))
+		if err == nil {
+			selection, err = captureNativeNodeChainSelection(ctx, clientRoot(a), selection, []string{selection.ExitMode}, nil)
+		}
 	}
-	selection, err = captureNativeNodeChainSelection(ctx, clientRoot(a), selection, []string{selection.ExitMode}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -163,11 +178,21 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 	// This socket-free projection exists only to compile the original candidate
 	// inventory. It has no host, process, tracker or ready proof and cannot pass
 	// the connected catalog/currentness gates.
-	sourceLaunch, err := newOrderedCandidateSourceLaunch(selection, session, runtime.GOOS, q.draft)
+	var sourceLaunch *desktopNodeLaunch
+	if q.append != nil {
+		sourceLaunch, err = newDesktopCandidateAppendSourceLaunch(selection)
+	} else {
+		sourceLaunch, err = newOrderedCandidateSourceLaunch(selection, session, runtime.GOOS, q.draft)
+	}
 	if err != nil {
 		return nil, err
 	}
-	inventory, err := captureDesktopNodeChainCandidateSourcesForScope(candidateServerIntent(ctx, q.serverResponse), a, sourceLaunch, q.Position, q.CandidateIDs, q.Scope)
+	var inventory *desktopNodeChainCandidateCatalog
+	if q.append != nil {
+		inventory, err = captureDesktopAppendCandidateSources(ctx, a, selection, sourceLaunch, q.CandidateIDs)
+	} else {
+		inventory, err = captureDesktopNodeChainCandidateSourcesForScope(candidateServerIntent(ctx, q.serverResponse), a, sourceLaunch, q.Position, q.CandidateIDs, q.Scope)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -175,13 +200,13 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 		return nil, errors.New("saved candidate catalog changed during preparation")
 	}
 	var prefixPreparation *mobilemultihop.NodeChainCandidatePreparation
-	if q.Scope == orderedCandidateSavedPrefixScope {
+	if orderedCandidateClosedScope(q.Scope) {
 		prefixPreparation = inventory.prefixPreparation
 		if prefixPreparation == nil || inventory.plan != nil || inventory.typedPlan != nil || prefixPreparation.OriginalSourceSHA256() != selection.Native.source {
 			return nil, errors.New("saved prefix inventory lost its original closed preparation")
 		}
 	}
-	if err = selection.Native.chain.validate(ctx, control, profiles); err != nil {
+	if err = validateDesktopCandidateSavedSelection(ctx, selection, profiles); err != nil {
 		return nil, err
 	}
 	currentNetwork, err := observe(ctx)
@@ -198,7 +223,7 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 	currentRevision, err := a.candidateCatalogRevisionLocked()
 	if err != nil || ctx.Err() != nil || lifetime.Err() != nil || repeated || len(c.seen) >= 1024 ||
 		c.owner != nil && (c.owner.running || !c.owner.drained) || !orderedCandidatePreparationIdleLocked(a) ||
-		a.state != initial || currentRevision != revision || !selection.Native.chain.profilesCurrent(control, a.profiles.Profiles) || deviceMTU.current() != nil {
+		a.state != initial || currentRevision != revision || !desktopCandidateSavedProfilesCurrent(selection, a.profiles.Profiles) || deviceMTU.current() != nil {
 		return nil, errors.Join(err, ctx.Err(), errors.New("temporary candidate capture changed before original admission"))
 	}
 	operation, cancel := context.WithCancel(context.WithValue(lifetime, deviceMTUContextKey{}, deviceMTU))
@@ -271,20 +296,27 @@ func (p *orderedCandidatePreparation) savedSourcesCurrent(ctx context.Context) e
 		p.selection.Native.chain == nil || p.observeNetwork == nil {
 		return errors.New("candidate saved source observation lost its original capture")
 	}
-	if p.request.Scope == orderedCandidateSavedPrefixScope && (p.prefixPreparation == nil || p.prefixPreparation != p.inventory.prefixPreparation || p.inventory.plan != nil || p.inventory.typedPlan != nil) ||
-		p.request.Scope != orderedCandidateSavedPrefixScope && (p.prefixPreparation != nil || p.inventory.prefixPreparation != nil) {
+	if orderedCandidateClosedScope(p.request.Scope) && (!p.closedPurposeCurrent() || p.prefixPreparation != p.inventory.prefixPreparation || p.inventory.plan != nil || p.inventory.typedPlan != nil || p.inventory.selectedPlan != nil) ||
+		!orderedCandidateClosedScope(p.request.Scope) && (p.prefixPreparation != nil || p.inventory.prefixPreparation != nil || p.request.append != nil) {
 		return errors.New("candidate saved source changed its complete or closed-prefix owner")
 	}
 	if err := desktopnetwork.LockContext(ctx, &p.app.mu); err != nil {
 		return err
 	}
 	profiles := cloneRouterProfileStore(p.app.profiles).Profiles
+	var appendErr error
+	if p.request.append != nil {
+		appendErr = p.app.validateDesktopProfileExpectationsLocked(p.request.append.desktopProfileExpectations, p.request.append.requiredIDs(), true)
+	}
 	p.app.mu.Unlock()
-	if err := p.selection.Native.chain.validate(ctx, p.selection.Control, profiles); err != nil {
+	if appendErr != nil {
+		return appendErr
+	}
+	if err := validateDesktopCandidateSavedSelection(ctx, p.selection, profiles); err != nil {
 		return err
 	}
 	// Re-capture only source inventory. No connected identity is manufactured.
-	current, err := captureDesktopNodeChainCandidateSourcesForScope(candidateServerIntent(ctx, p.request.serverResponse), p.app, p.inventory.launch, p.request.Position, p.request.CandidateIDs, p.request.Scope)
+	current, err := p.recaptureCandidateSources(ctx)
 	if err != nil || current.revision != p.revision || current.inventory != p.inventory.inventory || !reflect.DeepEqual(current.assets, p.inventory.assets) {
 		return errors.Join(err, errors.New("temporary candidate original saved inventory changed"))
 	}
@@ -318,7 +350,10 @@ func (p *orderedCandidatePreparation) currentLocked() (failure error) {
 		return errors.New("temporary candidate original owner was cancelled or replaced")
 	}
 	revision, err := p.app.candidateCatalogRevisionLocked()
-	if err != nil || revision != p.revision || !p.selection.Native.chain.profilesCurrent(p.selection.Control, p.app.profiles.Profiles) {
+	if p.request.append != nil && p.app.validateDesktopProfileExpectationsLocked(p.request.append.desktopProfileExpectations, p.request.append.requiredIDs(), true) != nil {
+		return errors.New("append device or prefix selection changed")
+	}
+	if err != nil || revision != p.revision || !desktopCandidateSavedProfilesCurrent(p.selection, p.app.profiles.Profiles) {
 		return errors.Join(err, errors.New("temporary candidate original saved graph changed"))
 	}
 	if [3]bool{p.app.state.DAITA, p.app.state.Jumbo, p.app.state.Socks} != [3]bool{p.state.DAITA, p.state.Jumbo, p.state.Socks} {

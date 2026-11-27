@@ -18,13 +18,14 @@ import (
 // request. Nodes are complete original suffix launch inputs; the first client
 // entry is identified separately and is not instantiated on this server.
 type NodeChainServerSource struct {
-	Schema          int                            `json:"schema"`
-	EntryID         string                         `json:"entry_id"`
-	EntryNodeID     string                         `json:"entry_node_id"`
-	EntryMode       string                         `json:"entry_mode"`
-	Nodes           []string                       `json:"nodes"`
-	IdentitySources []string                       `json:"identity_sources"`
-	OpenVPNPairing  *NodeChainOpenVPNServerPairing `json:"openvpn_pairing,omitempty"`
+	Schema               int                            `json:"schema"`
+	EntryID              string                         `json:"entry_id"`
+	EntryNodeID          string                         `json:"entry_node_id"`
+	EntryMode            string                         `json:"entry_mode"`
+	Nodes                []string                       `json:"nodes"`
+	IdentitySources      []string                       `json:"identity_sources"`
+	PacketCandidatePairs []NodeChainPacketCandidatePair `json:"packet_candidate_pairs,omitempty"`
+	OpenVPNPairing       *NodeChainOpenVPNServerPairing `json:"openvpn_pairing,omitempty"`
 }
 
 type NodeChainServerBinding struct {
@@ -186,6 +187,10 @@ func newNodeChainServerPolicyCaptured(sourceJSON string, carrier *NodeChainServe
 }
 
 func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerCarrier, family int) (*NodeChainServerPolicy, error) {
+	return newNodeChainServerPolicyFamilyReplacement(sourceJSON, carrier, family, nil, -1)
+}
+
+func newNodeChainServerPolicyFamilyReplacement(sourceJSON string, carrier *NodeChainServerCarrier, family int, original *NodeChainServerPolicy, replacement int) (*NodeChainServerPolicy, error) {
 	connect, socks, openvpn, multiple := family == 4, family == 3, family == 5, family == 6
 	if family != 0 && !connect && !socks && !openvpn && !multiple {
 		return nil, nodeChainServerError
@@ -194,6 +199,9 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 	if exactJSON([]byte(sourceJSON), &source, NodeChainInputLimit) != nil || (family == 0 && source.Schema != 1 && source.Schema != 2 || family != 0 && source.Schema != family) ||
 		!exactID.MatchString(source.EntryID) || !proofID.MatchString(source.EntryNodeID) || !NodeChainPrefixMode(source.EntryMode) ||
 		len(source.Nodes) < 1 || len(source.Nodes) > multihoprelay.NodeChainMaximumMembers && (source.Schema != 6 || len(source.Nodes) > multihoprelay.NodeChainExtendedMaximumMembers) || len(source.IdentitySources) != len(source.Nodes) {
+		return nil, nodeChainServerError
+	}
+	if original != nil && (!sameServerPacketReplacement(original, source, replacement) || carrier != original.carrier) {
 		return nil, nodeChainServerError
 	}
 	var sourceFields map[string]json.RawMessage
@@ -441,6 +449,9 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		members = append(members, nodeChainGraphMember{profile: node.profile, source: node.source, mode: node.mode})
 		closures = append(closures, closure)
 	}
+	if validateNodeChainPacketCandidatePairs(source, p.nodes) != nil {
+		return nil, nodeChainServerError
+	}
 	for value := range blocked {
 		p.blockedCIDRs = append(p.blockedCIDRs, value)
 	}
@@ -505,7 +516,7 @@ func newNodeChainServerPolicyFamily(sourceJSON string, carrier *NodeChainServerC
 		return nil, nodeChainServerError
 	}
 	if carrier != nil {
-		if carrier.sourceSHA != p.sourceSHA || carrier.source != p.sourceJSON || carrier.apply(p.nodes[0], closures[0]) != nil {
+		if (carrier.sourceSHA != p.sourceSHA || carrier.source != p.sourceJSON) && (original == nil || original.carrier != carrier || original.sourceSHA != carrier.sourceSHA || original.sourceJSON != carrier.source) || carrier.apply(p.nodes[0], closures[0]) != nil {
 			return nil, nodeChainServerCarrierError
 		}
 		p.carrier = carrier

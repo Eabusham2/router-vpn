@@ -11,6 +11,13 @@ import (
 // never successful private proof, native MTU readback, DNS or Connected state.
 // The complete saved graph remains immutable provenance for an explicit Save.
 type DesktopNodeCandidatePreparationMetadata struct {
+	Purpose               string                    `json:"purpose,omitempty"`
+	AppendPosition        int                       `json:"append_position,omitempty"`
+	DraftRevision         string                    `json:"draft_revision,omitempty"`
+	DeviceRevision        string                    `json:"device_revision,omitempty"`
+	DeviceSourceSHA256    string                    `json:"device_source_sha256,omitempty"`
+	DeviceMTURevision     string                    `json:"device_mtu_revision,omitempty"`
+	DeviceFixedMTU        int                       `json:"device_fixed_mtu,omitempty"`
 	Schema                int                       `json:"schema"`
 	SessionID             string                    `json:"session_id"`
 	TargetOS              string                    `json:"target_os"`
@@ -89,8 +96,8 @@ func NewDesktopNodeCandidatePreparationPolicy(original *NodeChainCandidatePrepar
 		return bad()
 	}
 	if restoredMTU != 0 {
-		final := derived.original.finalPreferences()
-		fixed, fixedErr := fixedMTU(final)
+		final := derived.devicePolicyProfile()
+		fixed, fixedErr := derived.devicePolicyFixedMTU()
 		jumbo, jumboErr := externalJumboPreference(final)
 		if _, err := mtuNumber(float64(restoredMTU)); err != nil || fixedErr != nil || jumboErr != nil ||
 			fixed != 0 && restoredMTU != fixed || jumbo && (configured != 9000 || restoredMTU != configured) {
@@ -103,7 +110,7 @@ func NewDesktopNodeCandidatePreparationPolicy(original *NodeChainCandidatePrepar
 	} else {
 		tun["interface_name"] = "router-vpn"
 	}
-	derived.mtu, err = candidatePreparationMTU(graph, derived.proofs, derived.original)
+	derived.mtu, err = derived.candidateMTU(graph)
 	if err != nil {
 		return bad()
 	}
@@ -115,7 +122,7 @@ func NewDesktopNodeCandidatePreparationPolicy(original *NodeChainCandidatePrepar
 	// Native proof names the selected prefix. Durable protection belongs to
 	// the original complete saved control, whose restrictions were aggregated
 	// above, even when the rest of the saved route is absent from this graph.
-	control := candidatePreparationControl(derived.original)
+	control := derived.controlProfileID()
 	meta := DesktopNodeCandidatePreparationMetadata{Schema: 1, SessionID: sessionID, TargetOS: targetOS,
 		OriginalSourceSHA256: original.originalSourceSHA(), PreparationSHA256: original.sourceSHA,
 		OriginalCaptureSHA256: original.capture, PrefixPosition: original.position,
@@ -123,6 +130,12 @@ func NewDesktopNodeCandidatePreparationPolicy(original *NodeChainCandidatePrepar
 		TUNTag: capture.TUNTag, OriginalTUNSHA256: originalTUN, DerivedTUNSHA256: desktopExternalObjectDigest(tun),
 		Prefixes: append([]NodeChainProof(nil), derived.proofs...), KillSwitchPolicy: kill,
 		IPv6Mode: capture.IPv6Mode, HomeLANAccess: lan, RestoredMTU: restoredMTU}
+	if source := derived.appendSource; source != nil {
+		meta.Purpose, meta.AppendPosition = nodeChainCandidateAppendPurpose, len(source.nodes)
+		meta.DraftRevision, meta.DeviceRevision = source.record.DraftRevision, source.record.DeviceRevision
+		meta.DeviceSourceSHA256 = source.device.source
+		meta.DeviceMTURevision, meta.DeviceFixedMTU = source.record.DeviceMTURevision, source.record.DeviceFixedMTU
+	}
 	meta.SourceSHA256 = desktopExternalObjectDigest([]any{"routervpn-desktop-candidate-prefix-source-v1", original.sourceSHA, sessionID, targetOS, restoredMTU})
 	for _, root := range capture.PhysicalRoots {
 		var found map[string]any
@@ -191,7 +204,13 @@ func captureDesktopCandidatePrefix(p *NodeChainCandidatePreparation, graph map[s
 	}
 	kill, ipv6, lan := "off", "on", true
 	var policies []nodeChainImportedDevicePolicy
-	if p.typedOriginal != nil {
+	if p.appendSource != nil {
+		var err error
+		policies, err = p.appendSource.devicePolicies()
+		if err != nil {
+			return bad()
+		}
+	} else if p.typedOriginal != nil {
 		original, err := p.typedOriginal.read()
 		if err != nil || original.pair != p.original {
 			return bad()
@@ -228,10 +247,10 @@ func captureDesktopCandidatePrefix(p *NodeChainCandidatePreparation, graph map[s
 		lan = lan && capture.HomeLANAccess
 	}
 	resolverPosition := p.position
-	if p.candidates.measurement != "" {
+	if p.candidates.measurement != "" && (p.appendSource == nil || p.appendSource.record.Schema == 2) {
 		resolverPosition = 0
 	}
-	selectedCapture, err := p.original.nodes[resolverPosition].DesktopCapture()
+	selectedCapture, err := p.prefixNode(resolverPosition).DesktopCapture()
 	if err != nil {
 		return bad()
 	}
@@ -302,7 +321,7 @@ func (p *DesktopNodeCandidatePreparationPolicy) Validate() error {
 	if p == nil || p.original == nil || p.preparation == nil || p.original == p.preparation ||
 		p.original.validate() != nil || p.preparation.validate() != nil || p.seal == "" || p.currentSeal() != p.seal ||
 		p.metadata.ApplicationOpen || p.metadata.DNSOpen || p.metadata.SourceSHA256 != p.preparation.sourceSHA ||
-		p.metadata.PolicyProfileID != candidatePreparationControl(p.original.original) ||
+		p.metadata.PolicyProfileID != p.original.controlProfileID() || !p.appendMetadataCurrent() ||
 		p.metadata.ConfigSHA256 != p.preparation.configSHA || p.metadata.CaptureSHA256 != p.preparation.capture {
 		return desktopNodeCandidatePreparationError
 	}

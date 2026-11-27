@@ -11,6 +11,10 @@ import (
 // changed. Only the current compiled Auto packet cap may be reduced; subsequent
 // positions see that reduced interface through the normal ordered MTU pass.
 func applyNodeChainImportedPacketMTU(members []nodeChainGraphMember, closures []*externalPredecessor, position int) error {
+	return applyNodeChainCapturedStreamPacketMTU(members, closures, position, nil)
+}
+
+func applyNodeChainCapturedStreamPacketMTU(members []nodeChainGraphMember, closures []*externalPredecessor, position int, appendScope *nodeChainAppendGraphScope) error {
 	if len(members) != len(closures) || position < 2 || position >= len(closures) || !NodeChainPrefixMode(members[position].mode) {
 		return nodeChainError
 	}
@@ -44,7 +48,12 @@ func applyNodeChainImportedPacketMTU(members []nodeChainGraphMember, closures []
 			if NodeChainPrefixMode(members[at].mode) {
 				break
 			}
-			if !members[at].imported || members[at].mode != "shadowsocks" {
+			if members[at].mode != "shadowsocks" {
+				return nodeChainError
+			}
+			if !members[at].imported && (appendScope == nil || at >= len(appendScope.nodes) ||
+				appendScope.nodes[at] == nil || appendScope.nodes[at].mode != "shadowsocks" ||
+				appendScope.closures[at] != closure || !nodeChainAppendSSClosure(closure)) {
 				return nodeChainError
 			}
 		}

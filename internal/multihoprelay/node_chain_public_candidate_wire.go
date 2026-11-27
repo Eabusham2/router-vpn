@@ -8,7 +8,7 @@ type nodeChainPublicCandidateRequest struct {
 }
 
 func publicCandidateRequest(q NodeChainCandidateRequest) (nodeChainPublicCandidateRequest, error) {
-	if !q.Lease.HasRegisteredFronts() || q.Schema != 3 && q.Schema != 2 || (q.Schema == 3) != (q.Lease.Schema == 8) || q.Validate() != nil {
+	if !q.Lease.HasRegisteredFronts() || q.Schema != 3 && q.Schema != 2 && !q.IsPacketResponse() || (q.Schema == 3) != (q.Lease.Schema == 8) || q.Validate() != nil {
 		return nodeChainPublicCandidateRequest{}, errNodeChainCandidate
 	}
 	w, err := compactNodeChainRequest(q.Lease)
@@ -16,7 +16,7 @@ func publicCandidateRequest(q NodeChainCandidateRequest) (nodeChainPublicCandida
 }
 func (w nodeChainPublicCandidateRequest) restore() (NodeChainCandidateRequest, error) {
 	q := w.NodeChainCandidateRequest
-	if (q.Schema != 3 && q.Schema != 2) || (w.LeaseWire.PublicFrontCount != nil) != (q.Schema == 3) || (w.LeaseWire.PrivateFrontCount != nil) != (q.Schema == 2) || w.LeaseWire.StatusNonce != nil {
+	if (q.Schema != 3 && q.Schema != 2 && !q.IsPacketResponse()) || (w.LeaseWire.PublicFrontCount != nil) != (q.Schema == 3) || (w.LeaseWire.PrivateFrontCount != nil) != (q.Schema == 2 || q.IsPacketResponse()) || w.LeaseWire.StatusNonce != nil {
 		return NodeChainCandidateRequest{}, errNodeChainCandidate
 	}
 	var err error
@@ -83,10 +83,13 @@ func DecodeNodeChainCandidateWorkerRequest(raw []byte, lease NodeChainCapture) (
 		return NodeChainCandidateIPCRequest{}, errNodeChainCandidate
 	}
 	q, err := w.Request.restore()
-	if err != nil || q.Position < 1 || q.Position >= len(lease.Source.Members) {
+	if err != nil {
 		return NodeChainCandidateIPCRequest{}, errNodeChainCandidate
 	}
-	c := NodeChainCandidateCapture{1, lease.Clone(), q, lease.Source.Members[q.Position-1], w.OperationOwnerID}
+	c, err := RestoreNodeChainCandidateCapture(lease, q, w.OperationOwnerID)
+	if err != nil {
+		return NodeChainCandidateIPCRequest{}, err
+	}
 	digest, err := c.Digest()
 	request := NodeChainCandidateIPCRequest{1, w.Operation, w.Nonce, c}
 	if err != nil || digest != w.CaptureSHA256 || request.Validate() != nil {

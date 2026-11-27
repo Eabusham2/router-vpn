@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"router-vpn/internal/desktopnetwork"
+	"router-vpn/internal/mobilemultihop"
 )
 
 // The native platform capture is separate from the portable ordered source.
@@ -21,18 +22,31 @@ type desktopNodeChainHostCapture struct {
 }
 
 type desktopNodeChainSources struct {
-	selection multihopSelection
-	selected  string
-	options   [3]bool
+	selection     multihopSelection
+	selected      string
+	options       [3]bool
+	appendCapture *desktopNodeCandidateAppendCapture
 }
 
 func captureDesktopNodeChainSourcesLocked(a *app, selection multihopSelection) (*desktopNodeChainSources, error) {
-	if a == nil || selection.Native == nil || selection.Native.chain == nil || selection.Native.validate(selection) != nil {
+	return captureDesktopNodeCandidateSourcesLocked(a, selection, nil)
+}
+func captureDesktopNodeCandidateSourcesLocked(a *app, selection multihopSelection, purpose *orderedCandidatePreparation) (*desktopNodeChainSources, error) {
+	var appendCapture *desktopNodeCandidateAppendCapture
+	if purpose != nil && purpose.request.Scope == orderedCandidateAppendScope {
+		if purpose.app != a || purpose.selection.Native != selection.Native || !purpose.closedPurposeCurrent() || validateDesktopCandidatePurposeSelection(context.Background(), selection, purpose.prefixPreparation) != nil {
+			return nil, errors.New("append host lost its original closed purpose")
+		}
+		appendCapture = desktopCandidateAppendCapture(selection)
+	} else if desktopCandidateAppendCapture(selection) != nil {
+		return nil, errors.New("an append source cannot enter an ordinary host capture")
+	}
+	if a == nil || selection.Native == nil || selection.Native.chain == nil || appendCapture == nil && selection.Native.validate(selection) != nil {
 		return nil, errors.New("ordered host capture lost its complete source")
 	}
 	selection.Control, selection.Entry, selection.Exit = cloneRouterProfile(selection.Control), cloneRouterProfile(selection.Entry), cloneRouterProfile(selection.Exit)
 	selection.Nodes = cloneDesktopNodeChainMembers(selection.Nodes)
-	s := &desktopNodeChainSources{selection: selection, selected: a.profiles.SelectedID,
+	s := &desktopNodeChainSources{selection: selection, selected: a.profiles.SelectedID, appendCapture: appendCapture,
 		options: [3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks}}
 	return s, s.currentLocked(a)
 }
@@ -44,7 +58,12 @@ func (s *desktopNodeChainSources) currentLocked(a *app) error {
 		s.options != [3]bool{s.selection.Control.DAITAEnabled, s.selection.Control.JumboTUN, s.selection.Control.SocksEnabled} {
 		return errors.New("ordered host changed its final control or runtime options")
 	}
-	if !s.selection.Native.chain.profilesCurrent(s.selection.Control, a.profiles.Profiles) {
+	if s.appendCapture != nil {
+		if desktopCandidateAppendCapture(s.selection) != s.appendCapture || s.appendCapture.native != s.selection.Native || s.appendCapture.original.chain != nil || s.appendCapture.request.validate() != nil ||
+			s.appendCapture.requestSHA != s.appendCapture.request.digest() || s.appendCapture.deviceMTU.current() != nil || !s.appendCapture.profilesCurrent(a.profiles.Profiles) {
+			return errors.New("append host changed its original independent device or prefix")
+		}
+	} else if desktopCandidateAppendCapture(s.selection) != nil || !s.selection.Native.chain.profilesCurrent(s.selection.Control, a.profiles.Profiles) {
 		return errors.New("ordered host changed a selected member's complete saved source")
 	}
 	return nil
@@ -58,7 +77,23 @@ func captureDesktopNodeChainHostContext(ctx context.Context, a *app, selection m
 // captures the original native observer above and retains it for all reads.
 func captureDesktopNodeChainHostContextWith(ctx context.Context, a *app, selection multihopSelection,
 	observe func(context.Context) (string, error)) (*desktopNodeChainHostCapture, error) {
-	if ctx == nil || ctx.Err() != nil || a == nil || observe == nil || selection.Native == nil || selection.Native.chain == nil || selection.Native.validate(selection) != nil {
+	return captureDesktopNodeChainHostContextForPurpose(ctx, a, selection, observe, nil)
+}
+func captureDesktopCandidatePrefixHostContext(ctx context.Context, p *orderedCandidatePreparation) (*desktopNodeChainHostCapture, error) {
+	if p == nil || !p.closedPurposeCurrent() {
+		return nil, errors.New("closed prefix host lost its original purpose")
+	}
+	return captureDesktopNodeChainHostContextForPurpose(ctx, p.app, p.selection, physicalNetworkIdentityContext, p)
+}
+func captureDesktopNodeChainHostContextForPurpose(ctx context.Context, a *app, selection multihopSelection, observe func(context.Context) (string, error), purpose *orderedCandidatePreparation) (*desktopNodeChainHostCapture, error) {
+	var preparation *mobilemultihop.NodeChainCandidatePreparation
+	if purpose != nil {
+		if purpose.app != a || purpose.selection.Native != selection.Native || !purpose.closedPurposeCurrent() {
+			return nil, errors.New("closed prefix host lost its exact source owner")
+		}
+		preparation = purpose.prefixPreparation
+	}
+	if ctx == nil || ctx.Err() != nil || a == nil || observe == nil || selection.Native == nil || selection.Native.chain == nil || validateDesktopCandidatePurposeSelection(ctx, selection, preparation) != nil {
 		return nil, errors.New("ordered host requires its original caller and full captured source")
 	}
 	if captured := selection.Native.chain.host; captured != nil {
@@ -70,7 +105,7 @@ func captureDesktopNodeChainHostContextWith(ctx context.Context, a *app, selecti
 	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
 		return nil, err
 	}
-	sources, err := captureDesktopNodeChainSourcesLocked(a, selection)
+	sources, err := captureDesktopNodeCandidateSourcesLocked(a, selection, purpose)
 	a.mu.Unlock()
 	if err != nil {
 		return nil, err

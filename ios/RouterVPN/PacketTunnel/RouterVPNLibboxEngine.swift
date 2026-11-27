@@ -2142,6 +2142,10 @@ final class RouterVPNLibboxEngine {
                     "node_id": member.profile["node_proof_id"] as? String ?? "", "mode": member.mode]
                 if selectedResponses.contains(position) {
                     prefix["measurement"] = selectedResponseMetric
+                    if let execution, let winner = selectedFields["execution"] as? String,
+                       let mode = execution.capture.packetResponseMode(at: position, winner: winner) {
+                        prefix["candidate_mode"] = mode
+                    }
                 } else if execution == nil, localPrefixes.indices.contains(position), let metric = localPrefixes[position].measurement {
                     prefix["measurement"] = metric
                     if let mode = localPrefixes[position].candidate_mode { prefix["candidate_mode"] = mode }
@@ -2152,8 +2156,12 @@ final class RouterVPNLibboxEngine {
             guard current else { return nil }
             var value: [String: Any] = ["session_id": settingsEpoch, "request_id": request, "mtu_session_id": mtuSession,
                 "source_sha256": sourceSHA256, "config_sha256": configSHA256, "proofs": safe]
-            if localPrefixes.contains(where: { $0.packetSuccessorResponse(in: localPrefixes) }) {
-                value["response_source_nodes"] = members.map { IOSNodeCandidateResponseNode(id: $0.id, mode: $0.mode).object }
+            if localPrefixes.contains(where: { $0.packetSuccessorResponse(in: localPrefixes) }) ||
+                safe.contains(where: { $0["candidate_mode"] as? String != nil }) {
+                value["response_source_nodes"] = members.map {
+                    IOSNodeCandidateResponseNode(id: $0.id, mode: $0.mode,
+                        kind: $0.profile["node_kind"] as? String == "external" ? "external" : "router-vpn").object
+                }
             }
             value.merge(selectedFields) { _, selected in selected }
             return reply(value)
@@ -2177,7 +2185,7 @@ final class RouterVPNLibboxEngine {
                 guard ["routed-tcp-connect", "routed-candidate-response"].contains(connect.capture.plan.candidatePrefixMeasurement(position)) else { return nil }
             }
             let originalSource = try? IOSCandidateCatalogPublication.shared.reopen(request: ownerRequest)
-            if temporaryMeasurement, let source = originalSource,
+            if temporaryMeasurement, execution == nil, let source = originalSource,
                let inventory = try? JSONSerialization.jsonObject(with: source.inventory.data) as? [String: Any],
                inventory["response_mode"] != nil { return nil }
             var responseMode: String?
@@ -2185,12 +2193,31 @@ final class RouterVPNLibboxEngine {
             if let source = originalSource,
                let inventory = try? JSONSerialization.jsonObject(with: source.inventory.data) as? [String: Any],
                let mode = inventory["response_mode"] as? String, IOSMultihopNodeSelection.supportsNativePrefix(mode) {
-                guard !temporaryMeasurement, let plan else { return nil }
-                if LibboxRouterNodeChainConnectedPacketSuccessorCandidateMode(plan, position) == mode {
-                    guard let original = try? IOSNodeChainCapture(plan: plan), Int(position) < original.members.count - 2 else { return nil }
+                if let execution {
+                    do {
+                        try execution.observe {
+                            let winner = try execution.capture.execution()
+                            guard execution.capture.packetResponseMode(at: Int(position), winner: winner) == mode else {
+                                throw self.error("The original selected packet response owner changed.")
+                            }
+                        }
+                    } catch { return nil }
                     responseMode = mode
-                    responseSourceNodes = original.members.map { IOSNodeCandidateResponseNode(id: $0.id, mode: $0.mode) }
-                } else if LibboxRouterNodeChainConnectedFinalCandidateResponseMode(plan, position) != mode { return nil }
+                    responseSourceNodes = execution.capture.members.map {
+                        IOSNodeCandidateResponseNode(id: $0.id, mode: $0.mode,
+                            kind: $0.profile["node_kind"] as? String == "external" ? "external" : "router-vpn")
+                    }
+                } else {
+                    guard !temporaryMeasurement, let plan else { return nil }
+                    if LibboxRouterNodeChainConnectedPacketSuccessorCandidateMode(plan, position) == mode {
+                        guard let original = try? IOSNodeChainCapture(plan: plan), Int(position) < original.members.count - 2 else { return nil }
+                        responseMode = mode
+                        responseSourceNodes = original.members.map {
+                            IOSNodeCandidateResponseNode(id: $0.id, mode: $0.mode,
+                                kind: $0.profile["node_kind"] as? String == "external" ? "external" : "router-vpn")
+                        }
+                    } else if LibboxRouterNodeChainConnectedFinalCandidateResponseMode(plan, position) != mode { return nil }
+                }
             }
             ownershipLock.lock()
             var captured = nodeCandidate

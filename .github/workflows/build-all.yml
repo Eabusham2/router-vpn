@@ -360,6 +360,9 @@ jobs:
               if($bytes.Length -lt 33 -or [BitConverter]::ToString($bytes,0,8) -cne '89-50-4E-47-0D-0A-1A-0A'){throw "Packaged $family omitted its rendered $layout"}
               [IO.File]::Move($image,(Join-Path $evidence $layout))
             }
+            $connectionFamily=if($family -eq 'Windows'){'windows'}else{'portable-windows'}
+            python deploy/build-native-runtime.py --desktop-connect --package $root --family $connectionFamily --evidence (Join-Path $evidence 'connection')
+            if($LASTEXITCODE-ne0){throw "Packaged $family real Connect/TUN cycle failed"}
           }
       - name: Save rendered Windows layouts and launch diagnostics
         if: always()
@@ -370,6 +373,8 @@ jobs:
             ${{ runner.temp }}/routervpn-ui/*/*.png
             ${{ runner.temp }}/routervpn-ui/*/*.log
             ${{ runner.temp }}/routervpn-ui/*/windows-self-test-error.json
+            ${{ runner.temp }}/routervpn-ui/*/connection/*.json
+            ${{ runner.temp }}/routervpn-ui/*/connection/*.log
           if-no-files-found: warn
           retention-days: 7
 
@@ -728,12 +733,22 @@ jobs:
           chmod +x client/macos/build-native-app.sh deploy/package-macos-native.sh
           ./deploy/package-macos-native.sh
           (cd dist/macos-native && shasum -a 256 -c SHA256SUMS)
+      - name: Connect the installed native macOS app through its real utun
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          mkdir -p "$RUNNER_TEMP/routervpn-macos-connect"
+          tar -xzf dist/macos-native/RouterVPN-darwin-arm64.tar.gz -C "$RUNNER_TEMP/routervpn-macos-connect"
+          python3 deploy/build-native-runtime.py --desktop-connect --package "$RUNNER_TEMP/routervpn-macos-connect/RouterVPN-darwin-arm64" --family macos --evidence "$RUNNER_TEMP/routervpn-ui/connection"
       - name: Save rendered macOS layouts
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: RouterVPN-macOS-layout-${{ github.sha }}
-          path: ${{ runner.temp }}/routervpn-ui/*.png
+          path: |
+            ${{ runner.temp }}/routervpn-ui/*.png
+            ${{ runner.temp }}/routervpn-ui/connection/*.json
+            ${{ runner.temp }}/routervpn-ui/connection/*.log
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@v4
@@ -752,6 +767,10 @@ jobs:
     runs-on: macos-15-intel
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@v4
+        with: {ref: '${{ github.sha }}'}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.26.3', cache: false}
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
       - uses: actions/download-artifact@v4
@@ -789,12 +808,19 @@ jobs:
               if len(image) < 33 or image[:8] != b'\x89PNG\r\n\x1a\n':
                   raise RuntimeError('Packaged Intel app omitted its rendered ' + name)
           PYMACINTEL
+      - name: Connect the installed Intel macOS app through its real utun
+        run: |
+          set -euo pipefail
+          python3 deploy/build-native-runtime.py --desktop-connect --package "$RUNNER_TEMP/routervpn-macos-intel/RouterVPN-darwin-amd64" --family macos --evidence "$RUNNER_TEMP/routervpn-macos-intel-layout/connection"
       - name: Save rendered Intel macOS layouts
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: RouterVPN-macOS-layout-amd64-${{ github.sha }}
-          path: ${{ runner.temp }}/routervpn-macos-intel-layout/*.png
+          path: |
+            ${{ runner.temp }}/routervpn-macos-intel-layout/*.png
+            ${{ runner.temp }}/routervpn-macos-intel-layout/connection/*.json
+            ${{ runner.temp }}/routervpn-macos-intel-layout/connection/*.log
           if-no-files-found: error
           retention-days: 7
 

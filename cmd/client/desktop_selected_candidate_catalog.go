@@ -49,12 +49,13 @@ type desktopSelectedCandidateTarget struct {
 }
 
 type desktopSelectedCandidateInventory struct {
-	Measurement string                           `json:"measurement,omitempty"`
-	Position    int                              `json:"prefix_position"`
-	Prefix      string                           `json:"prefix_id"`
-	Targets     []desktopSelectedCandidateTarget `json:"targets"`
-	digest      string
-	targetBytes int
+	CandidateMode string                           `json:"candidate_mode,omitempty"`
+	Measurement   string                           `json:"measurement,omitempty"`
+	Position      int                              `json:"prefix_position"`
+	Prefix        string                           `json:"prefix_id"`
+	Targets       []desktopSelectedCandidateTarget `json:"targets"`
+	digest        string
+	targetBytes   int
 }
 
 // The descriptor owns the original full ordered membership. Revalidate its
@@ -70,7 +71,9 @@ func (d *desktopSelectedCandidateDescriptor) originalInventory() (*desktopSelect
 		return nil, errors.New("selected source inventory was replaced")
 	}
 	var expected desktopSelectedCandidateInventory
-	if json.Unmarshal([]byte(raw), &expected) != nil || len(expected.Targets) == 0 {
+	if json.Unmarshal([]byte(raw), &expected) != nil || len(expected.Targets) == 0 ||
+		expected.CandidateMode != "" && (!mobilemultihop.NodeChainPrefixMode(expected.CandidateMode) || expected.Measurement != hopmeasure.CandidatePrivateResponseMeasurement ||
+			d.preparation == nil || expected.CandidateMode != d.preparation.SelectedPacketCandidateMode(expected.Position)) {
 		return nil, errors.New("invalid selected candidate inventory")
 	}
 	targets, err := json.Marshal(expected.Targets)
@@ -84,7 +87,21 @@ func (d *desktopSelectedCandidateDescriptor) originalInventory() (*desktopSelect
 	return d.expected, nil
 }
 
+// This is a source-only mode readback. The selected native reader and original
+// winning trial separately authorize every actual packet operation.
+func (d *desktopSelectedCandidateDescriptor) candidateMode() string {
+	if d == nil || d.plan == nil || d.preparation == nil {
+		return ""
+	}
+	expected, err := d.originalInventory()
+	if err != nil {
+		return ""
+	}
+	return expected.CandidateMode
+}
+
 type desktopSelectedCandidateMetadata struct {
+	CandidateMode     string                           `json:"candidate_mode,omitempty"`
 	Measurement       string                           `json:"measurement,omitempty"`
 	TargetTotal       int                              `json:"target_total,omitempty"`
 	TargetOffset      int                              `json:"target_offset,omitempty"`
@@ -133,8 +150,8 @@ func desktopCandidatePositionForIntent(launch *desktopNodeLaunch, position int, 
 	if launch == nil || launch.chain == nil || position < 0 || position >= len(launch.chain.selection.Nodes) {
 		return false
 	}
-	local := e.preparation.SupportsCompareLocalResponseCandidate(position) || e.preparation.SupportsCompareLocalPublicResponseCandidate(position)
-	server := serverResponse && (e.preparation.SupportsServerResponseCandidate(position) || e.preparation.SupportsServerPublicResponseCandidate(position))
+	local := e.preparation.SupportsCompareLocalResponseCandidate(position) || e.preparation.SupportsCompareLocalPublicResponseCandidate(position) || e.preparation.SupportsCompareLocalPacketResponseCandidate(position)
+	server := serverResponse && (e.preparation.SupportsServerResponseCandidate(position) || e.preparation.SupportsServerPublicResponseCandidate(position) || e.preparation.SupportsServerPacketResponseCandidate(position))
 	if local || server {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -237,6 +254,12 @@ func (d *desktopSelectedCandidateDescriptor) validateMetadata(request desktopSel
 	expected, err := d.originalInventory()
 	if err != nil {
 		return envelope, "", bad
+	}
+	if metadata.CandidateMode != expected.CandidateMode {
+		return envelope, "", bad
+	}
+	if expected.CandidateMode != "" {
+		names = append(names, "candidate_mode")
 	}
 	if expected.Measurement != "" {
 		if !desktopCandidateResponseMetric(expected.Measurement) || metadata.Measurement != expected.Measurement ||

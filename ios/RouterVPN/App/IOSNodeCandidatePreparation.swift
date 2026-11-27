@@ -44,6 +44,8 @@ import Foundation
     private(set) var retired = false
     private var launching = false
     private let onCancelled: @MainActor () -> Void
+    private let appendCurrent: (@MainActor () throws -> Void)?
+    private let appendDeviceMTU: IOSDeviceMTUPreference?
 
     private enum Purpose {
         case local(IOSNodeCandidateOriginalCapture)
@@ -51,13 +53,16 @@ import Foundation
     }
 
     private init(model: RouterVPNModel, bundle: ClientBundle, purpose: Purpose,
-                 prefixPosition: Int?, request: String?, completeFinalSource: Bool = false, onCancelled: @escaping @MainActor () -> Void) throws {
-        self.model = model; self.bundle = bundle; self.onCancelled = onCancelled
+                 prefixPosition: Int?, request: String?, completeFinalSource: Bool = false,
+                 appendCurrent: (@MainActor () throws -> Void)? = nil, onCancelled: @escaping @MainActor () -> Void) throws {
+        self.model = model; self.bundle = bundle; self.onCancelled = onCancelled; self.appendCurrent = appendCurrent
+        if case .local(let capture) = purpose { appendDeviceMTU = capture.appendSource?.deviceMTU }
+        else { appendDeviceMTU = nil }
         switch purpose {
         case .local(let capture):
             selectedDraft = nil
             launchInput = capture.launchInput; sourceSHA256 = capture.sourceSHA256; configSHA256 = capture.configSHA256
-            prefixes = prefixPosition != nil && completeFinalSource ? capture.preparedCandidatePrefixes : capture.candidatePrefixes
+            prefixes = prefixPosition != nil && (completeFinalSource || capture.isAppend) ? capture.preparedCandidatePrefixes : capture.candidatePrefixes
         case .selected(let draft):
             selectedDraft = draft
             launchInput = draft.launchInput; sourceSHA256 = draft.sourceSHA256; configSHA256 = draft.configSHA256
@@ -107,6 +112,38 @@ import Foundation
             let draft = try IOSNodeCandidateDraftExecution(model: model, bundle: bundle, position: position, request: request)
             value = try Self(model: model, bundle: bundle, purpose: .selected(draft), prefixPosition: position, request: request, onCancelled: onCancelled)
         }
+        return try publishReservation(value, model: model)
+    }
+
+    static func reserveAppend(model: RouterVPNModel, nodes: [IOSMultihopNodeSelection],
+                              editorOwner: IOSNodeChainEditorOwner, nextMode: String, draftRevision: String,
+                              request: String, current: @escaping @MainActor () throws -> Void,
+                              onCancelled: @escaping @MainActor () -> Void) throws -> IOSNodeCandidatePreparation {
+        guard retained == nil, !model.connected, !model.tunnelTransitioning,
+              !model.iosUserDisconnectInProgress, !model.iosSpeedLabOwnership.active,
+              !IOSMTUMeasurementGate.held, let bundle = model.bundle else { throw CancellationError() }
+        try current()
+        try model.requireIOSNodeChainAppendSources(editorOwner, nodes: nodes)
+        let snapshot = try IOSNodeBundleStore.shared.candidateSnapshot()
+        guard snapshot.stamp.ready, let control = editorOwner.fingerprints[editorOwner.controlID] else { throw CancellationError() }
+        let deviceRevision = "ios-device-" + IOSCandidateCatalogPublication.digest(Data((control + ":" + snapshot.stamp.revision).utf8))
+        let capture = try IOSNodeCandidateAppendSource.compile(deviceBundle: IOSNodeUsage.canonical(bundle),
+            records: snapshot.records, nodes: nodes, nextMode: nextMode, draftRevision: draftRevision,
+            deviceRevision: deviceRevision, deviceMTU: IOSDeviceMTUPreference.current())
+        let value = try Self(model: model, bundle: bundle, purpose: .local(.append(capture)),
+            prefixPosition: nodes.count - 1, request: request, appendCurrent: current, onCancelled: onCancelled)
+        do {
+            try current()
+            try model.requireIOSNodeChainAppendSources(editorOwner, nodes: nodes)
+        } catch {
+            try? value.prefixCapture?.native.close()
+            if let candidate = value.prefixCandidate { try? IOSCandidateCatalogPublication.shared.remove(candidate.source) }
+            throw error
+        }
+        return try publishReservation(value, model: model)
+    }
+
+    private static func publishReservation(_ value: IOSNodeCandidatePreparation, model: RouterVPNModel) throws -> IOSNodeCandidatePreparation {
         do { _ = try model.iosSpeedLabOwnership.begin(owner: value.owner) { [weak value] in value?.cancel() } }
         catch {
             try? value.prefixCapture?.native.close()
@@ -132,6 +169,8 @@ import Foundation
     private func requireFrozen() throws {
         guard !invalidated else { throw CancellationError() }
         do {
+            try appendCurrent?()
+            try appendDeviceMTU?.requireCurrent()
             try selectedDraft?.requireOriginal()
             guard Self.retained === self, try Self.selection(model) == selection,
                   try IOSNodeUsage.canonical(model.bundle) == originalBundle,

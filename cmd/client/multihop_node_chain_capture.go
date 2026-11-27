@@ -30,6 +30,7 @@ type desktopNodeChainCapture struct {
 	assets                             []viaEntryAsset
 	input                              string
 	chain                              *mobilemultihop.NodeChain
+	append                             *desktopNodeCandidateAppendCapture
 	socks                              *desktopNodeChainSOCKSCapture
 	connect                            *desktopNodeChainCONNECTCapture
 	host                               *desktopNodeChainHostCapture

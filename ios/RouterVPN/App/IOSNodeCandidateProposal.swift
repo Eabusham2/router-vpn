@@ -8,7 +8,10 @@ import Libbox
     let profiles: [RouterProfile]
     let launchInput: String
     let replacesPacketSuccessor: Bool
+    var appendedNodes: [IOSMultihopNodeSelection]? = nil
+    var appendsPacketNode: Bool { appendedNodes != nil }
     var orderedNodes: [IOSMultihopNodeSelection]? {
+        if let appendedNodes { return appendedNodes }
         let control = profiles.last?.normalizedNodeKind == "external" ? profiles.first : profiles.last
         return control?.multihopNodes
     }
@@ -25,6 +28,32 @@ import Libbox
             candidateID: candidateID, measuredInput: measuredInput, selectedExecution: false, retainFinal: retainFinal, connectedLocal: connectedLocal, preparedMode: preparedMode)
     }
 
+    /// A prospective prefix append has no complete route, selected final or
+    /// named-profile authority. Only the same in-memory editor may adopt it.
+    static func compileAppend(original: IOSNodeCandidateAppendSource, records: [String: Data], position: Int,
+                              candidateID: String, measuredInput: String) throws -> Self {
+        try original.requireDeviceCurrent()
+        guard position == original.members.count - 1, !original.members.contains(where: { $0.id == candidateID }),
+              let record = try JSONSerialization.jsonObject(with: Data(original.source.utf8)) as? [String: Any],
+              let originals = record["nodes"] as? [String], originals.count == original.members.count else { throw IOSNodeCandidateCapture.issue() }
+        var profiles: [RouterProfile] = []
+        for (index, member) in original.members.enumerated() {
+            let captured = try IOSNodeCandidateAppendSource.saved(member.id, records: records)
+            guard try IOSNodeCandidateAppendSource.memberInput(profile: captured.profile, assets: captured.assets, mode: member.mode) == originals[index] else {
+                throw IOSNodeCandidateCapture.issue()
+            }
+            profiles.append(try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: captured.profile)))
+        }
+        let candidate = try IOSNodeCandidateAppendSource.saved(candidateID, records: records)
+        guard try IOSNodeCandidateCapture.member(profile: candidate.profile, files: candidate.assets, mode: original.nextMode) == measuredInput,
+              try original.fits(measuredInput) else { throw IOSNodeCandidateCapture.issue() }
+        profiles.append(try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: candidate.profile)))
+        let nodes = original.members.map { IOSMultihopNodeSelection(id: $0.id, mode: $0.mode) } +
+            [.init(id: candidateID, mode: original.nextMode)]
+        return Self(description: "Append the measured \(original.nextMode) node to this unfinished prefix. Choose a real final node before saving.",
+            profiles: profiles, launchInput: original.source, replacesPacketSuccessor: false, appendedNodes: nodes)
+    }
+
     static func selectedPositions(input: Data, bundle: Data, proofs: [IOSNodeCandidatePrefix],
                                   source: String, config: String, winner: String = "") throws -> [Int] {
         guard let record = try JSONSerialization.jsonObject(with: bundle) as? [String: Any],
@@ -33,11 +62,7 @@ import Libbox
               profiles.filter({ $0["id"] as? String == id }).count == 1 else { throw IOSNodeCandidateCapture.issue() }
         let retained = try IOSNodeChainExecutionCapture.reopen(String(decoding: input, as: UTF8.self), selectedProfile: final)
         defer { try? retained.close() }
-        let responses = retained.responsePositions(for: winner)
-        let expected = retained.members.enumerated().map { position, member in
-            IOSNodeCandidatePrefix(position: position, profile_id: member.id, node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode,
-                measurement: responses.contains(position) ? retained.candidateResponseMetric : nil)
-        }
+        let expected = retained.candidatePrefixes(for: winner)
         guard retained.sourceSHA256 == source, retained.configSHA256 == config,
               proofs == expected else { throw IOSNodeCandidateCapture.issue() }
         return retained.candidatePositions(for: winner)
@@ -52,6 +77,12 @@ import Libbox
         defer { try? execution.close() }
         guard execution.sourceSHA256 == sourceSHA256, execution.configSHA256 == configSHA256 else { throw IOSNodeCandidateCapture.issue() }
         guard execution.candidatePositions(for: winner).contains(position) else { throw IOSNodeCandidateCapture.issue() }
+        let packetMode = execution.packetResponseMode(at: position, winner: winner)
+        if packetMode != nil {
+            guard !retainFinal, execution.plan.selectedPacketCandidateInputFitsSource(Int32(position), input: measuredInput) else {
+                throw IOSNodeCandidateCapture.issue()
+            }
+        }
         let original: IOSNodeCandidateOriginalCapture
         switch execution.local {
         case .ordinary(let value), .openvpn(let value): original = .ordinary(value)
@@ -62,11 +93,13 @@ import Libbox
         return try compileCaptured(original: original, records: records, position: position,
             candidateID: candidateID, measuredInput: measuredInput, selectedExecution: true, multipleImported: execution.isMultipleImported,
             selectedResponse: execution.responsePositions(for: winner).contains(position), selectedPublic: execution.isExternalFinal && position > 0,
-            selectedFinalResponse: execution.plan.supportsSelectedFinalResponseCandidate(Int32(position)), retainFinal: retainFinal)
+            selectedFinalResponse: execution.plan.supportsSelectedFinalResponseCandidate(Int32(position)),
+            selectedPacketMode: packetMode, retainFinal: retainFinal)
     }
 
     private static func compileCaptured(original: IOSNodeCandidateOriginalCapture, records: [String: Data], position: Int,
-            candidateID: String, measuredInput: String, selectedExecution: Bool, multipleImported: Bool = false, selectedResponse: Bool = false, selectedPublic: Bool = false, selectedFinalResponse: Bool = false, retainFinal: Bool = false, connectedLocal: Bool = false, preparedMode: String? = nil) throws -> Self {
+            candidateID: String, measuredInput: String, selectedExecution: Bool, multipleImported: Bool = false, selectedResponse: Bool = false, selectedPublic: Bool = false, selectedFinalResponse: Bool = false, selectedPacketMode: String? = nil, retainFinal: Bool = false, connectedLocal: Bool = false, preparedMode: String? = nil) throws -> Self {
+        guard !original.isAppend else { throw IOSNodeCandidateCapture.issue() }
         let prefixes = preparedMode != nil ? original.preparedCandidatePrefixes : connectedLocal ? original.connectedCandidatePrefixes : original.candidatePrefixes
         if let preparedMode {
             guard !connectedLocal, !selectedExecution, !retainFinal, original.selectionExecution == "local",
@@ -75,11 +108,17 @@ import Libbox
                   case .ordinary(let captured) = original,
                   LibboxRouterNodeChainPreparedCandidateResponseMode(captured.plan, Int32(position)) == preparedMode else { throw IOSNodeCandidateCapture.issue() }
         }
+        if let selectedPacketMode {
+            guard selectedExecution, selectedResponse, !selectedPublic, !selectedFinalResponse, !connectedLocal,
+                  preparedMode == nil, !retainFinal, position >= 0, position < original.members.count - 2,
+                  IOSMultihopNodeSelection.supportsNativePrefix(selectedPacketMode),
+                  original.members[position + 1].mode == selectedPacketMode else { throw IOSNodeCandidateCapture.issue() }
+        }
         let finalResponse = selectedExecution && selectedResponse && selectedFinalResponse ||
             (connectedLocal || preparedMode != nil) && !selectedExecution && original.selectionExecution == "local" &&
             prefixes.indices.contains(position) && prefixes[position].connectedFinalResponse(in: prefixes)
         let pairedFinalResponse = prefixes.indices.contains(position) && prefixes[position].pairedFinalResponse
-        let packetResponse = (connectedLocal || preparedMode != nil) && !selectedExecution && original.selectionExecution == "local" && prefixes.indices.contains(position) &&
+        let packetResponse = selectedPacketMode != nil || (connectedLocal || preparedMode != nil) && !selectedExecution && original.selectionExecution == "local" && prefixes.indices.contains(position) &&
             prefixes[position].packetSuccessorResponse(in: prefixes) && prefixes[position].supported(in: prefixes)
         guard !pairedFinalResponse || (connectedLocal || preparedMode != nil) && !selectedExecution && (finalResponse || packetResponse),
               !packetResponse || !retainFinal else { throw IOSNodeCandidateCapture.issue() }
@@ -102,7 +141,7 @@ import Libbox
             guard let found else { throw IOSNodeCandidateCapture.issue() }; return found
         }
         let candidate = try source(candidateID)
-        let pairedMode = prefixes[position].candidate_mode ?? "shadowsocks"
+        let pairedMode = selectedPacketMode ?? prefixes[position].candidate_mode ?? "shadowsocks"
         guard try IOSNodeCandidateCapture.member(profile: candidate.profile, files: candidate.files, mode: pairedMode) == measuredInput else { throw IOSNodeCandidateCapture.issue() }
         let publicResponse = selectedPublic || !selectedExecution && prefixes[position].metric == "routed-public-candidate-response"
         if publicResponse {
@@ -121,7 +160,12 @@ import Libbox
         }
         if !publicResponse && (selectedResponse || !selectedExecution && prefixes[position].metric == "routed-candidate-response") {
             let supported: Bool
-            if preparedMode != nil && pairedFinalResponse, case .ordinary(let captured) = original {
+            if selectedPacketMode != nil {
+                // The original selected execution's full-source FitsSource
+                // already admitted this exact input before entering this helper.
+                supported = pairedMode == original.members[position + 1].mode &&
+                    LibboxRouterNodeChainPacketSuccessorCandidateInputSupported(measuredInput, pairedMode)
+            } else if preparedMode != nil && pairedFinalResponse, case .ordinary(let captured) = original {
                 supported = pairedMode == original.members[position + 1].mode &&
                     LibboxRouterNodeChainPreparedCandidateInputFitsSource(captured.plan, Int32(position), measuredInput)
             } else if packetResponse, case .ordinary(let captured) = original {

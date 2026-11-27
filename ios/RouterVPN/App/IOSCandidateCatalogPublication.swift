@@ -246,10 +246,11 @@ final class IOSCandidateCatalogPublication: @unchecked Sendable {
 /// Reassembles only the public target inventory of one original native owner.
 /// Header and digest are immutable across frames; offsets come from accepted rows.
 struct IOSCandidateMetadataPages {
-    enum Family { case ordinary, selected, preparation }
+    enum Family { case ordinary, selected, preparation, appendPreparation }
     private let family: Family
     private let selectedResponse: (position: Int, id: String)?
     private let selectedResponseMetric: String
+    private let selectedResponseMode: String?
     private var header: [String: Any]?
     private var headerBytes: Data?
     private var total = 0
@@ -263,10 +264,11 @@ struct IOSCandidateMetadataPages {
     var nextOffset: Int32? { legacy == nil && rows.count < total ? Int32(exactly: rows.count) : nil }
 
     init(_ first: String, inventoryBytes: Int, legacyLimit: Int, family: Family = .ordinary,
-         selectedResponse: (position: Int, id: String)? = nil, selectedResponseMetric: String = "routed-candidate-response") throws {
+         selectedResponse: (position: Int, id: String)? = nil, selectedResponseMetric: String = "routed-candidate-response", selectedResponseMode: String? = nil) throws {
         guard inventoryBytes > 0, inventoryBytes <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw Self.issue() }
         self.selectedResponse = selectedResponse
         self.selectedResponseMetric = selectedResponseMetric
+        self.selectedResponseMode = selectedResponseMode
         self.family = family; self.budget = inventoryBytes; self.legacyLimit = legacyLimit
         try append(first)
     }
@@ -333,13 +335,30 @@ struct IOSCandidateMetadataPages {
             fields.insert("measurement")
         }
         if let mode = body["candidate_mode"] {
-            guard family != .selected, let mode = mode as? String, ["hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(mode),
-                  body["measurement"] as? String == "routed-candidate-response" else { throw Self.issue() }
+            guard let mode = mode as? String, ["hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(mode),
+                  body["measurement"] as? String == "routed-candidate-response",
+                  family != .selected || mode == selectedResponseMode && IOSMultihopNodeSelection.supportsNativePrefix(mode) &&
+                    selectedResponse != nil && Self.integer(body["prefix_position"]) == selectedResponse?.position &&
+                    body["prefix_id"] as? String == selectedResponse?.id else { throw Self.issue() }
             fields.insert("candidate_mode")
         }
         if paged { fields.formUnion(["target_total","target_offset","targets_sha256"]) }
         if family == .selected {
+            guard body["candidate_mode"] as? String == selectedResponseMode else { throw Self.issue() }
             fields.formUnion(["preparation_source_sha256","preparation_config_sha256","requested_execution","execution","selection_epoch"])
+        } else if family == .appendPreparation {
+            fields.formUnion(["purpose","append_position","draft_revision","device_revision","device_source_sha256","device_mtu_revision",
+                "original_source_sha256","prefix_count","prefixes_sha256","mtu_sha256","append_source_metadata_sha256",
+                "application_open","dns_open","ready","stage","mtu_measurement"])
+            guard body["purpose"] as? String == "draft-prefix-append",
+                  body["measurement"] as? String == "routed-candidate-response",
+                  IOSMultihopNodeSelection.supportsNativePrefix(body["candidate_mode"] as? String ?? ""),
+                  let count = Self.integer(body["prefix_count"]), (1..<IOSMultihopNodeSelection.physicalTraversalDepth).contains(count),
+                  Self.integer(body["append_position"]) == count, Self.integer(body["prefix_position"]) == count - 1,
+                  ["device_source_sha256","original_source_sha256","prefixes_sha256","mtu_sha256","append_source_metadata_sha256"].allSatisfy({
+                      IOSCandidateCatalogPublication.isDigest(body[$0] as? String ?? "")
+                  }), ["draft_revision","device_revision"].allSatisfy({ (body[$0] as? String)?.isEmpty == false }),
+                  body["device_mtu_revision"] is String else { throw Self.issue() }
         } else if family == .preparation {
             fields.formUnion(["original_source_sha256","prefixes","application_open","dns_open","ready","stage","mtu","mtu_measurement"])
             let required: Set<String> = ["position","profile_id","node_id","mode","start_layer","source_sha256","tag"]

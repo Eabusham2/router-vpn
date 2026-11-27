@@ -101,12 +101,21 @@ final class AndroidNodeCandidateMeasurement {
         if(!catalog.measurement.equals(metadata.optString("measurement","routed-tcp-connect"))||!nativeOwner.captureSHA256().equals(metadata.getString("capture_sha256"))||catalog.prefix!=metadata.getInt("prefix_position"))
             throw new IllegalStateException("Candidate metadata belongs to another original chain.");
         if(catalog.responseMode.isEmpty()?metadata.has("candidate_mode"):
-                !catalog.responseMode.equals(metadata.optString("candidate_mode"))||catalog.executionOwner!=null||!(catalog.preparedResponse()||catalog.connectedFinalResponse()||catalog.connectedPacketResponse()))
+                !catalog.responseMode.equals(metadata.optString("candidate_mode"))||!(catalog.selectedPacketResponse()||catalog.executionOwner==null
+                    &&(catalog.preparedResponse()||catalog.connectedFinalResponse()||catalog.connectedPacketResponse())))
             throw new IllegalStateException("The response carrier differs from the captured original successor transport.");
+        if(catalog.originalSource.appendDraft()) {
+            AndroidNodeCandidatePrefixCapture append=catalog.session.candidatePrefix;
+            if(!catalog.preparedAppendResponse()||append==null)throw new IllegalStateException("The append result lost its original closed owner.");
+            JSONObject captured=new JSONObject(append.metadata);
+            for(String key:new String[]{"purpose","append_position","draft_revision","device_revision","device_source_sha256",
+                    "device_mtu_revision","append_source_metadata_sha256","prefix_count","prefixes_sha256","mtu_sha256"})
+                if(!captured.get(key).equals(metadata.get(key)))throw new IllegalStateException("The append result changed its original prefix or device policy.");
+        } else if(metadata.has("purpose"))throw new IllegalStateException("A complete route cannot borrow unfinished-prefix authority.");
         if(catalog.executionOwner!=null){
             var owner=catalog.executionOwner;
             Object epoch=metadata.get("selection_epoch");
-            int expectedFields = "routed-tcp-connect".equals(catalog.measurement) ? 12 : 13;
+            int expectedFields = ("routed-tcp-connect".equals(catalog.measurement) ? 12 : 13) + (catalog.responseMode.isEmpty()?0:1);
             if(metadata.length()!=expectedFields||metadata.getInt("schema")!=1
                     ||!catalog.selectedPrefixID().equals(metadata.getString("prefix_id"))
                     ||!owner.sourceSHA256().equals(metadata.getString("preparation_source_sha256"))

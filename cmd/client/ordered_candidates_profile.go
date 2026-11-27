@@ -184,7 +184,7 @@ func (a *app) saveOrderedCandidateProfile(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), 409)
 		return
 	}
-	if job.view.candidateMode != "" && desktopConnectedCandidateMode(job.catalog.launch, job.view.position) != job.view.candidateMode {
+	if job.view.candidateMode != "" && desktopCandidateSourceMode(job.catalog.launch, job.view.position) != job.view.candidateMode {
 		http.Error(w, "original final-candidate connection changed", 409)
 		return
 	}

@@ -72,6 +72,7 @@ type desktopNodeChainCandidateCatalog struct {
 	typedEntryPreview                 *mobilemultihop.DesktopTypedEntryCandidateDescription
 	selectedPlan                      *desktopSelectedCandidateDescriptor
 	prefixPreparation                 *mobilemultihop.NodeChainCandidatePreparation
+	appendCapture                     *desktopNodeCandidateAppendCapture
 	profiles                          map[string]string
 	assets                            []viaEntryAsset
 	files                             []desktopCandidateSourceFile
@@ -159,6 +160,34 @@ func captureDesktopCandidateSourceProfiles(ctx context.Context, a *app, launch *
 		launch.chain.execution == nil && launch.chain.policy == nil && !desktopTypedCandidateSourceAllowed(launch) {
 		return nil, errors.New("connected candidate timing requires its independently supported full-path plan")
 	}
+	candidateMode := ""
+	if scope == orderedCandidateSavedCompleteScope {
+		candidateMode = desktopCandidateSourceMode(launch, position)
+	} else if scope == orderedCandidateSavedPrefixScope {
+		candidateMode = desktopPreparedCandidateMode(launch, position)
+	} else if scope == orderedCandidateSelectedDraftScope {
+		candidateMode = desktopSelectedPacketCandidateMode(launch, position)
+	}
+	result, err := captureDesktopCandidateSourceInventory(ctx, a, launch, profiles, revision, candidateMode)
+	if err != nil {
+		return nil, err
+	}
+	result.serverResponse = candidateServerRequested(ctx)
+	if seal {
+		err = result.sealSourcePlan(ctx, position, scope)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// This shared parser grants no runtime or source purpose; callers seal the
+// resulting inventory against their exact complete-route or append owner.
+func captureDesktopCandidateSourceInventory(ctx context.Context, a *app, launch *desktopNodeLaunch, profiles []common.RouterProfile, revision, mode string) (*desktopNodeChainCandidateCatalog, error) {
+	if ctx == nil || ctx.Err() != nil || a == nil || launch == nil || len(profiles) == 0 || revision == "" {
+		return nil, errors.New("candidate source inventory lost its original caller")
+	}
 	seen := map[string]bool{}
 	for _, profile := range profiles {
 		if !validProfileID(profile.ID) || seen[profile.ID] {
@@ -166,12 +195,7 @@ func captureDesktopCandidateSourceProfiles(ctx context.Context, a *app, launch *
 		}
 		seen[profile.ID] = true
 	}
-	result := &desktopNodeChainCandidateCatalog{serverResponse: candidateServerRequested(ctx), app: a, launch: launch, revision: revision, profiles: map[string]string{}}
-	if scope == orderedCandidateSavedCompleteScope {
-		result.candidateMode = desktopCandidateSourceMode(launch, position)
-	} else if scope == orderedCandidateSavedPrefixScope {
-		result.candidateMode = desktopPreparedCandidateMode(launch, position)
-	}
+	result := &desktopNodeChainCandidateCatalog{app: a, launch: launch, revision: revision, candidateMode: mode, profiles: map[string]string{}}
 	capture := &desktopNodeChainCapture{root: launch.root}
 	// Pin each original asset directory before and after compilation, including
 	// inodes and modification times. Replacing then restoring a source cannot
@@ -266,12 +290,6 @@ func captureDesktopCandidateSourceProfiles(ctx context.Context, a *app, launch *
 		return nil, err
 	}
 
-	if seal {
-		err = result.sealSourcePlan(ctx, position, scope)
-	}
-	if err != nil {
-		return nil, err
-	}
 	return result, nil
 }
 
@@ -281,7 +299,15 @@ func (result *desktopNodeChainCandidateCatalog) sealSourcePlan(ctx context.Conte
 	}
 	launch := result.launch
 	var err error
-	if scope == orderedCandidateSavedPrefixScope {
+	if scope == orderedCandidateAppendScope {
+		c := result.appendCapture
+		if c == nil || c.validate(ctx, c.selection) != nil || position != c.request.AppendPosition-1 || result.serverResponse || launch.chain != nil || launch.candidatePrefix != nil || launch.command != nil || result.candidateMode != c.source.CandidateMode() {
+			return errors.New("append inventory lost its distinct original source")
+		}
+		result.prefixPreparation, err = mobilemultihop.NewNodeChainCandidateAppendPreparation(c.source.Source(), result.inventory)
+	} else if result.appendCapture != nil {
+		return errors.New("append inventory cannot enter a complete-route purpose")
+	} else if scope == orderedCandidateSavedPrefixScope {
 		result.prefixPreparation, err = captureDesktopNodeCandidatePrefixSource(ctx, launch.chain.selection, position, result.inventory)
 	} else if scope == orderedCandidateSelectedDraftScope && launch.command == nil {
 		err = captureSelectedDraftPreview(result, position)
@@ -296,7 +322,8 @@ func (result *desktopNodeChainCandidateCatalog) sealSourcePlan(ctx context.Conte
 	}
 	if err == nil && (result.plan != nil && result.plan.CandidateMode() != result.candidateMode ||
 		result.prefixPreparation != nil && result.prefixPreparation.CandidateMode() != result.candidateMode ||
-		result.candidateMode != "" && result.plan == nil && result.prefixPreparation == nil) {
+		result.selectedPlan != nil && result.selectedPlan.candidateMode() != result.candidateMode ||
+		result.candidateMode != "" && result.plan == nil && result.prefixPreparation == nil && result.selectedPlan == nil) {
 		return errors.New("candidate source plan changed its authenticated protocol")
 	}
 	return err
@@ -351,11 +378,11 @@ func combineDesktopCandidateViewSources(ctx context.Context, parts []*desktopNod
 		return nil, errors.New("candidate view has no complete source inventory")
 	}
 	first := parts[0]
-	result := &desktopNodeChainCandidateCatalog{serverResponse: first.serverResponse, app: first.app, launch: first.launch, revision: first.revision, candidateMode: first.candidateMode, profiles: map[string]string{}}
+	result := &desktopNodeChainCandidateCatalog{serverResponse: first.serverResponse, app: first.app, launch: first.launch, revision: first.revision, candidateMode: first.candidateMode, appendCapture: first.appendCapture, profiles: map[string]string{}}
 	inventory := mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: first.revision, ResponseMode: first.candidateMode}
 	total := 0
 	for _, part := range parts {
-		if ctx.Err() != nil || part == nil || part.app != first.app || part.launch != first.launch || part.serverResponse != first.serverResponse || part.revision != first.revision || part.candidateMode != first.candidateMode {
+		if ctx.Err() != nil || part == nil || part.app != first.app || part.launch != first.launch || part.serverResponse != first.serverResponse || part.revision != first.revision || part.candidateMode != first.candidateMode || part.appendCapture != first.appendCapture {
 			return nil, errors.New("candidate view mixed source generations")
 		}
 		captured := sha256.Sum256([]byte(part.inventory))

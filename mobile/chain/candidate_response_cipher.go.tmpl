@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+
 	boxtls "github.com/sagernet/sing-box/common/tls"
 	"github.com/sagernet/sing-box/option"
 	wg "github.com/sagernet/sing-box/transport/wireguard"
@@ -161,11 +163,35 @@ type NativeCandidateDevice interface {
 	Close() error
 }
 
+// The private methods keep this factory sealed to the original ordinary,
+// prepared, selected-Local and registered Server request types in this package.
+type nativePacketRequest interface {
+	nativePacketCurrent(context.Context) error
+	nativePacketSource() candidateResponseSource
+	nativePacketMode() string
+	nativePacketAddress() string
+	dial(context.Context) (net.Conn, error)
+}
+
+func (r *NodeChainCandidatePacketRequest) nativePacketCurrent(ctx context.Context) error {
+	_, _, _, err := r.current(ctx)
+	return err
+}
+func (r *NodeChainCandidatePacketRequest) nativePacketSource() candidateResponseSource {
+	return r.response
+}
+func (r *NodeChainCandidatePacketRequest) nativePacketMode() string { return r.plan.responseMode }
+func (r *NodeChainCandidatePacketRequest) nativePacketAddress() string {
+	return r.response.Target.Address
+}
+
 type nativePacketCandidate struct {
-	request *NodeChainCandidatePacketRequest
-	device  NativeCandidateDevice
-	dialer  *candidatePacketDialer
-	cancel  context.CancelFunc
+	request  nativePacketRequest
+	device   NativeCandidateDevice
+	dialer   *candidatePacketDialer
+	cancel   context.CancelFunc
+	once     sync.Once
+	closeErr error
 }
 
 func (r *NodeChainCandidatePacketRequest) OpenNativeEndpoint(ctx context.Context, reader NodeChainEngine, original *NodeChain, awg func(context.Context, AmneziaEndpointConfig, N.Dialer) (NativeCandidateDevice, error)) (NodeChainCandidateEndpoint, error) {
@@ -182,29 +208,57 @@ func (r *NodeChainCandidatePacketRequest) OpenPreparedNativeEndpoint(ctx context
 	return r.openNativeEndpoint(ctx, awg)
 }
 
+func (r *NodeChainCandidatePacketRequest) OpenSelectedNativeEndpoint(ctx context.Context, reader NodeChainExecutionEngine, original *NodeChainExecutionProjection, awg func(context.Context, AmneziaEndpointConfig, N.Dialer) (NativeCandidateDevice, error)) (NodeChainCandidateEndpoint, error) {
+	if _, _, _, err := r.ReadSelected(ctx, reader, original); err != nil {
+		return nil, err
+	}
+	return r.openNativeEndpoint(ctx, awg)
+}
+
 func (r *NodeChainCandidatePacketRequest) openNativeEndpoint(ctx context.Context, awg func(context.Context, AmneziaEndpointConfig, N.Dialer) (NativeCandidateDevice, error)) (NodeChainCandidateEndpoint, error) {
-	_, _, address, err := r.current(ctx)
-	if err != nil || !NodeChainPrefixMode(r.plan.responseMode) || r.response.PacketOptions == "" {
-		return nil, errors.New("packet candidate lost its source or original Local prefix")
+	return openNativePacketEndpoint(ctx, r, awg)
+}
+
+func (r *NodeChainServerCandidatePacketRequest) OpenServerNativeEndpoint(ctx context.Context, reader NodeChainServerPacketEngine, original *NodeChainServerPolicy, capture multihoprelay.NodeChainCandidateCapture, awg func(context.Context, AmneziaEndpointConfig, N.Dialer) (NativeCandidateDevice, error)) (NodeChainCandidateEndpoint, error) {
+	if _, _, err := r.ReadServer(ctx, reader, original, capture); err != nil {
+		return nil, err
+	}
+	return openNativePacketEndpoint(ctx, r, awg)
+}
+
+func openNativePacketEndpoint(ctx context.Context, r nativePacketRequest, awg func(context.Context, AmneziaEndpointConfig, N.Dialer) (NativeCandidateDevice, error)) (NodeChainCandidateEndpoint, error) {
+	if ctx == nil || r == nil {
+		return nil, errors.New("packet candidate has no original request")
+	}
+	err := r.nativePacketCurrent(ctx)
+	if err != nil {
+		return nil, err
+	}
+	source, address, mode := r.nativePacketSource(), r.nativePacketAddress(), r.nativePacketMode()
+	if err != nil || !NodeChainPrefixMode(mode) || source.PacketOptions == "" || address == "" {
+		return nil, errors.New("packet candidate lost its source or original prefix")
 	}
 	owned, cancel := context.WithCancel(ctx)
 	dialer := &candidatePacketDialer{request: r, endpoint: address, ctx: owned}
 	owner := &nativePacketCandidate{request: r, dialer: dialer, cancel: cancel}
-	if r.plan.responseMode == "wg" {
-		owner.device, err = newCandidateWG(owned, r.response.PacketOptions, address, dialer)
+	if mode == "wg" {
+		owner.device, err = newCandidateWG(owned, source.PacketOptions, address, dialer)
 	} else {
 		var options AmneziaEndpointConfig
-		runtime, captured := AmneziaRuntimeConfig(r.response.PacketOptions)
-		if captured != nil || runtime.Remote.String() != address || awg == nil || json.Unmarshal([]byte(r.response.PacketOptions), &options) != nil || options.Detour != "" {
+		runtime, captured := AmneziaRuntimeConfig(source.PacketOptions)
+		if captured != nil || runtime.Remote.String() != address || awg == nil || json.Unmarshal([]byte(source.PacketOptions), &options) != nil || options.Detour != "" {
 			err = errors.New("invalid captured AWG candidate")
 		} else {
 			owner.device, err = awg(owned, options, dialer)
 		}
 	}
-	_, _, _, observed := r.current(ctx)
+	observed := r.nativePacketCurrent(ctx)
 	if err != nil || owner.device == nil || observed != nil || ctx.Err() != nil {
-		_ = owner.Close()
-		return nil, errors.New("could not open the captured packet candidate through its original prefix")
+		failure := errors.New("could not open the captured packet candidate through its original prefix")
+		if closeErr := owner.Close(); closeErr != nil {
+			return owner, errors.Join(failure, closeErr)
+		}
+		return nil, failure
 	}
 	return owner, nil
 }
@@ -228,28 +282,30 @@ func newCandidateWG(ctx context.Context, raw, address string, carrier N.Dialer) 
 		Address: captured.Address, MTU: captured.MTU, PrivateKey: captured.PrivateKey, ListenPort: captured.ListenPort, Workers: captured.Workers,
 		Peers: []wg.PeerOptions{{Endpoint: target, PublicKey: peer.PublicKey, PreSharedKey: peer.PreSharedKey, AllowedIPs: peer.AllowedIPs,
 			PersistentKeepaliveInterval: peer.PersistentKeepaliveInterval, Reserved: peer.Reserved}}})
-	if err != nil {
+	if err != nil || device == nil {
+		if device != nil {
+			return device, bad
+		}
 		return nil, bad
 	}
 	if err = device.Start(false); err != nil {
-		_ = device.Close()
-		return nil, bad // An upstream IPC error can include private key material.
+		return device, bad // Retain construction for joined retirement; IPC errors may include keys.
 	}
 	return device, nil
 }
 
 func (e *nativePacketCandidate) DialPrivate(ctx context.Context, address string) (net.Conn, error) {
 	r := e.request
-	if _, _, _, err := r.current(ctx); err != nil {
+	if err := r.nativePacketCurrent(ctx); err != nil {
 		return nil, err
 	}
-	api, err := privateAPI(r.response.API)
+	api, err := privateAPI(r.nativePacketSource().API)
 	destination := M.ParseSocksaddr(address)
 	if err != nil || !destination.IsIP() || api.Host != address || destination.Port == 0 {
 		return nil, errors.New("packet candidate requires its own original private API")
 	}
 	conn, err := e.device.DialContext(ctx, "tcp", destination)
-	_, _, _, observed := r.current(ctx)
+	observed := r.nativePacketCurrent(ctx)
 	if err != nil || observed != nil || ctx.Err() != nil {
 		if conn != nil {
 			_ = conn.Close()
@@ -260,17 +316,19 @@ func (e *nativePacketCandidate) DialPrivate(ctx context.Context, address string)
 }
 
 func (e *nativePacketCandidate) Close() error {
-	e.cancel()
-	e.dialer.beginClose()
-	var err error
-	if e.device != nil {
-		err = e.device.Close()
-	}
-	return errors.Join(err, e.dialer.join())
+	e.once.Do(func() {
+		e.cancel()
+		e.dialer.beginClose()
+		if e.device != nil {
+			e.closeErr = e.device.Close()
+		}
+		e.closeErr = errors.Join(e.closeErr, e.dialer.join())
+	})
+	return e.closeErr
 }
 
 type candidatePacketDialer struct {
-	request  *NodeChainCandidatePacketRequest
+	request  nativePacketRequest
 	endpoint string
 	ctx      context.Context
 	mu       sync.Mutex

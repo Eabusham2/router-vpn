@@ -24,21 +24,23 @@ const NodeChainCandidateMaximumBytes = 8 << 10
 var errNodeChainCandidate = errors.New("original ordered candidate authority is unavailable")
 
 type NodeChainCandidateRequest struct {
-	Schema                int              `json:"schema"`
-	Lease                 NodeChainRequest `json:"lease"`
-	OwnerID               string           `json:"owner_id"`
-	CaptureSHA256         string           `json:"capture_sha256"`
-	Operation             string           `json:"operation_id"`
-	ExecutionSHA256       string           `json:"execution_sha256"`
-	Trial                 string           `json:"trial_id"`
-	SelectionEpoch        uint64           `json:"selection_epoch"`
-	InventorySHA256       string           `json:"inventory_sha256"`
-	Position              int              `json:"position"`
-	CandidateID           string           `json:"candidate_id"`
-	CandidateSourceSHA256 string           `json:"candidate_source_sha256"`
-	Address               string           `json:"address"`
-	DeadlineAt            int64            `json:"deadline_at"`
-	Password              string           `json:"password"`
+	Schema                   int              `json:"schema"`
+	Lease                    NodeChainRequest `json:"lease"`
+	OwnerID                  string           `json:"owner_id"`
+	CaptureSHA256            string           `json:"capture_sha256"`
+	Operation                string           `json:"operation_id"`
+	ExecutionSHA256          string           `json:"execution_sha256"`
+	Trial                    string           `json:"trial_id"`
+	SelectionEpoch           uint64           `json:"selection_epoch"`
+	InventorySHA256          string           `json:"inventory_sha256"`
+	Position                 int              `json:"position"`
+	CandidateID              string           `json:"candidate_id"`
+	CandidateSourceSHA256    string           `json:"candidate_source_sha256"`
+	Address                  string           `json:"address"`
+	DeadlineAt               int64            `json:"deadline_at"`
+	Password                 string           `json:"password"`
+	CandidateMode            string           `json:"candidate_mode,omitempty"`
+	CandidateClientPublicKey string           `json:"candidate_client_public_key,omitempty"`
 }
 
 func nodeChainCandidateAddress(address string) bool {
@@ -61,7 +63,7 @@ func (q NodeChainCandidateRequest) Validate() error {
 }
 
 func (q NodeChainCandidateRequest) validateCandidateFields() error {
-	if (q.Schema != 1 && q.Schema != 2 && q.Schema != 3) || !proofID.MatchString(q.OwnerID) || !proofID.MatchString(q.CaptureSHA256) || !proofID.MatchString(q.Operation) || !proofID.MatchString(q.ExecutionSHA256) || !nonce.MatchString(q.Trial) || q.SelectionEpoch == 0 || !proofID.MatchString(q.InventorySHA256) || q.Position < 1 || (q.Schema == 1 && q.Position >= NodeChainMaximumMembers || q.Position >= NodeChainExtendedMaximumMembers) || !ident.MatchString(q.CandidateID) || !proofID.MatchString(q.CandidateSourceSHA256) || !nodeChainCandidateAddress(q.Address) || q.DeadlineAt <= 0 || !proofID.MatchString(q.Password) {
+	if (q.Schema != 1 && q.Schema != 2 && q.Schema != 3 && q.Schema != 4 && q.Schema != 5) || !proofID.MatchString(q.OwnerID) || !proofID.MatchString(q.CaptureSHA256) || !proofID.MatchString(q.Operation) || !proofID.MatchString(q.ExecutionSHA256) || !nonce.MatchString(q.Trial) || q.SelectionEpoch == 0 || !proofID.MatchString(q.InventorySHA256) || (q.Schema == 5 && q.Position != 0 || q.Schema != 5 && q.Position < 1) || (q.Schema == 1 && q.Position >= NodeChainMaximumMembers || q.Position >= NodeChainExtendedMaximumMembers) || !ident.MatchString(q.CandidateID) || !proofID.MatchString(q.CandidateSourceSHA256) || !nodeChainCandidateAddress(q.Address) || q.DeadlineAt <= 0 || !proofID.MatchString(q.Password) {
 		return errNodeChainCandidate
 	}
 	if (q.Schema == 3) != (q.Lease.Schema == 8) || q.Schema == 3 && q.Position >= len(q.Lease.Users) {
@@ -81,6 +83,19 @@ func (q NodeChainCandidateRequest) validateCandidateFields() error {
 			return errNodeChainCandidate
 		}
 	}
+	if q.IsPacketResponse() {
+		if !nodeChainPacketMode(q.CandidateMode) || !nodeChainPacketPublic(q.CandidateClientPublicKey) ||
+			q.Position >= len(q.Lease.Users)-1 || (q.Lease.Schema != 1 && q.Lease.Schema != 6) {
+			return errNodeChainCandidate
+		}
+		for _, key := range q.Lease.LocalPacketPublicKeys {
+			if key == q.CandidateClientPublicKey {
+				return errNodeChainCandidate
+			}
+		}
+	} else if q.CandidateMode != "" || q.CandidateClientPublicKey != "" {
+		return errNodeChainCandidate
+	}
 	for _, user := range q.Lease.Users {
 		if q.Password == user.Password {
 			return errNodeChainCandidate
@@ -88,9 +103,22 @@ func (q NodeChainCandidateRequest) validateCandidateFields() error {
 	}
 	return nil
 }
+
+// IsPacketResponse is descriptive only. Validate and the original operation
+// determine whether a packet request may acquire its own native transport.
+func (q NodeChainCandidateRequest) IsPacketResponse() bool {
+	return q.Schema == 4 || q.Schema == 5
+}
+
 func (q NodeChainCandidateRequest) Digest() (string, error) {
 	if q.Validate() != nil {
 		return "", errNodeChainCandidate
+	}
+	if q.Schema == 5 {
+		return nodeChainDigest("routervpn-selected-first-packet-candidate-request-v5", q)
+	}
+	if q.Schema == 4 {
+		return nodeChainDigest("routervpn-selected-packet-candidate-request-v4", q)
 	}
 	if q.Schema == 3 {
 		return nodeChainDigest("routervpn-public-final-candidate-request-v3", q)
@@ -130,7 +158,14 @@ func (c NodeChainCandidateCapture) Validate() error {
 	// Digest validated the original lease, including every derived front. Compare
 	// all live request fields before reusing that result for its candidate copy.
 	if err != nil || c.Schema != 1 || q.validateCandidateFields() != nil || q.OwnerID != c.Lease.OwnerID || q.CaptureSHA256 != digest ||
-		(!reflect.DeepEqual(q.Lease, c.Lease.Request) && !sameNodeChainRequest(q.Lease, c.Lease.Request)) || !proofID.MatchString(c.OperationOwnerID) || q.Position >= len(c.Lease.Source.Members) || c.Member != c.Lease.Source.Members[q.Position-1] {
+		(!reflect.DeepEqual(q.Lease, c.Lease.Request) && !sameNodeChainRequest(q.Lease, c.Lease.Request)) || !proofID.MatchString(c.OperationOwnerID) || q.Position >= len(c.Lease.Source.Members) {
+		return errNodeChainCandidate
+	}
+	if q.Schema == 5 {
+		if c.Member != (NodeChainMember{}) || !c.Lease.Source.FirstPacketCandidateResponse(q.CandidateMode) {
+			return errNodeChainCandidate
+		}
+	} else if c.Member != c.Lease.Source.Members[q.Position-1] {
 		return errNodeChainCandidate
 	}
 	if q.Schema == 1 {
@@ -145,6 +180,15 @@ func (c NodeChainCandidateCapture) Validate() error {
 		}
 		for _, m := range c.Lease.Source.Members {
 			if q.CandidateID == m.ProfileID || q.CandidateSourceSHA256 == m.SourceSHA256 {
+				return errNodeChainCandidate
+			}
+		}
+	} else if q.IsPacketResponse() {
+		if q.CandidateID == c.Lease.Source.EntryID || q.Schema == 4 && !c.Lease.Source.PacketCandidateResponsePrefix(q.Position, q.CandidateMode) {
+			return errNodeChainCandidate
+		}
+		for _, member := range c.Lease.Source.Members {
+			if member.ProfileID == q.CandidateID || member.ClientPublicKey == q.CandidateClientPublicKey || member.ServerPublicKey == q.CandidateClientPublicKey {
 				return errNodeChainCandidate
 			}
 		}
@@ -198,6 +242,12 @@ func (c NodeChainCandidateCapture) Digest() (string, error) {
 	if c.Validate() != nil {
 		return "", errNodeChainCandidate
 	}
+	if c.Request.Schema == 5 {
+		return nodeChainDigest("routervpn-selected-first-packet-candidate-capture-v5", c)
+	}
+	if c.Request.Schema == 4 {
+		return nodeChainDigest("routervpn-selected-packet-candidate-capture-v4", c)
+	}
 	if c.Request.Schema == 3 {
 		return nodeChainDigest("routervpn-public-final-candidate-capture-v3", c)
 	}
@@ -211,7 +261,20 @@ func NewNodeChainCandidateCapture(lease NodeChainCapture, q NodeChainCandidateRe
 	if err != nil {
 		return NodeChainCandidateCapture{}, err
 	}
-	c := NodeChainCandidateCapture{1, lease.Clone(), q.Clone(), lease.Source.Members[q.Position-1], owner}
+	return RestoreNodeChainCandidateCapture(lease, q, owner)
+}
+
+// RestoreNodeChainCandidateCapture reconstructs validated metadata only. The
+// authenticated original lease/receipt remains the caller's runtime authority.
+// First-suffix requests retain their real entry in Lease and no suffix Member.
+func RestoreNodeChainCandidateCapture(lease NodeChainCapture, q NodeChainCandidateRequest, owner string) (NodeChainCandidateCapture, error) {
+	if q.Validate() != nil || lease.Validate() != nil || q.Position >= len(lease.Source.Members) {
+		return NodeChainCandidateCapture{}, errNodeChainCandidate
+	}
+	c := NodeChainCandidateCapture{Schema: 1, Lease: lease.Clone(), Request: q.Clone(), OperationOwnerID: owner}
+	if q.Schema != 5 {
+		c.Member = lease.Source.Members[q.Position-1]
+	}
 	return c, c.Validate()
 }
 
@@ -226,9 +289,13 @@ type NodeChainCandidateReceipt struct {
 	Drained          bool   `json:"drained"`
 	Accepted         int    `json:"accepted"`
 	InFlight         bool   `json:"in_flight"`
+	PairingSHA256    string `json:"pairing_sha256,omitempty"`
 }
 
 func (r NodeChainCandidateReceipt) Validate(c NodeChainCandidateCapture) error {
+	if c.Request.IsPacketResponse() && !proofID.MatchString(r.PairingSHA256) || !c.Request.IsPacketResponse() && r.PairingSHA256 != "" {
+		return errNodeChainCandidate
+	}
 	digest, err := c.Digest()
 	if err != nil || r.Schema != 1 || r.Operation != c.Request.Operation || r.OperationOwnerID != c.OperationOwnerID || r.CaptureSHA256 != digest || r.DeadlineAt != c.Request.DeadlineAt || r.Accepted < 0 || r.Accepted > NodeChainCandidateMaximumConnects || r.InFlight && r.Accepted == 0 || r.Drained && (!r.Retired || r.InFlight) || !r.Prepared && (r.Accepted != 0 || r.InFlight) {
 		return errNodeChainCandidate
@@ -371,9 +438,43 @@ func (c NodeChainCandidateCapture) ResponseSourceFile() string {
 		switch c.Request.Schema {
 		case 2:
 			return "candidate-response-" + c.OperationOwnerID + ".json"
+		case 4:
+			return "packet-candidate-response-" + c.OperationOwnerID + ".json"
 		case 3:
 			return "public-candidate-response-" + c.OperationOwnerID + ".json"
 		}
 	}
 	return ""
+}
+
+// PacketCandidateResponsePrefix describes only a same-mode paired replacement
+// inside an original packet/literal-import suffix. It does not register a
+// candidate, grant a UDP socket, or substitute the authenticated entry owner.
+func (s NodeChainDescriptor) PacketCandidateResponsePrefix(position int, mode string) bool {
+	if (s.Schema != 1 && s.Schema != 6) || s.Validate() != nil || position < 1 || position >= len(s.Members)-1 || !nodeChainPacketMode(mode) {
+		return false
+	}
+	next := s.Members[position]
+	if next.Mode != mode || next.StartLayer != "off" || next.NodeKind != "" {
+		return false
+	}
+	for _, member := range s.Members[:position] {
+		if nodeChainPacketMode(member.Mode) && member.NodeKind == "" {
+			continue
+		}
+		if s.Schema != 6 || member.Mode != "shadowsocks" || member.StartLayer != "off" || member.NodeKind != "external" || member.ProofKind != "public-path" {
+			return false
+		}
+	}
+	return true
+}
+
+// FirstPacketCandidateResponse identifies a replacement of the first Server
+// suffix under the original authenticated entry. It grants no physical route.
+func (s NodeChainDescriptor) FirstPacketCandidateResponse(mode string) bool {
+	if (s.Schema != 1 && s.Schema != 6) || s.Validate() != nil || len(s.Members) < 2 || !nodeChainPacketMode(mode) {
+		return false
+	}
+	first := s.Members[0]
+	return first.Mode == mode && first.StartLayer == "off" && first.NodeKind == ""
 }

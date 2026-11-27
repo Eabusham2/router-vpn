@@ -14,6 +14,7 @@ import (
 // prefix, and acquiring it grants neither a connected path nor DNS forwarding.
 // Native prefix proof and owned measurement still have to bind this capture.
 type NodeChainCandidatePreparation struct {
+	appendSource                                        *NodeChainCandidateAppendSource
 	original                                            *NodeChain
 	typedOriginal                                       *nodeChainCandidateTypedOriginal
 	multipleOriginal                                    *nodeChainCandidateMultipleOriginal
@@ -78,10 +79,10 @@ func newNodeChainCandidatePreparationOwned(original *NodeChain, typed *nodeChain
 	}
 	var candidates *NodeChainCandidatePlan
 	if requested != "" {
-		if typed != nil || multiple != nil || original.PreparedCandidateResponseMode(position) != requested {
+		if typed != nil || original.PreparedCandidateResponseMode(position) != requested {
 			return nil, nodeChainCandidatePreparationError
 		}
-		candidates, err = original.newPreparedResponseCandidatePlan(position, inventory, requested)
+		candidates, err = original.newPreparedResponseCandidatePlan(position, inventory, requested, multiple)
 	} else {
 		candidates, err = original.newPacketCandidatePlanOwned(position, inventory, multiple)
 	}
@@ -141,20 +142,16 @@ func newNodeChainCandidatePreparationOwned(original *NodeChain, typed *nodeChain
 		return nil, errors.Join(err, nodeChainCandidatePreparationError)
 	}
 	if requested != "" {
-		// The worker uses the saved route's prospective final MTU. Every live
-		// packet prefix must have the exact endpoint and MTU it was derived from.
-		closed, err := packetCandidateEndpoints(config)
+		// Keep every imported transport, Start Layer, resolver and packet MTU
+		// exactly as in the complete saved source. The closed graph only omits
+		// the unselected suffix; it cannot rebuild the retained prefix differently.
+		closed, err := candidatePrefixClosure(config, proofs)
 		if err != nil {
 			return nil, err
 		}
-		saved, err := packetCandidateEndpoints(savedConfig)
-		if err != nil {
-			return nil, err
-		}
-		for _, proof := range proofs {
-			if closed[proof.Tag] == nil || !reflect.DeepEqual(closed[proof.Tag], saved[proof.Tag]) {
-				return nil, nodeChainCandidatePreparationError
-			}
+		saved, err := candidatePrefixClosure(savedConfig, proofs)
+		if err != nil || !reflect.DeepEqual(closed, saved) {
+			return nil, nodeChainCandidatePreparationError
 		}
 	}
 	var graph, saved map[string]any
@@ -211,12 +208,19 @@ func (c *NodeChain) PreparedCandidateInputFitsSource(position int, input string)
 		return false
 	}
 	defer clear(inventory)
-	_, err = c.newPreparedResponseCandidatePlan(position, string(inventory), mode)
+	var multiple *nodeChainCandidateMultipleOriginal
+	if c.importedNodes != nil {
+		multiple, err = newNodeChainCandidateMultipleOriginal(c)
+		if err != nil {
+			return false
+		}
+	}
+	_, err = c.newPreparedResponseCandidatePlan(position, string(inventory), mode, multiple)
 	return err == nil
 }
 
-func (c *NodeChain) newPreparedResponseCandidatePlan(position int, inventory, mode string) (*NodeChainCandidatePlan, error) {
-	plan, err := c.newCandidatePlanInputs(position, inventory, nil, nil, false, mode, true)
+func (c *NodeChain) newPreparedResponseCandidatePlan(position int, inventory, mode string, multiple *nodeChainCandidateMultipleOriginal) (*NodeChainCandidatePlan, error) {
+	plan, err := c.newCandidatePlanInputs(position, inventory, multiple, nil, false, mode, true)
 	if err != nil || mode != "hysteria2" {
 		return plan, err
 	}
@@ -273,6 +277,9 @@ func candidatePreparationMTU(graph map[string]any, proofs []NodeChainProof, orig
 }
 
 func (p *NodeChainCandidatePreparation) digest() string {
+	if p != nil && p.appendSource != nil {
+		return p.appendDigest()
+	}
 	if p == nil || p.original == nil || p.candidates == nil {
 		return ""
 	}
@@ -291,6 +298,9 @@ func (p *NodeChainCandidatePreparation) digest() string {
 	return externalDigest(raw)
 }
 func (p *NodeChainCandidatePreparation) validate() error {
+	if p != nil && p.appendSource != nil {
+		return p.validateAppend()
+	}
 	if p != nil && p.typedOriginal != nil {
 		read, err := p.typedOriginal.read()
 		if err != nil || read.pair != p.original || p.position < 0 || p.position >= len(read.devices)-2 {
@@ -394,6 +404,9 @@ func (p *NodeChainCandidatePreparation) MTUPlan() (NodeChainMTUPlan, error) {
 func (p *NodeChainCandidatePreparation) Metadata() string {
 	if p.validate() != nil {
 		return ""
+	}
+	if p.appendSource != nil {
+		return p.appendMetadata()
 	}
 	var candidates map[string]any
 	if json.Unmarshal([]byte(p.candidates.Metadata()), &candidates) != nil {

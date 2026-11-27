@@ -67,11 +67,12 @@ func desktopCandidateMetricForIntent(launch *desktopNodeLaunch, position int, se
 		return ""
 	}
 	// A paired final is the retained replacement target, never another prefix.
-	if position == len(launch.chain.selection.Nodes)-1 && desktopFinalCandidateSourceMode(launch, position-1) != "" {
+	if position == len(launch.chain.selection.Nodes)-1 && (desktopFinalCandidateSourceMode(launch, position-1) != "" || desktopSelectedPacketCandidateMode(launch, position-1) != "") {
 		return ""
 	}
 	privateSelected := launch.chain.execution != nil && launch.chain.execution.preparation != nil &&
-		(launch.chain.execution.preparation.SupportsCompareLocalResponseCandidate(position) || serverResponse && launch.chain.execution.preparation.SupportsServerResponseCandidate(position))
+		(launch.chain.execution.preparation.SupportsCompareLocalResponseCandidate(position) || launch.chain.execution.preparation.SupportsCompareLocalPacketResponseCandidate(position) ||
+			serverResponse && (launch.chain.execution.preparation.SupportsServerResponseCandidate(position) || launch.chain.execution.preparation.SupportsServerPacketResponseCandidate(position)))
 	publicSelected := launch.chain.execution != nil && launch.chain.execution.preparation != nil &&
 		(launch.chain.execution.preparation.SupportsCompareLocalPublicResponseCandidate(position) || serverResponse && launch.chain.execution.preparation.SupportsServerPublicResponseCandidate(position))
 	if position > 7 && !privateSelected && !publicSelected && (launch.chain.execution != nil || launch.chain.policy == nil || launch.chain.policy.OriginalChain().ExtendedLocalNodeCount() <= position+1) {
@@ -148,6 +149,9 @@ func desktopConnectedCandidateMode(launch *desktopNodeLaunch, position int) stri
 }
 
 func desktopCandidateSourceMode(launch *desktopNodeLaunch, position int) string {
+	if mode := desktopSelectedPacketCandidateMode(launch, position); mode != "" {
+		return mode
+	}
 	if mode := desktopConnectedCandidateMode(launch, position); mode != "" {
 		return mode
 	}
@@ -237,7 +241,7 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view := &orderedCandidateView{token: hex.EncodeToString(nonce), capture: capture, expires: time.Now().Add(120 * time.Second), position: position, identity: identity}
-	view.candidateMode = desktopConnectedCandidateMode(identity.Ordered.launch, position)
+	view.candidateMode = desktopCandidateSourceMode(identity.Ordered.launch, position)
 	members := identity.Ordered.launch.chain.selection.Nodes
 	if desktopConnectedFinalCandidateMode(identity.Ordered.launch, position) != "" {
 		final := members[len(members)-1]
@@ -254,7 +258,7 @@ func (a *app) orderedCandidateCatalog(w http.ResponseWriter, r *http.Request) {
 	if e := identity.Ordered.launch.chain.execution; serverResponse && e != nil {
 		owners = candidateResponseExecutions(e.preparation, position)
 	}
-	if e := identity.Ordered.launch.chain.execution; e != nil && len(owners) == 0 && requested == "auto" && e.preparation.SupportsSelectedFinalResponseCandidate(position) {
+	if e := identity.Ordered.launch.chain.execution; e != nil && len(owners) == 0 && requested == "auto" && (e.preparation.SupportsSelectedFinalResponseCandidate(position) || e.preparation.SupportsCompareLocalPacketResponseCandidate(position)) {
 		owners = []string{"local"}
 	}
 	privateResponse := view.candidateMode != "" || len(owners) > 0 || desktopCompareLocalPrivateResponseMembers(members, requested, position)
@@ -444,12 +448,13 @@ func orderedCandidateProposalForExecution(members []desktopNodeChainMember, posi
 
 func orderedCandidateProposalForExecutionWithMode(members []desktopNodeChainMember, position int, candidate common.RouterProfile, profiles []common.RouterProfile, requested, candidateMode string) (common.RouterProfile, []common.MultihopNodeSelection, error) {
 	var control common.RouterProfile
-	if candidateMode != "" && !desktopConnectedResponseMembers(members, requested, position, candidate, candidateMode) {
+	if candidateMode != "" && !desktopCandidateResponseMembers(members, requested, position, candidate, candidateMode) {
 		return control, nil, errors.New("candidate response changed its original member protocol or complete path")
 	}
+	packetResponse := candidateMode != ""
 	publicResponse := desktopPublicCandidateMembers(members, requested, position) && desktopNodeChainImportedExecutionMiddle(candidate)
 	typedFinal := desktopTypedFinalResponseMembers(members, requested, position)
-	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !common.ExtendedAWGSelectedMultihopSelection(nodeChainSelectedReferences(members)) && !(requested == "local" && (common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)) || common.ExtendedMixedLocalPacketCount(nodeChainSelectedReferences(members)) > 0))) || position < 0 || position >= len(members)-1 || !(mobilemultihop.NodeChainPrefixMode(members[position].Mode) || publicResponse || (requested == "local" || desktopSelectedResponseProposal(members, requested, position, candidate)) && (members[position].Mode == "shadowsocks" || typedFinal) && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
+	if len(members) < 2 || (len(members) > common.MultihopMaximumNodes && !common.ExtendedLocalMultihopSelection(nodeChainSelectedReferences(members)) && !common.ExtendedAWGSelectedMultihopSelection(nodeChainSelectedReferences(members)) && !((requested == "local" || packetResponse) && (common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members)) || common.ExtendedMixedLocalPacketCount(nodeChainSelectedReferences(members)) > 0))) || position < 0 || position >= len(members)-1 || !(packetResponse || mobilemultihop.NodeChainPrefixMode(members[position].Mode) || publicResponse || (requested == "local" || desktopSelectedResponseProposal(members, requested, position, candidate)) && (members[position].Mode == "shadowsocks" || typedFinal) && candidate.External == nil) || !validDesktopOrderedExecution(requested) {
 		return control, nil, errors.New("candidate requires an original packet prefix")
 	}
 	if desktopNodeChainHasExternalFinal(members) && (!validDesktopOrderedExecution(requested) || position != 0 && !publicResponse || !desktopNodeChainImportedExecutionMiddle(candidate)) {
@@ -468,8 +473,8 @@ func orderedCandidateProposalForExecutionWithMode(members []desktopNodeChainMemb
 	}
 	replacement := position + 1
 	selected := common.MultihopNodeSelection{ID: candidate.ID, Mode: mode}
-	if publicResponse || members[position].Mode == "shadowsocks" && replacement < len(nodes)-1 &&
-		(requested == "local" || desktopSelectedResponseProposal(members, requested, position, candidate)) {
+	if candidateMode == "" && (publicResponse || members[position].Mode == "shadowsocks" && replacement < len(nodes)-1 &&
+		(requested == "local" || desktopSelectedResponseProposal(members, requested, position, candidate))) {
 		if len(nodes) >= common.MultihopPhysicalTraversalDepth || nodes[replacement].Mode != "shadowsocks" {
 			return control, nil, errors.New("saving this measured intermediate requires the original stream suffix and room for another member")
 		}

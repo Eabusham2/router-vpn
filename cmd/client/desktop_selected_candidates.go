@@ -585,6 +585,15 @@ func retireDesktopSelectedCandidateCaptured(ctx context.Context, launch *desktop
 }
 
 func (d *desktopSelectedCandidateDescriptor) responseOperation(pos int, winner string) string {
+	if d.candidateMode() != "" {
+		if winner == "local" && d.preparation.SupportsCompareLocalPacketResponseCandidate(pos) {
+			return "selected-local-packet-response-50"
+		}
+		if winner == "server" && d.serverResponse && d.preparation.SupportsServerPacketResponseCandidate(pos) {
+			return "selected-server-packet-response-50"
+		}
+		return ""
+	}
 	if winner == "local" && d.preparation.SupportsCompareLocalPublicResponseCandidate(pos) {
 		return "selected-local-public-response-50"
 	}

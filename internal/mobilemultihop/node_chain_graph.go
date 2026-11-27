@@ -74,6 +74,10 @@ func compileNodeChainGraph(nodes []nodeChainGraphMember, closures []*externalPre
 }
 
 func compileNodeChainGraphWithHome(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress, connect nodeChainCapturedTransportScope, server *nodeChainMultipleImportedServerScope, closed *NodeChainCandidatePlan, home *NodeChainServerHomeDNS) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
+	return compileNodeChainGraphWithAppend(nodes, closures, expected, connect, server, closed, home, nil)
+}
+
+func compileNodeChainGraphWithAppend(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress, connect nodeChainCapturedTransportScope, server *nodeChainMultipleImportedServerScope, closed *NodeChainCandidatePlan, home *NodeChainServerHomeDNS, appendScope *nodeChainAppendGraphScope) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 	bad := errors.New("ordered chain lost a complete captured node closure")
 	fail := func(err error) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 		return "", nil, NodeChainDNSCapture{}, nil, err
@@ -82,6 +86,14 @@ func compileNodeChainGraphWithHome(nodes []nodeChainGraphMember, closures []*ext
 	// test may keep the original entry resolver attached to its own outbound.
 	// Only the separately owned closed-ingress constructor can request this.
 	resolverPosition := len(nodes) - 1
+	if appendScope != nil {
+		if connect != nil || server != nil || closed != nil || home != nil || appendScope.validate(nodes, closures, expected) != nil {
+			return fail(bad)
+		}
+		// The literal stream stop owns no application resolver. Its separate
+		// append scope retains the first real prefix resolver with ingress closed.
+		resolverPosition = 0
+	}
 	if closed != nil {
 		if closed.validate() != nil || closed.measurement == "" || len(nodes) != closed.prefix.Position+1 || connect != nil || server != nil {
 			return fail(bad)
@@ -93,7 +105,7 @@ func compileNodeChainGraphWithHome(nodes []nodeChainGraphMember, closures []*ext
 			return fail(err)
 		}
 	}
-	if err := applyNodeChainMemberMTUWithServerScope(nodes, closures, server); err != nil {
+	if err := applyNodeChainMemberMTUWithAppendScope(nodes, closures, server, appendScope); err != nil {
 		return fail(err)
 	}
 	last := closures[len(closures)-1]

@@ -34,7 +34,7 @@ Add-Type -AssemblyName WindowsBase
 $Reader=New-Object System.Xml.XmlNodeReader $Xaml
 $Window=[Windows.Markup.XamlReader]::Load($Reader)
 function Control([string]$Name){return $Window.FindName($Name)}
-if($SelfTest){
+if($SelfTest-and$env:ROUTERVPN_CONNECTION_SELF_TEST-cne'1'){
  foreach($Name in @('StateText','RouterCombo','ModeCombo','MapCanvas','NodesGrid','ModesGrid','DnsSummary','DnsModeCombo','DnsProtocolCombo','DnsPresetCombo','DnsHostBox','DnsPortBox','DnsServerBox','DnsPathBox','DnsSaveButton','DnsRefreshButton','AdvancedSummary','MtuRetestButton','MultihopEntryCombo','MultihopExitCombo','MultihopExitModeCombo','MultihopConnectButton','MultihopSummary','DiagnosticsBox','TutorialButton','PairNodeButton','ImportNodeButton','ExternalDirectButton','ExternalViaEntryButton','DeleteNodeButton','SortCurrentButton','SortRecentButton','SortUsageButton','SortLatencyButton','SortNameButton','SelectLowestLatencyButton')){if(-not(Control $Name)){throw "Windows product self-test missing $Name"}}
  $Source=Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw
  if(Control 'UnifiedShell'){
@@ -136,6 +136,128 @@ function SelectLowestMeasuredNode{
  Log ([string]$Result.note)
 }
 (Control 'RefreshButton').Add_Click({RefreshDnsPolicy;RefreshProduct});(Control 'SettingsRefreshButton').Add_Click({RefreshProduct});(Control 'SortCurrentButton').Add_Click({$script:NodeSort='current';RefreshProduct});(Control 'SortRecentButton').Add_Click({$script:NodeSort='last-used';RefreshProduct});(Control 'SortUsageButton').Add_Click({$script:NodeSort='most-used';RefreshProduct});(Control 'SortLatencyButton').Add_Click({$script:NodeSort='latency';RefreshProduct});(Control 'SortNameButton').Add_Click({$script:NodeSort='name';RefreshProduct});(Control 'SelectLowestLatencyButton').Add_Click({try{SelectLowestMeasuredNode}catch{Log ("Lowest-latency selection: $($_.Exception.Message)")};RefreshProduct});(Control 'MultihopRefreshButton').Add_Click({RefreshMultihop});(Control 'MultihopConnectButton').Add_Click({try{$Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue;if(-not$Entry-or-not$Exit){throw 'Choose both an entry and exit node.'};if($Entry-eq$Exit){throw 'Multihop entry and exit nodes must be different.'};$Result=Api '/api/multihop/connect' 'POST' @{entry_id=$Entry;exit_id=$Exit;base='wg';entry_mode=(MultihopEntryModeChoice);exit_mode=(MultihopExitModeChoice)} 180;Log ("Multihop connected entry=$($Result.entry_id) exit=$($Result.exit_id) mode=$($Result.exit_mode)")}catch{Log ("Multihop failed: $($_.Exception.Message)")};RefreshProduct});(Control 'MtuRetestButton').Add_Click({try{$Result=Api '/api/mtu/retest' 'POST' @{} 130;Log ("MTU Retest: effective=$($Result.effective_mtu) source=$($Result.effective_mtu_source) tested=$($Result.effective_mtu_tested_at)")}catch{Log ("MTU Retest failed: $($_.Exception.Message)")};RefreshProduct});(Control 'AutoButton').Add_Click({try{$Result=Api '/api/auto' 'POST' @{} 120;Log ("AUTO runtime=$($Result.runtime_mode)")}catch{Log ("AUTO failed: $($_.Exception.Message)")};RefreshProduct});(Control 'ConnectButton').Add_Click({try{$Mode=[string]$ModeCombo.SelectedValue;if(-not$Mode){throw 'Choose an available mode.'};$Result=Api '/api/connect-logical' 'POST' @{mode=$Mode;base=(BaseChoice)} 150;Log ("Connected runtime=$($Result.runtime_mode) base=$($Result.base)")}catch{Log ("Connect failed: $($_.Exception.Message)")};RefreshProduct});(Control 'DisconnectButton').Add_Click({try{[void](Api '/api/disconnect' 'POST' @{} 15);Log 'Disconnected'}catch{Log $_.Exception.Message};RefreshProduct});(Control 'PublicIpButton').Add_Click({try{$Result=Api '/api/public-ip' -Timeout 12;Log ("Public VPN exit: $($Result.public_ip)")}catch{Log $_.Exception.Message}});$DnsButton.Add_Click({try{$Displayed=[string]$RouterCombo.SelectedValue;$Profile=$RouterCombo.SelectedItem;if(-not$Displayed-or-not$Profile-or[string]$Profile.id-cne$Displayed){throw 'Refresh the displayed node before DNS Retest.'};$Kind=([string]$Profile.node_kind).ToLowerInvariant();if($Kind-ceq'external'){Show-RouterVPNDNSMeasurement -BaseUrl $BaseUrl -Owner $Window -DisplayedProfileID $Displayed;return};if($Kind-cnotin@('','router-vpn')){throw 'The selected node type is invalid.'};$Result=Api '/api/dns/retest' 'POST' @{} 90;Log ("DNS winner: $($Result.winner.address) $($Result.winner.latency_ms)ms")}catch{Log $_.Exception.Message};RefreshDnsPolicy;RefreshProduct});$DnsRefreshButton.Add_Click({RefreshDnsPolicy;RefreshProduct});$DnsSaveButton.Add_Click({try{$Fields=@{mode=(ComboTag $DnsModeCombo 'home');protocol=(ComboTag $DnsProtocolCombo 'udp');host=[string]$DnsHostBox.Text;port=([int]([string]$DnsPortBox.Text));server_name=[string]$DnsServerBox.Text;path=[string]$DnsPathBox.Text};$Body=New-RouterVPNDNSPolicyPayload -Captured $script:DnsPolicyCapture -DisplayedProfileID ([string]$RouterCombo.SelectedValue) -Fields $Fields;$Result=Api '/api/dns/policy' 'POST' $Body 10;Log ("DNS policy saved for next connection: $($Result.mode) $($Result.host)")}catch{Log ("DNS policy failed: $($_.Exception.Message)")};RefreshDnsPolicy;RefreshProduct});$DnsPresetCombo.Add_SelectionChanged({$Tag=ComboTag $DnsPresetCombo 'manual';$Map=@{cf4=@('1.1.1.1','cloudflare-dns.com');cf4b=@('1.0.0.1','cloudflare-dns.com');cf6=@('2606:4700:4700::1111','cloudflare-dns.com');cf6b=@('2606:4700:4700::1001','cloudflare-dns.com');g4=@('8.8.8.8','dns.google');g4b=@('8.8.4.4','dns.google');g6=@('2001:4860:4860::8888','dns.google');g6b=@('2001:4860:4860::8844','dns.google');q4=@('9.9.9.9','dns.quad9.net');q4b=@('149.112.112.112','dns.quad9.net');q6=@('2620:fe::fe','dns.quad9.net');q6b=@('2620:fe::9','dns.quad9.net')};if($Map.ContainsKey($Tag)){$DnsHostBox.Text=$Map[$Tag][0];$DnsServerBox.Text=$Map[$Tag][1]}});(Control 'EmergencyButton').Add_Click({try{[void](Api '/api/emergency-stop' 'POST' @{} 15);Log 'Emergency stop completed'}catch{Log $_.Exception.Message};RefreshProduct});(Control 'PairNodeButton').Add_Click({try{ShowPairNodeDialog}catch{Log ("Pairing failed: $($_.Exception.Message)")}});(Control 'ImportNodeButton').Add_Click({try{$Picker=New-Object Microsoft.Win32.OpenFileDialog;$Picker.Title='Import Router VPN or external node';$Picker.Filter='Router VPN / external JSON (*.json)|*.json|All files (*.*)|*.*';if($Picker.ShowDialog($Window)){$Bytes=[IO.File]::ReadAllBytes($Picker.FileName);if($Bytes.Length-gt(32MB)){throw 'Node JSON is larger than 32 MiB.'};$Imported=ImportAnyNode $Bytes;Log ("Imported $($Imported.kind) node: $($Imported.result.profile.name)");RefreshProduct}}catch{Log ("Import failed: $($_.Exception.Message)")}});(Control 'ExternalDirectButton').Add_Click({try{ConnectExternal $false}catch{Log ("External direct failed: $($_.Exception.Message)")};RefreshProduct});(Control 'ExternalViaEntryButton').Add_Click({try{ConnectExternal $true}catch{Log ("External via entry failed: $($_.Exception.Message)")};RefreshProduct});(Control 'DeleteNodeButton').Add_Click({try{$Profile=SelectedNode;$Answer=[System.Windows.MessageBox]::Show("Remove linked node '$($Profile.name)' from this app?",'Router VPN',[System.Windows.MessageBoxButton]::YesNo,[System.Windows.MessageBoxImage]::Warning);if($Answer-eq[System.Windows.MessageBoxResult]::Yes){[void](Api '/api/profile/delete' 'POST' @{id=[string]$Profile.id} 10);Log ("Removed node $($Profile.name)");RefreshProduct}}catch{Log ("Remove failed: $($_.Exception.Message)")}});(Control 'SelectNodeButton').Add_Click({try{$Profile=SelectedNode;[void](Api '/api/profile/select' 'POST' @{id=[string]$Profile.id} 10)}catch{Log $_.Exception.Message};RefreshProduct});(Control 'LatencyButton').Add_Click({try{$Profile=SelectedNode;$Result=Api '/api/profile/latency' 'POST' @{id=[string]$Profile.id;samples=50} 180;Log ("Latency median=$($Result.median_ms)ms p90=$($Result.p90_ms)ms")}catch{Log $_.Exception.Message};RefreshProduct});$RouterCombo.Add_SelectionChanged({if($RouterCombo.SelectedValue){if(Test-RouterVPNProfileLoadPending $PSScriptRoot){return};try{[void](Api '/api/profile/select' 'POST' @{id=[string]$RouterCombo.SelectedValue} 10)}catch{};RefreshDnsPolicy;RefreshProduct}});(Control 'TutorialButton').Add_Click({[System.Windows.MessageBox]::Show('Install once. In Nodes / Map, pair with a 6-digit one-time code or import Router VPN/external schema-v3 JSON. Order nodes by current/recent, last used, most used, lowest measured latency or name. Automatic lowest-latency choice requires real 50-sample measurements on at least two usable nodes. Modes shows layers, latency/traffic/speed estimates and exact live readiness reason. DNS supports Home/Fastest/Custom/DoT/DoH/DoH3/Rescue; benchmark values are real home-node DNS query RTT. Highlight an external exit for direct connect, or choose a different entry in Advanced and use External via Advanced entry. Exact public-exit proof is mandatory; unsupported protocol/hop combinations stay rejected.','Router VPN native onboarding')|Out-Null})
+function Write-DesktopConnectPhase([string]$Name,$Value){
+ $Path=Join-Path ([IO.Directory]::GetCurrentDirectory()) $Name
+ $Temporary=$Path+'.'+[Guid]::NewGuid().ToString('N')+'.tmp'
+ $Created=$false
+ try{
+  $Bytes=[Text.UTF8Encoding]::new($false).GetBytes(($Value|ConvertTo-Json -Depth 8 -Compress))
+  if($Bytes.Length-gt16384){throw 'Desktop connection receipt exceeded its bound.'}
+  $File=[IO.File]::Open($Temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);$Created=$true
+  try{$File.Write($Bytes,0,$Bytes.Length);$File.Flush($true)}finally{$File.Dispose()}
+  [IO.File]::Move($Temporary,$Path)
+ }finally{if($Created-and[IO.File]::Exists($Temporary)){[IO.File]::Delete($Temporary)}}
+}
+function Read-DesktopConnectJSON([string]$Name,[int]$Limit){
+ $Path=Join-Path ([IO.Directory]::GetCurrentDirectory()) $Name
+ $Item=Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+ if($Item.PSIsContainer-or($Item.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0){throw 'Desktop connection input is not a regular private file.'}
+ $File=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+ try{
+  if($File.Length-lt2-or$File.Length-gt$Limit){throw 'Desktop connection input exceeded its bound.'}
+  $Reader=[IO.StreamReader]::new($File,[Text.UTF8Encoding]::new($false,$true))
+  try{return ($Reader.ReadToEnd()|ConvertFrom-Json)}finally{$Reader.Dispose()}
+ }finally{$File.Dispose()}
+}
+function Pump-DesktopConnectWindow{
+ $Frame=[Windows.Threading.DispatcherFrame]::new()
+ $Tick=[Windows.Threading.DispatcherTimer]::new([Windows.Threading.DispatcherPriority]::Background)
+ $Tick.Interval=[TimeSpan]::FromMilliseconds(50)
+ $Handler=[EventHandler]({$Frame.Continue=$false}.GetNewClosure())
+ $Tick.Add_Tick($Handler)
+ try{$Tick.Start();[Windows.Threading.Dispatcher]::PushFrame($Frame)}finally{$Tick.Stop();$Tick.Remove_Tick($Handler)}
+}
+function Test-DesktopConnectMarker([string]$Name,[string]$Phase,[string]$Run){
+ if(-not[IO.File]::Exists((Join-Path ([IO.Directory]::GetCurrentDirectory()) $Name))){return $false}
+ $Value=Read-DesktopConnectJSON $Name 16384
+ if($Value.schema-ne1-or[string]$Value.run_id-cne$Run-or[string]$Value.phase-cne$Phase){throw 'Desktop connection phase identity changed.'}
+ return $true
+}
+function Wait-DesktopConnect([scriptblock]$Predicate,[Diagnostics.Stopwatch]$Clock,[string]$Run,[switch]$Cleanup){
+ while($true){
+  if($Clock.Elapsed.TotalSeconds-ge160){throw 'Desktop connection UI deadline expired.'}
+  if(-not$Cleanup-and(Test-DesktopConnectMarker 'desktop-connect-cancel.json' 'cancel' $Run)){throw 'Desktop connection was cancelled by its original fixture.'}
+  if(&$Predicate){return}
+  if(-not$Window.IsVisible){throw 'Desktop connection window closed before its original operation joined.'}
+  Pump-DesktopConnectWindow
+ }
+}
+function Read-DesktopConnectPayload([string]$URL){
+ $Request=[Net.HttpWebRequest]::Create($URL);$Request.Proxy=$null;$Request.KeepAlive=$false
+ $Request.Timeout=4000;$Request.ReadWriteTimeout=4000;$Request.AllowAutoRedirect=$false
+ $Response=$null;$Stream=$null;$Body=[IO.MemoryStream]::new()
+ try{
+  $Response=$Request.GetResponse()
+  if([int]$Response.StatusCode-ne200){throw 'Desktop connection payload returned a non-success status.'}
+  $Stream=$Response.GetResponseStream();$Buffer=New-Object byte[] 4096
+  while(($Count=$Stream.Read($Buffer,0,$Buffer.Length))-gt0){if($Body.Length+$Count-gt65536){throw 'Desktop connection payload exceeded its bound.'};$Body.Write($Buffer,0,$Count)}
+  $Digest=[Security.Cryptography.SHA256]::Create()
+  try{return ([BitConverter]::ToString($Digest.ComputeHash($Body.ToArray())).Replace('-','').ToLowerInvariant())}finally{$Digest.Dispose()}
+ }finally{if($Stream){$Stream.Dispose()};if($Response){$Response.Dispose()};$Body.Dispose();$Request.Abort()}
+}
+function Invoke-DesktopConnectSelfTest{
+ $Clock=[Diagnostics.Stopwatch]::StartNew();$Stage='manifest';$Run='';$Started=$false;$Failure=$null
+ $Result=@{schema=1;run_id='';phase='complete';status='failed';connect=$false;traffic=$false;loss=$false;disconnect=$false;failure_stage=$Stage}
+ try{
+  $Fixture=Read-DesktopConnectJSON 'desktop-connect-fixture.json' (1MB)
+  $Run=[string]$Fixture.run_id;$Result.run_id=$Run
+  $Fields=@('schema','kind','run_id','profile_bundle','logical_mode','runtime_mode','private_address','dns_host','payload_url','literal_payload_url','payload_sha256')
+  if(@($Fixture.PSObject.Properties).Count-ne$Fields.Count-or@($Fixture.PSObject.Properties|Where-Object{$_.Name-cnotin$Fields}).Count-ne0-or$Fixture.schema-ne1-or[string]$Fixture.kind-cne'routervpn-desktop-connect'-or$Run-cnotmatch'^[0-9a-f]{32}$'-or[string]$Fixture.logical_mode-cne'base-raw'-or[string]$Fixture.runtime_mode-cne'wg'-or[string]$Fixture.payload_sha256-cnotmatch'^[0-9a-f]{64}$'){throw 'Desktop connection manifest is invalid.'}
+  $Private=[Net.IPAddress]::Parse([string]$Fixture.private_address);$Octets=$Private.GetAddressBytes()
+  if($Octets.Length-ne4-or-not($Octets[0]-eq10-or($Octets[0]-eq172-and$Octets[1]-ge16-and$Octets[1]-le31)-or($Octets[0]-eq192-and$Octets[1]-eq168))){throw 'Desktop connection target is not a private IPv4 peer.'}
+  if([string]$Fixture.dns_host-cne($Run+'.desktop-smoke.invalid')-or[string]$Fixture.payload_url-cne('http://'+$Fixture.dns_host+':8787/desktop-connect/'+$Run)-or[string]$Fixture.literal_payload_url-cne('http://'+$Fixture.private_address+':8787/desktop-connect/'+$Run)){throw 'Desktop connection nonce target changed.'}
+  foreach($Name in @('desktop-connect-connected.json','desktop-connect-peer-stopped.json','desktop-connect-result.json','desktop-connect-cancel.json')){if([IO.File]::Exists((Join-Path ([IO.Directory]::GetCurrentDirectory()) $Name))){throw 'Desktop connection reused a prior phase.'}}
+  $Stage='import'
+  $Imported=ApiRaw '/api/profile/import' ([Text.Encoding]::UTF8.GetBytes(($Fixture.profile_bundle|ConvertTo-Json -Depth 12 -Compress))) 25
+  $ID=[string]$Imported.profile.id
+  if(-not$Imported.ok-or-not$ID){throw 'Desktop connection did not import a real profile.'}
+  [void](Api '/api/profile/select' 'POST' @{id=$ID} 10)
+  RefreshProduct
+  SetComboTag $BaseCombo 'wg';$ModeCombo.SelectedValue='base-raw'
+  (Control 'UnifiedMultihop').IsChecked=$false
+  $Button=Control 'UnifiedConnectButton'
+  if($null-eq$Button-or-not$Button.IsEnabled-or$ModeCombo.SelectedValue-cne'base-raw'-or(BaseChoice)-cne'wg'-or$RouterCombo.SelectedValue-cne$ID){throw 'Desktop connection could not select its real profile and WG mode.'}
+  $Window.Show();$Window.UpdateLayout();$Stage='connect';$Started=$true
+  $Button.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+  Wait-DesktopConnect {
+   $Current=Api '/api/status' -Timeout 3
+   if([string]$Current.phase-ceq'failed'){throw 'The normal Connect action failed.'}
+   if([bool]$Current.connected){
+    if([string]$Current.router_id-cne$ID-or[string]$Current.runtime_mode-cne'wg'-or[string]$Current.logical_mode-cne'base-raw'-or[string]$Current.base-cne'wg'-or[bool]$Current.socks){throw 'Desktop connection returned a different runtime or profile.'}
+    return (-not(UnifiedAsyncBusy))
+   };return $false
+  } $Clock $Run
+  $Result.connect=$true;$Stage='traffic'
+  $Addresses=@([Net.Dns]::GetHostAddresses([string]$Fixture.dns_host)|ForEach-Object{$_.ToString()})
+  if($Addresses.Count-ne1-or$Addresses[0]-cne[string]$Fixture.private_address){throw 'Desktop connection OS DNS did not use the private peer.'}
+  if((Read-DesktopConnectPayload ([string]$Fixture.payload_url))-cne[string]$Fixture.payload_sha256){throw 'Desktop connection payload did not match its fresh nonce.'}
+  $Result.traffic=$true
+  Write-DesktopConnectPhase 'desktop-connect-connected.json' @{schema=1;run_id=$Run;phase='connected';profile_id=$ID;runtime_mode='wg';private_address=[string]$Fixture.private_address;payload_sha256=[string]$Fixture.payload_sha256}
+  $Stage='peer-stop'
+  Wait-DesktopConnect {Test-DesktopConnectMarker 'desktop-connect-peer-stopped.json' 'peer-stopped' $Run} $Clock $Run
+  $Stage='loss';$Denied=$false
+  try{[void](Read-DesktopConnectPayload ([string]$Fixture.literal_payload_url))}catch [Net.WebException]{
+   if($null-eq$_.Exception.Response-and$_.Exception.Status-cin@([Net.WebExceptionStatus]::ConnectFailure,[Net.WebExceptionStatus]::Timeout,[Net.WebExceptionStatus]::ConnectionClosed,[Net.WebExceptionStatus]::ReceiveFailure,[Net.WebExceptionStatus]::SendFailure)){$Denied=$true}else{throw}
+  }
+  if(-not$Denied){throw 'Desktop connection bypassed the stopped private peer.'}
+  $Result.loss=$true;$Stage='disconnect'
+  $Button.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+  Wait-DesktopConnect {$Current=Api '/api/status' -Timeout 3;return (-not[bool]$Current.connected-and[string]$Current.phase-ceq'off'-and[string]$Current.mode-ceq'off'-and-not(UnifiedAsyncBusy))} $Clock $Run -Cleanup
+  $Result.disconnect=$true;$Result.status='passed';$Result.failure_stage=''
+ }catch{$Failure=$_;$Result.failure_stage=$Stage}
+ finally{
+  if($Started-and-not$Result.disconnect){
+   try{[void](CancelUnifiedApiAsync $false);[void](Api '/api/disconnect' 'POST' @{} 20);$Current=Api '/api/status' -Timeout 3;$Result.disconnect=(-not[bool]$Current.connected-and[string]$Current.phase-ceq'off'-and[string]$Current.mode-ceq'off')}catch{$Result.disconnect=$false}
+  }
+  $Timer.Stop()
+  if($Run-cmatch'^[0-9a-f]{32}$'){Write-DesktopConnectPhase 'desktop-connect-result.json' $Result}
+  $Window.Close()
+ }
+ if($Failure){throw $Failure}
+ if($Result.status-cne'passed'-or-not$Result.disconnect){throw 'Desktop connection did not complete its original cleanup.'}
+ Write-Host 'Router VPN Windows real Connect/TUN/traffic/disconnect: OK'
+}
+
 $BaseCombo.SelectedIndex=0
 $MultihopEntryModeCombo.SelectedIndex=0
 $MultihopExitModeCombo.SelectedIndex=0
@@ -149,6 +271,6 @@ $Window.Add_Closed({$Timer.Stop()})
 RefreshDnsPolicy
 RefreshProduct
 $Timer.Start()
-[void]$Window.ShowDialog()
+if($SelfTest-and$env:ROUTERVPN_CONNECTION_SELF_TEST-ceq'1'){Invoke-DesktopConnectSelfTest}else{[void]$Window.ShowDialog()}
 
 }finally{Close-RouterVPNControllerTransport}

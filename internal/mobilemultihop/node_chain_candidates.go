@@ -49,6 +49,7 @@ type NodeChainCandidateOwner interface {
 }
 
 type NodeChainCandidatePlan struct {
+	appendSource           *NodeChainCandidateAppendSource
 	chain                  *NodeChain
 	multiple               *nodeChainCandidateMultipleOriginal
 	multipleSeal           *nodeChainMultipleCandidatePlanSeal
@@ -95,7 +96,14 @@ func (c *NodeChain) NewCandidatePlanFromInputs(position int, inventory string, i
 		return nil, err
 	}
 	if requested != "" {
-		return c.newCandidatePlanInputs(position, inventory, nil, inputs, false, requested, false)
+		var multiple *nodeChainCandidateMultipleOriginal
+		if c != nil && c.importedNodes != nil {
+			multiple, err = newNodeChainCandidateMultipleOriginal(c)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return c.newCandidatePlanInputs(position, inventory, multiple, inputs, false, requested, false)
 	}
 	if c != nil && c.validateCapture() == nil && c.connectedFinalResponsePrefix(position) {
 		return c.newCandidatePlanInputs(position, inventory, nil, inputs, true, "", false)
@@ -121,7 +129,7 @@ func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multi
 	}
 	measurement := c.CandidatePrefixMeasurement(position)
 	if responseMode != "" {
-		if multiple != nil || connectedFinalResponse || c.candidateNativeResponseModeAt(position) != responseMode {
+		if connectedFinalResponse || c.candidateNativeResponseModeAt(position) != responseMode {
 			return nil, nodeChainCandidatePreparationError
 		}
 		measurement = hopmeasure.CandidatePrivateResponseMeasurement
@@ -163,7 +171,13 @@ func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multi
 	}
 	if NodeChainPrefixMode(responseMode) {
 		packetKeys = make(map[string]bool)
-		for _, member := range c.nodes {
+		for position, member := range c.nodes {
+			if member == nil {
+				if multiple == nil || c.importedSSMemberAt(position) == nil {
+					return nil, nodeChainCandidatePreparationError
+				}
+				continue
+			}
 			if !NodeChainPrefixMode(member.mode) {
 				continue
 			}
@@ -505,6 +519,9 @@ func (p *NodeChainCandidatePlan) Metadata() string {
 	if p.validate() != nil {
 		return ""
 	}
+	if p.appendSource != nil {
+		return p.appendMetadata()
+	}
 	if p.metadataPages == nil {
 		return ""
 	}
@@ -537,6 +554,9 @@ func (p *NodeChainCandidatePlan) Metadata() string {
 }
 
 func (p *NodeChainCandidatePlan) digest() string {
+	if p != nil && p.appendSource != nil {
+		return p.appendDigest()
+	}
 	if p == nil || p.chain == nil {
 		return ""
 	}
@@ -568,6 +588,9 @@ func (p *NodeChainCandidatePlan) digest() string {
 }
 
 func (p *NodeChainCandidatePlan) validate() error {
+	if p != nil && p.appendSource != nil {
+		return p.validateAppend()
+	}
 	if p == nil || p.chain == nil || p.chain.validateCapture() != nil || p.seal == "" || p.seal != p.digest() ||
 		p.prefix.Position < 0 || p.prefix.Position >= len(p.chain.proofs) || p.prefix != p.chain.proofs[p.prefix.Position] {
 		return errors.New("candidate plan changed its sealed original capture")
@@ -578,7 +601,7 @@ func (p *NodeChainCandidatePlan) validate() error {
 	if p.connectedFinalResponse && (p.multiple != nil || p.measurement != hopmeasure.CandidatePrivateResponseMeasurement || !p.chain.connectedFinalResponsePrefix(p.prefix.Position)) {
 		return nodeChainCandidatePreparationError
 	}
-	if p.responseMode != "" && (p.connectedFinalResponse || p.multiple != nil || p.measurement != hopmeasure.CandidatePrivateResponseMeasurement || p.chain.candidateNativeResponseModeAt(p.prefix.Position) != p.responseMode) {
+	if p.responseMode != "" && (p.connectedFinalResponse || p.measurement != hopmeasure.CandidatePrivateResponseMeasurement || p.chain.candidateNativeResponseModeAt(p.prefix.Position) != p.responseMode) {
 		return nodeChainCandidatePreparationError
 	}
 	if p.multiple == nil && p.chain.importedNodes != nil && !p.connectedFinalResponse || p.multiple != nil && !p.multiple.currentValidated(p.chain) {

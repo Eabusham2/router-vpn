@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/netip"
 	"slices"
 
@@ -82,19 +86,50 @@ func desktopConnectedResponseMembers(members []desktopNodeChainMember, execution
 	if desktopFinalResponseMembers(members, execution, position, candidate, mode) {
 		return true
 	}
-	if !mobilemultihop.NodeChainPrefixMode(mode) || execution != "local" || len(members) < 3 || len(members) > mobilemultihop.NodeChainMaximumNodes && (mode != "wg" || !common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members))) || position < 0 || position > len(members)-3 || members[position+1].Mode != mode ||
+	return execution == "local" && desktopPacketResponseMembers(members, position, candidate, mode)
+}
+
+// This shared public shape carries no Local or selected runtime authority.
+func desktopPacketResponseMembers(members []desktopNodeChainMember, position int, candidate common.RouterProfile, mode string) bool {
+	if !mobilemultihop.NodeChainPrefixMode(mode) || len(members) < 3 || len(members) > mobilemultihop.NodeChainMaximumNodes && (mode != "wg" || !common.ExtendedPairedLocalMultihopSelection(nodeChainSelectedReferences(members))) || position < 0 || position > len(members)-3 || members[position+1].Mode != mode ||
 		candidate.External != nil || candidate.NodeKind != "" && candidate.NodeKind != "router-vpn" || candidate.StartLayer != "" && candidate.StartLayer != "off" {
 		return false
 	}
 	for i, member := range members {
-		if member.Profile.External != nil || member.Profile.NodeKind != "" && member.Profile.NodeKind != "router-vpn" || member.Profile.StartLayer != "" && member.Profile.StartLayer != "off" || member.Profile.ID == candidate.ID || candidate.NodeProofID != "" && member.Profile.NodeProofID == candidate.NodeProofID {
+		p := member.Profile
+		if p.ID == candidate.ID || candidate.NodeProofID != "" && p.NodeProofID == candidate.NodeProofID {
 			return false
 		}
-		if i < len(members)-1 && !mobilemultihop.NodeChainPrefixMode(member.Mode) || i == len(members)-1 && member.Mode != "shadowsocks" && member.Mode != "hysteria2" {
+		if p.External != nil || p.NodeKind == "external" {
+			// Imported credentials remain in the original schema-six registry.
+			// This public proposal cannot replace an import or infer UDP authority.
+			if len(members) > mobilemultihop.NodeChainMaximumNodes || i == 0 || i == len(members)-1 || i == position+1 ||
+				member.Mode != "shadowsocks" || members[len(members)-1].Mode != "shadowsocks" ||
+				!desktopNodeChainImportedExecutionMiddle(p) || p.StartLayer != "" && p.StartLayer != "off" {
+				return false
+			}
+			continue
+		}
+		if p.NodeKind != "" && p.NodeKind != "router-vpn" ||
+			(i > position || len(members) > mobilemultihop.NodeChainMaximumNodes) && p.StartLayer != "" && p.StartLayer != "off" ||
+			!desktopCONNECTExecutionPairedLayer(p.StartLayer) ||
+			i < len(members)-1 && !mobilemultihop.NodeChainPrefixMode(member.Mode) ||
+			i == len(members)-1 && member.Mode != "shadowsocks" && member.Mode != "hysteria2" {
 			return false
 		}
 	}
 	return true
+}
+
+// Selected packet proposals have their own source family. The live selected
+// catalog still binds the actual winner and epoch; this only checks the exact
+// complete public replacement before the private route is compiled again.
+func desktopCandidateResponseMembers(members []desktopNodeChainMember, execution string, position int, candidate common.RouterProfile, mode string) bool {
+	if desktopConnectedResponseMembers(members, execution, position, candidate, mode) {
+		return true
+	}
+	return (execution == "auto" || execution == "server") &&
+		desktopPacketResponseMembers(members, position, candidate, mode)
 }
 
 // Adoption requires a fresh native receipt from the originally selected trial.
@@ -142,7 +177,7 @@ func orderedResponseProfileWithMode(ctx context.Context, root, execution string,
 	publicResponse := desktopPublicCandidateMembers(members, execution, position) && desktopNodeChainImportedExecutionMiddle(candidate)
 	typedFinal := desktopTypedFinalResponseMembers(members, execution, position)
 	if candidateMode != "" {
-		if !desktopConnectedResponseMembers(members, execution, position, candidate, candidateMode) {
+		if !desktopCandidateResponseMembers(members, execution, position, candidate, candidateMode) {
 			return empty, nil, "", errors.New("this response cannot replace the original member while preserving its transport and complete route")
 		}
 	} else if !publicResponse && (execution != "local" && !desktopSelectedResponseProposal(members, execution, position, candidate) || position < 1 || position+1 >= len(members) || candidate.External != nil || members[position].Mode != "shadowsocks" && !typedFinal) {
@@ -171,6 +206,7 @@ func orderedResponseProfileWithMode(ctx context.Context, root, execution string,
 const (
 	orderedCandidateDraftInsertAction  = "insert-measured-hop"
 	orderedCandidateDraftReplaceAction = "replace-measured-hop"
+	orderedCandidateDraftAppendAction  = "append-measured-hop"
 )
 
 // A draft response choice always inserts the measured relay. In particular,
@@ -279,4 +315,122 @@ func (p *orderedCandidatePreparation) draftDeliveryCurrentLocked() bool {
 	}
 	revision, err := a.candidateCatalogRevisionLocked()
 	return err == nil && revision == p.revision
+}
+
+// An incomplete editor prefix has no selected final and cannot be decoded as
+// a complete Connect request. Only the explicit append purpose accepts it.
+type orderedCandidateAppendRequest struct {
+	Schema         int                            `json:"schema"`
+	Purpose        string                         `json:"purpose"`
+	Execution      string                         `json:"execution"`
+	DraftRevision  string                         `json:"draft_revision"`
+	AppendPosition int                            `json:"append_position"`
+	NextMode       string                         `json:"next_mode"`
+	Nodes          []common.MultihopNodeSelection `json:"nodes"`
+	desktopProfileExpectations
+}
+
+func (q *orderedCandidateAppendRequest) validate() error {
+	bad := errors.New("append measurement requires its exact incomplete Local prefix, next packet mode and original device selection")
+	if q == nil || q.Schema != 1 || q.Purpose != orderedCandidateAppendScope || q.Execution != "local" ||
+		!validViaEntryRequestID(q.DraftRevision) || len(q.Nodes) < 1 || len(q.Nodes) >= mobilemultihop.NodeChainExtendedLocalMaximumNodes ||
+		q.AppendPosition != len(q.Nodes) || !mobilemultihop.NodeChainPrefixMode(q.NextMode) ||
+		q.ExpectedSelectedNodeID == nil || !validProfileID(*q.ExpectedSelectedNodeID) || q.ExpectedProfileTokens == nil {
+		return bad
+	}
+	seen := map[string]bool{}
+	for position, node := range q.Nodes {
+		if !validProfileID(node.ID) || seen[node.ID] ||
+			!mobilemultihop.NodeChainPrefixMode(node.Mode) && (position == 0 || node.Mode != "shadowsocks") {
+			return bad
+		}
+		seen[node.ID] = true
+	}
+	required := q.requiredIDs()
+	if len(q.ExpectedProfileTokens) != len(required) {
+		return bad
+	}
+	for _, id := range required {
+		if !validExternalProfileExpectationToken(q.ExpectedProfileTokens[id]) {
+			return bad
+		}
+	}
+	return nil
+}
+
+func (q *orderedCandidateAppendRequest) requiredIDs() []string {
+	if q == nil {
+		return nil
+	}
+	ids := nodeChainIDsForDraft(q.Nodes)
+	if q.ExpectedSelectedNodeID != nil && !slices.Contains(ids, *q.ExpectedSelectedNodeID) {
+		ids = append(ids, *q.ExpectedSelectedNodeID)
+	}
+	return ids
+}
+
+func (q *orderedCandidateAppendRequest) digest() string {
+	if q.validate() != nil {
+		return ""
+	}
+	raw, err := json.Marshal(q)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func decodeOrderedCandidateAppendRequest(body io.Reader) (*orderedCandidateAppendRequest, error) {
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return nil, err
+	}
+	fields, err := externalConnectJSONObject(raw)
+	if err != nil {
+		return nil, err
+	}
+	for name := range fields {
+		switch name {
+		case "schema", "purpose", "execution", "draft_revision", "append_position", "next_mode", "nodes", "expected_selected_node_id", "expected_profile_tokens":
+		default:
+			return nil, errors.New("append source cannot mix complete-route, selected or unknown fields")
+		}
+	}
+	if len(fields) != 9 {
+		return nil, errors.New("append source requires every original prefix and device field")
+	}
+	expectations, err := decodeDesktopProfileExpectations(fields)
+	if err != nil {
+		return nil, err
+	}
+	var rows []json.RawMessage
+	if json.Unmarshal(fields["nodes"], &rows) != nil || len(rows) < 1 || len(rows) >= mobilemultihop.NodeChainExtendedLocalMaximumNodes {
+		return nil, errors.New("append source requires bounded real prefix rows")
+	}
+	for _, raw := range rows {
+		row, err := externalConnectJSONObject(raw)
+		if err != nil || len(row) != 2 || row["id"] == nil || row["mode"] == nil {
+			return nil, errors.New("append rows require only original identity and raw mode")
+		}
+	}
+	var q orderedCandidateAppendRequest
+	if err := json.Unmarshal(raw, &q); err != nil {
+		return nil, err
+	}
+	q.desktopProfileExpectations = expectations
+	if err := q.validate(); err != nil {
+		return nil, err
+	}
+	return &q, nil
+}
+
+func (a *app) candidateAppendNodesLocked(q *orderedCandidateAppendRequest, scope string) ([]common.MultihopNodeSelection, error) {
+	if scope != orderedCandidateAppendScope || q.validate() != nil {
+		return nil, errors.New("incomplete prefix requires its distinct append purpose")
+	}
+	if err := a.validateDesktopProfileExpectationsLocked(q.desktopProfileExpectations, q.requiredIDs(), true); err != nil {
+		return nil, err
+	}
+	return slices.Clone(q.Nodes), nil
 }

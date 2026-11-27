@@ -61,6 +61,89 @@ func NewRouterNodeChainCandidatePreparation(source string, prefixPosition int32,
 	return &RouterNodeChainCandidatePreparation{prep: prep, inventorySHA: hex.EncodeToString(digest[:])}, nil
 }
 
+// RouterNodeChainCandidateAppendSource retains only an actual incomplete
+// prefix and independently captured device policy. It is not RouterNodeChain.
+type RouterNodeChainCandidateAppendSource struct {
+	source *mobilemultihop.NodeChainCandidateAppendSource
+}
+
+func NewRouterNodeChainCandidateAppendSource(input string) (*RouterNodeChainCandidateAppendSource, error) {
+	source, err := mobilemultihop.NewNodeChainCandidateAppendSource(input)
+	if err != nil {
+		return nil, err
+	}
+	return &RouterNodeChainCandidateAppendSource{source: source}, nil
+}
+func (s *RouterNodeChainCandidateAppendSource) Source() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.Source()
+}
+func (s *RouterNodeChainCandidateAppendSource) SourceSHA256() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.SourceSHA256()
+}
+func (s *RouterNodeChainCandidateAppendSource) Config() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.Config()
+}
+
+func (s *RouterNodeChainCandidateAppendSource) ConfigSHA256() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.ConfigSHA256()
+}
+func (s *RouterNodeChainCandidateAppendSource) Metadata() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.Metadata()
+}
+func (s *RouterNodeChainCandidateAppendSource) CandidateMode() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.CandidateMode()
+}
+func (s *RouterNodeChainCandidateAppendSource) AppendPosition() int32 {
+	if s == nil || s.source == nil {
+		return -1
+	}
+	return int32(s.source.AppendPosition())
+}
+func RouterNodeChainCandidateAppendInputFitsSource(source *RouterNodeChainCandidateAppendSource, input string) bool {
+	return source != nil && source.source != nil && source.source.CandidateInputFitsSource(input)
+}
+func NewRouterNodeChainCandidateAppendPreparation(prefixSource, inventory string) (*RouterNodeChainCandidatePreparation, error) {
+	prep, err := mobilemultihop.NewNodeChainCandidateAppendPreparation(prefixSource, inventory)
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256([]byte(inventory))
+	return &RouterNodeChainCandidatePreparation{prep: prep, inventorySHA: hex.EncodeToString(digest[:])}, nil
+}
+func (m *RouterNodeChainCandidatePreparation) IsAppend() bool {
+	return m != nil && m.prep != nil && m.prep.IsAppend()
+}
+func (m *RouterNodeChainCandidatePreparation) AppendPosition() int32 {
+	if m == nil || m.prep == nil {
+		return -1
+	}
+	return int32(m.prep.AppendPosition())
+}
+func (m *RouterNodeChainCandidatePreparation) AppendSourceMetadata() string {
+	if m == nil || m.prep == nil {
+		return ""
+	}
+	return m.prep.AppendSourceMetadata()
+}
+
 // Provider transport reopens only the complete canonical private capture.
 // Parse reconstructs and validates every source/config/candidate field first;
 // this narrow decode reads the already-validated canonical inventory solely

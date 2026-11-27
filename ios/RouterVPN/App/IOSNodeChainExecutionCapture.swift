@@ -152,7 +152,30 @@ final class IOSNodeChainExecutionCapture {
     // Preview the original geometry. The live native owner separately verifies its
     // winning epoch and requires the selected server to supply matching candidates.
     var candidateResponseMetric: String { isExternalFinal ? "routed-public-candidate-response" : "routed-candidate-response" }
+    func packetResponseMode(at position: Int, winner: String) -> String? {
+        guard (requested == "auto" && winner == "local") || (["server", "auto"].contains(requested) && winner == "server"),
+              position >= 0, position < members.count - 2 else { return nil }
+        let mode = plan.selectedPacketCandidateMode(Int32(position))
+        guard IOSMultihopNodeSelection.supportsNativePrefix(mode), mode == members[position + 1].mode,
+              winner == "local" ? plan.supportsCompareLocalPacketResponseCandidate(Int32(position)) :
+                  plan.supportsServerPacketResponseCandidate(Int32(position)) else { return nil }
+        return mode
+    }
     func responsePositions(for winner: String) -> [Int] {
+        Array(Set(legacyResponsePositions(for: winner) + members.indices.filter {
+            packetResponseMode(at: $0, winner: winner) != nil
+        })).sorted()
+    }
+    func candidatePrefixes(for winner: String) -> [IOSNodeCandidatePrefix] {
+        let responses = responsePositions(for: winner)
+        return members.enumerated().map { position, member in
+            IOSNodeCandidatePrefix(position: position, profile_id: member.id,
+                node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode,
+                measurement: responses.contains(position) ? candidateResponseMetric : nil,
+                candidate_mode: packetResponseMode(at: position, winner: winner))
+        }
+    }
+    private func legacyResponsePositions(for winner: String) -> [Int] {
         guard (requested == "auto" && winner == "local") || (["server", "auto"].contains(requested) && winner == "server") else { return [] }
         let finalPrefix = members.count - 2
         if plan.supportsSelectedFinalResponseCandidate(Int32(finalPrefix)) { return [finalPrefix] }
@@ -176,7 +199,7 @@ final class IOSNodeChainExecutionCapture {
 
     func candidatePositions(for winner: String) -> [Int] {
         if isExternalFinal && !(winner == "server" || requested == "auto" && winner == "local") { return [] }
-        return candidatePositions + responsePositions(for: winner)
+        return Array(Set(candidatePositions + responsePositions(for: winner))).sorted()
     }
 
     var isCONNECT: Bool { local.isCONNECT }

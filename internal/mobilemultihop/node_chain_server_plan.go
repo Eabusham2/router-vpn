@@ -197,6 +197,13 @@ func newNodeChainServerPlanFamily(input string, family int) (*NodeChainServerPol
 		if localErr != nil || serverErr != nil {
 			return nil, bad
 		}
+		if NodeChainPrefixMode(paired.mode) && packetPairLayerOff(paired.node) && packetPairLayerOff(server.node) {
+			pair, pairErr := nodeChainPacketCandidatePair(position+1, paired.node, server.node)
+			if pairErr != nil {
+				return nil, bad
+			}
+			source.PacketCandidatePairs = append(source.PacketCandidatePairs, pair)
+		}
 		local.Nodes, source.Nodes = append(local.Nodes, localInput), append(source.Nodes, serverInput)
 		local.IdentitySources, source.IdentitySources = append(local.IdentitySources, paired.identity), append(source.IdentitySources, server.identity)
 	}

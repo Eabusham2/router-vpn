@@ -1388,7 +1388,625 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
     return destination
 
 
+def desktop_connect(package, family, evidence):
+    """One real packaged App/WG/system-TUN cycle on this native desktop."""
+    import ipaddress
+    import socketserver
+    import stat
+    import signal
+
+    windows = os.name == 'nt'
+    if (windows and family not in ('windows', 'portable-windows')) or (
+            not windows and (sys.platform != 'darwin' or family != 'macos')):
+        raise ValueError('The connection gate requires the actual native desktop')
+    package = package.resolve(strict=True)
+    evidence = evidence.resolve()
+    evidence.mkdir(parents=True, exist_ok=False)
+    os.chmod(evidence, 0o700)
+    run_id = uuid.uuid4().hex
+    result = {'schema': 1, 'kind': 'routervpn-desktop-connect', 'run_id': run_id,
+              'family': family, 'status': 'failed', 'processes': [], 'cleanup_proved': False}
+    app = peer = None
+    workers, servers, logs = [], [], []
+    command_children = []
+    workers_stop = threading.Event()
+    deadline_all = time.monotonic()+360
+    phase_root = None
+    counts, lock = Counter(), threading.Lock()
+    error = None
+    stage = 'preflight'
+
+    def publish(path, value):
+        data = json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
+        if len(data) > 1 << 20:
+            raise ValueError('Desktop connection JSON exceeded its bound')
+        temporary = path.with_name(path.name+'.'+uuid.uuid4().hex+'.tmp')
+        created = False
+        publication_error = None
+        try:
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            created = True
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.link(temporary, path)  # exclusive publication; never replace a prior phase
+        except BaseException as failure:
+            publication_error = failure
+            raise
+        finally:
+            if created:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except BaseException as cleanup_error:
+                    if publication_error is None:
+                        raise
+                    publication_error.add_note('Original publication temp retirement failed: '+type(cleanup_error).__name__)
+
+    def read_json(path, limit=16384):
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > limit:
+            raise ValueError('Desktop connection phase is not an exclusive regular file')
+        if not windows and (info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600):
+            raise ValueError('Desktop connection phase lost its private owner')
+        with path.open('rb') as stream:
+            captured = os.fstat(stream.fileno())
+            if (captured.st_dev, captured.st_ino) != (info.st_dev, info.st_ino):
+                raise ValueError('Desktop connection phase identity changed')
+            value = json.loads(stream.read(limit+1), object_pairs_hook=unique_object)
+        current = path.lstat()
+        if (current.st_dev, current.st_ino, current.st_size) != (info.st_dev, info.st_ino, info.st_size):
+            raise ValueError('Desktop connection phase changed during readback')
+        return value
+
+    def command(argv, timeout=20):
+        # Fixed OS inspection / package commands only. The original child is
+        # retained before wait, and every timeout joins that child before error.
+        with tempfile.TemporaryFile() as output:
+            child = subprocess.Popen([str(v) for v in argv], stdout=output, stderr=subprocess.STDOUT)
+            command_children.append(child)  # original handles survive every failed wait through final readback
+            try:
+                code = child.wait(max(0.01, min(timeout, deadline_all-time.monotonic())))
+            except BaseException as primary:
+                signal_error = join_error = None
+                if child.poll() is None:
+                    try:
+                        child.kill()
+                    except BaseException as failure:
+                        signal_error = failure
+                try:
+                    child.wait(5)
+                except BaseException as failure:
+                    join_error = failure
+                    result.setdefault('retained_command_pids', []).append(child.pid)
+                if signal_error or join_error:
+                    primary.add_note('Original inspection child retirement: signal='+str(type(signal_error).__name__ if signal_error else 'ok')+' join='+str(type(join_error).__name__ if join_error else 'ok'))
+                raise
+            output.seek(0)
+            data = output.read((1 << 20)+1)
+        if len(data) > 1 << 20 or code != 0:
+            raise ValueError('A fixed desktop inspection or installation command failed')
+        return data.decode('utf-8-sig').strip()
+
+    powershell = (Path(os.environ.get('SystemRoot', r'C:\Windows')) /
+                  'System32/WindowsPowerShell/v1.0/powershell.exe')
+    def ps(script):
+        encoded = base64.b64encode(script.encode('utf-16le')).decode()
+        return json.loads(command([powershell, '-NoProfile', '-NonInteractive',
+                                   '-EncodedCommand', encoded]))
+
+    def snapshot():
+        if windows:
+            return ps(r"""
+$ErrorActionPreference='Stop'
+[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
+$v=@{
+ interfaces=@(Get-NetAdapter -IncludeHidden | ForEach-Object {@{index=[int]$_.ifIndex;id=$_.InterfaceGuid.ToString();name=$_.Name;status=$_.Status.ToString()}})
+ addresses=@(Get-NetIPAddress | ForEach-Object {@{index=[int]$_.InterfaceIndex;address=$_.IPAddress;prefix=[int]$_.PrefixLength}})
+ routes=@(Get-NetRoute | ForEach-Object {@{index=[int]$_.InterfaceIndex;prefix=$_.DestinationPrefix;gateway=$_.NextHop;metric=[int]$_.RouteMetric;interface_metric=[int]$_.InterfaceMetric}})
+ dns=@(Get-DnsClientServerAddress | ForEach-Object {@{index=[int]$_.InterfaceIndex;family=$_.AddressFamily.ToString();servers=@($_.ServerAddresses)}})
+}
+$v | ConvertTo-Json -Depth 6 -Compress
+""")
+        interfaces, addresses, routes = [], [], []
+        current = None
+        for line in command(['/sbin/ifconfig', '-a']).splitlines():
+            head = re.match(r'^(\S+): flags=\d+<([^>]*)> mtu (\d+)', line)
+            if head:
+                current = head[1]
+                interfaces.append({'name': current, 'flags': head[2], 'mtu': int(head[3])})
+            address = re.match(r'\s+inet ([0-9.]+) netmask (\S+)', line)
+            if address and current:
+                addresses.append({'name': current, 'address': address[1], 'netmask': address[2]})
+        for version in ('inet', 'inet6'):
+            for line in command(['/usr/sbin/netstat', '-rn', '-f', version]).splitlines():
+                parts = line.split()
+                if len(parts) >= 4 and re.fullmatch(r'[A-Za-z!]+', parts[2]) and parts[0] != 'Destination':
+                    # Link-layer neighbour cache entries are not routing policy.
+                    if 'L' not in parts[2] or parts[3].startswith('utun'):
+                        routes.append({'family': version, 'prefix': parts[0], 'gateway': parts[1],
+                                       'flags': parts[2], 'name': parts[3]})
+        dns = '\n'.join(line.strip() for line in command(['/usr/sbin/scutil', '--dns']).splitlines()
+                        if not line.strip().startswith('reach'))
+        return {'interfaces': interfaces, 'addresses': addresses, 'routes': routes, 'dns': dns}
+
+    def canonical(value):
+        if isinstance(value, list):
+            return sorted((canonical(v) for v in value), key=lambda v: json.dumps(v, sort_keys=True))
+        if isinstance(value, dict):
+            return {k: canonical(v) for k, v in sorted(value.items())}
+        return value
+
+    def network(prefix):
+        if prefix == 'default' or prefix == '0.0.0.0/0' or ':' in prefix:
+            return None
+        address, slash, bits = prefix.partition('/')
+        if not re.fullmatch(r'[0-9.]+', address):
+            return None
+        fields = address.split('.')
+        return ipaddress.ip_network('.'.join(fields+['0']*(4-len(fields)))+'/'+
+                                    (bits if slash else str(len(fields)*8)), strict=False)
+
+    def phase(name, expected):
+        path = phase_root/name
+        if not path.exists():
+            return None
+        if path.lstat().st_nlink == 2:  # publisher has not removed its exact temp yet
+            return None
+        value = read_json(path)
+        if type(value.get('schema')) is not int or value.get('schema') != 1 or value.get('run_id') != run_id or value.get('phase') != expected:
+            raise ValueError('Desktop connection phase does not belong to this run')
+        return value
+
+    def stop_peer():
+        if peer is None:
+            return
+        failures = []
+        if peer.poll() is None:
+            try:
+                peer.terminate()
+            except BaseException as failure:
+                failures.append(type(failure).__name__)
+        try:
+            code = peer.wait(8)
+        except BaseException as failure:
+            failures.append(type(failure).__name__)
+            try:
+                peer.kill()
+            except BaseException as kill_failure:
+                failures.append(type(kill_failure).__name__)
+            try:
+                code = peer.wait(5)
+            except BaseException as join_failure:
+                failures.append(type(join_failure).__name__)
+                result['original_peer_retained'] = True
+                code = None
+        result['peer_exit_code'] = code
+        if failures or code not in (0, -signal.SIGTERM) and not (windows and code == 1):
+            result['peer_retirement_errors'] = failures
+            raise ValueError('The original WG peer did not retire normally')
+
+    try:
+        target = ('windows/' if windows else 'darwin/') + ('arm64' if platform.machine().lower() in ('arm64', 'aarch64') else 'amd64')
+        payload_root = package/'App/RouterVPN' if family == 'portable-windows' else package
+        provenance = json.loads(regular(package/'ROUTER-VPN-SOURCE.json', 32768))
+        if provenance.get('source_sha') != os.environ.get('GITHUB_SHA') or provenance.get('repository') != os.environ.get('GITHUB_REPOSITORY'):
+            raise ValueError('The connection gate requires the exact same-run package')
+        native = payload_root/'runtime/native'
+        native_receipt = reuse(native, target)
+        binary = native/binary_name(target)
+        result.update(source_sha=provenance['source_sha'], target=target,
+                      native_sha256=hashlib.sha256(regular(binary, MAX_BINARY)).hexdigest(),
+                      native_policy_sha256=native_receipt['policy_sha256'])
+        if windows:
+            phase_root = package/'Data' if family == 'portable-windows' else package
+            phase_root.mkdir(exist_ok=True)
+            launcher = package/('RouterVPNPortable.exe' if family == 'portable-windows' else 'RouterVPN.exe')
+            regular(launcher, MAX_BINARY)
+        else:
+            if os.getuid() == 0 or Path('/opt/router-vpn-client').exists() or Path('/opt/router-vpn-client').is_symlink():
+                raise ValueError('A native Mac connection gate requires an uninstalled original desktop account')
+            stage = 'install'
+            command(['/bin/bash', payload_root/'client/install-macos-native.sh', payload_root], 90)
+            launcher = Path('/opt/router-vpn-client/RouterVPN.app/Contents/MacOS/RouterVPN')
+            regular(launcher, MAX_BINARY)
+            if hashlib.sha256(launcher.read_bytes()).digest() != hashlib.sha256(
+                    regular(payload_root/'RouterVPN.app/Contents/MacOS/RouterVPN', MAX_BINARY)).digest():
+                raise ValueError('The installed original App differs from the verified package')
+            phase_root = Path(tempfile.mkdtemp(prefix='routervpn-desktop-connect-')).resolve(strict=True)
+            os.chmod(phase_root, 0o700)
+        work = Path(tempfile.mkdtemp(prefix='.desktop-connect-', dir=phase_root))
+        os.chmod(work, 0o700)
+        for name in ('fixture', 'connected', 'peer-stopped', 'result', 'cancel'):
+            if (phase_root/('desktop-connect-'+name+'.json')).exists():
+                raise ValueError('The original data root already contains a connection gate')
+        stage = 'network-capture'
+        before = snapshot()
+        result['before'] = before
+        if windows:
+            defaults = [r for r in before['routes'] if r['prefix'] == '0.0.0.0/0']
+            chosen = min(defaults, key=lambda r: r['metric']+r['interface_metric'])
+            physical = chosen['index']
+            candidates = [a['address'] for a in before['addresses'] if a['index'] == physical and ':' not in a['address']]
+            if not any(i['index'] == physical and i['status'] == 'Up' for i in before['interfaces']):
+                raise ValueError('The original Windows default interface is not up')
+        else:
+            match = re.search(r'^\s*interface:\s*(\S+)', command(['/sbin/route', '-n', 'get', 'default']), re.M)
+            physical = match[1] if match else ''
+            candidates = [a['address'] for a in before['addresses'] if a['name'] == physical]
+            if not any(i['name'] == physical and 'UP' in i['flags'].split(',') for i in before['interfaces']):
+                raise ValueError('The original Mac default interface is not up')
+        outer = next((x for x in candidates if ipaddress.ip_address(x).is_private and
+                      not ipaddress.ip_address(x).is_loopback and not ipaddress.ip_address(x).is_link_local), None)
+        if not outer:
+            raise ValueError('The real default NIC has no captured private IPv4 address')
+        occupied = [n for r in before['routes'] if (n := network(r['prefix']))]
+        occupied.extend(ipaddress.ip_network(a['address']+'/32') for a in before['addresses'] if ':' not in a['address'])
+        subnet = next((ipaddress.ip_network('10.253.'+str(i)+'.0/24') for i in range(240, 255)
+                       if not any(ipaddress.ip_network('10.253.'+str(i)+'.0/24').overlaps(n) for n in occupied)), None)
+        if subnet is None:
+            raise ValueError('No non-overlapping private test subnet is available')
+        private, client_address = str(subnet[1]), str(subnet[2])
+        result.update(physical_interface=physical, physical_address=outer, private_address=private,
+                      private_subnet=str(subnet), topology='own-NIC encrypted WG; private addresses exist only inside WG')
+        keys = []
+        for _ in range(2):
+            keys.append(dict(line.split(': ', 1) for line in command([binary, 'generate', 'wg-keypair']).splitlines()))
+        server_key, client_key = keys
+        node_id = hashlib.sha256(('router-vpn-node-proof-v1\n'+server_key['PublicKey']).encode()).hexdigest()
+        host = run_id+'.desktop-smoke.invalid'
+        path = '/desktop-connect/'+run_id
+        body = os.urandom(32768)
+        body_hash = hashlib.sha256(body).hexdigest()
+        def counted(name):
+            with lock:
+                counts[name] += 1
+        class HTTP(http.server.BaseHTTPRequestHandler):
+            def setup(self):
+                super().setup()
+                self.connection.settimeout(2)
+            def log_message(self, *_):
+                pass
+            def do_GET(self):
+                if self.path == '/health':
+                    data = json.dumps({'ok': True, 'node_id': node_id, 'proof': 'router-vpn-private-agent-v1'}).encode()
+                    counted('health')
+                elif self.path == path:
+                    data = body
+                    counted('payload')
+                elif self.path == '/control/'+run_id:
+                    data = body
+                    counted('control')
+                else:
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(data)))
+                self.send_header('Connection', 'close')
+                self.end_headers()
+                self.wfile.write(data)
+        def dns_response(data):
+            if len(data) < 17 or len(data) > 4096 or data[2] & 0x80 or data[4:6] != b'\0\1':
+                raise ValueError('Invalid bounded local DNS question')
+            cursor, labels = 12, []
+            while cursor < len(data) and data[cursor]:
+                length = data[cursor]
+                if length > 63 or cursor+1+length >= len(data):
+                    raise ValueError('Invalid local DNS label')
+                labels.append(data[cursor+1:cursor+1+length].decode('ascii').lower())
+                cursor += length+1
+            end = cursor+5
+            if end > len(data):
+                raise ValueError('Truncated local DNS question')
+            name, kind, cls = '.'.join(labels), *struct.unpack('!HH', data[cursor+1:end])
+            allowed = name in (host, 'example.com') and cls == 1
+            answer = b''
+            if allowed and kind == 1:
+                # The native readiness proof requires a non-private A answer.
+                # It is DNS data only: no connection to this address is made.
+                address = private if name == host else '1.1.1.1'
+                answer = b'\xc0\x0c'+struct.pack('!HHIH', 1, 1, 0, 4)+socket.inet_aton(address)
+                counted('dns_nonce' if name == host else 'dns_readiness')
+            return (data[:2]+struct.pack('!HHHHH', 0x8180 if allowed else 0x8183, 1, bool(answer), 0, 0)+data[12:end]+answer)
+        class UDPDNS(socketserver.BaseRequestHandler):
+            def handle(self):
+                try:
+                    data, channel = self.request
+                    channel.sendto(dns_response(data), self.client_address)
+                except (ValueError, OSError, UnicodeError):
+                    counted('dns_rejected')
+        class TCPDNS(socketserver.BaseRequestHandler):
+            def handle(self):
+                self.request.settimeout(2)
+                def receive(length):
+                    data = b''
+                    while len(data) < length:
+                        chunk = self.request.recv(length-len(data))
+                        if not chunk:
+                            raise ValueError('Local DNS stream closed')
+                        data += chunk
+                    return data
+                try:
+                    size = struct.unpack('!H', receive(2))[0]
+                    if not 17 <= size <= 4096:
+                        raise ValueError('Local DNS stream exceeded its bound')
+                    answer = dns_response(receive(size))
+                    self.request.sendall(struct.pack('!H', len(answer))+answer)
+                except (ValueError, OSError):
+                    counted('dns_rejected')
+        http_server = http.server.HTTPServer(('127.0.0.1', 0), HTTP)
+        servers.append(http_server)
+        udp_dns = socketserver.UDPServer(('127.0.0.1', 0), UDPDNS)
+        servers.append(udp_dns)
+        tcp_dns = socketserver.TCPServer(('127.0.0.1', 0), TCPDNS)
+        servers.append(tcp_dns)
+        def serve(server):
+            while not workers_stop.is_set():
+                server.handle_request()
+        for server in servers:
+            server.timeout = 0.1
+            thread = threading.Thread(target=serve, args=(server,))
+            workers.append((thread, server))  # retain the pair before attempting Start
+            thread.start()
+        # WG opens wildcard IPv4 and IPv6 UDP on the same port. Probe that
+        # exact listener set, including Windows excluded UDP ranges.
+        port = None
+        for _ in range(32):
+            reservations, selected = [], 0
+            try:
+                bindings = [(socket.AF_INET, '0.0.0.0')]
+                if socket.has_ipv6:
+                    bindings.append((socket.AF_INET6, '::'))
+                for address_family, address in bindings:
+                    try:
+                        reservation = socket.socket(address_family, socket.SOCK_DGRAM)
+                        reservations.append(reservation)
+                        if address_family == socket.AF_INET6:
+                            reservation.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                        if windows:
+                            reservation.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                        reservation.bind((address, selected))
+                        selected = reservation.getsockname()[1]
+                    except OSError as failure:
+                        if address_family == socket.AF_INET6 and (failure.errno == errno.EAFNOSUPPORT or getattr(failure, 'winerror', None) == 10047):
+                            continue
+                        raise
+                port = selected
+                break
+            except OSError as failure:
+                if failure.errno not in (errno.EACCES, errno.EADDRINUSE) and getattr(failure, 'winerror', None) not in (10013, 10048):
+                    raise
+            finally:
+                for reservation in reservations:
+                    reservation.close()
+        if port is None:
+            raise ValueError('No actual dual-stack UDP listener port was available')
+        result['physical_peer_port'] = port
+        rules = [{'ip_cidr': [private+'/32'], 'port': [8787 if protocol == 'http' else 53],
+                  'network': transport, 'action': 'route', 'outbound': 'local',
+                  'override_address': '127.0.0.1', 'override_port': server.server_address[1]}
+                 for protocol, transport, server in (('http', 'tcp', http_server), ('dns', 'udp', udp_dns), ('dns', 'tcp', tcp_dns))]
+        config = {'log': {'level': 'info'}, 'endpoints': [{'type': 'wireguard', 'tag': 'peer',
+                  'system': False, 'mtu': 1280, 'address': [private+'/32'], 'private_key': server_key['PrivateKey'],
+                  'listen_port': port, 'peers': [{'public_key': client_key['PublicKey'],
+                  'allowed_ips': [client_address+'/32']}]}],
+                  'outbounds': [{'type': 'direct', 'tag': 'local'}],
+                  'route': {'rules': rules+[{'action': 'reject'}]}}
+        publish(work/'peer.json', config)
+        log = (work/'peer.log').open('xb')
+        logs.append(log)
+        peer = subprocess.Popen([str(binary), 'run', '-c', str(work/'peer.json')],
+                                cwd=work, stdout=log, stderr=subprocess.STDOUT)
+        result['processes'].append({'role': 'peer', 'pid': peer.pid})
+        stage = 'peer-start'
+        ready_deadline = time.monotonic()+5
+        while True:
+            if peer.poll() is not None:
+                raise ValueError('The original private WG peer exited during startup')
+            if 'sing-box started' in (work/'peer.log').read_text(errors='replace')[-16384:]:
+                break
+            if time.monotonic() >= ready_deadline:
+                raise ValueError('The original private WG peer did not start')
+            time.sleep(0.05)
+        wg = ('[Interface]\nPrivateKey = '+client_key['PrivateKey']+'\nAddress = '+client_address+
+              '/32\nDNS = '+private+'\nMTU = 1280\n[Peer]\nPublicKey = '+server_key['PublicKey']+
+              '\nEndpoint = '+outer+':'+str(port)+'\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 15\n')
+        profile = {'id': 'desktop-connect', 'name': 'Desktop private connection', 'node_kind': 'router-vpn',
+                   'endpoint': outer, 'node_proof_id': node_id, 'api_token': os.urandom(32).hex(),
+                   'router_api': 'http://'+private+':8787', 'path_probe_url': 'http://'+private+':8787/health',
+                   'adguard_ipv4': private, 'dns_mode': 'home', 'dns_protocol': 'udp', 'start_layer': 'off',
+                   'ipv6_mode': 'off', 'kill_switch': True, 'kill_switch_policy': 'on-connect',
+                   'home_lan_access': False, 'mtu_policy': 'manual', 'manual_mtu': 1280, 'base_tunnel': 'wg'}
+        bundle = {'endpoint': outer, 'nodeProofId': node_id, 'apiToken': profile['api_token'],
+                  'routerAPI': profile['router_api'], 'adGuardIPv4': private, 'selectedRouterID': profile['id'],
+                  'routerProfiles': [profile], 'profiles': {'wg': {'wg.conf': base64.b64encode(wg.encode()).decode()}}}
+        fixture = {'schema': 1, 'kind': 'routervpn-desktop-connect', 'run_id': run_id, 'profile_bundle': bundle,
+                   'logical_mode': 'base-raw', 'runtime_mode': 'wg', 'private_address': private, 'dns_host': host,
+                   'payload_url': 'http://'+host+':8787'+path, 'literal_payload_url': 'http://'+private+':8787'+path,
+                   'payload_sha256': body_hash}
+        publish(phase_root/'desktop-connect-fixture.json', fixture)
+        stage = 'app-connect'
+        app_log = (evidence/'desktop-connect-app.log').open('xb')
+        logs.append(app_log)
+        env = os.environ.copy()
+        env['ROUTERVPN_CONNECTION_SELF_TEST'] = '1'
+        if windows:
+            env['ROUTERVPN_CAPTURE_SELF_TEST_LAYOUT'] = '1'
+        arguments = [str(launcher), '--self-test'] if windows else [str(launcher), '--connection-self-test', str(phase_root/'desktop-connect-fixture.json')]
+        # Reserve the complete original 180s watchdog + 85s checked cleanup
+        # before granting the App any tunnel authority. Slow setup cannot spend
+        # the shutdown budget and strand a newly admitted connection.
+        if deadline_all-time.monotonic() < 280:
+            raise ValueError('Desktop setup left insufficient original App cleanup budget')
+        app = subprocess.Popen(arguments, cwd=phase_root, env=env, stdout=app_log, stderr=subprocess.STDOUT)
+        result['processes'].append({'role': 'original-app', 'pid': app.pid})
+        deadline = min(deadline_all-15, time.monotonic()+265)
+        connected = None
+        while time.monotonic() < deadline:
+            connected = phase('desktop-connect-connected.json', 'connected')
+            if connected:
+                break
+            if app.poll() is not None or phase('desktop-connect-result.json', 'complete'):
+                raise ValueError('The original App did not complete its connection phase')
+            time.sleep(0.1)
+        if not connected:
+            raise ValueError('The original App connection phase exceeded its bound')
+        if (connected.get('runtime_mode') != 'wg' or connected.get('private_address') != private
+                or connected.get('payload_sha256') != body_hash or not connected.get('profile_id')):
+            raise ValueError('The original App reported a different connection')
+        during = snapshot()
+        result['during'] = during
+        if windows:
+            original = {i['index'] for i in before['interfaces']}
+            created = [i for i in during['interfaces'] if i['index'] not in original and i['status'] == 'Up']
+            matching = [r for r in during['routes'] if ':' not in r['prefix'] and
+                        ipaddress.ip_address(private) in ipaddress.ip_network(r['prefix'], strict=False)]
+            best = min(matching, key=lambda r: (-ipaddress.ip_network(r['prefix'], strict=False).prefixlen,
+                                                r['metric']+r['interface_metric']))
+            if len(created) != 1 or best['index'] != created[0]['index']:
+                raise ValueError('Fresh private traffic is not routed by the original new Windows TUN')
+        else:
+            original = {i['name'] for i in before['interfaces']}
+            created = [i for i in during['interfaces'] if i['name'] not in original and i['name'].startswith('utun')]
+            route = command(['/sbin/route', '-n', 'get', private])
+            if len(created) != 1 or not re.search(r'^\s*interface:\s*'+re.escape(created[0]['name'])+r'\s*$', route, re.M):
+                raise ValueError('Fresh private traffic is not routed by the original new utun')
+        if canonical(during['dns']) == canonical(before['dns']):
+            raise ValueError('The original connection did not change the OS DNS configuration')
+        with lock:
+            first_counts = dict(counts)
+        if any(first_counts.get(k, 0) < 1 for k in ('health', 'payload', 'dns_nonce', 'dns_readiness')):
+            raise ValueError('The real private HTTP/DNS peer did not observe all connection proofs')
+        result.update(connected=connected, tunnel_interface=created[0], connected_peer_counters=first_counts)
+        stage = 'peer-loss'
+        stop_peer()
+        # The decrypted destination stays independently live; only the exact
+        # encrypted upstream is retired before the App's fresh literal probe.
+        control = http.client.HTTPConnection('127.0.0.1', http_server.server_address[1], timeout=3)
+        try:
+            control.request('GET', '/control/'+run_id)
+            response = control.getresponse()
+            if response.status != 200 or hashlib.sha256(response.read(65537)).hexdigest() != body_hash:
+                raise ValueError('The independent private destination control failed')
+        finally:
+            control.close()
+        publish(phase_root/'desktop-connect-peer-stopped.json', {'schema': 1, 'run_id': run_id, 'phase': 'peer-stopped'})
+        stage = 'app-disconnect'
+        code = app.wait(max(1, deadline-time.monotonic()))
+        result['app_exit_code'] = code
+        final = phase('desktop-connect-result.json', 'complete')
+        result['app_result'] = final
+        if (code != 0 or not final or final.get('status') != 'passed' or
+                any(final.get(k) is not True for k in ('connect', 'traffic', 'loss', 'disconnect')) or
+                (not windows and final.get('cleanup_proved') is not True)):
+            raise ValueError('The original App did not prove its full connection and shutdown')
+        with lock:
+            if counts['payload'] != first_counts['payload']:
+                raise ValueError('The stopped encrypted peer was bypassed')
+        stage = 'restoration'
+        after = snapshot()
+        result['after'] = after
+        if canonical(after) != canonical(before):
+            raise ValueError('Original desktop interfaces, routes or DNS were not restored')
+        result['controller_cleanup_proved'] = True
+        result['status'] = 'passed'
+    except BaseException as failure:
+        error = failure
+        result['failure_stage'] = stage
+    finally:
+        cleanup = []
+        if error is not None and phase_root is not None and app is not None and app.poll() is None:
+            try:
+                publish(phase_root/'desktop-connect-cancel.json', {'schema': 1, 'run_id': run_id, 'phase': 'cancel'})
+            except BaseException as failure:
+                cleanup.append(type(failure).__name__)
+            try:
+                # The independent original App/session watchdog owns shutdown,
+                # including when the native UI dispatcher has stalled.
+                app.wait(max(1, deadline_all-time.monotonic()-10))
+            except BaseException as failure:
+                cleanup.append(type(failure).__name__)
+                result['original_app_retained'] = app.poll() is None
+        try:
+            stop_peer()
+        except BaseException as failure:
+            cleanup.append(type(failure).__name__)
+        workers_stop.set()
+        retained_servers = set()
+        for worker, server in workers:
+            try:
+                worker.join(5)
+            except BaseException as failure:
+                cleanup.append(type(failure).__name__)
+            if worker.is_alive():
+                cleanup.append('owned-worker-not-joined')
+                retained_servers.add(server)
+        for server in servers:
+            if server in retained_servers:
+                continue
+            try:
+                server.server_close()
+            except BaseException as failure:
+                cleanup.append(type(failure).__name__)
+        for log in logs:
+            try:
+                log.close()
+            except BaseException as failure:
+                cleanup.append(type(failure).__name__)
+        with lock:
+            result['final_peer_counters'] = dict(counts)
+        if app is not None and app.poll() is not None:
+            result['app_exit_code'] = app.wait()
+        if 'before' in result and 'after' not in result and app is not None and app.poll() is not None:
+            try:
+                result['after'] = snapshot()
+            except BaseException as failure:
+                cleanup.append(type(failure).__name__)
+        result['restoration_proved'] = ('before' in result and 'after' in result and
+                                        canonical(result['before']) == canonical(result['after']))
+        inspections = []
+        for child in command_children:
+            joined, code = False, None
+            try:
+                code = child.wait(5)
+                joined = True
+            except BaseException as failure:
+                cleanup.append('original-inspection-child-'+type(failure).__name__)
+            inspections.append({'pid': child.pid, 'joined': joined, 'exit_code': code})
+        result['inspection_children'] = inspections
+        result['cleanup_errors'] = cleanup
+        result['cleanup_proved'] = (not cleanup and all(child['joined'] for child in inspections) and
+                                   app is not None and app.poll() == 0 and
+                                   peer is not None and peer.poll() is not None and
+                                   result.get('controller_cleanup_proved') is True and
+                                   result['restoration_proved'])
+        if not result['cleanup_proved']:
+            result['status'] = 'failed'
+        try:
+            publish(evidence/'desktop-connect-qualification.json', result)
+        except BaseException as publication_error:
+            if error is None:
+                error = publication_error
+                result['failure_stage'] = 'receipt-publication'
+            else:
+                error.add_note('The bounded desktop failure receipt could not be published: '+type(publication_error).__name__)
+    if error is not None:
+        raise ValueError('Desktop connection gate failed at '+result['failure_stage']) from error
+    if result['status'] != 'passed':
+        raise ValueError('Desktop connection ownership cleanup was not proved')
+    print('Verified real packaged App Connect / WG system TUN / private DNS+HTTP / loss / original disconnect restoration', flush=True)
+
+
 if __name__ == '__main__':
+    if sys.argv[1:2] == ['--desktop-connect']:
+        connection = argparse.ArgumentParser(description='Actual packaged desktop Connect/TUN connection gate')
+        connection.add_argument('--desktop-connect', action='store_true')
+        connection.add_argument('--package', type=Path, required=True)
+        connection.add_argument('--family', choices=('windows', 'portable-windows', 'macos'), required=True)
+        connection.add_argument('--evidence', type=Path, required=True)
+        request = connection.parse_args()
+        desktop_connect(request.package, request.family, request.evidence)
+        raise SystemExit(0)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('target', choices=TARGETS)
     parser.add_argument('destination', type=Path)

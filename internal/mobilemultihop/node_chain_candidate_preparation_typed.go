@@ -129,6 +129,8 @@ func ParseNodeChainCandidatePreparationCapture(input string) (*NodeChainCandidat
 		return nil, nodeChainCandidatePreparationError
 	}
 	switch header.Kind {
+	case nodeChainCandidateAppendPreparationKind:
+		return ParseNodeChainCandidateAppendPreparation(input)
 	case "routervpn-node-chain-candidate-preparation":
 		return ParseNodeChainCandidatePreparation(input)
 	case nodeChainSOCKSCandidatePreparationKind:
@@ -155,6 +157,9 @@ func (o *nodeChainCandidateTypedOriginal) seal() string {
 	return nodeChainCONNECTCandidatePreparationKind + ":" + o.connect.seal
 }
 func (p *NodeChainCandidatePreparation) originalSourceSHA() string {
+	if p.appendSource != nil {
+		return p.appendSource.sourceSHA
+	}
 	if p.typedOriginal != nil {
 		if p.typedOriginal.socks != nil {
 			return p.typedOriginal.socks.metadata.SourceSHA256

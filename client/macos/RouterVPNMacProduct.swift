@@ -2,6 +2,8 @@ import AppKit
 import Foundation
 import CoreFoundation
 import MapKit
+import Darwin
+import CryptoKit
 
 let routerVPNProductBaseURL = URL(string: "http://127.0.0.1:8788")!
 let routerVPNProductContractVersion = 3
@@ -115,6 +117,8 @@ private final class ProductComparisonTransportDelegate: NSObject, URLSessionTask
 }
 
 final class ProductAPI {
+    fileprivate let connectionSelfTestRequests: ProductConnectionRequestReadback? =
+        CommandLine.arguments.dropFirst().first == "--connection-self-test" ? ProductConnectionRequestReadback() : nil
     private let session: URLSession
     private let allowsRequests: Bool
     init(allowsRequests: Bool = true) {
@@ -194,11 +198,15 @@ final class ProductAPI {
         guard allowsRequests else {
             throw NSError(domain: "RouterVPNMac", code: 1, userInfo: [NSLocalizedDescriptionKey: "The layout self-test does not start a controller or make network requests."])
         }
+        guard connectionSelfTestRequests?.permits(req) != false else { throw productConnectionCheckFailure() }
         guard MacProfileLoadTransaction.Store.standard.permitsRequest(req.httpMethod, path: req.url?.path ?? "") else {
             throw MacProfileLoadTransaction.issue("Finish or recover the pending connection profile Load before changing the VPN.")
         }
         var ownedRequest = req
         try RouterVPNMacLocalAuthorization.shared.authorize(&ownedRequest)
+        let connectionRequest = connectionSelfTestRequests?.begin(ownedRequest)
+        var connectionRequestSucceeded = false
+        defer { connectionSelfTestRequests?.end(connectionRequest, succeeded: connectionRequestSucceeded) }
         let comparisonSession = try capturedComparisonSession(ownedRequest, timeout: timeout)
         let activeSession = comparisonSession ?? session
         defer { comparisonSession?.invalidateAndCancel() }
@@ -208,6 +216,7 @@ final class ProductAPI {
         if sem.wait(timeout: .now() + timeout + 2) == .timedOut { task.cancel(); throw NSError(domain: "RouterVPNMac", code: 2, userInfo: [NSLocalizedDescriptionKey: "Local controller request timed out"]) }
         if let err { throw err }
         guard (200..<300).contains(code) else { let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines); throw NSError(domain: "RouterVPNMac", code: code, userInfo: [NSLocalizedDescriptionKey: (text?.isEmpty == false ? text! : "Local controller request failed")]) }
+        connectionRequestSucceeded = true
         return data
     }
     func json(_ path: String, timeout: TimeInterval = 15) throws -> Any { try JSONSerialization.jsonObject(with: request(path, timeout: timeout)) }
@@ -962,10 +971,104 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
             window.displayIfNeeded()
             let output = URL(fileURLWithPath: directory, isDirectory: true)
             try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-            guard let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { return false }
-            content.cacheDisplay(in: content.bounds, to: bitmap)
-            guard let png = bitmap.representation(using: .png, properties: [:]) else { return false }
-            print("macOS native capture: requested=\(Int(size.width))x\(Int(size.height)) content=\(Int(content.bounds.width))x\(Int(content.bounds.height)) bitmap=\(bitmap.pixelsWide)x\(bitmap.pixelsHigh)")
+            let number = window.windowNumber, originalFrame = window.frame, originalBounds = content.bounds
+            let originalScale = window.backingScaleFactor
+            guard number > 0 else { print("macOS compositor capture: original window number unavailable"); return false }
+            func windowRecord() -> NSDictionary? {
+                guard window.contentView === content, content.window === window, owner.map.window === window,
+                      window.isVisible, !window.isMiniaturized, window.windowNumber == number,
+                      window.frame == originalFrame, content.bounds == originalBounds,
+                      window.backingScaleFactor == originalScale,
+                      let rows = CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(number)) as? [[String: Any]],
+                      rows.count == 1, let row = rows.first,
+                      (row[kCGWindowNumber as String] as? NSNumber)?.intValue == number,
+                      (row[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == getpid(),
+                      (row[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue == true,
+                      let bounds = row[kCGWindowBounds as String] as? NSDictionary else { return nil }
+                return bounds
+            }
+            guard let capturedBounds = windowRecord(),
+                  FileManager.default.isExecutableFile(atPath: "/usr/sbin/screencapture") else {
+                print("macOS compositor capture: original on-screen window or system capture utility unavailable")
+                return false
+            }
+            let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("routervpn-window-capture-" + UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            let imageURL = temporary.appendingPathComponent("window.png")
+            let errorURL = temporary.appendingPathComponent("capture.stderr")
+            var child: pid_t = 0, childStatus: Int32?, waitError: Int32 = 0
+            defer {
+                // Keep the original files if an exceptional retirement could not prove the child joined.
+                if child == 0 || childStatus != nil { try? FileManager.default.removeItem(at: temporary) }
+            }
+            var actions: posix_spawn_file_actions_t?
+            let actionError = posix_spawn_file_actions_init(&actions)
+            guard actionError == 0 else { print("macOS compositor capture: file action setup \(actionError)"); return false }
+            defer { posix_spawn_file_actions_destroy(&actions) }
+            var attributes: posix_spawnattr_t?
+            let attributeError = posix_spawnattr_init(&attributes)
+            guard attributeError == 0 else { print("macOS compositor capture: spawn attribute setup \(attributeError)"); return false }
+            defer { posix_spawnattr_destroy(&attributes) }
+            let setup = [
+                posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT)),
+                posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0),
+                posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0),
+                posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, errorURL.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+            ]
+            guard setup.allSatisfy({ $0 == 0 }) else { print("macOS compositor capture: child descriptor setup failed"); return false }
+            var arguments = ["/usr/sbin/screencapture", "-x", "-o", "-l", String(number), imageURL.path].map { strdup($0) } + [nil]
+            var environment = ["PATH=/usr/bin:/bin:/usr/sbin:/sbin"].map { strdup($0) } + [nil]
+            defer { arguments.forEach { free($0) }; environment.forEach { free($0) } }
+            guard arguments.dropLast().allSatisfy({ $0 != nil }), environment.dropLast().allSatisfy({ $0 != nil }) else {
+                print("macOS compositor capture: child argument allocation failed"); return false
+            }
+            let spawnError = posix_spawn(&child, "/usr/sbin/screencapture", &actions, &attributes, &arguments, &environment)
+            guard spawnError == 0 else { child = 0; print("macOS compositor capture: system utility launch \(spawnError)"); return false }
+            func joinCapture(until deadline: TimeInterval) -> Bool {
+                while childStatus == nil && waitError == 0 {
+                    var status: Int32 = 0
+                    let result = waitpid(child, &status, WNOHANG)
+                    if result == child { childStatus = status; break }
+                    if result < 0 && errno != EINTR { waitError = errno; break }
+                    let remaining = deadline - ProcessInfo.processInfo.systemUptime
+                    if remaining <= 0 { break }
+                    _ = RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: min(0.02, remaining)))
+                }
+                return childStatus != nil
+            }
+            let completed = joinCapture(until: ProcessInfo.processInfo.systemUptime + 5)
+            if !completed && waitError == 0 {
+                // The direct child has not been reaped, so this original PID cannot be reused.
+                let term = kill(child, SIGTERM)
+                if term != 0 && errno != ESRCH { print("macOS compositor capture: original child TERM \(errno)") }
+                if !joinCapture(until: ProcessInfo.processInfo.systemUptime + 1) && waitError == 0 {
+                    let forced = kill(child, SIGKILL)
+                    if forced != 0 && errno != ESRCH { print("macOS compositor capture: original child KILL \(errno)") }
+                    _ = joinCapture(until: ProcessInfo.processInfo.systemUptime + 2)
+                }
+            }
+            guard completed, childStatus == 0, waitError == 0 else {
+                var detail = ""
+                if let handle = try? FileHandle(forReadingFrom: errorURL) {
+                    detail = String(data: (try? handle.read(upToCount: 1024)) ?? Data(), encoding: .utf8) ?? ""
+                    try? handle.close()
+                }
+                print("macOS compositor capture failed: completed=\(completed) joined=\(childStatus != nil) status=\(childStatus.map(String.init) ?? "unavailable") waitError=\(waitError) stderr=\(detail)")
+                return false
+            }
+            guard let currentBounds = windowRecord(), currentBounds.isEqual(capturedBounds) else {
+                print("macOS compositor capture: original window or frame changed"); return false
+            }
+            let imageAttributes = try imageURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+            guard imageAttributes.isRegularFile == true, let imageBytes = imageAttributes.fileSize, imageBytes > 8, imageBytes <= 32 * 1024 * 1024 else {
+                print("macOS compositor capture: invalid bounded image file"); return false
+            }
+            let png = try Data(contentsOf: imageURL)
+            guard png.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]),
+                  let bitmap = NSBitmapImageRep(data: png), bitmap.pixelsWide > 0, bitmap.pixelsHigh > 0 else {
+                print("macOS compositor capture: system utility omitted a valid PNG"); return false
+            }
+            print("macOS native capture: method=composited-own-window requested=\(Int(size.width))x\(Int(size.height)) content=\(Int(content.bounds.width))x\(Int(content.bounds.height)) frame=\(NSStringFromRect(originalFrame)) bitmap=\(bitmap.pixelsWide)x\(bitmap.pixelsHigh) joined=true")
             let suffix = failure ? "-failure" : ""
             try png.write(to: output.appendingPathComponent("macos-\(Int(size.width))x\(Int(size.height))\(suffix).png"), options: .atomic)
             return true
@@ -1038,7 +1141,506 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     return 0
 }
 
+// This explicit packaged-app gate uses the existing controls and installed
+// controller. It adds no alternative connect, authentication, or cleanup path.
+fileprivate final class ProductConnectionRequestReadback: @unchecked Sendable {
+    private let lock = NSLock()
+    private var expectedMode = ""
+    private var started = [String: Int](), finished = [String: Int](), passed = [String: Int]()
+    private var invalid = false
+    func configure(_ mode: String) { lock.lock(); defer { lock.unlock() }; expectedMode = mode }
+    func permits(_ request: URLRequest) -> Bool {
+        // The connection gate does not start unrelated public-exit, updater,
+        // latency or speed operations from ordinary background UI observers.
+        guard let path = request.url?.path else { return false }
+        if request.httpMethod == "GET" {
+            return ["/api/status", "/api/nodes", "/api/profiles", "/api/logical-modes", "/api/session/events",
+                    "/api/multihop/status", "/api/profile/settings", "/api/profile/protection",
+                    "/api/dns/policy", "/api/home-summary", "/api/forwarding/master"].contains(path)
+        }
+        return request.httpMethod == "POST" &&
+            ["/api/profile/import", "/api/profile/select", "/api/connect-logical", "/api/disconnect"].contains(path)
+    }
+    func begin(_ request: URLRequest) -> String? {
+        guard request.httpMethod == "POST", let path = request.url?.path,
+              ["/api/connect-logical", "/api/disconnect"].contains(path) else { return nil }
+        lock.lock(); defer { lock.unlock() }
+        started[path, default: 0] += 1
+        if path == "/api/connect-logical" {
+            let body = request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }
+            if body != ["mode": expectedMode, "base": "auto"] || expectedMode.isEmpty { invalid = true }
+        }
+        return path
+    }
+    func end(_ path: String?, succeeded: Bool) {
+        guard let path else { return }
+        lock.lock(); defer { lock.unlock() }
+        finished[path, default: 0] += 1
+        if succeeded { passed[path, default: 0] += 1 }
+    }
+    func completed(_ path: String) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let count = started[path, default: 0], done = finished[path, default: 0]
+        guard !invalid, count <= 1, done <= count,
+              done == 0 || passed[path, default: 0] == done else { throw productConnectionCheckFailure() }
+        return count == 1 && done == 1
+    }
+}
+
+private func productConnectionCheckFailure() -> NSError {
+    NSError(domain: "RouterVPN.ConnectionSelfTest", code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "The original packaged connection check did not complete."])
+}
+private func productConnectionHex(_ value: String, _ count: Int) -> Bool {
+    value.utf8.count == count && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+}
+private func productConnectionTrue(_ value: Any?) -> Bool {
+    guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return false }
+    return number.boolValue
+}
+
+private final class ProductConnectionFiles: @unchecked Sendable {
+    let path: String, name: String
+    private var directory: Int32
+    private let original: stat
+    private var manifestIdentity: stat?
+    private(set) var manifest = Data()
+    init(_ supplied: String) throws {
+        guard getuid() != 0, getuid() == geteuid(), supplied.hasPrefix("/"),
+              !supplied.utf8.contains(0), supplied.utf8.count < 4096 else { throw productConnectionCheckFailure() }
+        let url = URL(fileURLWithPath: supplied).standardizedFileURL
+        guard url.path == supplied, url.resolvingSymlinksInPath().path == supplied else { throw productConnectionCheckFailure() }
+        path = url.deletingLastPathComponent().path; name = url.lastPathComponent
+        guard !name.isEmpty, !["desktop-connect-connected.json", "desktop-connect-peer-stopped.json",
+                             "desktop-connect-cancel.json", "desktop-connect-result.json"].contains(name) else { throw productConnectionCheckFailure() }
+        var before = stat()
+        guard lstat(path, &before) == 0, before.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+              before.st_uid == getuid(), before.st_mode & 0o777 == 0o700 else { throw productConnectionCheckFailure() }
+        try RouterVPNMacPathACL.validate(path)
+        let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { throw productConnectionCheckFailure() }
+        directory = fd; original = before
+        do {
+            try current()
+            guard let captured = try read(name, limit: 1 << 20, marker: false) else { throw productConnectionCheckFailure() }
+            manifest = captured.0; manifestIdentity = captured.1
+            for sibling in ["desktop-connect-connected.json", "desktop-connect-peer-stopped.json",
+                            "desktop-connect-cancel.json", "desktop-connect-result.json"] {
+                var info = stat()
+                guard fstatat(directory, sibling, &info, AT_SYMLINK_NOFOLLOW) != 0, errno == ENOENT else { throw productConnectionCheckFailure() }
+            }
+        } catch { directory = -1; close(fd); throw error }
+    }
+    deinit { if directory >= 0 { close(directory) } }
+    private func same(_ a: stat, _ b: stat) -> Bool {
+        a.st_dev == b.st_dev && a.st_ino == b.st_ino && a.st_uid == b.st_uid &&
+        a.st_gid == b.st_gid && a.st_mode == b.st_mode && a.st_nlink == b.st_nlink &&
+        a.st_size == b.st_size && a.st_mtimespec.tv_sec == b.st_mtimespec.tv_sec &&
+        a.st_mtimespec.tv_nsec == b.st_mtimespec.tv_nsec &&
+        a.st_ctimespec.tv_sec == b.st_ctimespec.tv_sec && a.st_ctimespec.tv_nsec == b.st_ctimespec.tv_nsec
+    }
+    func current() throws {
+        var held = stat(), named = stat()
+        guard fstat(directory, &held) == 0, lstat(path, &named) == 0,
+              held.st_dev == original.st_dev, held.st_ino == original.st_ino,
+              named.st_dev == original.st_dev, named.st_ino == original.st_ino,
+              held.st_mode == original.st_mode, named.st_mode == original.st_mode,
+              held.st_uid == original.st_uid, named.st_uid == original.st_uid,
+              held.st_gid == original.st_gid, named.st_gid == original.st_gid else { throw productConnectionCheckFailure() }
+        try RouterVPNMacPathACL.validate(path)
+    }
+    private func read(_ leaf: String, limit: Int, marker: Bool) throws -> (Data, stat)? {
+        try current()
+        let fd = openat(directory, leaf, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        if fd < 0 {
+            if marker && errno == ENOENT { return nil }
+            throw productConnectionCheckFailure()
+        }
+        defer { close(fd) }
+        var before = stat(), after = stat(), named = stat()
+        guard fstat(fd, &before) == 0, before.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+              before.st_uid == getuid(), before.st_mode & 0o777 == 0o600,
+              before.st_size > 0, before.st_size <= limit else { throw productConnectionCheckFailure() }
+        // A hard-link publisher has not finished removing its private temp yet.
+        if marker && before.st_nlink == 2 { return nil }
+        guard before.st_nlink == 1 else { throw productConnectionCheckFailure() }
+        try RouterVPNMacPathACL.validate(path + "/" + leaf)
+        var bytes = Data(count: Int(before.st_size))
+        var offset = 0
+        while offset < bytes.count {
+            let amount = bytes.withUnsafeMutableBytes { raw in Darwin.read(fd, raw.baseAddress!.advanced(by: offset), raw.count - offset) }
+            if amount < 0 && errno == EINTR { continue }
+            guard amount > 0 else { throw productConnectionCheckFailure() }
+            offset += amount
+        }
+        guard fstat(fd, &after) == 0, fstatat(directory, leaf, &named, AT_SYMLINK_NOFOLLOW) == 0,
+              same(before, after), same(before, named) else { throw productConnectionCheckFailure() }
+        try current()
+        return (bytes, after)
+    }
+    func unchanged() throws {
+        guard let original = manifestIdentity, let captured = try read(name, limit: 1 << 20, marker: false),
+              captured.0 == manifest, same(original, captured.1) else { throw productConnectionCheckFailure() }
+    }
+    func marker(_ leaf: String, runID: String, phase: String) throws -> Bool {
+        guard ["desktop-connect-peer-stopped.json", "desktop-connect-cancel.json"].contains(leaf) else { throw productConnectionCheckFailure() }
+        guard let captured = try read(leaf, limit: 4096, marker: true) else { return false }
+        guard let object = try JSONSerialization.jsonObject(with: captured.0) as? [String: Any],
+              Set(object.keys) == ["schema", "run_id", "phase"],
+              let schema = object["schema"] as? NSNumber, CFGetTypeID(schema) != CFBooleanGetTypeID(),
+              schema.stringValue == "1", object["run_id"] as? String == runID,
+              object["phase"] as? String == phase else { throw productConnectionCheckFailure() }
+        return true
+    }
+    func write(_ leaf: String, object: [String: Any]) throws {
+        guard ["desktop-connect-connected.json", "desktop-connect-result.json"].contains(leaf) else { throw productConnectionCheckFailure() }
+        try current()
+        let bytes = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        guard !bytes.isEmpty, bytes.count <= 4096 else { throw productConnectionCheckFailure() }
+        let temporary = "." + leaf + ".pending"
+        let fd = openat(directory, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
+        guard fd >= 0 else { throw productConnectionCheckFailure() }
+        defer { close(fd) } // Failed writes retain their original private file.
+        var identity = stat()
+        guard fstat(fd, &identity) == 0, identity.st_uid == getuid(), identity.st_nlink == 1,
+              identity.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), identity.st_mode & 0o777 == 0o600 else { throw productConnectionCheckFailure() }
+        var offset = 0
+        while offset < bytes.count {
+            let amount = bytes.withUnsafeBytes { raw in Darwin.write(fd, raw.baseAddress!.advanced(by: offset), raw.count - offset) }
+            if amount < 0 && errno == EINTR { continue }
+            guard amount > 0 else { throw productConnectionCheckFailure() }
+            offset += amount
+        }
+        var held = stat(), named = stat()
+        guard fsync(fd) == 0, fstat(fd, &held) == 0,
+              fstatat(directory, temporary, &named, AT_SYMLINK_NOFOLLOW) == 0,
+              held.st_dev == identity.st_dev, held.st_ino == identity.st_ino,
+              held.st_uid == identity.st_uid, held.st_gid == identity.st_gid,
+              held.st_mode == identity.st_mode, held.st_nlink == 1,
+              same(held, named), held.st_size == bytes.count else { throw productConnectionCheckFailure() }
+        try current()
+        guard renameatx_np(directory, temporary, directory, leaf, UInt32(RENAME_EXCL)) == 0,
+              fsync(directory) == 0 else { throw productConnectionCheckFailure() }
+    }
+}
+
+private struct ProductConnectionFixture {
+    let runID: String, profile: [String: Any], mode: String, address: String, digest: String
+    let payload: URL, literal: URL
+    init(_ bytes: Data) throws {
+        guard let object = try JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+              Set(object.keys) == ["schema", "kind", "run_id", "profile_bundle", "logical_mode", "runtime_mode",
+                                   "private_address", "dns_host", "payload_url", "literal_payload_url", "payload_sha256"],
+              let schema = object["schema"] as? NSNumber, CFGetTypeID(schema) != CFBooleanGetTypeID(), schema.stringValue == "1",
+              object["kind"] as? String == "routervpn-desktop-connect",
+              let run = object["run_id"] as? String, productConnectionHex(run, 32),
+              let bundle = object["profile_bundle"] as? [String: Any],
+              object["logical_mode"] as? String == "base-raw", object["runtime_mode"] as? String == "wg",
+              let ip = object["private_address"] as? String,
+              let digest = object["payload_sha256"] as? String, productConnectionHex(digest, 64),
+              object["dns_host"] as? String == run + ".desktop-smoke.invalid",
+              object["payload_url"] as? String == "http://" + run + ".desktop-smoke.invalid:8787/desktop-connect/" + run,
+              object["literal_payload_url"] as? String == "http://" + ip + ":8787/desktop-connect/" + run,
+              let payload = URL(string: object["payload_url"] as? String ?? ""),
+              let literal = URL(string: object["literal_payload_url"] as? String ?? "") else { throw productConnectionCheckFailure() }
+        let octets = ip.split(separator: ".", omittingEmptySubsequences: false).compactMap { UInt8($0) }
+        var raw = in_addr()
+        guard octets.count == 4, octets.map(String.init).joined(separator: ".") == ip,
+              inet_pton(AF_INET, ip, &raw) == 1,
+              octets[0] == 10 || (octets[0] == 172 && (16...31).contains(octets[1])) || (octets[0] == 192 && octets[1] == 168) else { throw productConnectionCheckFailure() }
+        runID = run; profile = bundle; mode = "base-raw"; address = ip; self.digest = digest
+        self.payload = payload; self.literal = literal
+    }
+}
+
+// A fresh ordinary URLSession resolves the nonce hostname through the OS.
+// No proxy, custom resolver, URL override, cached response or controller token.
+private final class ProductConnectionHTTP: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let done = DispatchSemaphore(value: 0), invalidated = DispatchSemaphore(value: 0), lock = NSLock()
+    private var bytes = Data(), failure: Error?, response: HTTPURLResponse?
+    private var remote = "", finished = false, overflow = false, sessionRetired = false
+    private var originalSession: URLSession?, originalTask: URLSessionDataTask?
+    var joined: Bool { lock.lock(); defer { lock.unlock() }; return finished && sessionRetired }
+    private static let limit = 65536
+    func run(_ url: URL) throws -> (Data, Int, String, Bool) {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.connectionProxyDictionary = [:]; configuration.urlCache = nil
+        configuration.httpCookieStorage = nil; configuration.httpShouldSetCookies = false
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        configuration.timeoutIntervalForRequest = 12; configuration.timeoutIntervalForResource = 12
+        let queue = OperationQueue(); queue.maxConcurrentOperationCount = 1
+        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
+        var request = URLRequest(url: url); request.timeoutInterval = 12
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.setValue("close", forHTTPHeaderField: "Connection")
+        let task = session.dataTask(with: request)
+        lock.lock(); originalSession = session; originalTask = task; lock.unlock()
+        task.resume()
+        let timedOut = done.wait(timeout: .now() + 15) == .timedOut
+        var completionJoined = !timedOut
+        if timedOut {
+            task.cancel()
+            completionJoined = done.wait(timeout: .now() + 3) == .success
+        }
+        if completionJoined { session.finishTasksAndInvalidate() } else { session.invalidateAndCancel() }
+        let invalidationJoined = invalidated.wait(timeout: .now() + 3) == .success
+        lock.lock(); defer { lock.unlock() }
+        // Retain the exact task/session on an unproved join. A canceled request
+        // is not an endpoint-denial receipt, even if its late completion arrives.
+        if completionJoined && invalidationJoined && finished && sessionRetired {
+            originalTask = nil; originalSession = nil
+        }
+        guard completionJoined, invalidationJoined, finished, sessionRetired,
+              !timedOut, !overflow else { throw productConnectionCheckFailure() }
+        // Even a partial HTTP response proves the stopped path was reachable.
+        if let response { return (bytes, response.statusCode, remote, failure == nil) }
+        if let failure { throw failure }
+        throw productConnectionCheckFailure()
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        lock.lock(); self.response = response as? HTTPURLResponse
+        overflow = response.expectedContentLength > Int64(Self.limit); let reject = overflow; lock.unlock()
+        completionHandler(reject ? .cancel : .allow)
+    }
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        lock.lock(); let reject = bytes.count > Self.limit - data.count
+        if reject { overflow = true } else { bytes.append(data) }; lock.unlock()
+        if reject { dataTask.cancel() }
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        lock.lock(); defer { lock.unlock() }
+        if metrics.transactionMetrics.count == 1, let metric = metrics.transactionMetrics.first,
+           !metric.isProxyConnection, metric.resourceFetchType == .networkLoad { remote = metric.remoteAddress ?? "" }
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.lock(); failure = error; finished = true; lock.unlock(); done.signal()
+    }
+    func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
+        lock.lock()
+        guard session === originalSession else { lock.unlock(); return }
+        failure = failure ?? error; sessionRetired = true
+        lock.unlock(); invalidated.signal()
+    }
+}
+
+private final class ProductConnectionLifetime: @unchecked Sendable {
+    let deadline = ProcessInfo.processInfo.systemUptime + 180
+    private let lock = NSLock(), stop = DispatchSemaphore(value: 0), joined = DispatchSemaphore(value: 0)
+    private var expired = false, resultWritten = false, abortCleanup = false, failureNoted = false
+    private var stage = "launch", flags = ["connect": false, "traffic": false, "loss": false, "disconnect": false]
+    private let files: ProductConnectionFiles, fixture: ProductConnectionFixture
+    init(_ files: ProductConnectionFiles, _ fixture: ProductConnectionFixture) { self.files = files; self.fixture = fixture }
+    func advance(_ value: String) { lock.lock(); stage = value; lock.unlock() }
+    func proved(_ value: String) { lock.lock(); flags[value] = true; lock.unlock() }
+    func failed() { lock.lock(); failureNoted = true; lock.unlock() }
+    func active() throws {
+        lock.lock(); let ended = expired || abortCleanup; lock.unlock()
+        guard !ended, ProcessInfo.processInfo.systemUptime < deadline else { throw productConnectionCheckFailure() }
+        try files.unchanged()
+        guard try !files.marker("desktop-connect-cancel.json", runID: fixture.runID, phase: "cancel") else { throw productConnectionCheckFailure() }
+    }
+    var timedOut: Bool { lock.lock(); defer { lock.unlock() }; return expired }
+    func writeResult(cleanup: Bool) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if resultWritten { return false }
+        let passed = !expired && stage == "complete" && cleanup && flags.values.allSatisfy { $0 }
+        var object: [String: Any] = ["schema": 1, "run_id": fixture.runID, "phase": "complete",
+                                    "status": passed ? "passed" : "failed", "cleanup_proved": cleanup,
+                                    "failure_stage": passed ? "" : stage]
+        for (key, value) in flags { object[key] = value }
+        try files.write("desktop-connect-result.json", object: object); resultWritten = true
+        return passed
+    }
+    func arm(api: ProductAPI, owner: RouterVPNMacOwnedProcess, identity: RouterVPNMacShutdownIdentity) {
+        DispatchQueue.global(qos: .utility).async { [self, api, owner] in
+            defer { joined.signal() }
+            while true {
+                if stop.wait(timeout: .now() + 0.2) == .success { return }
+                do { try active() } catch { break }
+            }
+            lock.lock()
+            if !failureNoted { stage = ProcessInfo.processInfo.systemUptime >= deadline ? "watchdog" : "cancel" }
+            expired = true; lock.unlock()
+            // Failure cleanup only: retain the same installed capability, without
+            // involving a stalled AppKit queue or granting a new connection.
+            if owner.acceptsRequests { _ = try? api.request("/api/disconnect", method: "POST", body: [:], timeout: 25) }
+            if owner.acceptsRequests {
+                let ended = DispatchSemaphore(value: 0)
+                do {
+                    let request = try RouterVPNMacShutdownTransport(url: routerVPNProductBaseURL.appendingPathComponent("api/controller/shutdown"),
+                                                                   identity: identity, timeout: 35) { _ in ended.signal() }
+                    request.start()
+                    if ended.wait(timeout: .now() + 38) == .timedOut { request.cancel(); _ = ended.wait(timeout: .now() + 3) }
+                } catch { /* No replacement capability or forced process retirement. */ }
+            }
+            let until = ProcessInfo.processInfo.systemUptime + 15
+            while owner.isRunning && owner.joinFailure == nil && ProcessInfo.processInfo.systemUptime < until { Thread.sleep(forTimeInterval: 0.05) }
+            // Only the normal ShutdownController acknowledgment can prove cleanup.
+            _ = try? writeResult(cleanup: false)
+        }
+    }
+    func finishWatchdog(cleanup: Bool) -> Bool {
+        if cleanup { stop.signal() }
+        else { lock.lock(); abortCleanup = true; failureNoted = true; lock.unlock() }
+        return joined.wait(timeout: .now() + 85) == .success
+    }
+}
+
+@MainActor private func runProductConnectionSelfTest(_ path: String) -> Int32 {
+    let files: ProductConnectionFiles, fixture: ProductConnectionFixture
+    do {
+        files = try ProductConnectionFiles(path); fixture = try ProductConnectionFixture(files.manifest)
+        guard RouterVPNMacLocalAuthorization.installedBundle() else { throw productConnectionCheckFailure() }
+    } catch { fputs("macOS connection self-test: invalid installed fixture prerequisites\n", stderr); return 2 }
+    let app = NSApplication.shared; app.setActivationPolicy(.regular); app.finishLaunching()
+    let delegate = ProductDelegate(); app.delegate = delegate
+    let lifetime = ProductConnectionLifetime(files, fixture)
+    var watchdog = false, cleanup = false, failure = false
+    var httpOwners: [ProductConnectionHTTP] = []
+    func fetch(_ url: URL) throws -> (Data, Int, String, Bool) {
+        let original = ProductConnectionHTTP(); httpOwners.append(original)
+        return try original.run(url)
+    }
+    func pump() { _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05)) }
+    func wait(_ predicate: () throws -> Bool) throws {
+        while true { try lifetime.active(); if try predicate() { return }; pump() }
+    }
+    func click(_ window: ProductWindowController, _ expected: String) throws {
+        guard let control = window.findUnifiedView("unified-connect") as? NSButton,
+              control.target === window, control.action == #selector(ProductWindowController.connectUnified),
+              control.isEnabled, !control.isHiddenOrHasHiddenAncestor, control.title == expected else { throw productConnectionCheckFailure() }
+        control.performClick(nil)
+    }
+    do {
+        try delegate.ensureController()
+        guard let owner = delegate.installedController, delegate.controller === owner,
+              owner.acceptsRequests, let requests = delegate.api.connectionSelfTestRequests else { throw productConnectionCheckFailure() }
+        let identity = RouterVPNMacShutdownIdentity(processID: owner.processIdentifier, token: delegate.controllerOwnerToken)
+        lifetime.arm(api: delegate.api, owner: owner, identity: identity); watchdog = true
+        requests.configure(fixture.mode)
+        let window = ProductWindowController(api: delegate.api); delegate.wc = window
+        guard RouterVPNVectorMap.geometry != nil,
+              window.map.overlays.contains(where: { $0 is RouterVPNVectorMapOverlay }) else { throw productConnectionCheckFailure() }
+        window.showWindow(nil); window.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        lifetime.advance("import")
+        let imported = try JSONSerialization.jsonObject(with: delegate.api.request("/api/profile/import", method: "POST", body: fixture.profile)) as? [String: Any]
+        guard productConnectionTrue(imported?["ok"]), let profile = imported?["profile"] as? [String: Any],
+              let profileID = profile["id"] as? String, !profileID.isEmpty, profileID.utf8.count <= 64,
+              profileID.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 }) else { throw productConnectionCheckFailure() }
+        guard profile["base_tunnel"] as? String == "wg", profile["kill_switch_policy"] as? String == "on-connect",
+              !productConnectionTrue(profile["home_lan_access"]), profile["ipv6_mode"] as? String == "off",
+              profile["dns_mode"] as? String == "home", profile["dns_protocol"] as? String == "udp" else { throw productConnectionCheckFailure() }
+        _ = try delegate.api.request("/api/profile/select", method: "POST", body: ["id": profileID])
+        guard let catalog = try delegate.api.json("/api/logical-modes") as? [[String: Any]],
+              let mode = catalog.first(where: { $0["id"] as? String == fixture.mode }),
+              productConnectionTrue(mode["available"]), let variants = mode["variants"] as? [String: Any],
+              let wg = variants["wg"] as? [String: Any], productConnectionTrue(wg["available"]),
+              wg["runtime_id"] as? String == "wg" else { throw productConnectionCheckFailure() }
+        lifetime.advance("controls")
+        window.refreshAll(); window.refreshUnifiedModeMenu(preferred: fixture.mode)
+        try wait {
+            let index = window.routerPopup.indexOfSelectedItem
+            return window.routerIDs.indices.contains(index) && window.profiles.indices.contains(index) &&
+                window.routerIDs[index] == profileID && window.profiles[index]["id"] as? String == profileID
+        }
+        guard let popup = window.findUnifiedView("unified-mode-popup") as? NSPopUpButton,
+              let toggle = window.findUnifiedView("unified-multihop-toggle") as? NSButton else { throw productConnectionCheckFailure() }
+        if toggle.state == .on { toggle.performClick(nil) }
+        guard toggle.state == .off else { throw productConnectionCheckFailure() }
+        try wait { popup.itemArray.contains { ($0.representedObject as? String) == fixture.mode && $0.isEnabled } }
+        guard let item = popup.itemArray.first(where: { ($0.representedObject as? String) == fixture.mode && $0.isEnabled }),
+              popup.target === window, popup.action == #selector(ProductWindowController.unifiedModeChanged(_:)) else { throw productConnectionCheckFailure() }
+        popup.select(item)
+        guard popup.sendAction(popup.action, to: popup.target) else { throw productConnectionCheckFailure() }
+        lifetime.advance("connect")
+        try wait { (window.findUnifiedView("unified-connect") as? NSButton)?.title == "Connect" }
+        try click(window, "Connect")
+        try wait { try requests.completed("/api/connect-logical") }
+        guard let state = try delegate.api.json("/api/status") as? [String: Any],
+              productConnectionTrue(state["connected"]), state["router_id"] as? String == profileID,
+              state["runtime_mode"] as? String == "wg", state["base"] as? String == "wg",
+              state["logical_mode"] as? String == fixture.mode else { throw productConnectionCheckFailure() }
+        try wait { (window.findUnifiedView("unified-connect") as? NSButton)?.title == "Disconnect" }
+        lifetime.proved("connect"); lifetime.advance("traffic")
+        let (payload, code, address, complete) = try fetch(fixture.payload)
+        try lifetime.active()
+        guard complete, code == 200, address == fixture.address,
+              SHA256.hash(data: payload).map({ String(format: "%02x", $0) }).joined() == fixture.digest else { throw productConnectionCheckFailure() }
+        lifetime.proved("traffic")
+        try files.write("desktop-connect-connected.json", object: ["schema": 1, "run_id": fixture.runID,
+                        "phase": "connected", "profile_id": profileID, "runtime_mode": "wg",
+                        "private_address": fixture.address, "payload_sha256": fixture.digest])
+        lifetime.advance("peer-stop")
+        try wait { try files.marker("desktop-connect-peer-stopped.json", runID: fixture.runID, phase: "peer-stopped") }
+        lifetime.advance("loss")
+        var denied = false
+        do { _ = try fetch(fixture.literal) }
+        catch {
+            let issue = error as NSError
+            denied = issue.domain == NSURLErrorDomain &&
+                [NSURLErrorTimedOut, NSURLErrorCannotConnectToHost, NSURLErrorNetworkConnectionLost, NSURLErrorNotConnectedToInternet].contains(issue.code)
+        }
+        try lifetime.active()
+        guard denied else { throw productConnectionCheckFailure() }
+        lifetime.proved("loss"); lifetime.advance("disconnect")
+        guard let state = try delegate.api.json("/api/status") as? [String: Any], productConnectionTrue(state["connected"]),
+              state["router_id"] as? String == profileID, state["runtime_mode"] as? String == "wg" else { throw productConnectionCheckFailure() }
+        try click(window, "Disconnect")
+        try wait { try requests.completed("/api/disconnect") }
+        guard let off = try delegate.api.json("/api/status") as? [String: Any],
+              off["connected"] as? Bool == false, off["mode"] as? String == "off",
+              (off["runtime_mode"] as? String ?? "").isEmpty,
+              (off["phase"] as? String ?? "off") == "off" else { throw productConnectionCheckFailure() }
+        try wait { (window.findUnifiedView("unified-connect") as? NSButton)?.title == "Connect" }
+        lifetime.proved("disconnect"); lifetime.advance("shutdown")
+    } catch { failure = true; lifetime.failed() }
+    delegate.wc?.timer?.invalidate()
+    if let owner = delegate.installedController, delegate.controller === owner {
+        if !watchdog {
+            lifetime.arm(api: delegate.api, owner: owner,
+                         identity: RouterVPNMacShutdownIdentity(processID: owner.processIdentifier, token: delegate.controllerOwnerToken))
+            watchdog = true
+        }
+        if !lifetime.timedOut {
+            let identity = RouterVPNMacShutdownIdentity(processID: owner.processIdentifier, token: delegate.controllerOwnerToken)
+            let flow = RouterVPNMacShutdownController(baseURL: routerVPNProductBaseURL, identity: identity, process: owner,
+                isCurrent: { delegate.ownsController && delegate.installedController === owner &&
+                    delegate.controller === owner && delegate.controllerOwnerToken == identity.token })
+            delegate.shutdown = flow
+            var finished = false
+            flow.onFinish = { allowed in cleanup = allowed && flow.acknowledged && owner.joinedSuccessfully; finished = true }
+            flow.start()
+            let until = ProcessInfo.processInfo.systemUptime + 55
+            while !finished && ProcessInfo.processInfo.systemUptime < until { pump() }
+            if !finished { flow.retire() }
+        }
+        if watchdog && !lifetime.finishWatchdog(cleanup: cleanup) { cleanup = false }
+        cleanup = cleanup && !owner.isRunning && owner.joinedSuccessfully
+    }
+    cleanup = cleanup && httpOwners.allSatisfy { $0.joined }
+    if !failure && !lifetime.timedOut && cleanup { lifetime.advance("complete") }
+    let passed = (try? lifetime.writeResult(cleanup: cleanup)) == true
+    print(passed ? "macOS connection self-test: actual control, private traffic, peer loss and original cleanup passed" :
+                   "macOS connection self-test failed; original owner and fixture evidence are retained")
+    if let owner = delegate.installedController, !owner.joinedSuccessfully || !httpOwners.allSatisfy({ $0.joined }) {
+        // A failed cleanup cannot drop the original controller/HTTP capabilities
+        // or remove the installation. Checked Quit remains available.
+        withExtendedLifetime((delegate, httpOwners)) { app.run() }
+    }
+    return passed ? 0 : 2
+}
+
 MainActor.assumeIsolated {
+    if CommandLine.arguments.contains("--connection-self-test") {
+        guard CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--connection-self-test" else {
+            fputs("macOS connection self-test: invalid invocation\n", stderr); exit(2)
+        }
+        exit(runProductConnectionSelfTest(CommandLine.arguments[2]))
+    }
     if CommandLine.arguments.contains("--self-test") { exit(runProductSelfTest()) }
     let productApp = NSApplication.shared
     let productDelegate = ProductDelegate()

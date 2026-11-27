@@ -75,6 +75,22 @@ func (m *RouterNodeChainExecution) SupportsSelectedFinalResponseCandidate(positi
 	return m != nil && m.prep != nil && !m.retired.Load() && !m.closed.Load() &&
 		m.prep.SupportsSelectedFinalResponseCandidate(int(position))
 }
+func (m *RouterNodeChainExecution) SelectedPacketCandidateMode(position int32) string {
+	if m == nil || m.prep == nil || m.retired.Load() || m.closed.Load() {
+		return ""
+	}
+	return m.prep.SelectedPacketCandidateMode(int(position))
+}
+func (m *RouterNodeChainExecution) SupportsCompareLocalPacketResponseCandidate(position int32) bool {
+	return m != nil && m.prep != nil && !m.retired.Load() && !m.closed.Load() && m.prep.SupportsCompareLocalPacketResponseCandidate(int(position))
+}
+func (m *RouterNodeChainExecution) SupportsServerPacketResponseCandidate(position int32) bool {
+	return m != nil && m.prep != nil && !m.retired.Load() && !m.closed.Load() && m.prep.SupportsServerPacketResponseCandidate(int(position))
+}
+func (m *RouterNodeChainExecution) SelectedPacketCandidateInputFitsSource(position int32, input string) bool {
+	return m != nil && m.prep != nil && !m.retired.Load() && !m.closed.Load() && m.prep.SelectedPacketCandidateInputFitsSource(int(position), input)
+}
+
 func (m *RouterNodeChainExecution) newExecutionCandidateMeasurementContext(ctx context.Context, server *CommandServer, position int, inventory string, catalog RouterNodeChainCandidateCatalog) (*RouterNodeChainExecutionCandidateMeasurement, error) {
 	if m == nil || ctx == nil || ctx.Err() != nil || position < 0 || position >= mobilemultihop.NodeChainExtendedLocalMaximumNodes-1 || server == nil || catalog == nil {
 		return nil, errRouterNodeChainExecution
@@ -102,7 +118,53 @@ func (m *RouterNodeChainExecution) newExecutionCandidateMeasurementContext(ctx c
 	}
 	var plan routerNodeChainExecutionCandidatePlanMetadata
 	var factory func(context.Context, *RouterNodeChainExecutionCandidateMeasurement) (routerNodeChainExecutionCandidateService, error)
-	if position == 0 {
+	var inventoryMode struct {
+		ResponseMode string `json:"response_mode"`
+	}
+	if json.Unmarshal([]byte(inventory), &inventoryMode) != nil {
+		return nil, errRouterNodeChainExecution
+	}
+	if mode := inventoryMode.ResponseMode; mode != "" {
+		if !mobilemultihop.NodeChainPrefixMode(mode) || m.prep.SelectedPacketCandidateMode(position) != mode {
+			return nil, errRouterNodeChainExecution
+		}
+		switch runtime.Progress().Execution {
+		case "local":
+			selected, err := runtime.NewLocalPacketResponseCandidatePlanContext(ctx, position, inventory)
+			if err != nil {
+				return nil, err
+			}
+			plan = selected
+			factory = func(call context.Context, owner *RouterNodeChainExecutionCandidateMeasurement) (routerNodeChainExecutionCandidateService, error) {
+				service, err := selected.NewMeasurementContext(call, owner)
+				if service == nil {
+					return nil, err
+				}
+				return service, err
+			}
+		case "server":
+			var selected *mobilemultihop.NodeChainExecutionRemoteCandidatePlan
+			var err error
+			if position == 0 {
+				selected, err = runtime.NewRemoteFirstPacketResponseCandidatePlanContext(ctx, position, inventory)
+			} else {
+				selected, err = runtime.NewRemotePacketResponseCandidatePlanContext(ctx, position, inventory)
+			}
+			if err != nil {
+				return nil, err
+			}
+			plan = selected
+			factory = func(call context.Context, owner *RouterNodeChainExecutionCandidateMeasurement) (routerNodeChainExecutionCandidateService, error) {
+				service, err := selected.NewMeasurementContext(call, owner)
+				if service == nil {
+					return nil, err
+				}
+				return service, err
+			}
+		default:
+			return nil, errRouterNodeChainExecution
+		}
+	} else if position == 0 {
 		entry, err := runtime.NewEntryCandidatePlanContext(ctx, position, inventory)
 		if err != nil {
 			return nil, err
@@ -153,8 +215,9 @@ func (m *RouterNodeChainExecution) newExecutionCandidateMeasurementContext(ctx c
 		PreparationConfig string `json:"preparation_config_sha256"`
 		Source            string `json:"source_sha256"`
 		Config            string `json:"config_sha256"`
+		CandidateMode     string `json:"candidate_mode"`
 	}
-	if json.Unmarshal([]byte(plan.Metadata()), &metadata) != nil || metadata.PreparationSource != m.prep.SourceSHA256() || metadata.PreparationConfig != m.prep.ConfigSHA256() || metadata.Source != projection.SourceSHA256() || metadata.Config != projection.ConfigSHA256() {
+	if json.Unmarshal([]byte(plan.Metadata()), &metadata) != nil || metadata.PreparationSource != m.prep.SourceSHA256() || metadata.PreparationConfig != m.prep.ConfigSHA256() || metadata.Source != projection.SourceSHA256() || metadata.Config != projection.ConfigSHA256() || metadata.CandidateMode != inventoryMode.ResponseMode {
 		return nil, errRouterNodeChainExecution
 	}
 	sum := sha256.Sum256([]byte(inventory))

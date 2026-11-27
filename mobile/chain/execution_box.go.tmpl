@@ -1038,3 +1038,45 @@ func (e *RouterVPNNodeChainExecutionEngine) RetireContext(ctx context.Context) e
 	}
 	return ctx.Err()
 }
+
+// This method is deliberately distinct from ordinary and prepared packet I/O.
+// The sealed request authorizes one current Local winner and one literal tuple.
+func (e *RouterVPNNodeChainExecutionEngine) DialSelectedCandidatePacketContext(ctx context.Context, request *mobilemultihop.NodeChainCandidatePacketRequest) (net.Conn, error) {
+	if e == nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	state := e.state.Load()
+	if state == nil || state.stage != 2 || state.projection == nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	identity, tag, address, err := request.ReadSelected(ctx, e, state.projection)
+	if err != nil || identity != state.identity || e.nativeCurrent(ctx, state) != nil {
+		return nil, errors.Join(err, errRouterVPNExecutionOwner)
+	}
+	retained := state.prefixes[tag]
+	destination, err := routerVPNExecutionDestination(address)
+	if err != nil || retained == nil {
+		return nil, errors.Join(err, errRouterVPNExecutionOwner)
+	}
+	connection, dialErr := retained.DialContext(ctx, "udp", destination)
+	actual, nextTag, nextAddress, observeErr := request.ReadSelected(ctx, e, state.projection)
+	if actual != identity || nextTag != tag || nextAddress != address || e.state.Load() != state || e.nativeCurrent(ctx, state) != nil {
+		observeErr = errors.Join(observeErr, errRouterVPNExecutionOwner)
+	}
+	if connection == nil {
+		dialErr = errors.Join(dialErr, errRouterVPNExecutionOwner)
+	}
+	return connection, errors.Join(dialErr, observeErr, ctx.Err())
+}
+func (e *RouterVPNNodeChainExecutionEngine) OpenSelectedCandidateEndpointContext(ctx context.Context, request *mobilemultihop.NodeChainCandidatePacketRequest) (mobilemultihop.NodeChainCandidateEndpoint, error) {
+	if e == nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	state := e.state.Load()
+	if state == nil || state.stage != 2 || state.projection == nil {
+		return nil, errRouterVPNExecutionOwner
+	}
+	return request.OpenSelectedNativeEndpoint(ctx, e, state.projection, routerVPNNewCandidateAWG)
+}
+
+var _ mobilemultihop.NodeChainSelectedPacketEngine = (*RouterVPNNodeChainExecutionEngine)(nil)

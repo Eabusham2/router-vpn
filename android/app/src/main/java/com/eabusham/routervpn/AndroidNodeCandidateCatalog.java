@@ -29,6 +29,8 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
     final List<Row> rows;
     final String inventory, inventorySHA, signature, measurement, responseMode;
     private final boolean preparedPurpose;
+    private final AndroidNodeCandidateAppendSource appendSource;
+    private final io.nekohasekai.libbox.RouterNodeChainExecution selectedPacketOwner;
     private volatile boolean invalidated;
     private volatile boolean savedSourcesInvalidated;
     private final AndroidNodeStore nodes;
@@ -53,10 +55,31 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
     private static String candidateMeasurement(AndroidNodeChainSession session,int position,boolean connected) throws Exception {
         AndroidNodeStore.ChainCapture source=source(session);
         if(!session.capture.ownsSource(source)||position<0||position>=source.modes.size()-1)return "";
-        if(connected&&!connectedResponseMode(session,position).isEmpty())return "routed-candidate-response";
+        if(!selectedPacketResponseMode(session,position).isEmpty()
+                ||connected&&!connectedResponseMode(session,position).isEmpty())return "routed-candidate-response";
         io.nekohasekai.libbox.RouterNodeChainExecution owner=session.candidateExecutionOwner();
         if(owner!=null&&owner.supportsSelectedFinalResponseCandidate(position))return "routed-candidate-response";
         return candidateMeasurement(session.capture,source,position);
+    }
+    private static String selectedPacketResponseMode(AndroidNodeChainSession session,int position)throws Exception {
+        if(session==null||session.candidatePrefix!=null||position<0||position>=session.source.modes.size()-2)return "";
+        var owner=session.candidateExecutionOwner();
+        if(owner==null||!session.source.execution.equals(owner.requestedExecution())
+                ||!AndroidNodeChainCapture.selectedResponseWinner(session.source.execution,owner.execution()))return "";
+        String mode=owner.selectedPacketCandidateMode(position),winner=owner.execution();
+        if(!NativeSingBoxController.nativeWireGuardFamily(mode)||!mode.equals(session.source.modes.get(position+1)))return "";
+        return "local".equals(winner)&&owner.supportsCompareLocalPacketResponseCandidate(position)
+                ||"server".equals(winner)&&owner.supportsServerPacketResponseCandidate(position)?mode:"";
+    }
+    private static String responseMode(AndroidNodeChainSession session,int position,boolean connected)throws Exception {
+        String selected=selectedPacketResponseMode(session,position);
+        return !selected.isEmpty()?selected:connected?connectedResponseMode(session,position):"";
+    }
+    boolean selectedPacketResponse()throws Exception {
+        if(selectedPacketOwner==null||executionOwner!=selectedPacketOwner||session==null
+                ||preparedPurpose||responseMode.isEmpty()||!"routed-candidate-response".equals(measurement))return false;
+        requireCurrent();
+        return responseMode.equals(selectedPacketResponseMode(session,prefix));
     }
     private static String connectedResponseMode(AndroidNodeChainSession session,int position) throws Exception {
         if(session==null||session.candidatePrefix!=null||session.execution!=null||session.temporaryMeasurement()||!"local".equals(session.source.execution)
@@ -71,8 +94,10 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
     }
 
     static String preparedResponseMode(AndroidNodeChainCapture original,AndroidNodeStore.ChainCapture source,int position) {
-        if(original==null||source==null||!"local".equals(source.execution)||original.plan==null
-                ||!original.ownsSource(source)||position<0||position>=source.members.size()-1)return "";
+        if(original==null||source==null||!"local".equals(source.execution)||!original.ownsSource(source))return "";
+        if(original.append!=null)return source.appendDraft()&&position==source.members.size()-1
+                &&source.appendMode.equals(original.append.plan.candidateMode())?source.appendMode:"";
+        if(original.plan==null||position<0||position>=source.members.size()-1)return "";
         String mode=Libbox.routerNodeChainPreparedCandidateResponseMode(original.plan,position);
         return source.modes.get(position+1).equals(mode)?mode:"";
     }
@@ -86,6 +111,11 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         return responseMode.equals(retained.candidatePrefix.responseMode)
                 &&responseMode.equals(retained.candidatePrefix.plan.candidateMode())
                 &&responseMode.equals(preparedResponseMode(retained.capture,originalSource,prefix));
+    }
+    boolean preparedAppendResponse()throws Exception {
+        return appendSource!=null&&originalSource.appendDraft()&&preparedResponse()
+                &&session.capture.append==appendSource&&session.candidatePrefix.plan.isAppend()
+                &&session.candidatePrefix.plan.appendPosition()==originalSource.members.size();
     }
     boolean connectedPacketResponse() throws Exception {
         if(!NativeSingBoxController.nativeWireGuardFamily(responseMode)||session==null||prefix<0||prefix>=originalSource.members.size()-2
@@ -113,7 +143,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         this(context,session,prefix,true);
     }
     AndroidNodeCandidateCatalog(Context context,AndroidNodeChainSession session,int prefix,boolean connected)throws Exception {
-        this(context,source(session),prefix,candidateMeasurement(session,prefix,connected),connected?connectedResponseMode(session,prefix):"",session.capture.plan,false);
+        this(context,source(session),prefix,candidateMeasurement(session,prefix,connected),responseMode(session,prefix,connected),session.capture.plan,false,null,session.candidateExecutionOwner());
         bind(session);
     }
     /** Capture the immutable saved inventory before permission or a native
@@ -124,17 +154,35 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         String metric=!responseMode.isEmpty()?"routed-candidate-response":java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(source.modes.get(prefix))?"routed-tcp-connect":
                 AndroidNodeChainCapture.responsePrefix(source.members,source.modes,prefix,source.execution)
                         ? (source.members.get(source.members.size()-1).imported ? "routed-public-candidate-response" : "routed-candidate-response") : "";
-        return new AndroidNodeCandidateCatalog(context,source,prefix,metric,responseMode,original.plan,true);
+        return new AndroidNodeCandidateCatalog(context,source,prefix,metric,responseMode,original.plan,true,original.append,null);
     }
     private static AndroidNodeStore.ChainCapture source(AndroidNodeChainSession session) {
         if(session==null)throw new IllegalStateException("The original ordered path is missing.");return session.source;
     }
-    private AndroidNodeCandidateCatalog(Context context,AndroidNodeStore.ChainCapture source,int prefix,String metric,String responseMode,RouterNodeChain originalPlan,boolean preparedPurpose)throws Exception {
-        originalSource=source;this.prefix=prefix;this.preparedPurpose=preparedPurpose;
+    private AndroidNodeCandidateCatalog(Context context,AndroidNodeStore.ChainCapture source,int prefix,String metric,String responseMode,RouterNodeChain originalPlan,boolean preparedPurpose,AndroidNodeCandidateAppendSource appendSource,io.nekohasekai.libbox.RouterNodeChainExecution selectedPacketOwner)throws Exception {
+        originalSource=source;this.prefix=prefix;this.preparedPurpose=preparedPurpose;this.appendSource=appendSource;this.selectedPacketOwner=selectedPacketOwner;
         if(source==null||prefix<0||prefix>=source.members.size())throw new IllegalStateException("The original saved packet prefix is missing.");
         source.requireCurrent();
         measurement=metric;this.responseMode=responseMode;
-        if(!responseMode.isEmpty()) {
+        if(appendSource!=null) {
+            appendSource.requireCurrent();
+            if(!preparedPurpose||originalPlan!=null||appendSource.original!=source||!source.appendDraft()
+                    ||!"local".equals(source.execution)||prefix!=source.members.size()-1
+                    ||!"routed-candidate-response".equals(metric)||!responseMode.equals(source.appendMode)
+                    ||!responseMode.equals(appendSource.plan.candidateMode())
+                    ||appendSource.plan.appendPosition()!=source.members.size())throw new IllegalStateException("The append catalog lost its original unfinished prefix.");
+        } else if(source.appendDraft())throw new IllegalStateException("An unfinished prefix requires its separate append source.");
+        else if(!responseMode.isEmpty()&&selectedPacketOwner!=null) {
+            if(preparedPurpose||!"routed-candidate-response".equals(metric)
+                    ||!source.execution.equals(selectedPacketOwner.requestedExecution())
+                    ||!AndroidNodeChainCapture.selectedResponseWinner(source.execution,selectedPacketOwner.execution())
+                    ||prefix>=source.members.size()-2||!responseMode.equals(source.modes.get(prefix+1))
+                    ||!responseMode.equals(selectedPacketOwner.selectedPacketCandidateMode(prefix))
+                    ||!("local".equals(selectedPacketOwner.execution())&&selectedPacketOwner.supportsCompareLocalPacketResponseCandidate(prefix)
+                        ||"server".equals(selectedPacketOwner.execution())&&selectedPacketOwner.supportsServerPacketResponseCandidate(prefix)))
+                throw new IllegalStateException("The packet response lost its exact selected execution.");
+        }
+        else if(!responseMode.isEmpty()) {
             if(!"local".equals(source.execution)||!"routed-candidate-response".equals(metric)||originalPlan==null
                     ||prefix>=source.members.size()-1||!responseMode.equals(source.modes.get(prefix+1)))
                 throw new IllegalStateException("The response carrier requires its original successor position.");
@@ -176,7 +224,10 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
                 }
                 input=AndroidNodeChainCapture.memberInput(candidate,measuredMode(candidate),profile);
                 boolean supported;
-                if(!responseMode.isEmpty() && preparedPurpose)
+                if(appendSource!=null)supported=appendSource.fits(input);
+                else if(!responseMode.isEmpty()&&selectedPacketOwner!=null)
+                    supported=selectedPacketOwner.selectedPacketCandidateInputFitsSource(prefix,input);
+                else if(!responseMode.isEmpty() && preparedPurpose)
                     supported=Libbox.routerNodeChainPreparedCandidateInputFitsSource(originalPlan,prefix,input);
                 else if(!responseMode.isEmpty() && prefix<source.members.size()-2)
                     supported=Libbox.routerNodeChainPacketSuccessorCandidateInputSupported(input,responseMode)
@@ -241,6 +292,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         // Retain even a binding that subsequently fails validation: a later
         // caller cannot adopt a replacement server with these captured inputs.
         session=original;server=retained;executionOwner=original.candidateExecutionOwner();
+        if(executionOwner!=selectedPacketOwner)throw new IllegalStateException("The captured selected execution owner changed before binding.");
         if(executionOwner!=null)selectedPrefixID();
         requireCurrent();
     }
@@ -248,7 +300,8 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         if (session == null || executionOwner == null || session.source != originalSource
                 || session.candidateExecutionOwner() != executionOwner || session.candidateServer() != server
                 || !(session.capture.ownsSelectedCandidatePrefix(originalSource, prefix)
-                    || "routed-candidate-response".equals(measurement) && executionOwner.supportsSelectedFinalResponseCandidate(prefix)))
+                    || "routed-candidate-response".equals(measurement) && (executionOwner.supportsSelectedFinalResponseCandidate(prefix)
+                        ||!responseMode.isEmpty()&&responseMode.equals(selectedPacketResponseMode(session,prefix)))))
             throw new IllegalStateException("This selected route has no retained candidate prefix at the requested position.");
         if (!"routed-tcp-connect".equals(measurement) && (!originalSource.execution.equals(executionOwner.requestedExecution())
                 || !AndroidNodeChainCapture.selectedResponseWinner(originalSource.execution, executionOwner.execution())))
@@ -260,7 +313,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
         if(invalidated)throw new IllegalStateException("The original candidate catalog authority was retired.");
     }
     private void requireOriginalSourceCurrent()throws Exception {
-        try{originalSource.requireCurrent();}
+        try{originalSource.requireCurrent();if(appendSource!=null)appendSource.requireCurrent();}
         catch(Exception changed){savedSourcesInvalidated=true;throw changed;}
     }
     private String currentSignature()throws Exception {

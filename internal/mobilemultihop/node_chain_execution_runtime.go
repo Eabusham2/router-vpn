@@ -38,6 +38,7 @@ type NodeChainExecutionRuntime struct {
 	runDone, watchDone   chan struct{}
 	started, retired     atomic.Bool
 	closed               bool
+	candidatePacketKeys  map[string]*candidatePacketRun
 	measurementHolds     int
 	lastCaptures         int
 	healthObservations   int

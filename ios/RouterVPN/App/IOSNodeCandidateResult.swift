@@ -11,6 +11,8 @@ struct IOSNodeCandidateMetadata: Decodable {
     let targets: [Target]
     var measurement: String? = nil
     var candidate_mode: String? = nil
+    var purpose: String? = nil
+    var append_source_metadata_sha256: String? = nil
     var metric: String { measurement ?? "routed-tcp-connect" }
     static func label(_ metric: String) -> String {
         switch metric {
@@ -27,8 +29,14 @@ struct IOSNodeCandidateMetadata: Decodable {
     func validate(prefix: IOSNodeCandidatePrefix, source: String, config: String, ids: Set<String>,
                   requestedExecution: String? = nil, selectedExecution: String? = nil, selectedPositions: [Int] = [0],
                   selectedResponse: IOSNodeCandidatePrefix? = nil) throws {
-        guard candidate_mode == prefix.candidate_mode,
-              candidate_mode == nil || prefix.pairedFinalResponse && requestedExecution == nil && selectedExecution == nil else { throw IOSNodeCandidateResult.issue() }
+        guard purpose == prefix.purpose, candidate_mode == prefix.candidate_mode,
+              (purpose == nil ? append_source_metadata_sha256 == nil :
+                purpose == "draft-prefix-append" && IOSCandidateCatalogPublication.isDigest(append_source_metadata_sha256 ?? "")),
+              candidate_mode == nil || (prefix.pairedFinalResponse || prefix.purpose == "draft-prefix-append") &&
+                requestedExecution == nil && selectedExecution == nil ||
+                 candidate_mode != nil && IOSMultihopNodeSelection.supportsNativePrefix(candidate_mode ?? "") &&
+                 prefix.purpose == nil && requestedExecution != nil && selectedExecution != nil &&
+                 selectedResponse == prefix && metric == "routed-candidate-response" else { throw IOSNodeCandidateResult.issue() }
         if let requestedExecution, let selectedExecution {
             guard ["server", "auto"].contains(requestedExecution), ["local", "server"].contains(selectedExecution),
                   requestedExecution == "auto" || requestedExecution == selectedExecution,

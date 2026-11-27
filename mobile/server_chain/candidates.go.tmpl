@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	ssclient "github.com/sagernet/sing-shadowsocks2"
@@ -13,8 +14,11 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/dialer"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/routervpnamnezia"
 	"github.com/sagernet/sing/common/auth"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -58,6 +62,11 @@ type routerVPNServerChainCandidateResponder interface {
 type routerVPNServerChainCandidate struct {
 	prepareDone                           chan struct{}
 	response                              routerVPNServerChainCandidateResponder
+	packetResponse                        *mobilemultihop.NodeChainServerPacketCandidateResponder
+	packetRequest                         *mobilemultihop.NodeChainServerCandidatePacketRequest
+	packetEndpoint                        mobilemultihop.NodeChainCandidateEndpoint
+	packetClose                           *routerVPNServerChainClose
+	firstDialer                           N.Dialer
 	responseFile                          routerVPNServerChainCandidateFile
 	nonces                                map[string]bool
 	reads                                 int
@@ -93,8 +102,9 @@ func (n *routerVPNServerChain) NewCandidateOperation(ctx context.Context, c mult
 	}
 	var responder routerVPNServerChainCandidateResponder
 	var public *mobilemultihop.NodeChainServerPublicCandidateResponder
+	var packet *mobilemultihop.NodeChainServerPacketCandidateResponder
 	var responseFile routerVPNServerChainCandidateFile
-	if c.Request.Schema == 2 || c.Request.Schema == 3 {
+	if c.Request.Schema == 2 || c.Request.Schema == 3 || c.Request.IsPacketResponse() {
 		if n.root == nil {
 			return nil, errServerChainFront
 		}
@@ -104,7 +114,9 @@ func (n *routerVPNServerChain) NewCandidateOperation(ctx context.Context, c mult
 		if err != nil {
 			return nil, errServerChainFront
 		}
-		if c.Request.Schema == 3 {
+		if c.Request.IsPacketResponse() {
+			packet, err = mobilemultihop.NewNodeChainServerPacketCandidateResponder(c, string(input))
+		} else if c.Request.Schema == 3 {
 			public, err = mobilemultihop.NewNodeChainServerPublicCandidateResponder(c, string(input))
 			responder = public
 		} else {
@@ -117,6 +129,10 @@ func (n *routerVPNServerChain) NewCandidateOperation(ctx context.Context, c mult
 	}
 	var target *mobilemultihop.NodeChainServerCandidateTarget
 	switch c.Request.Schema {
+	case 5:
+		target, err = n.policy.FirstPacketResponseCandidateTarget(c)
+	case 4:
+		target, err = n.policy.PacketResponseCandidateTarget(c)
 	case 3:
 		target, err = n.policy.PublicResponseCandidateTarget(c, public)
 	case 2:
@@ -128,7 +144,7 @@ func (n *routerVPNServerChain) NewCandidateOperation(ctx context.Context, c mult
 		return nil, err
 	}
 	tag, address, err := target.Read(n.policy, c)
-	if err != nil || n.outputs[tag] == nil {
+	if err != nil || c.Request.Schema != 5 && n.outputs[tag] == nil || c.Request.Schema == 5 && tag != "" {
 		return nil, errServerChainFront
 	}
 	n.mu.Lock()
@@ -150,13 +166,19 @@ func (n *routerVPNServerChain) NewCandidateOperation(ctx context.Context, c mult
 	}
 	op := &routerVPNServerChainCandidate{owner: n, front: n.front, policy: n.policy, target: target, outbound: n.outputs[tag], capture: c.Clone(), tag: tag, address: address, ctx: owned, cancel: cancel, quota: quota, resources: make(map[net.Conn]*routerVPNServerChainClose), closeGate: make(chan struct{}, 1), expiryDone: make(chan struct{})}
 	op.self = op
-	op.response, op.responseFile = responder, responseFile
-	if responder != nil {
+	op.response, op.responseFile, op.packetResponse = responder, responseFile, packet
+	if responder != nil || packet != nil {
 		op.nonces = make(map[string]bool)
 	}
 	n.candidateAttempts[c.Request.Operation] = c.Clone()
 	n.candidate = op
 	go op.expire()
+	if packet != nil && c.Request.Schema == 4 {
+		op.packetRequest, err = packet.NewPacketRequest(ctx, n.policy, c, op)
+		if err != nil {
+			return op, err
+		}
+	}
 	return op, nil
 }
 func (op *routerVPNServerChainCandidate) original() bool {
@@ -166,16 +188,35 @@ func (op *routerVPNServerChainCandidate) original() bool {
 	op.owner.mu.Lock()
 	same := op.owner.candidate == op
 	op.owner.mu.Unlock()
+	if op.capture.Request.Schema == 5 {
+		return same && op.tag == "" && op.outbound == nil && op.target != nil && op.packetResponse != nil
+	}
 	return same && op.outbound != nil && op.owner.outputs[op.tag] == op.outbound
 }
 func (op *routerVPNServerChainCandidate) current(ctx context.Context) bool {
 	if ctx == nil || ctx.Err() != nil || !op.original() || op.ctx.Err() != nil || !time.Now().Before(time.UnixMilli(op.capture.Request.DeadlineAt)) {
 		return false
 	}
-	if op.capture.Request.Schema == 2 || op.capture.Request.Schema == 3 {
-		if op.response == nil || !op.responseFile.current(op.owner.root, op.capture.ResponseSourceFile()) {
+	op.mu.Lock()
+	active := op.prepared && !op.retired
+	op.mu.Unlock()
+	if !active {
+		return false
+	}
+	if op.capture.Request.Schema == 2 || op.capture.Request.Schema == 3 || op.capture.Request.IsPacketResponse() {
+		if !op.responseFile.current(op.owner.root, op.capture.ResponseSourceFile()) {
 			return false
 		}
+		if op.capture.Request.IsPacketResponse() {
+			if op.packetResponse == nil || op.packetRequest == nil || op.packetResponse.PairingSHA256() == "" {
+				return false
+			}
+		} else if op.response == nil {
+			return false
+		}
+	}
+	if op.capture.Request.Schema == 5 && op.packetRequest.FirstCarrierAdmitContext(ctx) != nil {
+		return false
 	}
 	tag, address, err := op.target.Read(op.policy, op.capture)
 	if err != nil || tag != op.tag || address != op.address || !op.owner.trafficCurrent() || !op.owner.nativeCurrent(ctx) {
@@ -209,6 +250,15 @@ func (op *routerVPNServerChainCandidate) Prepare(ctx context.Context) (multihopr
 	ctx = bounded
 	if !op.owner.trafficCurrent() || !op.owner.nativeCurrent(ctx) {
 		return multihoprelay.NodeChainCandidateReceipt{}, errServerChainFront
+	}
+	if op.capture.Request.Schema == 5 {
+		request, err := op.packetResponse.NewFirstPacketRequestContext(ctx, op.ctx, op.policy, op.capture, op)
+		op.mu.Lock()
+		op.packetRequest = request
+		op.mu.Unlock()
+		if err != nil || request == nil || ctx.Err() != nil {
+			return multihoprelay.NodeChainCandidateReceipt{}, errors.Join(err, ctx.Err(), errServerChainFront)
+		}
 	}
 	op.front.mu.Lock()
 	op.mu.Lock()
@@ -254,12 +304,21 @@ func (op *routerVPNServerChainCandidate) Snapshot(ctx context.Context) (multihop
 	if !op.current(ctx) {
 		return multihoprelay.NodeChainCandidateReceipt{}, errServerChainFront
 	}
+	if op.capture.Request.Schema == 5 {
+		if err := op.packetRequest.FirstCarrierObserveContext(ctx, op, op.policy, op.capture); err != nil {
+			return multihoprelay.NodeChainCandidateReceipt{}, err
+		}
+	}
 	usage := op.quota.Snapshot()
 	digest, err := op.capture.Digest()
 	if err != nil {
 		return multihoprelay.NodeChainCandidateReceipt{}, err
 	}
-	return multihoprelay.NodeChainCandidateReceipt{Schema: 1, Operation: op.capture.Request.Operation, OperationOwnerID: op.capture.OperationOwnerID, CaptureSHA256: digest, DeadlineAt: op.capture.Request.DeadlineAt, Prepared: true, Retired: usage.Retired, Drained: usage.Drained, Accepted: usage.Accepted, InFlight: usage.InFlight}, nil
+	pairing := ""
+	if op.packetResponse != nil {
+		pairing = op.packetResponse.PairingSHA256()
+	}
+	return multihoprelay.NodeChainCandidateReceipt{Schema: 1, Operation: op.capture.Request.Operation, OperationOwnerID: op.capture.OperationOwnerID, CaptureSHA256: digest, DeadlineAt: op.capture.Request.DeadlineAt, Prepared: true, Retired: usage.Retired, Drained: usage.Drained, Accepted: usage.Accepted, InFlight: usage.InFlight, PairingSHA256: pairing}, nil
 }
 func (op *routerVPNServerChainCandidate) expire() {
 	defer close(op.expiryDone)
@@ -349,6 +408,15 @@ func (op *routerVPNServerChainCandidate) drain(ctx context.Context) error {
 	}
 	if err := op.closeResources(ctx); err != nil {
 		return err
+	}
+	// Only after the original sample/open worker joined can its endpoint ledger be final.
+	if err := op.closePacketEndpoint(ctx); err != nil {
+		return err
+	}
+	if op.capture.Request.Schema == 5 && op.packetRequest != nil {
+		if err := op.packetRequest.CloseFirstCarrierContext(ctx); err != nil {
+			return err
+		}
 	}
 	op.mu.Lock()
 	if len(op.resources) != 0 {
@@ -444,20 +512,27 @@ func (op *routerVPNServerChainCandidate) connect(ctx context.Context, conn net.C
 	if !op.current(bounded) {
 		return errServerChainFront
 	}
-	// dialOriginal pins the actual original outbound and rechecks all native
-	// packet/DNS/carrier owners around the returned socket.
-	remote, err := op.dialOriginal(bounded, destination)
-	if remote != nil {
-		op.retain(remote)
-	}
-	if err != nil || remote == nil || !op.current(bounded) {
-		return errServerChainFront
-	}
-	if err := N.ReportConnHandshakeSuccess(conn, remote); err != nil {
-		return err
-	}
-	if op.response == nil {
-		return nil
+	var remote net.Conn
+	if op.packetResponse != nil {
+		// This acknowledges only the authenticated control connection. The
+		// native packet endpoint is separately constructed from the sealed pair.
+		if err := N.ReportConnHandshakeSuccess(conn, conn); err != nil {
+			return err
+		}
+	} else {
+		remote, err = op.dialOriginal(bounded, destination)
+		if remote != nil {
+			op.retain(remote)
+		}
+		if err != nil || remote == nil || !op.current(bounded) {
+			return errServerChainFront
+		}
+		if err := N.ReportConnHandshakeSuccess(conn, remote); err != nil {
+			return err
+		}
+		if op.response == nil {
+			return nil
+		}
 	}
 	// Each response grant receives one fixed 96-byte challenge. The private reply
 	// is a 64-byte MAC. The public reply also binds its measured HTTPS interval.
@@ -486,7 +561,20 @@ func (op *routerVPNServerChainCandidate) connect(ctx context.Context, conn net.C
 		}
 		return cipher.DialConn(raw, M.ParseSocksaddr(address))
 	}
-	reply, err := op.response.Reply(bounded, op.capture, remote, nonce, string(frame[32:]), wrap)
+	var reply string
+	if op.packetResponse != nil {
+		challenge := string(frame[32:])
+		if !op.packetResponse.ValidChallenge(op.capture, nonce, challenge) {
+			return errServerChainFront
+		}
+		endpoint, openErr := op.openPacketEndpoint(bounded)
+		if openErr != nil {
+			return openErr
+		}
+		reply, err = op.packetResponse.ReplyPacket(bounded, op.capture, endpoint, nonce, challenge)
+	} else {
+		reply, err = op.response.Reply(bounded, op.capture, remote, nonce, string(frame[32:]), wrap)
+	}
 	replyBytes := 64
 	if op.capture.Request.Schema == 3 {
 		replyBytes = 80
@@ -646,3 +734,117 @@ func (n *routerVPNServerChain) CandidateCommand(ctx context.Context, q multihopr
 		return nil, errServerChainFront
 	}
 }
+
+// The Server endpoint belongs to this original operation across its bounded
+// samples. No accepted client socket can select another UDP target or reader.
+func (op *routerVPNServerChainCandidate) ServerCandidateCurrentContext(ctx context.Context, request *mobilemultihop.NodeChainServerCandidatePacketRequest) error {
+	if op == nil || request == nil || request != op.packetRequest || op.packetResponse == nil || !op.current(ctx) {
+		return errServerChainFront
+	}
+	return nil
+}
+func (op *routerVPNServerChainCandidate) DialServerCandidatePacketContext(ctx context.Context, request *mobilemultihop.NodeChainServerCandidatePacketRequest) (net.Conn, error) {
+	if op == nil || request == nil || request != op.packetRequest {
+		return nil, errServerChainFront
+	}
+	tag, address, err := request.ReadServer(ctx, op, op.policy, op.capture)
+	if err != nil || tag != op.tag || address != op.address {
+		return nil, errServerChainFront
+	}
+	destination := M.ParseSocksaddr(address)
+	if !destination.IsIP() || destination.Port == 0 {
+		return nil, errServerChainFront
+	}
+	call := adapter.WithContext(ctx, &adapter.InboundContext{Inbound: "routervpn-server-packet-candidate", InboundType: "socks", Network: "udp", Destination: destination})
+	var original net.Conn
+	if op.capture.Request.Schema == 5 {
+		if tag != "" || op.outbound != nil || op.firstDialer == nil {
+			return nil, errServerChainFront
+		}
+		original, err = op.firstDialer.DialContext(call, "udp", destination)
+	} else {
+		if op.outbound == nil || op.owner.outputs[tag] != op.outbound {
+			return nil, errServerChainFront
+		}
+		original, err = op.outbound.DialContext(call, "udp", destination)
+	}
+	conn := op.owner.trackConnection(original)
+	if conn == nil {
+		return nil, errors.Join(err, errServerChainFront)
+	}
+	_, _, after := request.ReadServer(ctx, op, op.policy, op.capture)
+	// The sealed packet dialer retains every returned socket before error checks.
+	return conn, errors.Join(err, after, ctx.Err())
+}
+func (op *routerVPNServerChainCandidate) openPacketEndpoint(ctx context.Context) (mobilemultihop.NodeChainCandidateEndpoint, error) {
+	if !op.current(ctx) || op.packetRequest == nil {
+		return nil, errServerChainFront
+	}
+	op.mu.Lock()
+	endpoint := op.packetEndpoint
+	op.mu.Unlock()
+	if endpoint != nil {
+		return endpoint, nil
+	}
+	if op.capture.Request.Schema == 5 {
+		raw, err := op.packetRequest.FirstCarrierOptions(ctx, op, op.policy, op.capture)
+		if err != nil {
+			return nil, err
+		}
+		var options option.DialerOptions
+		if json.Unmarshal([]byte(raw), &options) != nil || options.BindInterface == "" || options.Detour != "" || (options.Inet4BindAddress == nil) == (options.Inet6BindAddress == nil) {
+			return nil, errServerChainFront
+		}
+		bound, err := dialer.New(op.owner.ctx, options, false)
+		if err != nil || bound == nil {
+			return nil, errors.Join(err, errServerChainFront)
+		}
+		op.firstDialer = bound
+	}
+	// Sample cancellation retires the operation; a successful open retains only
+	// the operation deadline, not the lifetime of its first challenge.
+	stop := context.AfterFunc(ctx, op.cancel)
+	endpoint, err := op.packetRequest.OpenServerNativeEndpoint(op.ctx, op, op.policy, op.capture,
+		func(call context.Context, options mobilemultihop.AmneziaEndpointConfig, carrier N.Dialer) (mobilemultihop.NativeCandidateDevice, error) {
+			device, openErr := routervpnamnezia.NewCandidateEndpoint(call, routervpnamnezia.Options(options), carrier)
+			if device == nil {
+				return nil, openErr
+			}
+			return device, openErr
+		})
+	stop()
+	if endpoint != nil {
+		op.mu.Lock()
+		op.packetEndpoint = endpoint
+		op.packetClose = &routerVPNServerChainClose{original: endpoint, failed: op.cancel}
+		op.mu.Unlock()
+	}
+	if err != nil || endpoint == nil || ctx.Err() != nil || !op.current(ctx) {
+		op.cancel()
+		return nil, errors.Join(err, ctx.Err(), errServerChainFront)
+	}
+	return endpoint, nil
+}
+func (op *routerVPNServerChainCandidate) closePacketEndpoint(ctx context.Context) error {
+	op.mu.Lock()
+	endpoint, owner := op.packetEndpoint, op.packetClose
+	op.mu.Unlock()
+	if endpoint == nil && owner == nil {
+		return nil
+	}
+	if endpoint == nil || owner == nil || owner.original != endpoint {
+		return errServerChainFront
+	}
+	if err := owner.CloseContext(ctx); err != nil {
+		return err
+	}
+	op.mu.Lock()
+	defer op.mu.Unlock()
+	if op.packetEndpoint != endpoint || op.packetClose != owner {
+		return errServerChainFront
+	}
+	op.packetEndpoint, op.packetClose = nil, nil
+	return nil
+}
+
+var _ mobilemultihop.NodeChainServerPacketEngine = (*routerVPNServerChainCandidate)(nil)

@@ -340,6 +340,13 @@ enum RouterVPNOrderedNodes {
               let flag = external[final ? "ordered_external_final" : "ordered_local_imported_nodes_supported"] as? NSNumber else { return false }
         return CFGetTypeID(flag) == CFBooleanGetTypeID() && flag.boolValue
     }
+    static func appendPrefixModes(_ profile: [String: Any], position: Int) -> [String] {
+        guard position >= 0 else { return [] }
+        if externalFinalEntry(profile) {
+            return prefixModes + (position > 0 && startLayerOff(profile) ? ["shadowsocks"] : [])
+        }
+        return position > 0 && literalExternal(profile, final: false) ? ["shadowsocks"] : []
+    }
     static func externalFinalPath(_ rows: [[String: String]], control: String, profiles: [[String: Any]]) -> Bool {
         guard externalFinalShape(rows, control: control) else { return false }
         for (i, row) in rows.enumerated() {
@@ -439,6 +446,7 @@ struct RouterVPNOrderedNodeDraft {
     let capturedCatalog: [[String: Any]]
     let finalModes: [String]
     let execution: String
+    private(set) var prefixOnly = false
     private(set) var externalExit: String?
     private(set) var finalMode: String
     private(set) var prefixes: [String]
@@ -485,9 +493,76 @@ struct RouterVPNOrderedNodeDraft {
         guard finalModes.contains(finalMode) else { throw RouterVPNOrderedNodes.issue("The saved final transport no longer matches its paired source settings.") }
         if !selection.orderedNodes.isEmpty { _ = try self.selection() }
     }
-    var nodes: [[String: String]] { prefixes.enumerated().map { ["id": $0.element, "mode": modes[$0.offset]] } + [["id": externalExit ?? control, "mode": finalMode]] }
+    var prefixNodes: [[String:String]] { prefixes.enumerated().map { ["id":$0.element,"mode":modes[$0.offset]] } }
+    var nodes: [[String: String]] { prefixOnly ? prefixNodes : prefixNodes + [["id": externalExit ?? control, "mode": finalMode]] }
+    func appendModes(for id: String, at position: Int) -> [String] {
+        guard let profile=capturedCatalog.first(where:{$0["id"] as? String == id}) else { return [] }
+        return RouterVPNOrderedNodes.appendPrefixModes(profile,position:position)
+    }
+    private func validAppendPrefix(_ rows: [[String:String]], maximum: Int = 96) -> Bool {
+        guard (1...maximum).contains(rows.count), Set(rows.compactMap{$0["id"]}).count == rows.count else { return false }
+        return rows.enumerated().allSatisfy { position,row in
+            guard row.count == 2, let id=row["id"], let mode=row["mode"] else { return false }
+            return appendModes(for:id,at:position).contains(mode)
+        }
+    }
+    mutating func beginPrefixOnly() throws {
+        guard execution == "local", externalExit == nil, prefixes.isEmpty || validAppendPrefix(prefixNodes,maximum:95) else { throw RouterVPNOrderedNodes.issue("Start the Local prefix with paired WireGuard or AWG2; later Shadowsocks hops must have Start Layer Off.") }
+        prefixOnly=true
+    }
+    mutating func finishPrefixOnly(current: [String:Any]) throws {
+        var updated=self;updated.prefixOnly=false
+        _ = try RouterVPNOrderedNodes.connectBody(updated.selection(),current:current)
+        self=updated
+    }
+    func appendBody(mode: String, revision: UUID, current: [String:Any]) throws -> [String:Any] {
+        guard prefixOnly, execution == "local", externalExit == nil, RouterVPNOrderedNodes.prefixModes.contains(mode),
+              validAppendPrefix(prefixNodes,maximum:95), current["selected_id"] as? String == control,
+              let profiles=current["profiles"] as? [[String:Any]] else { throw RouterVPNOrderedNodes.issue("Recapture the original Local packet prefix and device selection.") }
+        let required=Set(prefixes+[control])
+        var expected:[String:String]=[:]
+        for id in required {
+            let matches=profiles.filter{$0["id"] as? String == id}
+            guard matches.count == 1, let token=tokens[id], matches[0]["profile_token"] as? String == token else { throw RouterVPNOrderedNodes.issue("An original prefix or device profile changed. Reopen the editor.") }
+            if id == control && !RouterVPNOrderedNodes.externalFinalEntry(matches[0]) { throw RouterVPNOrderedNodes.issue("The original selected device control changed.") }
+            if let position=prefixes.firstIndex(of:id), !RouterVPNOrderedNodes.appendPrefixModes(matches[0],position:position).contains(modes[position]) { throw RouterVPNOrderedNodes.issue("An original prefix transport changed.") }
+            expected[id]=token
+        }
+        return ["schema":1,"purpose":"draft-prefix-append","execution":"local",
+                "draft_revision":revision.uuidString.replacingOccurrences(of:"-",with:"").lowercased(),
+                "append_position":prefixes.count,"next_mode":mode,"nodes":prefixNodes,
+                "expected_selected_node_id":control,"expected_profile_tokens":expected]
+    }
+    mutating func appendMeasured(_ response: [String:Any], body: [String:Any], current: [String:Any]) throws {
+        func flag(_ key:String)->Bool { guard let value=response[key] as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() else { return false };return value.boolValue }
+        func number(_ key:String)->Double? { guard let value=response[key] as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(), value.doubleValue.isFinite else { return nil };return value.doubleValue }
+        guard prefixOnly, let mode=body["next_mode"] as? String, RouterVPNOrderedNodes.prefixModes.contains(mode),
+              let revision=body["draft_revision"] as? String,
+              let expected=body["expected_profile_tokens"] as? [String:String],
+              body["nodes"] as? [[String:String]] == prefixNodes,
+              response["scope"] as? String == "draft-prefix-append", response["purpose"] as? String == "draft-prefix-append",
+              response["origin"] as? String == "editor-draft", response["requested_execution"] as? String == "local",
+              response["draft_action"] as? String == "append-measured-hop", response["draft_revision"] as? String == revision,
+              response["candidate_mode"] as? String == mode, response["expected_selected_node_id"] as? String == control,
+              response["device_revision"] as? String == tokens[control], expected[control] == tokens[control],
+              flag("chosen"), flag("native_down"),
+              number("append_position") == Double(prefixes.count),
+              number("prefix_position") == Double(prefixes.count-1),
+              let id=response["candidate_id"] as? String, !prefixes.contains(id),
+              let proposed=response["proposed_path"] as? [[String:String]], proposed == prefixNodes+[["id":id,"mode":mode]],
+              validAppendPrefix(proposed), let issued=response["expected_profile_tokens"] as? [String:String], issued.count == proposed.count,
+              current["selected_id"] as? String == control, let profiles=current["profiles"] as? [[String:Any]],
+              let candidate=profiles.first(where:{$0["id"] as? String == id}), RouterVPNOrderedNodes.startLayerOff(candidate) else { throw RouterVPNOrderedNodes.issue("The measured append no longer belongs to this original closed prefix.") }
+        for key in Set(prefixes+[control,id]) {
+            let matches=profiles.filter{$0["id"] as? String == key}
+            guard matches.count == 1, let token=tokens[key], matches[0]["profile_token"] as? String == token,
+                  key == control && !prefixes.contains(key) && key != id || issued[key] == token,
+                  key == id || expected[key] == token else { throw RouterVPNOrderedNodes.issue("An original prefix, appended node, or device source changed before adoption.") }
+        }
+        prefixes.append(id);modes.append(mode)
+    }
     mutating func chooseExternalExit(_ id: String) throws {
-        guard ["local", "server", "auto"].contains(execution), candidates.contains(id), !prefixes.contains(id),
+        guard !prefixOnly, ["local", "server", "auto"].contains(execution), candidates.contains(id), !prefixes.contains(id),
               let exit = capturedCatalog.first(where: { $0["id"] as? String == id }), RouterVPNOrderedNodes.literalExternal(exit, final: true),
               let entry = capturedCatalog.first(where: { $0["id"] as? String == control }), RouterVPNOrderedNodes.externalFinalEntry(entry),
               prefixes.filter({ $0 != control }).allSatisfy({ member in
@@ -500,6 +575,7 @@ struct RouterVPNOrderedNodeDraft {
         finalMode = "shadowsocks"
     }
     func allowedModes(at index: Int) -> [String] {
+        if prefixOnly { return prefixes.indices.contains(index) ? appendModes(for:prefixes[index],at:index):[] }
         if externalExit != nil {
             guard (0...prefixes.count).contains(index) else { return [] }
             return index == 0 ? RouterVPNOrderedNodes.prefixModes : ["shadowsocks"]
@@ -549,17 +625,32 @@ struct RouterVPNOrderedNodeDraft {
             RouterVPNOrderedNodes.localImportedPath(nodes, profiles: capturedCatalog, selectedExecution: execution != "local"))
     }
     func preparedCandidateMode(after index: Int) -> String? {
-        guard execution == "local", externalExit == nil, (2...RouterVPNOrderedNodes.physicalTraversalDepth).contains(nodes.count),
-              modes.indices.contains(index), ["shadowsocks","hysteria2"].contains(finalMode) ||
-              (index + 1 == prefixes.count && nodes.count <= 8 && RouterVPNOrderedNodes.prefixModes.contains(finalMode)),
-              modes.allSatisfy(RouterVPNOrderedNodes.prefixModes.contains),
-              Set(prefixes + [control]).count == nodes.count,
-              RouterVPNOrderedNodes.pairedMembersOff(nodes, profiles: capturedCatalog),
-              nodes.count <= 8 || finalMode == "shadowsocks" && modes.allSatisfy({ $0 == "wg" }) else { return nil }
-        if index + 1 < prefixes.count { return modes[index + 1] }
+        guard !prefixOnly else { return nil }
+        let selected = ["auto","server"].contains(execution)
+        guard (execution == "local" || selected), externalExit == nil, (2...RouterVPNOrderedNodes.physicalTraversalDepth).contains(nodes.count),
+              modes.indices.contains(index), !selected || nodes.count >= 3 && index + 1 < prefixes.count,
+              ["shadowsocks","hysteria2"].contains(finalMode) ||
+              (!selected && index + 1 == prefixes.count && nodes.count <= 8 && RouterVPNOrderedNodes.prefixModes.contains(finalMode)),
+              Set(prefixes + [control]).count == nodes.count else { return nil }
+        let packetReplacement = index + 1 < prefixes.count
+        for (i,node) in nodes.enumerated() {
+            let matches = capturedCatalog.filter { $0["id"] as? String == node["id"] }
+            guard matches.count == 1, let profile = matches.first, let mode = node["mode"] else { return nil }
+            if profile["node_kind"] as? String == "external" {
+                guard packetReplacement, nodes.count <= 8, i > 0, i < nodes.count-1, i != index+1,
+                      mode == "shadowsocks", finalMode == "shadowsocks", RouterVPNOrderedNodes.literalExternal(profile,final:false) else { return nil }
+                continue
+            }
+            let layersAllowed = packetReplacement && nodes.count <= 8 && i <= index
+            guard layersAllowed ? RouterVPNOrderedNodes.externalFinalEntry(profile) : RouterVPNOrderedNodes.pairedMembersOff([node],profiles:[profile]),
+                  i == nodes.count-1 || RouterVPNOrderedNodes.prefixModes.contains(mode),
+                  nodes.count <= 8 || mode == (i == nodes.count-1 ? "shadowsocks":"wg") else { return nil }
+        }
+        if packetReplacement { return modes[index + 1] }
         return nodes.count <= 8 && finalMode != "shadowsocks" ? finalMode:nil
     }
     func canMeasure(after index: Int) -> Bool {
+        if prefixOnly { return index == prefixes.count-1 && validAppendPrefix(prefixNodes,maximum:95) }
         guard modes.indices.contains(index) else { return false }
         if preparedCandidateMode(after: index) != nil { return true }
         if externalExit != nil {
@@ -619,6 +710,12 @@ struct RouterVPNOrderedNodeDraft {
         }
     }
     mutating func add(_ id: String) throws {
+        if prefixOnly {
+            guard let mode=appendModes(for:id,at:prefixes.count).first else { throw RouterVPNOrderedNodes.issue("Choose a supported prefix node; the first node must be paired WireGuard or AWG2.") }
+            let proposed=prefixNodes+[["id":id,"mode":mode]]
+            guard validAppendPrefix(proposed,maximum:95) else { throw RouterVPNOrderedNodes.issue("Choose a different supported prefix node.") }
+            prefixes.append(id);modes.append(mode);return
+        }
         var mode = importedModes[id] ?? "wg"
         if nodes.count >= 8, execution != "local", !importedIDs.contains(id) {
             var proposed = nodes
@@ -693,15 +790,24 @@ struct RouterVPNOrderedNodeDraft {
         guard [-1, 1].contains(offset), prefixes.indices.contains(index), prefixes.indices.contains(index + offset), externalExit == nil || index > 0 && index + offset > 0 else {
             throw RouterVPNOrderedNodes.issue("Move an entry or hop within the prefix. The selected final exit stays last.")
         }
+        if prefixOnly {
+            var proposed=prefixNodes;proposed.swapAt(index,index+offset)
+            guard validAppendPrefix(proposed) else { throw RouterVPNOrderedNodes.issue("Keep a paired WireGuard or AWG2 node first.") }
+        }
         prefixes.swapAt(index, index + offset)
         modes.swapAt(index, index + offset)
     }
     mutating func remove(_ index: Int) throws {
         guard prefixes.indices.contains(index), externalExit == nil || index > 0 else { throw RouterVPNOrderedNodes.issue("The entry or exit is pinned to this route.") }
+        if prefixOnly {
+            var proposed=prefixNodes;proposed.remove(at:index)
+            guard proposed.isEmpty || validAppendPrefix(proposed) else { throw RouterVPNOrderedNodes.issue("Keep a paired WireGuard or AWG2 node first.") }
+        }
         prefixes.remove(at: index)
         modes.remove(at: index)
     }
     func selection() throws -> RouterVPNConnectionProfileSelection {
+        guard !prefixOnly else { throw RouterVPNOrderedNodes.issue("Select a real final before using this incomplete prefix.") }
         let ordered = try RouterVPNOrderedNodes.decode(nodes, control: control)
         guard allowedModes(at: prefixes.count).contains(finalMode) else {
             throw RouterVPNOrderedNodes.issue("The selected final transport is unavailable for this path and execution.")
@@ -1449,6 +1555,9 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
     private let candidates = NSPopUpButton(frame: .zero, pullsDown: false)
     private let transport = NSPopUpButton(frame: .zero, pullsDown: false)
     private let status = NSTextField(wrappingLabelWithString: "")
+    private let appendMode = NSPopUpButton(frame:.zero,pullsDown:false)
+    private let prefixOnlyButton = NSButton(title:"Build prefix only",target:nil,action:nil)
+    private let applyButton = NSButton(title:"Apply path",target:nil,action:nil)
 
     init(owner: ProductWindowController, draft: RouterVPNOrderedNodeDraft) {
         self.productOwner = owner; self.draft = draft
@@ -1466,6 +1575,10 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         for (title, action) in [("Move up", #selector(moveSelectedHopUp)), ("Move down", #selector(moveSelectedHopDown)), ("Remove hop", #selector(removeHop))] { move.addArrangedSubview(NSButton(title: title, target: self, action: action)) }
         move.addArrangedSubview(NSButton(title: "Measure next hop…", target: self, action: #selector(measureNext)))
         root.addArrangedSubview(move)
+        let appendRow=NSStackView();appendRow.orientation = .horizontal;appendRow.spacing=8
+        prefixOnlyButton.target=self;prefixOnlyButton.action = #selector(togglePrefixOnly);appendRow.addArrangedSubview(prefixOnlyButton)
+        for mode in RouterVPNOrderedNodes.prefixModes { appendMode.addItem(withTitle:RouterVPNOrderedNodes.modeName(mode));appendMode.lastItem?.representedObject=mode }
+        appendMode.target=self;appendMode.action = #selector(appendTransportChanged);appendMode.setAccessibilityLabel("Next measured packet transport");appendRow.addArrangedSubview(appendMode);root.addArrangedSubview(appendRow)
         candidates.menu?.delegate = self
         candidates.setAccessibilityLabel("Available linked entry and hop nodes")
         for id in draft.candidates { candidates.addItem(withTitle: "\(draft.names[id] ?? id) · \(id)"); candidates.lastItem?.representedObject = id }
@@ -1477,21 +1590,34 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         status.textColor = .secondaryLabelColor; root.addArrangedSubview(status)
         let finish = NSStackView(); finish.orientation = .horizontal; finish.spacing = 8
         finish.addArrangedSubview(NSButton(title: "Cancel", target: self, action: #selector(cancelEditing)))
-        let apply = NSButton(title: "Apply path", target: self, action: #selector(applyPath)); apply.keyEquivalent = "\r"; finish.addArrangedSubview(apply); root.addArrangedSubview(finish)
+        applyButton.target=self;applyButton.action = #selector(applyPath);applyButton.keyEquivalent = "\r"; finish.addArrangedSubview(applyButton); root.addArrangedSubview(finish)
         window.contentView = root; render()
     }
     required init?(coder: NSCoder) { nil }
     private func render(selected: Int? = nil) {
         revision = UUID()
         path.removeAllItems()
+        appendMode.isHidden = !draft.prefixOnly;applyButton.isEnabled = !draft.prefixOnly
+        prefixOnlyButton.title=draft.prefixOnly ? "Use selected node as final":"Build prefix only"
+        candidates.removeAllItems()
+        let available=draft.prefixOnly ? draft.names.keys.sorted().filter { id in !draft.prefixes.contains(id) && !draft.appendModes(for:id,at:draft.prefixes.count).isEmpty } : draft.candidates
+        for id in available { candidates.addItem(withTitle:"\(draft.names[id] ?? id) · \(id)");candidates.lastItem?.representedObject=id }
         for (index, row) in draft.nodes.enumerated() {
-            let id = row["id"]!, role = index == draft.prefixes.count ? "Exit" : index == 0 ? "Entry" : "Hop \(index)"
+            let id = row["id"]!, role = !draft.prefixOnly && index == draft.prefixes.count ? "Exit" : index == 0 ? "Entry" : "Hop \(index)"
             path.addItem(withTitle: "\(index + 1). \(role) · \(RouterVPNOrderedNodes.modeName(row["mode"]!)) · \(draft.names[id] ?? id) · \(id)")
         }
         path.selectItem(at: min(max(selected ?? 0, 0), draft.nodes.count - 1))
         selectedHopChanged()
-        status.stringValue = "\(draft.nodes.count) nodes. Apply stages this selection; Connect starts it."
+        status.stringValue = draft.prefixOnly ? "\(draft.prefixes.count) real prefix nodes. Measure the next packet node, then select a real final before using this path.":"\(draft.nodes.count) nodes. Apply stages this selection; Connect starts it."
     }
+    @objc private func togglePrefixOnly() {
+        do {
+            if draft.prefixOnly { guard let owner=productOwner else { return };let current=try owner.api.json("/api/profiles",timeout:5) as? [String:Any] ?? [:];try draft.finishPrefixOnly(current:current) }
+            else { try draft.beginPrefixOnly() }
+            render(selected:max(0,draft.prefixes.count-1))
+        } catch { status.stringValue=error.localizedDescription }
+    }
+    @objc private func appendTransportChanged() { revision=UUID() }
     @objc private func selectedHopChanged() {
         let index = path.indexOfSelectedItem
         let modes = draft.allowedModes(at: index)
@@ -1526,7 +1652,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         catch { status.stringValue = error.localizedDescription }
     }
     func menuWillOpen(_ menu: NSMenu) {
-        guard menu === candidates.menu, openedRevision != revision, !draft.prefixes.isEmpty, draft.canMeasure(after: draft.prefixes.count - 1),
+        guard !draft.prefixOnly, menu === candidates.menu, openedRevision != revision, !draft.prefixes.isEmpty, draft.canMeasure(after: draft.prefixes.count - 1),
               draft.modes.last == "shadowsocks" || draft.execution != "local" || draft.modes.allSatisfy(RouterVPNOrderedNodes.prefixModes.contains) else { return }
         openedRevision = revision
         let original = revision
@@ -1539,6 +1665,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         }
     }
     @objc private func measureNext() {
+        if draft.prefixOnly { measureAppend();return }
         do {
             let index = path.indexOfSelectedItem, original = revision
             guard let owner = productOwner, draft.canMeasure(after: index) else {
@@ -1570,6 +1697,25 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
                 }
             }
         } catch { status.stringValue = error.localizedDescription }
+    }
+    private func measureAppend() {
+        do {
+            guard let owner=productOwner, let mode=appendMode.selectedItem?.representedObject as? String else { throw RouterVPNOrderedNodes.issue("Choose the next packet transport.") }
+            let current=try owner.api.json("/api/profiles",timeout:5) as? [String:Any] ?? [:]
+            let original=revision, position=draft.prefixes.count-1
+            let body=try draft.appendBody(mode:mode,revision:original,current:current)
+            path.selectItem(at:position);selectedHopChanged()
+            owner.showOrderedPrefixCandidates(savedPrefix:true,draft:body,position:position) { [weak self, weak owner] response in
+                guard let self, let owner, self.window?.isVisible == true, self.draft.prefixOnly, self.revision == original,
+                      self.appendMode.selectedItem?.representedObject as? String == mode,
+                      owner.connectionProfileSelectionGeneration == self.draft.generation,
+                      owner.captureConnectionProfileSelection().selectedNodeID == self.draft.control else { throw RouterVPNOrderedNodes.issue("The original incomplete prefix changed. Capture it again.") }
+                let current=try owner.api.json("/api/profiles",timeout:5) as? [String:Any] ?? [:]
+                var updated=self.draft;try updated.appendMeasured(response,body:body,current:current);self.draft=updated
+                self.render(selected:updated.prefixes.count-1)
+                self.status.stringValue="Appended the measured node after the temporary path stopped. Select a real final before using this path."
+            }
+        } catch { status.stringValue=error.localizedDescription }
     }
     @objc private func applyPath() {
         do { guard let owner = productOwner else { throw RouterVPNOrderedNodes.issue("Reopen the editor from the current Router VPN window.") }; try owner.applyOrderedNodeDraft(draft); close() }
