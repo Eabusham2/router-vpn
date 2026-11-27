@@ -734,6 +734,7 @@ jobs:
           ./deploy/package-macos-native.sh
           (cd dist/macos-native && shasum -a 256 -c SHA256SUMS)
       - name: Connect the installed native macOS app through its real utun
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           test "$(uname -m)" = arm64
@@ -809,6 +810,7 @@ jobs:
                   raise RuntimeError('Packaged Intel app omitted its rendered ' + name)
           PYMACINTEL
       - name: Connect the installed Intel macOS app through its real utun
+        timeout-minutes: 15
         run: |
           set -euo pipefail
           python3 deploy/build-native-runtime.py --desktop-connect --package "$RUNNER_TEMP/routervpn-macos-intel/RouterVPN-darwin-amd64" --family macos --evidence "$RUNNER_TEMP/routervpn-macos-intel-layout/connection"

@@ -2624,6 +2624,23 @@ $v | ConvertTo-Json -Depth 6 -Compress
             else:
                 error.add_note('The bounded desktop failure receipt could not be published: '+type(publication_error).__name__)
     if error is not None:
+        if not android:
+            # Surface the original App's own failure stage and log tail in the
+            # job log, so a CI failure is diagnosable without the artifact.
+            try:
+                if phase_root is not None and (phase_root/'desktop-connect-result.json').exists():
+                    app_final = read_json(phase_root/'desktop-connect-result.json')
+                    print('Original App result:', json.dumps({k: app_final.get(k) for k in
+                          ('status', 'failure_stage', 'connect', 'traffic', 'loss', 'disconnect')}), flush=True)
+                receipt_path = phase_root/'windows-self-test-error.json' if phase_root is not None else None
+                if windows and receipt_path is not None and receipt_path.exists() and receipt_path.stat().st_size <= 16384:
+                    print('Original App self-test receipt:', receipt_path.read_text('utf-8', 'replace'), flush=True)
+                app_log_path = evidence/'desktop-connect-app.log'
+                if app_log_path.exists():
+                    tail = app_log_path.read_bytes()[-8192:].decode('utf-8', 'replace')
+                    print('Original App log tail:\n'+tail, flush=True)
+            except BaseException as diagnostic_error:
+                print('Original App diagnostics unavailable:', type(diagnostic_error).__name__, flush=True)
         raise ValueError('Desktop connection gate failed at '+result['failure_stage']) from error
     if result['status'] != 'passed':
         raise ValueError('Desktop connection ownership cleanup was not proved')
