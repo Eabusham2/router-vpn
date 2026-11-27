@@ -438,7 +438,7 @@ func (c NodeChainCandidateCapture) ResponseSourceFile() string {
 		switch c.Request.Schema {
 		case 2:
 			return "candidate-response-" + c.OperationOwnerID + ".json"
-		case 4:
+		case 4, 5:
 			return "packet-candidate-response-" + c.OperationOwnerID + ".json"
 		case 3:
 			return "public-candidate-response-" + c.OperationOwnerID + ".json"
