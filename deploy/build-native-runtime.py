@@ -2632,6 +2632,9 @@ $v | ConvertTo-Json -Depth 6 -Compress
                     app_final = read_json(phase_root/'desktop-connect-result.json')
                     print('Original App result:', json.dumps({k: app_final.get(k) for k in
                           ('status', 'failure_stage', 'connect', 'traffic', 'loss', 'disconnect')}), flush=True)
+                receipt_path = phase_root/'windows-self-test-error.json' if phase_root is not None else None
+                if windows and receipt_path is not None and receipt_path.exists() and receipt_path.stat().st_size <= 16384:
+                    print('Original App self-test receipt:', receipt_path.read_text('utf-8', 'replace'), flush=True)
                 app_log_path = evidence/'desktop-connect-app.log'
                 if app_log_path.exists():
                     tail = app_log_path.read_bytes()[-8192:].decode('utf-8', 'replace')
