@@ -10,6 +10,12 @@ const nodeChainCandidateAppendSourceKind = "routervpn-node-chain-candidate-appen
 const nodeChainCandidateAppendPreparationKind = "routervpn-node-chain-candidate-append-preparation"
 const nodeChainCandidateAppendPurpose = "draft-prefix-append"
 
+// NodeChainCandidateAppendNextMode is only a source classifier for the distinct
+// incomplete Local append purpose. It grants no complete or selected route.
+func NodeChainCandidateAppendNextMode(mode string) bool {
+	return NodeChainPrefixMode(mode) || mode == "shadowsocks"
+}
+
 // The device source is captured separately from the forwarding prefix. It
 // contributes only device TUN/settings authority, never a final node or proof.
 type nodeChainCandidateAppendSourceRecord struct {
@@ -43,7 +49,7 @@ type NodeChainCandidateAppendSource struct {
 	mtu                      NodeChainMTUPlan
 }
 
-var nodeChainCandidateAppendError = errors.New("candidate append requires its original incomplete Local prefix, independent device policy and exact prospective packet closure")
+var nodeChainCandidateAppendError = errors.New("candidate append requires its original incomplete Local prefix, independent device policy and exact prospective transport closure")
 
 // NewNodeChainCandidateAppendSource compiles only actual prefix members. The
 // same graph compiler handles each accepted depth; the physical traversal and
@@ -54,7 +60,7 @@ func NewNodeChainCandidateAppendSource(input string) (*NodeChainCandidateAppendS
 		record.Kind != nodeChainCandidateAppendSourceKind || record.Schema != 1 && record.Schema != 2 || record.Execution != "local" ||
 		!nodeChainIdentityText(record.DraftRevision) || !nodeChainIdentityText(record.DeviceRevision) ||
 		len(record.DraftRevision) > 256 || len(record.DeviceRevision) > 256 ||
-		!NodeChainPrefixMode(record.NextMode) || len(record.Nodes) < 1 || len(record.Nodes) >= NodeChainExtendedLocalMaximumNodes ||
+		!NodeChainCandidateAppendNextMode(record.NextMode) || len(record.Nodes) < 1 || len(record.Nodes) >= NodeChainExtendedLocalMaximumNodes ||
 		record.AppendPosition != len(record.Nodes) || len(record.IdentitySources) != len(record.Nodes) ||
 		record.DeviceMTURevision != "" && (!nodeChainIdentityText(record.DeviceMTURevision) || len(record.DeviceMTURevision) > 256) ||
 		record.DeviceFixedMTU != 0 && (record.DeviceMTURevision == "" || record.DeviceFixedMTU < 1280 || record.DeviceFixedMTU > 9000) {
@@ -222,7 +228,7 @@ func (s *NodeChainCandidateAppendSource) validate() error {
 	if s == nil || s.self != s || s.device == nil || s.device != s.originalDevice ||
 		s.device.validateNodeDesktopCapture() != nil || len(s.nodes) < 1 || len(s.nodes) >= NodeChainExtendedLocalMaximumNodes ||
 		s.memberCapturesCurrent() != nil || len(s.proofs) != len(s.nodes) ||
-		s.record.AppendPosition != len(s.nodes) || !NodeChainPrefixMode(s.record.NextMode) ||
+		s.record.AppendPosition != len(s.nodes) || !NodeChainCandidateAppendNextMode(s.record.NextMode) ||
 		s.seal == "" || s.seal != s.digest() {
 		return nodeChainCandidateAppendError
 	}
@@ -309,38 +315,51 @@ func (s *NodeChainCandidateAppendSource) Metadata() string {
 	return string(raw)
 }
 
-func (s *NodeChainCandidateAppendSource) candidatePacketOptions(input string) (string, error) {
+// Each candidate is compiled prospectively without changing or reopening the
+// original prefix. Packet and stream candidates share this exact source check.
+func (s *NodeChainCandidateAppendSource) candidateConfig(input string) (string, []NodeChainProof, error) {
 	if s.validate() != nil {
-		return "", nodeChainCandidateAppendError
+		return "", nil, nodeChainCandidateAppendError
 	}
 	candidate, err := ParseNodeLaunchInput(input)
 	if err != nil || candidate == nil || candidate.mode != s.record.NextMode {
-		return "", nodeChainCandidateAppendError
+		return "", nil, nodeChainCandidateAppendError
 	}
 	config, proofs, physical, err := s.compileGraph(candidate)
 	if err != nil || len(proofs) != len(s.proofs)+1 || !reflect.DeepEqual(proofs[:len(s.proofs)], s.proofs) ||
 		!nodeChainSamePhysical(physical, s.physical) {
-		return "", errors.Join(err, nodeChainCandidateAppendError)
+		return "", nil, errors.Join(err, nodeChainCandidateAppendError)
 	}
 	config, mtu, err := s.applyDevicePolicy(config, proofs)
-	if err != nil || mtu.Original != s.mtu.Original ||
+	if err != nil || mtu.Original != s.mtu.Original || len(mtu.Prefixes) != len(proofs) ||
 		!reflect.DeepEqual(mtu.Prefixes[:len(s.proofs)], s.mtu.Prefixes) {
-		return "", errors.Join(err, nodeChainCandidateAppendError)
+		return "", nil, errors.Join(err, nodeChainCandidateAppendError)
 	}
 	original, err := candidatePrefixClosure(s.config, s.proofs)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	prospective, err := candidatePrefixClosure(config, proofs[:len(s.proofs)])
 	if err != nil || !reflect.DeepEqual(original, prospective) {
+		return "", nil, nodeChainCandidateAppendError
+	}
+	return config, proofs, nil
+}
+
+func (s *NodeChainCandidateAppendSource) candidatePacketOptions(input string) (string, error) {
+	if s.validate() != nil || !NodeChainPrefixMode(s.record.NextMode) {
 		return "", nodeChainCandidateAppendError
+	}
+	config, proofs, err := s.candidateConfig(input)
+	if err != nil {
+		return "", err
 	}
 	endpoints, err := packetCandidateEndpoints(config)
 	if err != nil {
 		return "", err
 	}
 	endpoint := endpoints[proofs[len(s.nodes)].Tag]
-	if endpoint == nil || endpoint["type"] != nodeChainPrefixType(candidate.mode) ||
+	if endpoint == nil || endpoint["type"] != nodeChainPrefixType(s.record.NextMode) ||
 		endpoint["detour"] != s.proofs[len(s.proofs)-1].Tag || !candidateUnboundPacket(endpoint) {
 		return "", nodeChainCandidateAppendError
 	}
@@ -348,4 +367,41 @@ func (s *NodeChainCandidateAppendSource) candidatePacketOptions(input string) (s
 	endpoint["tag"] = "proxy"
 	raw, err := json.Marshal(endpoint)
 	return string(raw), err
+}
+
+func (s *NodeChainCandidateAppendSource) candidateSSResponse(input string) (candidateResponseSource, error) {
+	var empty candidateResponseSource
+	if s.validate() != nil || s.record.NextMode != "shadowsocks" {
+		return empty, nodeChainCandidateAppendError
+	}
+	response, err := parseCandidateResponseSource(input)
+	if err != nil {
+		return empty, err
+	}
+	config, proofs, err := s.candidateConfig(input)
+	if err != nil {
+		return empty, err
+	}
+	node, err := ParseNodeLaunchInput(input)
+	if err != nil || node == nil {
+		return empty, nodeChainCandidateAppendError
+	}
+	closure, err := nodeMultihopPredecessor(node)
+	if err != nil || !nodeChainAppendSSClosure(closure) {
+		return empty, nodeChainCandidateAppendError
+	}
+	proof := proofs[len(s.proofs)]
+	if proof.ProfileID != response.Target.ID || proof.SourceSHA256 != response.Target.SourceSHA256 ||
+		proof.NodeID != response.NodeID || proof.Mode != "shadowsocks" || proof.StartLayer != "off" ||
+		proof.NodeKind != "" || proof.Kind != "" {
+		return empty, nodeChainCandidateAppendError
+	}
+	projected, err := candidatePrefixClosure(config, proofs)
+	expected := predecessorCopy(closure.final)
+	expected["tag"], expected["detour"] = proof.Tag, s.proofs[len(s.proofs)-1].Tag
+	if err != nil || !reflect.DeepEqual(projected["outbounds/"+proof.Tag], expected) ||
+		response.Method != predecessorText(closure.final, "method") || response.Password != predecessorText(closure.final, "password") {
+		return empty, nodeChainCandidateAppendError
+	}
+	return response, nil
 }

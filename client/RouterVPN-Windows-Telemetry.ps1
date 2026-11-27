@@ -900,7 +900,7 @@ function TestOrderedCandidateAppendEnvelope($S,$Value){
  }
  $mode=ExternalComparisonValue $Value 'candidate_mode';$nodes=$null
  if($Value-is[Collections.IDictionary]){$nodes=$Value['response_source_nodes']}else{$property=$Value.PSObject.Properties['response_source_nodes'];if($null-ne$property){$nodes=$property.Value}}
- if($mode-cnotin@('wg','awg2-fast','awg2-strong')-or$mode-cne(ExternalComparisonValue $draft 'next_mode')-or
+ if($mode-cnotin@('wg','awg2-fast','awg2-strong','shadowsocks')-or$mode-cne(ExternalComparisonValue $draft 'next_mode')-or
     $nodes-isnot[array]-or$nodes.Count-lt1-or$nodes.Count-ge96-or$draft.nodes-isnot[array]-or$draft.nodes.Count-ne$nodes.Count-or
     $S.Position-ne$nodes.Count-1-or(OrderedCandidateNumber $Value 'append_position')-ne$nodes.Count-or
     (OrderedCandidateNumber $draft 'append_position')-ne$nodes.Count){return $false}
@@ -1256,7 +1256,8 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
  }else{
   $priorMode -cin @('wg','awg2-fast','awg2-strong') -and $null -eq (ExternalComparisonValue (ExternalComparisonValue $S 'View') 'original_final')
  }
- $preparedMode=$packetMode -and ([bool](ExternalComparisonValue $S 'SavedPath') -or $null -ne (ExternalComparisonValue $S 'Draft'))
+ $appendMode=(OrderedCandidateScope $S)-ceq'draft-prefix-append'
+ $preparedMode=($packetMode -or $appendMode) -and ([bool](ExternalComparisonValue $S 'SavedPath') -or $null -ne (ExternalComparisonValue $S 'Draft'))
   if($preparedMode){
    if($Phase -ceq 'catalog'){
     if(-not(TestOrderedCandidatePreparedCatalog $S $Value)){throw 'The temporary candidate catalog changed its captured source.'}
@@ -1310,7 +1311,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
 
   }
  }
- if(-not $packetMode -and ('candidate_mode' -cin $modeFields -or 'original_final' -cin $modeFields -or ($Phase -cne 'catalog' -and $null -ne $priorMode))){
+ if(-not $packetMode -and -not $preparedMode -and ('candidate_mode' -cin $modeFields -or 'original_final' -cin $modeFields -or ($Phase -cne 'catalog' -and $null -ne $priorMode))){
   if([bool](ExternalComparisonValue $S 'SavedPath')){
    if(-not(OrderedCandidateSavedEnvelope $S $Value ($Phase -ceq 'catalog'))){throw 'Paired final responses changed their original Local measurement purpose.'}
   }elseif('scope' -cin $modeFields -or 'origin' -cin $modeFields -or $null -ne (ExternalComparisonValue $S 'Draft')){throw 'Paired final responses changed their original connected Local purpose.'}
@@ -1577,7 +1578,7 @@ function ShowOrderedCandidates{
  $S.Client.Timeout=[System.Threading.Timeout]::InfiniteTimeSpan;$script:RouterVPNOrderedCandidates=$S
  if($SavedPrefix){$D.Title='Test saved prefix';$D.FindName('PurposeNote').Text='Temporarily measure each supported candidate through the selected prefix. Packet prefixes time 50 TCP handshakes. Eligible Shadowsocks prefixes time 50 private-agent responses or HTTPS responses through an independent imported candidate. HTTPS timing starts after TLS and verifies the expected exit IP. The current exit does not need to respond. The VPN returns to Disconnected before choices appear. Choose a measured candidate to save a future profile.'}elseif($SavedPath){$D.Title='Test saved Local path';$D.FindName('PurposeNote').Text='Temporarily prove the complete saved Local path. For each eligible candidate, measure 50 TCP handshakes through a packet prefix or 50 responses through a Shadowsocks prefix. Paired candidates answer private-agent challenges; imported candidates use HTTPS after TLS with their expected exit IP. The path returns to Disconnected before future-profile choices appear. Choose a measured candidate to save a future profile.'}
  if($null-ne$Draft){$D.Owner=$Editor;$D.Title='Measure the next hop';$S.ProfileName.Parent.Visibility='Collapsed';$S.Save.Content='Add measured hop to draft';$D.FindName('PurposeNote').Text='Measure 50 samples per eligible linked candidate through the selected draft prefix. The captured prefix determines whether each sample times a TCP handshake, a private-agent response, or HTTPS through an imported candidate after TLS and exit-IP verification. Add one measured hop after the temporary route closes.'}
- if((OrderedCandidateScope $S)-ceq'draft-prefix-append'){$D.Title='Measure next packet node';$D.FindName('PurposeNote').Text='Measure 50 authenticated responses through this incomplete prefix. Application traffic and DNS remain closed. Choose appends the measured node only after the temporary path fully stops. Select a real final before saving a connection.';$S.Save.Visibility='Collapsed'}
+ if((OrderedCandidateScope $S)-ceq'draft-prefix-append'){$D.Title='Measure next node';$D.FindName('PurposeNote').Text='Measure 50 authenticated responses through this incomplete prefix. Application traffic and DNS remain closed. Choose appends the measured node only after the temporary path fully stops. Select a real final before saving a connection.';$S.Save.Visibility='Collapsed'}
  $S.Refresh.Add_Click({if($null-ne$S.Prefix.SelectedValue){$S.Position=[int]$S.Prefix.SelectedValue};$S.View=$null;$S.Receipt=$null;StartOrderedCandidateRequest $S 'catalog' (OrderedCandidateCatalogPath $S) $S.Draft}.GetNewClosure())
  $S.Run.Add_Click({SetOrderedCandidateControls $S;if(-not$S.Run.IsEnabled){$S.Status.Text='Capture the selected prefix before testing.';return};if([long]$S.View.expires_at-le[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()){$S.Status.Text='The catalog expired. Capture this prefix again before testing.';return};$IDs=@($S.Table.SelectedItems|ForEach-Object{[string]$_.ID});if($IDs.Count-lt1){$S.Status.Text='Select at least one candidate row.';return};$S.RequestID=[Guid]::NewGuid().ToString('N');$S.SelectedWinner='';$S.SelectedEpoch=0;$S.Receipt=$null;$S.PendingDrain=$true;$S.CancelWanted=$false;$S.SavedAdmitted=$false;StartOrderedCandidateRequest $S 'run' (OrderedCandidateBase $S) (OrderedCandidateScopedBody $S @{request_id=$S.RequestID;view_token=[string]$S.View.view_token;prefix_position=$S.Position;candidate_ids=$IDs;samples=50})}.GetNewClosure())
  $S.Prefix.Add_SelectionChanged({SetOrderedCandidateControls $S}.GetNewClosure())

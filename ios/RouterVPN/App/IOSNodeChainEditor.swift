@@ -24,7 +24,15 @@ struct IOSNodeChainDraft {
     }
 
     func appendMeasurementPath(profiles: [RouterProfile]) throws -> [IOSMultihopNodeSelection] {
-        guard unfinished, (1..<IOSMultihopNodeSelection.physicalTraversalDepth).contains(nodes.count),
+        try appendSourcePath(profiles: profiles, maximum: IOSMultihopNodeSelection.physicalTraversalDepth - 1)
+    }
+
+    func appendCompletionPath(profiles: [RouterProfile]) throws -> [IOSMultihopNodeSelection] {
+        try appendSourcePath(profiles: profiles, maximum: IOSMultihopNodeSelection.physicalTraversalDepth)
+    }
+
+    private func appendSourcePath(profiles: [RouterProfile], maximum: Int) throws -> [IOSMultihopNodeSelection] {
+        guard unfinished, (1...maximum).contains(nodes.count),
               Set(nodes.map(\.id)).count == nodes.count, nodes.enumerated().allSatisfy({ position, node in
                   let originals = profiles.filter { $0.id == node.id }
                   return !node.id.isEmpty && originals.count == 1 &&
@@ -37,7 +45,7 @@ struct IOSNodeChainDraft {
                                 original: [IOSMultihopNodeSelection], draftRevision: String, mode: String) throws {
         guard unfinished, revision == draftRevision, nodes == original, !candidate.isEmpty,
               nodes.count < IOSMultihopNodeSelection.physicalTraversalDepth,
-              !nodes.contains(where: { $0.id == candidate }), IOSMultihopNodeSelection.supportsNativePrefix(mode),
+              !nodes.contains(where: { $0.id == candidate }), IOSNodeCandidateAppendSource.supportsNextMode(mode),
               compiled == nodes + [.init(id: candidate, mode: mode)] else { throw IOSNodeCandidateAppendSource.issue() }
         nodes = compiled
     }
@@ -335,6 +343,7 @@ struct IOSNodeChainAppendCompletion {
     let stamp: IOSCandidateCatalogPublication.Stamp
     let deviceMTU: IOSDeviceMTUPreference
     let idleGeneration: UUID
+    var usesLastNodeAsFinal: Bool { prefix.last?.id == finalID && prefix.last?.mode == "shadowsocks" }
 }
 
 @MainActor
@@ -386,7 +395,7 @@ extension RouterVPNModel {
     func requireIOSNodeChainAppendSources(_ owner: IOSNodeChainEditorOwner, nodes: [IOSMultihopNodeSelection]) throws {
         guard bundle?.selectedRouterID == owner.controlID, let control = selectedNodeProfile,
               control.id == owner.controlID, control.normalizedNodeKind == "router-vpn", control.external == nil,
-              !nodes.isEmpty, nodes.count < IOSMultihopNodeSelection.physicalTraversalDepth,
+              !nodes.isEmpty, nodes.count <= IOSMultihopNodeSelection.physicalTraversalDepth,
               Set(nodes.map(\.id)).count == nodes.count, nodes.allSatisfy({ !$0.id.isEmpty }) else {
             throw IOSNodeCandidateAppendSource.issue()
         }
@@ -420,17 +429,18 @@ extension RouterVPNModel {
               !iosSpeedLabOwnership.active, !IOSMTUMeasurementGate.held,
               IOSNodeCandidatePreparation.retained == nil else { throw CancellationError() }
         try requireIOSNodeChainAppendSources(owner, nodes: prefix)
-        guard !prefix.contains(where: { $0.id == finalID }),
+        let keepsLast = prefix.count >= 2 && prefix.last?.id == finalID && prefix.last?.mode == "shadowsocks"
+        guard keepsLast || !prefix.contains(where: { $0.id == finalID }),
               let expected = owner.fingerprints[finalID], try iosNodeChainEditorFingerprint(finalID) == expected,
               allNodeProfiles.filter({ $0.id == finalID }).count == 1 else {
-            throw IOSMultihopNodeSelection.issue("Choose a distinct final node from the original linked sources.")
+            throw IOSMultihopNodeSelection.issue("Use the actual last paired Shadowsocks node or choose a distinct final from the original linked sources.")
         }
     }
 
     func prepareIOSNodeChainAppendCompletion(_ draft: IOSNodeChainDraft, owner: IOSNodeChainEditorOwner,
                                              finalID: String) throws -> IOSNodeChainAppendCompletion {
         guard draft.unfinished else { throw IOSNodeCandidateAppendSource.issue() }
-        let prefix = try draft.appendMeasurementPath(profiles: iosNodeChainEditorProfiles(owner: owner))
+        let prefix = try draft.appendCompletionPath(profiles: iosNodeChainEditorProfiles(owner: owner))
         try requireIOSNodeChainAppendCompletionIdle(owner, prefix: prefix, finalID: finalID)
         let originalBundle = try IOSNodeUsage.canonical(bundle)
         let snapshot = try IOSNodeBundleStore.shared.candidateSnapshot()
@@ -444,7 +454,7 @@ extension RouterVPNModel {
               value.profiles["shadowsocks"]?["sing-box.json"]?.isEmpty == false else {
             throw IOSMultihopNodeSelection.issue("The final node needs its original paired Shadowsocks 2022 source.")
         }
-        let nodes = prefix + [IOSMultihopNodeSelection(id: finalID, mode: "shadowsocks")]
+        let nodes = prefix.last?.id == finalID ? prefix : prefix + [IOSMultihopNodeSelection(id: finalID, mode: "shadowsocks")]
         try IOSMultihopNodeSelection.validate(nodes, execution: "local", entryID: nil, entryMode: nil,
                                              exitID: nil, exitMode: nil, controlID: finalID)
         value.selectedRouterID = finalID

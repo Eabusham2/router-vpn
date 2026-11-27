@@ -100,7 +100,7 @@ import Foundation
                 try binding.require(self); try current()
                 if capture.metadata.measurement == "routed-public-candidate-response" { message = "Testing public HTTPS through the selected Shadowsocks 2022 prefix" }
                 else if let carrier = capture.metadata.candidate_mode {
-                    message = capture.isAppend ? "Testing the next \(carrier) packet node through this prefix" :
+                    message = capture.isAppend ? "Testing the next \(carrier) node through this prefix" :
                         "Testing the selected prefix for a \(carrier) replacement"
                 }
                 else { message = capture.metadata.measurement == "routed-candidate-response" ? "Testing the selected Shadowsocks 2022 prefix" : "Testing the selected packet prefix" }

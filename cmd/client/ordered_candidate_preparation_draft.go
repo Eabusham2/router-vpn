@@ -331,10 +331,10 @@ type orderedCandidateAppendRequest struct {
 }
 
 func (q *orderedCandidateAppendRequest) validate() error {
-	bad := errors.New("append measurement requires its exact incomplete Local prefix, next packet mode and original device selection")
+	bad := errors.New("append measurement requires its exact incomplete Local prefix, next transport mode and original device selection")
 	if q == nil || q.Schema != 1 || q.Purpose != orderedCandidateAppendScope || q.Execution != "local" ||
 		!validViaEntryRequestID(q.DraftRevision) || len(q.Nodes) < 1 || len(q.Nodes) >= mobilemultihop.NodeChainExtendedLocalMaximumNodes ||
-		q.AppendPosition != len(q.Nodes) || !mobilemultihop.NodeChainPrefixMode(q.NextMode) ||
+		q.AppendPosition != len(q.Nodes) || !mobilemultihop.NodeChainCandidateAppendNextMode(q.NextMode) ||
 		q.ExpectedSelectedNodeID == nil || !validProfileID(*q.ExpectedSelectedNodeID) || q.ExpectedProfileTokens == nil {
 		return bad
 	}

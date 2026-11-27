@@ -1,6 +1,7 @@
 package mobilemultihop
 
 import (
+	"encoding/base64"
 	"errors"
 	"net/netip"
 	"reflect"
@@ -204,6 +205,7 @@ func (s *NodeChainCandidateAppendSource) compileGraph(candidate *NodeProfile) (s
 	members := make([]nodeChainGraphMember, len(nodes))
 	streams := make([]*externalPredecessor, 0, len(nodes))
 	targets := map[netip.AddrPort]bool{}
+	withStreams := s.record.Schema == 2 || candidate != nil && candidate.mode == "shadowsocks"
 	for i, node := range nodes {
 		var closure *externalPredecessor
 		var err error
@@ -227,7 +229,7 @@ func (s *NodeChainCandidateAppendSource) compileGraph(candidate *NodeProfile) (s
 			streams = append(streams, closure)
 		} else if node == nil || !NodeChainPrefixMode(node.mode) || closure.final["type"] != nodeChainPrefixType(node.mode) {
 			return fail(nil)
-		} else if s.record.Schema == 2 {
+		} else if withStreams {
 			sockets, err := node.PhysicalEgress()
 			if err != nil {
 				return fail(err)
@@ -246,7 +248,7 @@ func (s *NodeChainCandidateAppendSource) compileGraph(candidate *NodeProfile) (s
 		}
 		closures[i] = closure
 	}
-	if s.record.Schema == 2 {
+	if withStreams {
 		if len(streams) == 0 {
 			return fail(nil)
 		}
@@ -271,4 +273,67 @@ func (s *NodeChainCandidateAppendSource) compileGraph(candidate *NodeProfile) (s
 		return fail(err)
 	}
 	return config, proofs, physical, nil
+}
+
+// Read every original transport row retained by the append source. The sets
+// reject a proposed SS peer that aliases a prefix packet, SS stream or layer;
+// they never grant a dialer, resolver, candidate or complete-route identity.
+func (s *NodeChainCandidateAppendSource) streamCandidateAliases() (map[string]bool, map[string]bool, error) {
+	rows, err := candidatePrefixClosure(s.config, s.proofs)
+	if err != nil {
+		return nil, nil, err
+	}
+	keys, addresses := map[string]bool{}, map[string]bool{}
+	rememberKey := func(value string) bool {
+		if value == "" {
+			return true
+		}
+		raw, err := base64.StdEncoding.DecodeString(value)
+		defer clear(raw)
+		if err != nil || len(raw) != 32 {
+			return false
+		}
+		keys[base64.StdEncoding.EncodeToString(raw)] = true
+		return true
+	}
+	rememberAddress := func(host string, value any) bool {
+		ip, err := netip.ParseAddr(host)
+		port, ok := value.(float64)
+		if err != nil || ip.Zone() != "" || ip.Is4In6() || !ok || !externalPort(port) {
+			return false
+		}
+		addresses[netip.AddrPortFrom(ip, uint16(port)).String()] = true
+		return true
+	}
+	for label, raw := range rows {
+		if !strings.HasPrefix(label, "outbounds/") && !strings.HasPrefix(label, "endpoints/") {
+			continue
+		}
+		row, ok := raw.(map[string]any)
+		if !ok {
+			return nil, nil, nodeChainCandidateAppendError
+		}
+		switch predecessorText(row, "type") {
+		case "shadowsocks", "routervpn-aes-xor":
+			key := importedSS2022KeyIdentity(predecessorText(row, "method"), predecessorText(row, "password"))
+			if key == "" || !rememberAddress(predecessorText(row, "server"), row["server_port"]) {
+				return nil, nil, nodeChainCandidateAppendError
+			}
+			keys[key] = true
+		case "wireguard", AmneziaType:
+			if !rememberKey(predecessorText(row, "private_key")) {
+				return nil, nil, nodeChainCandidateAppendError
+			}
+			peers, ok := row["peers"].([]any)
+			if !ok || len(peers) != 1 {
+				return nil, nil, nodeChainCandidateAppendError
+			}
+			peer, ok := peers[0].(map[string]any)
+			if !ok || !rememberKey(predecessorText(peer, "public_key")) || !rememberKey(predecessorText(peer, "pre_shared_key")) ||
+				!rememberAddress(predecessorText(peer, "address"), peer["port"]) {
+				return nil, nil, nodeChainCandidateAppendError
+			}
+		}
+	}
+	return keys, addresses, nil
 }

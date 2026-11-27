@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,9 +12,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -61,6 +66,8 @@ func registerConnectionProfileSetupRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/connection-profile/setup/update", a.updateConnectionProfileSetup)
 	h.HandleFunc("/api/connection-profile/setup/load", a.loadConnectionProfileSetup)
 	h.HandleFunc("/api/connection-profile/setup/delete", a.deleteConnectionProfileSetup)
+	h.HandleFunc("/api/connection-profile/setup/complete-prefix", a.previewConnectionProfileCompletion)
+	h.HandleFunc("/api/connection-profile/setup/save-completed-prefix", a.saveCompletedConnectionProfile)
 }
 
 func connectionProfileSetupMetaPath(a *app) string {
@@ -695,4 +702,232 @@ func readBoundedBody(r *http.Request, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// A completion owns immutable sources only. It never changes a selected node,
+// starts a runtime, or borrows a prior measurement's authority.
+type connectionProfileCompletionCapture struct {
+	request         connectionProfileCompletionRequest
+	catalog         common.RouterProfileStore
+	catalogRevision string
+	state           state
+	device          common.RouterProfile
+	deviceInput     string
+	deviceAssets    []viaEntryAsset
+	future          common.RouterProfile
+	profiles        []common.RouterProfile
+	compiled        *desktopNodeChainCapture
+	mtu             *deviceMTUCapture
+	digest          string
+}
+
+func connectionProfileCompletionSHA(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func (a *app) captureConnectionProfileCompletion(ctx context.Context, q connectionProfileCompletionRequest) (*connectionProfileCompletionCapture, error) {
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
+	if err := a.validateConnectionProfileCompletionLocked(q); err != nil {
+		a.mu.Unlock()
+		return nil, err
+	}
+	catalog, originalState := cloneRouterProfileStore(a.profiles), a.state
+	revision, err := a.candidateCatalogRevisionLocked()
+	a.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	device, _ := profileByID(catalog.Profiles, q.DeviceID)
+	future, _ := profileByID(catalog.Profiles, q.FinalID)
+	future = cloneRouterProfile(future)
+	future.MultihopEnabled, future.MultihopExecution = true, "local"
+	future.MultihopNodes = append([]common.MultihopNodeSelection(nil), q.Nodes...)
+	future.MultihopEntryID, future.MultihopExitID, future.MultihopEntryMode = "", "", ""
+	profiles := cloneRouterProfileStore(catalog).Profiles
+	for i := range profiles {
+		if profiles[i].ID == future.ID {
+			profiles[i] = future
+		}
+	}
+	mtu, err := captureDeviceMTUPolicy(a)
+	if err != nil {
+		return nil, err
+	}
+	ctx = context.WithValue(ctx, deviceMTUContextKey{}, mtu)
+	root, err := canonicalBundleRoot(clientRoot(a))
+	if err != nil {
+		return nil, err
+	}
+	deviceCapture := &desktopNodeChainCapture{root: root}
+	total := 0
+	deviceInput, _, _, err := deviceCapture.compileMember(ctx, desktopNodeChainMember{Profile: device, Mode: "wg"}, &total, nil)
+	if err != nil {
+		return nil, err
+	}
+	proposal, err := captureOrderedCandidateProposal(ctx, root, future, profiles, q.Nodes)
+	if err != nil {
+		return nil, err
+	}
+	compiled, ok := proposal.(*desktopNodeChainCapture)
+	if !ok || compiled.chain == nil || compiled.append != nil || compiled.socks != nil || compiled.connect != nil {
+		return nil, errors.New("completion did not compile its normal complete Local path")
+	}
+	if err := mtu.current(); err != nil {
+		return nil, err
+	}
+	if mtu.policy.FixedMTU != 0 {
+		// The original ordered chain owns its selector and every prefix bound.
+		// Validate the future TUN size through that capture, without changing it.
+		bound, err := compiled.chain.MTUPlan()
+		if err != nil {
+			return nil, err
+		}
+		plan, err := compiled.chain.PlanForMTU(compiled.chain.Config(), bound.Original)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := plan.Config(mtu.policy.FixedMTU); err != nil {
+			return nil, err
+		}
+	}
+	if err := mtu.current(); err != nil {
+		return nil, err
+	}
+	capture := &connectionProfileCompletionCapture{request: q, catalog: catalog, catalogRevision: revision, state: originalState,
+		device: cloneRouterProfile(device), deviceInput: deviceInput, deviceAssets: append([]viaEntryAsset(nil), deviceCapture.assets...),
+		future: future, profiles: profiles, compiled: compiled, mtu: mtu}
+	binding, err := json.Marshal([]any{json.RawMessage(q.identity()), revision, compiled.seal,
+		connectionProfileCompletionSHA([]byte(deviceInput)), mtu.token})
+	if err != nil {
+		return nil, err
+	}
+	capture.digest = connectionProfileCompletionSHA(binding)
+	if err := desktopnetwork.LockContext(ctx, &a.mu); err != nil {
+		return nil, err
+	}
+	err = capture.currentLocked(ctx, a)
+	a.mu.Unlock()
+	return capture, err
+}
+
+// The original operation lock remains held through this complete readback and
+// any atomic named-profile append. Source bytes never enter the public result.
+func (capture *connectionProfileCompletionCapture) currentLocked(ctx context.Context, a *app) error {
+	if ctx == nil || ctx.Err() != nil || capture == nil || capture.compiled == nil || capture.mtu == nil {
+		return errors.New("completion source owner is unavailable")
+	}
+	if err := a.validateConnectionProfileCompletionLocked(capture.request); err != nil {
+		return err
+	}
+	revision, err := a.candidateCatalogRevisionLocked()
+	if err != nil || revision != capture.catalogRevision || a.state != capture.state || !reflect.DeepEqual(a.profiles, capture.catalog) {
+		return errors.New("the original completion catalog or idle state changed")
+	}
+	if err := capture.mtu.current(); err != nil {
+		return err
+	}
+	if err := capture.compiled.validate(ctx, capture.future, capture.profiles); err != nil {
+		return err
+	}
+	for _, asset := range capture.deviceAssets {
+		files, err := readDesktopNodeAssets(capture.compiled.root, asset.id, asset.mode)
+		if err != nil {
+			return err
+		}
+		same := viaEntryAssetDigest(files) == asset.digest
+		clearViaEntryAssets(files)
+		if !same {
+			return errors.New("the independent original device source changed")
+		}
+	}
+	return ctx.Err()
+}
+
+func (capture *connectionProfileCompletionCapture) response() map[string]any {
+	q := capture.request
+	return map[string]any{"schema": 1, "purpose": connectionProfileCompletionPurpose, "compiled": true,
+		"draft_revision": q.DraftRevision, "device_id": q.DeviceID, "device_revision": q.DeviceRevision,
+		"final_id": q.FinalID, "nodes": q.Nodes, "source_sha256": connectionProfileCompletionSHA([]byte(capture.compiled.input)),
+		"device_source_sha256": connectionProfileCompletionSHA([]byte(capture.deviceInput)), "device_mtu_revision": capture.mtu.token,
+		"completion_sha256": capture.digest, "active_path_changed": false}
+}
+
+func (a *app) previewConnectionProfileCompletion(w http.ResponseWriter, r *http.Request) {
+	a.writeConnectionProfileCompletion(w, r, false)
+}
+
+func (a *app) saveCompletedConnectionProfile(w http.ResponseWriter, r *http.Request) {
+	a.writeConnectionProfileCompletion(w, r, true)
+}
+
+func (a *app) writeConnectionProfileCompletion(w http.ResponseWriter, r *http.Request, saving bool) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	release, err := a.beginMutationOperation(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	defer release()
+	raw, err := readBoundedBody(r, 32<<10)
+	if err != nil {
+		http.Error(w, "completion request exceeds its bounded JSON source", http.StatusBadRequest)
+		return
+	}
+	q, err := decodeConnectionProfileCompletion(raw, saving)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	capture, err := a.captureConnectionProfileCompletion(r.Context(), q)
+	if err != nil {
+		http.Error(w, "complete path did not retain its original sources: "+err.Error(), http.StatusConflict)
+		return
+	}
+	if saving && q.ExpectedCompletionSHA256 != capture.digest {
+		http.Error(w, "the original completion preview changed; review the current complete path again", http.StatusConflict)
+		return
+	}
+	if err := desktopnetwork.LockContext(r.Context(), &a.mu); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	defer a.mu.Unlock()
+	if err := capture.currentLocked(r.Context(), a); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	response := capture.response()
+	if saving {
+		record, err := a.orderedCandidateProfileRecordLocked(capture.future, q.Name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		store, err := loadConnectionProfileStore(a)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if len(store.Profiles) >= connectionProfileStoreMaxEntries {
+			http.Error(w, "connection profile limit reached", http.StatusConflict)
+			return
+		}
+		if err := capture.currentLocked(r.Context(), a); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		store.Profiles = append(store.Profiles, record)
+		if err := persistConnectionProfileStore(a, store); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		response["profile_id"], response["profile_name"] = record.ID, record.Name
+	}
+	viaEntryJSON(w, response)
 }

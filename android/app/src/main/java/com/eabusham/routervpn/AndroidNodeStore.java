@@ -639,9 +639,9 @@ final class AndroidNodeStore {
             String nextMode,String revision,java.util.function.BooleanSupplier current)throws Exception { synchronized(STORE_LOCK) {
         requireChainCatalog(catalog);
         if(current==null||!current.getAsBoolean()||sources.isEmpty()||sources.size()>=PHYSICAL_TRAVERSAL_DEPTH
-                ||sources.size()!=modes.size()||!List.of("wg","awg2-fast","awg2-strong").contains(nextMode)
+                ||sources.size()!=modes.size()||!AndroidNodeCandidateAppendSource.supportsNextMode(nextMode)
                 ||revision==null||!revision.matches("[A-Za-z0-9_.-]{1,128}"))
-            throw new IllegalStateException("The unfinished draft or next packet mode changed.");
+            throw new IllegalStateException("The unfinished draft or next transport changed.");
         ChainSource device=catalog.source(catalog.selectedId);
         device.requirePairedIdentity();
         List<ChainSource> originals=new ArrayList<>();JSONArray refs=new JSONArray();

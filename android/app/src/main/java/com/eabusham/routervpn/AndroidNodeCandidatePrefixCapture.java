@@ -133,10 +133,18 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
         for(int i=0;i<proofs.length();i++){
             JSONObject proof=proofs.getJSONObject(i),member=new JSONObject(original.memberInputs.get(i));
             if ("routervpn-node-chain-imported-member".equals(member.optString("kind"))) {
-                if(original.plan==null || (responseMode.isEmpty()
-                        ?!Libbox.routerNodeChainCandidatePrefixMeasurement(original.plan,prefix).equals(meta.optString("measurement","routed-tcp-connect"))
-                        :!responseMode.equals(Libbox.routerNodeChainPreparedCandidateResponseMode(original.plan,prefix))))throw invalid();
-                JSONObject retained=new JSONObject(Libbox.routerNodeChainCandidatePrefixProof(original.plan,i));
+                JSONObject retained;
+                if(original.append!=null) {
+                    original.append.requireCurrent();
+                    if(original.plan!=null||!plan.isAppend()||!"draft-prefix-append".equals(meta.getString("purpose"))
+                            ||!original.append.metadata.equals(plan.appendSourceMetadata()))throw invalid();
+                    retained=new JSONObject(original.append.metadata).getJSONArray("prefixes").getJSONObject(i);
+                } else {
+                    if(original.plan==null || (responseMode.isEmpty()
+                            ?!Libbox.routerNodeChainCandidatePrefixMeasurement(original.plan,prefix).equals(meta.optString("measurement","routed-tcp-connect"))
+                            :!responseMode.equals(Libbox.routerNodeChainPreparedCandidateResponseMode(original.plan,prefix))))throw invalid();
+                    retained=new JSONObject(Libbox.routerNodeChainCandidatePrefixProof(original.plan,i));
+                }
                 for(String key:new String[]{"position","profile_id","node_id","source_sha256","tag","kind","node_kind","mode","start_layer"})
                     if(!retained.get(key).equals(proof.get(key)))throw invalid();
                 if(!"public-path".equals(proof.getString("kind"))||!"external".equals(proof.getString("node_kind"))||!proof.getString("node_id").isEmpty())throw invalid();

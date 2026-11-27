@@ -13,6 +13,8 @@ import java.util.List;
 /** Source-only capture of a real unfinished prefix. The separately selected
  * control supplies device policy, never a fabricated route member or final. */
 final class AndroidNodeCandidateAppendSource {
+    static final List<String> NEXT_MODES=List.of("wg","awg2-fast","awg2-strong","shadowsocks");
+    static boolean supportsNextMode(String mode){return mode!=null&&NEXT_MODES.contains(mode);}
     final RouterNodeChainCandidateAppendSource plan;
     final AndroidNodeStore.ChainCapture original;
     final AndroidDeviceMTU deviceMTU;
@@ -22,7 +24,7 @@ final class AndroidNodeCandidateAppendSource {
     private final Context context;
 
     AndroidNodeCandidateAppendSource(Context context,AndroidNodeStore.ChainCapture original)throws Exception {
-        if(original==null||!original.appendDraft()||!"local".equals(original.execution))
+        if(original==null||!original.appendDraft()||!"local".equals(original.execution)||!supportsNextMode(original.appendMode))
             throw invalid();
         this.context=context.getApplicationContext();this.original=original;
         original.requireCurrent();deviceMTU=AndroidDeviceMTU.capture(this.context);

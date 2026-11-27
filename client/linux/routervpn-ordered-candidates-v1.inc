@@ -209,7 +209,7 @@ static JsonArray *linux_oc_append_source(JsonObject *view, JsonObject *draft, in
         strcmp(linux_ec_string(view,"requested_execution"),"local") || strcmp(linux_ec_string(view,"proof_scope"),"selected-prefix") ||
         linux_ec_number(view,"schema")!=1 || linux_ec_number(view,"prefix_position")!=position ||
         strcmp(linux_ec_string(view,"measurement"),"routed-candidate-response") ||
-        !linux_oc_packet_mode(linux_ec_string(view,"candidate_mode")) ||
+        (!linux_oc_packet_mode(linux_ec_string(view,"candidate_mode")) && strcmp(linux_ec_string(view,"candidate_mode"),"shadowsocks")) ||
         strcmp(linux_ec_string(view,"candidate_mode"),linux_ec_string(draft,"next_mode"))) return NULL;
     const char *closed[]={"application_open","dns_open"};
     for (guint i=0;i<G_N_ELEMENTS(closed);i++) {
@@ -894,7 +894,8 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
     JsonNode *original=linux_ec_member(o,"original_final");
     gboolean packet_mode=phase==1 ? linux_oc_packet_mode(linux_ec_string(o,"candidate_mode")) && !original :
         linux_oc_packet_mode(linux_ec_string(prior,"candidate_mode")) && !linux_ec_member(prior,"original_final");
-    gboolean prepared_mode=packet_mode && (s->saved_path || s->draft);
+    gboolean append_mode=!strcmp(linux_oc_scope(s),"draft-prefix-append");
+    gboolean prepared_mode=(packet_mode || append_mode) && (s->saved_path || s->draft);
     if (prepared_mode) {
         if (!s->saved_path || !s->saved_prefix) return FALSE;
         if (phase==1) {
@@ -936,7 +937,7 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
                     if (g_strcmp0(linux_ec_string(choice,"id"),s->chosen_id)) continue;
                     if (!linux_oc_prepared_path(prior,draft_source,choice,linux_ec_array(o,"proposed_path"),s->position)) return FALSE;
                     if (phase==6) {
-                        if (!s->draft || !linux_oc_packet_mode(linux_ec_string(prior,"candidate_mode")) ||
+                        if (!s->draft || (!append_mode && !linux_oc_packet_mode(linux_ec_string(prior,"candidate_mode"))) ||
                             strcmp(linux_ec_string(o,"draft_action"),!strcmp(linux_oc_scope(s),"draft-prefix-append")?"append-measured-hop":"replace-measured-hop")) return FALSE;
                     } else if (strcmp(linux_ec_string(o,"proposal_action"),linux_ec_string(choice,"proposal_action"))) return FALSE;
                     matches++;
@@ -979,7 +980,7 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
 
         }
     }
-    if (!packet_mode && (mode || original || (phase!=1 && prior_mode))) {
+    if (!packet_mode && !prepared_mode && (mode || original || (phase!=1 && prior_mode))) {
         if (s->saved_path) {
             if (!linux_oc_saved_envelope(s,o,phase==1)) return FALSE;
         } else if (s->draft || linux_ec_member(o,"scope") || linux_ec_member(o,"origin")) return FALSE;

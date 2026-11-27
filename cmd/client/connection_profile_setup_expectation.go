@@ -1,10 +1,14 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
 )
 
 // Setup expectations protect the caller's current selection. They are not
@@ -74,4 +78,139 @@ func (a *app) validateConnectionProfileSetupExpectationsLocked(expected desktopP
 		return err
 	}
 	return a.validateDesktopProfileExpectationsLocked(expected, ids, true)
+}
+
+// This completion purpose has a current device and a different future final.
+// Path-token bounds remain unchanged; the independent device has its own token.
+const connectionProfileCompletionPurpose = "draft-last-ss-final"
+
+type connectionProfileCompletionRequest struct {
+	Schema                   int                            `json:"schema"`
+	Purpose                  string                         `json:"purpose"`
+	Execution                string                         `json:"execution"`
+	DraftRevision            string                         `json:"draft_revision"`
+	DeviceID                 string                         `json:"device_id"`
+	DeviceRevision           string                         `json:"device_revision"`
+	FinalID                  string                         `json:"final_id"`
+	Nodes                    []common.MultihopNodeSelection `json:"nodes"`
+	Name                     string                         `json:"name,omitempty"`
+	ExpectedCompletionSHA256 string                         `json:"expected_completion_sha256,omitempty"`
+	desktopProfileExpectations
+}
+
+func decodeConnectionProfileCompletion(raw []byte, saving bool) (connectionProfileCompletionRequest, error) {
+	var q connectionProfileCompletionRequest
+	bad := errors.New("completion requires the exact unfinished Local path and independent current device")
+	fields, err := externalConnectJSONObject(raw)
+	if err != nil {
+		return q, bad
+	}
+	for name := range fields {
+		switch name {
+		case "schema", "purpose", "execution", "draft_revision", "device_id", "device_revision", "final_id", "nodes", "expected_selected_node_id", "expected_profile_tokens":
+		case "name", "expected_completion_sha256":
+			if !saving {
+				return q, bad
+			}
+		default:
+			return q, bad
+		}
+	}
+	count := 10
+	if saving {
+		count += 2
+	}
+	if len(fields) != count {
+		return q, bad
+	}
+	expected, err := decodeDesktopProfileExpectations(fields)
+	if err != nil {
+		return q, bad
+	}
+	var rows []json.RawMessage
+	if json.Unmarshal(fields["nodes"], &rows) != nil || len(rows) < 2 || len(rows) > mobilemultihop.NodeChainExtendedLocalMaximumNodes {
+		return q, bad
+	}
+	for _, raw := range rows {
+		row, err := externalConnectJSONObject(raw)
+		if err != nil || len(row) != 2 || row["id"] == nil || row["mode"] == nil {
+			return q, bad
+		}
+	}
+	if json.Unmarshal(raw, &q) != nil {
+		return q, bad
+	}
+	q.desktopProfileExpectations = expected
+	if q.Schema != 1 || q.Purpose != connectionProfileCompletionPurpose || q.Execution != "local" ||
+		!validViaEntryRequestID(q.DraftRevision) || !validProfileID(q.DeviceID) || !validProfileID(q.FinalID) ||
+		!validExternalProfileExpectationToken(q.DeviceRevision) || q.ExpectedSelectedNodeID == nil ||
+		*q.ExpectedSelectedNodeID != q.DeviceID || len(q.ExpectedProfileTokens) != len(q.Nodes) ||
+		q.Nodes[len(q.Nodes)-1].ID != q.FinalID || q.Nodes[len(q.Nodes)-1].Mode != "shadowsocks" {
+		return q, bad
+	}
+	seen := map[string]bool{}
+	for position, node := range q.Nodes {
+		if !validProfileID(node.ID) || seen[node.ID] ||
+			!mobilemultihop.NodeChainPrefixMode(node.Mode) && (position == 0 || node.Mode != "shadowsocks") ||
+			!validExternalProfileExpectationToken(q.ExpectedProfileTokens[node.ID]) {
+			return q, bad
+		}
+		seen[node.ID] = true
+	}
+	if token, present := q.ExpectedProfileTokens[q.DeviceID]; present && token != q.DeviceRevision {
+		return q, bad
+	}
+	if saving {
+		q.Name = strings.TrimSpace(q.Name)
+		decoded, err := hex.DecodeString(q.ExpectedCompletionSHA256)
+		if err != nil || len(decoded) != sha256.Size || hex.EncodeToString(decoded) != q.ExpectedCompletionSHA256 {
+			return q, bad
+		}
+		if err := validateConnectionProfileName(q.Name); err != nil {
+			return q, err
+		}
+	}
+	return q, nil
+}
+
+func (q connectionProfileCompletionRequest) identity() []byte {
+	q.Name, q.ExpectedCompletionSHA256 = "", ""
+	raw, _ := json.Marshal(q)
+	return raw
+}
+
+// Caller holds operationMu and a.mu. No complete-route expectation rule changes.
+func (a *app) validateConnectionProfileCompletionLocked(q connectionProfileCompletionRequest) error {
+	bad := errors.New("the original completion device, path, or idle owner changed")
+	if a.controllerClosingLocked() || a.profiles.SelectedID != q.DeviceID || a.connectionContext != nil ||
+		a.candidatePreparation != nil || !orderedCandidatePreparationDownLocked(a) {
+		return bad
+	}
+	device, ok := a.profileByIDLocked(q.DeviceID)
+	if !ok || device.External != nil || device.NodeKind != "" && device.NodeKind != "router-vpn" ||
+		!common.ValidNodeProofID(device.NodeProofID) || publicProfileToken(device) != q.DeviceRevision {
+		return bad
+	}
+	seen := map[string]bool{}
+	for _, profile := range a.profiles.Profiles {
+		if seen[profile.ID] {
+			return bad
+		}
+		seen[profile.ID] = true
+	}
+	for position, row := range q.Nodes {
+		profile, ok := a.profileByIDLocked(row.ID)
+		if !ok || publicProfileToken(profile) != q.ExpectedProfileTokens[row.ID] {
+			return bad
+		}
+		if profile.External != nil || profile.NodeKind == "external" {
+			if position == 0 || position == len(q.Nodes)-1 || !desktopNodeChainImportedExecutionMiddle(profile) {
+				return bad
+			}
+		} else if profile.NodeKind != "" && profile.NodeKind != "router-vpn" || !common.ValidNodeProofID(profile.NodeProofID) ||
+			!desktopCONNECTExecutionPairedLayer(profile.StartLayer) || row.Mode == "shadowsocks" && profile.StartLayer != "" && profile.StartLayer != "off" {
+			return bad
+		}
+	}
+	return nil
 }

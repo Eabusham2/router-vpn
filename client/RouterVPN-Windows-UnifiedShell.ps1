@@ -916,22 +916,26 @@ function ShowUnifiedOrderedNodes {
         $draft=(Control 'UnifiedNodeChainButton').Tag
         $initial=@();if($null-ne$draft-and[string]$draft.control_id-ceq$id-and@($draft.nodes).Count){[void](New-RouterVPNOrderedConnectPayload $draft $store);$initial=@(Copy-RouterVPNOrderedNodes $draft.nodes $id)}
         [xml]$x=@"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Ordered node path" Width="640" Height="570" MinWidth="510" MinHeight="440" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><StackPanel><TextBlock Text="Entry → hops → exit" FontSize="22" FontWeight="Bold"/><TextBlock Text="Choose each hop in order. A Local route to a literal Shadowsocks exit uses the selected WireGuard or AmneziaWG entry’s saved Start Layer. Keep the imported hops and exit set to Off. With a paired entry, supported Shadowsocks 2022 imports can occupy any middle hop. Server and Compare require support from every import and the native controller. For a Local custom entry, use two distinct Shadowsocks imports with Start Layer Off followed by a paired Shadowsocks exit. SOCKS5, HTTP(S) CONNECT and OpenVPN belong immediately before a Shadowsocks exit. A Hysteria2 exit uses its saved Start Layer after paired WireGuard or AmneziaWG hops. WireGuard and AWG2 exits require Local execution and Start Layer Off on all two to eight paired nodes. Server and Compare require the selected path to support remote execution." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,7,0,12"/></StackPanel><Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ComboBox Name="Available" DisplayMemberPath="name" SelectedValuePath="id"/><StackPanel Grid.Column="1" Orientation="Horizontal"><ComboBox Name="PrefixMode" DisplayMemberPath="display" SelectedValuePath="id" MinWidth="155" Margin="8,0,0,0"/><Button Name="ExternalExit" Content="Use as external exit" Padding="8,6" Margin="8,0,0,0"/><Button Name="Add" Content="Add node" Padding="12,6" Margin="8,0,0,0"/></StackPanel></Grid><ListBox Name="Order" Grid.Row="2" DisplayMemberPath="display" Margin="0,12"/><WrapPanel Grid.Row="3"><Button Name="Up" Content="Move up" Padding="12,6"/><Button Name="Down" Content="Move down" Padding="12,6" Margin="8,0"/><Button Name="Remove" Content="Remove" Padding="12,6"/><Button Name="MeasureNext" Content="Measure next hop…" Padding="12,6" Margin="4,0"/><ComboBox Name="AppendMode" DisplayMemberPath="display" SelectedValuePath="id" MinWidth="130" Margin="4,0" Visibility="Collapsed"/><Button Name="PrefixOnly" Content="Build prefix only" Padding="10,6" Margin="4,0"/><Button Name="ChangeMode" Content="Set selected transport" Padding="12,6" Margin="8,0,0,0"/></WrapPanel><StackPanel Grid.Row="4" Margin="0,12"><TextBlock Name="Final" FontWeight="SemiBold" TextWrapping="Wrap"/><ComboBox Name="FinalMode" DisplayMemberPath="display" SelectedValuePath="id" Margin="0,6,0,0" ToolTip="WireGuard and AWG2 exits require Local execution and Start Layer Off throughout. Hysteria2 retains the exit node's Start Layer."/><TextBlock Name="Status" Foreground="#FFBD8D" TextWrapping="Wrap" Margin="0,7,0,0"/></StackPanel><StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="Cancel" Content="Cancel" Padding="12,7" Margin="4"/><Button Name="Apply" Content="Use this path" Padding="12,7" Margin="4"/></StackPanel></Grid></Window>
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Ordered node path" Width="640" Height="570" MinWidth="510" MinHeight="440" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><StackPanel><TextBlock Text="Entry → hops → exit" FontSize="22" FontWeight="Bold"/><TextBlock Text="Choose each hop in order. A Local route to a literal Shadowsocks exit uses the selected WireGuard or AmneziaWG entry’s saved Start Layer. Keep the imported hops and exit set to Off. With a paired entry, supported Shadowsocks 2022 imports can occupy any middle hop. Server and Compare require support from every import and the native controller. For a Local custom entry, use two distinct Shadowsocks imports with Start Layer Off followed by a paired Shadowsocks exit. SOCKS5, HTTP(S) CONNECT and OpenVPN belong immediately before a Shadowsocks exit. A Hysteria2 exit uses its saved Start Layer after paired WireGuard or AmneziaWG hops. WireGuard and AWG2 exits require Local execution and Start Layer Off on all two to eight paired nodes. Server and Compare require the selected path to support remote execution." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,7,0,12"/></StackPanel><Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ComboBox Name="Available" DisplayMemberPath="name" SelectedValuePath="id"/><StackPanel Grid.Column="1" Orientation="Horizontal"><ComboBox Name="PrefixMode" DisplayMemberPath="display" SelectedValuePath="id" MinWidth="155" Margin="8,0,0,0"/><Button Name="ExternalExit" Content="Use as external exit" Padding="8,6" Margin="8,0,0,0"/><Button Name="Add" Content="Add node" Padding="12,6" Margin="8,0,0,0"/></StackPanel></Grid><ListBox Name="Order" Grid.Row="2" DisplayMemberPath="display" Margin="0,12"/><WrapPanel Grid.Row="3"><Button Name="Up" Content="Move up" Padding="12,6"/><Button Name="Down" Content="Move down" Padding="12,6" Margin="8,0"/><Button Name="Remove" Content="Remove" Padding="12,6"/><Button Name="MeasureNext" Content="Measure next hop…" Padding="12,6" Margin="4,0"/><ComboBox Name="AppendMode" DisplayMemberPath="display" SelectedValuePath="id" MinWidth="130" Margin="4,0" Visibility="Collapsed"/><Button Name="PrefixOnly" Content="Build prefix only" Padding="10,6" Margin="4,0"/><Button Name="CompletePrefix" Content="Use last Shadowsocks node as final" Padding="10,6" Margin="4,0" Visibility="Collapsed"/><Button Name="ChangeMode" Content="Set selected transport" Padding="12,6" Margin="8,0,0,0"/></WrapPanel><StackPanel Grid.Row="4" Margin="0,12"><TextBlock Name="Final" FontWeight="SemiBold" TextWrapping="Wrap"/><ComboBox Name="FinalMode" DisplayMemberPath="display" SelectedValuePath="id" Margin="0,6,0,0" ToolTip="WireGuard and AWG2 exits require Local execution and Start Layer Off throughout. Hysteria2 retains the exit node's Start Layer."/><TextBlock Name="Status" Foreground="#FFBD8D" TextWrapping="Wrap" Margin="0,7,0,0"/></StackPanel><StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="Cancel" Content="Cancel" Padding="12,7" Margin="4"/><Button Name="Apply" Content="Use this path" Padding="12,7" Margin="4"/></StackPanel></Grid></Window>
 "@
         $dialog=[Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x));$dialog.Owner=$Window;$dialog.Tag=@{Append=$false;Revision=[Guid]::NewGuid().ToString('N')}
         $rows=New-Object 'Collections.Generic.List[object]';foreach($node in $initial|Select-Object -SkipLast 1){[void]$rows.Add([pscustomobject]@{id=$node.id;mode=$node.mode})}
         $available=$dialog.FindName('Available');$list=$dialog.FindName('Order');$status=$dialog.FindName('Status');$prefixMode=$dialog.FindName('PrefixMode');$finalMode=$dialog.FindName('FinalMode')
-        $appendMode=$dialog.FindName('AppendMode');$appendMode.ItemsSource=@('wg','awg2-fast','awg2-strong'|ForEach-Object{[pscustomobject]@{id=$_;display=(Get-RouterVPNOrderedModeTitle $_)}});$appendMode.SelectedIndex=0
+        $appendMode=$dialog.FindName('AppendMode');$appendMode.ItemsSource=@('wg','awg2-fast','awg2-strong','shadowsocks'|ForEach-Object{[pscustomobject]@{id=$_;display=(Get-RouterVPNOrderedModeTitle $_)}});$appendMode.SelectedIndex=0
         $finalMode.Tag=if($initial.Count){$initial[-1].mode}else{'shadowsocks'}
         $prefixMode.ItemsSource=@('wg','awg2-fast','awg2-strong','shadowsocks','socks5','http-connect','https-connect','openvpn'|ForEach-Object{[pscustomobject]@{id=$_;display=(Get-RouterVPNOrderedModeTitle $_)}});$prefixMode.SelectedIndex=0
         if($initial.Count -and $initial[0].id -ceq $id){$dialog.FindName('Final').Tag=[string]$initial[-1].id}
         $dialog.FindName('Final').Text='Final exit: '+[string]$selected[0].name
         $refresh={
+            $dialog.FindName('CompletePrefix').Visibility=if($dialog.Tag.Append){'Visible'}else{'Collapsed'}
+            $canComplete=$dialog.Tag.Append-and$rows.Count-ge2-and(Test-RouterVPNOrderedAppendNodes @($rows.ToArray()) $store.profiles 96)
+            if($canComplete){$last=$rows[$rows.Count-1];$source=@($store.profiles|Where-Object{[string]$_.id-ceq$last.id});$canComplete=$last.mode-ceq'shadowsocks'-and$source.Count-eq1-and(Test-RouterVPNOrderedPairedOff $source[0])}
+            $dialog.FindName('CompletePrefix').IsEnabled=$canComplete
             if($dialog.Tag.Append){
                 $dialog.FindName('Final').Text='Incomplete prefix — select a real final before using this path.'
                 $finalMode.Visibility='Collapsed';$appendMode.Visibility='Visible';$dialog.FindName('Apply').IsEnabled=$false
                 $dialog.FindName('ExternalExit').IsEnabled=$false;$dialog.FindName('PrefixOnly').Content='Use selected node as final'
-                $dialog.FindName('MeasureNext').Content='Measure next packet node…'
+                $dialog.FindName('MeasureNext').Content='Measure next node…'
                 $dialog.FindName('MeasureNext').IsEnabled=Test-RouterVPNOrderedAppendNodes @($rows.ToArray()) $store.profiles 95
                 $index=$list.SelectedIndex;$labels=@()
                 for($i=0;$i-lt$rows.Count;$i++){$node=$rows[$i];$match=@($store.profiles|Where-Object{[string]$_.id-ceq$node.id});$labels+=[pscustomobject]@{id=$node.id;display=('{0}. {1} · {2}'-f($i+1),[string]$match[0].name,(Get-RouterVPNOrderedModeTitle $node.mode))}}
@@ -1008,7 +1012,7 @@ function ShowUnifiedOrderedNodes {
                 if([string](Control 'UnifiedExecution').SelectedItem.Tag-cne'local'-or$dialog.FindName('Final').Tag-or
                    ($rows.Count-gt0-and-not(Test-RouterVPNOrderedAppendNodes @($rows.ToArray()) $store.profiles 95))){throw 'Start the Local prefix with a paired WireGuard or AWG2 node; later Shadowsocks hops must have Start Layer Off.'}
                 $dialog.Tag.Append=$true;$dialog.Tag.Revision=[Guid]::NewGuid().ToString('N')
-                $status.Text='This editor now holds only real prefix nodes. Select the next packet mode and measure it; choose a real final when the prefix is ready.'
+                $status.Text='This editor now holds only real prefix nodes. Select the next transport and measure it; choose a real final when the prefix is ready.'
             }else{
                 $chosen=[string]$finalMode.SelectedValue;if(-not$chosen){$chosen=[string]$finalMode.Tag};if(-not$chosen){$chosen='shadowsocks'}
                 $nodes=@($rows.ToArray())+@([pscustomobject]@{id=$id;mode=$chosen})
@@ -1034,7 +1038,9 @@ function ShowUnifiedOrderedNodes {
             if($dialog.Tag.Append){
                 if(Test-RouterVPNOrderedLiteralOff $available.SelectedItem){$mode='shadowsocks'}
                 if([string]$mode-cnotin@(Get-RouterVPNOrderedAppendModes $available.SelectedItem $rows.Count)){throw 'Choose a supported transport for this real prefix node.'}
-                [void]$rows.Add([pscustomobject]@{id=[string]$available.SelectedValue;mode=[string]$mode});&$refresh;$list.SelectedIndex=$rows.Count-1;return
+                [void]$rows.Add([pscustomobject]@{id=[string]$available.SelectedValue;mode=[string]$mode});&$refresh;$list.SelectedIndex=$rows.Count-1
+                if($dialog.FindName('MeasureNext').IsEnabled){$dialog.FindName('MeasureNext').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Primitives.ButtonBase]::ClickEvent))}
+                return
             }
 if(Test-RouterVPNOrderedImportedMiddle $available.SelectedItem){if([string]$finalMode.SelectedValue-cne'shadowsocks'){throw 'Choose a Shadowsocks 2022 exit before adding an imported middle.'};$mode=Get-RouterVPNOrderedImportedMode $available.SelectedItem}else{
                 $selectedStream=$mode -ceq 'shadowsocks' -and (Test-RouterVPNOrderedStreamEdit $rows $rows.Count $available.SelectedValue $id $finalMode.SelectedValue ([string](Control 'UnifiedExecution').SelectedItem.Tag) $store.profiles)
@@ -1079,6 +1085,47 @@ if($dialog.FindName('Final').Tag -and ($list.SelectedIndex -ne 0 -or -not (Test-
             foreach($node in $nodes){$origin=@($store.profiles|Where-Object{[string]$_.id-ceq[string]$node.id});if($origin.Count-ne1){throw 'The original editor catalog lost a node.'};$tokens.Add($node.id,(Get-RouterVPNOrderedValue $origin[0] 'profile_token'))}
             [pscustomobject]@{control_id=$id;nodes=$nodes;profile_tokens=$tokens;execution=[string](Control 'UnifiedExecution').SelectedItem.Tag}
         }
+
+        $dialog.FindName('CompletePrefix').Add_Click({try{
+            Assert-RouterVPNMutationIdle 'completing the original ordered prefix'
+            if(-not$dialog.IsVisible-or-not$dialog.Tag.Append-or[string]$RouterCombo.SelectedValue-cne$id-or[string](Control 'UnifiedExecution').SelectedItem.Tag-cne'local'){throw 'Keep the original unfinished Local editor open.'}
+            $captured=&$captureEditor
+            $body=New-RouterVPNOrderedCompletionPayload $captured (Api '/api/profiles' -Timeout 5)
+            $preview=Api '/api/connection-profile/setup/complete-prefix' 'POST' $body -Timeout 15
+            [void](Confirm-RouterVPNOrderedCompletion $body $preview)
+            $current=&$captureEditor
+            if(-not$dialog.IsVisible-or-not$dialog.Tag.Append-or[string]$RouterCombo.SelectedValue-cne$id-or[string](Control 'UnifiedExecution').SelectedItem.Tag-cne'local'-or$current.draft_revision-cne$captured.draft_revision-or(ConvertTo-Json @($current.nodes) -Compress)-cne(ConvertTo-Json @($captured.nodes) -Compress)){throw 'The original draft changed during complete-path compilation.'}
+            [void](New-RouterVPNOrderedCompletionPayload $captured (Api '/api/profiles' -Timeout 5))
+            [xml]$completeXaml=@"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Use last Shadowsocks node as final" Width="470" Height="260" MinWidth="420" MinHeight="240" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><StackPanel Margin="18"><TextBlock Text="The complete path compiled with every original node in order. Name this future profile, then Save explicitly. Load and Connect remain separate choices." TextWrapping="Wrap"/><TextBox Name="Name" Margin="0,12"/><TextBlock Name="Status" TextWrapping="Wrap" Foreground="#FFBD8D"/><StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0"><Button Name="Cancel" Content="Back" Padding="12,6" Margin="4"/><Button Name="Save" Content="Save profile" Padding="12,6" Margin="4"/></StackPanel></StackPanel></Window>
+"@
+            $completion=[Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $completeXaml));$completion.Owner=$dialog
+            $completion.FindName('Cancel').Add_Click({$completion.Close()})
+            $completion.FindName('Save').Add_Click({
+                $name=$completion.FindName('Name').Text.Trim()
+                if(-not$name){$completion.FindName('Status').Text='Enter a profile name.';return}
+                $completion.FindName('Save').IsEnabled=$false
+                try{
+                    Assert-RouterVPNMutationIdle 'saving the complete future profile'
+                    $fresh=&$captureEditor
+                    if(-not$dialog.IsVisible-or-not$dialog.Tag.Append-or[string]$RouterCombo.SelectedValue-cne$id-or
+                       [string](Control 'UnifiedExecution').SelectedItem.Tag-cne'local'-or$fresh.draft_revision-cne$captured.draft_revision-or
+                       (ConvertTo-Json @($fresh.nodes) -Compress)-cne(ConvertTo-Json @($captured.nodes) -Compress)){throw 'The original editor changed. Review it again.'}
+                    [void](New-RouterVPNOrderedCompletionPayload $captured (Api '/api/profiles' -Timeout 5))
+                    $save=[ordered]@{};foreach($key in $body.Keys){$save[$key]=$body[$key]};$save.name=$name;$save.expected_completion_sha256=[string]$preview.completion_sha256
+                    $reply=Api '/api/connection-profile/setup/save-completed-prefix' 'POST' $save -Timeout 15
+                    [void](Confirm-RouterVPNOrderedCompletion $save $reply -Saved)
+                    foreach($key in @('source_sha256','device_source_sha256','device_mtu_revision','completion_sha256')){if($reply.$key-cne$preview.$key){throw 'The saved source differs from the reviewed preview.'}}
+                    $fresh=&$captureEditor
+                    if(-not$dialog.IsVisible-or-not$dialog.Tag.Append-or[string]$RouterCombo.SelectedValue-cne$id-or[string](Control 'UnifiedExecution').SelectedItem.Tag-cne'local'-or$fresh.draft_revision-cne$captured.draft_revision-or
+                       (ConvertTo-Json @($fresh.nodes) -Compress)-cne(ConvertTo-Json @($captured.nodes) -Compress)){throw 'The profile was saved, but the original editor changed before its response.'}
+                    [void](New-RouterVPNOrderedCompletionPayload $captured (Api '/api/profiles' -Timeout 5))
+                    $status.Text='Saved '+$reply.profile_name+'. Load this future profile separately, then Connect to verify the complete path.'
+                    $completion.Close()
+                }catch{$completion.FindName('Status').Text=$_.Exception.Message}
+            })
+            [void]$completion.ShowDialog()
+        }catch{$status.Text=$_.Exception.Message}})
         $available.Add_DropDownOpened({
             if($dialog.Tag.Append){return}
             $execution=[string](Control 'UnifiedExecution').SelectedItem.Tag
@@ -1093,19 +1140,24 @@ if($dialog.FindName('Final').Tag -and ($list.SelectedIndex -ne 0 -or -not (Test-
         })
         $dialog.FindName('MeasureNext').Add_Click({try{
             if($dialog.Tag.Append){
-                if([string](Control 'UnifiedExecution').SelectedItem.Tag-cne'local'){throw 'Prefix append requires the original Local execution.'}
-                $captured=&$captureEditor;$body=New-RouterVPNOrderedAppendPayload $captured (Api '/api/profiles' -Timeout 5)
-                $list.SelectedIndex=$rows.Count-1;$position=$list.SelectedIndex
-                $choice=ShowOrderedCandidates -Draft $body -Position $position -Editor $dialog
-                if($null-eq$choice){return}
-                $fresh=&$captureEditor
-                if(-not$dialog.IsVisible-or-not$dialog.Tag.Append-or[string]$RouterCombo.SelectedValue-cne$id-or
-                   [string](Control 'UnifiedExecution').SelectedItem.Tag-cne'local'-or$fresh.draft_revision-cne$captured.draft_revision-or
-                   $fresh.next_mode-cne$captured.next_mode-or(ConvertTo-Json @($fresh.nodes) -Compress)-cne(ConvertTo-Json @($captured.nodes) -Compress)){throw 'The original incomplete prefix changed. Capture it again.'}
-                $path=@(Convert-RouterVPNOrderedAppendChoice $captured $body $choice (Api '/api/profiles' -Timeout 5))
-                $rows.Clear();foreach($node in $path){[void]$rows.Add([pscustomobject]@{id=$node.id;mode=$node.mode})}
-                $dialog.Tag.Revision=[Guid]::NewGuid().ToString('N');&$refresh;$list.SelectedIndex=$rows.Count-1
-                $status.Text='Appended the measured node after the temporary path stopped. Choose a real final before using this path.'
+                do {
+                    Assert-RouterVPNMutationIdle 'measuring the next node through the original prefix'
+                    if(-not$dialog.IsVisible-or-not$dialog.Tag.Append-or[string]$RouterCombo.SelectedValue-cne$id-or
+                       [string](Control 'UnifiedExecution').SelectedItem.Tag-cne'local'){throw 'Prefix append requires the original Local editor and device.'}
+                    $captured=&$captureEditor;$body=New-RouterVPNOrderedAppendPayload $captured (Api '/api/profiles' -Timeout 5)
+                    $list.SelectedIndex=$rows.Count-1;$position=$list.SelectedIndex
+                    $choice=ShowOrderedCandidates -Draft $body -Position $position -Editor $dialog
+                    if($null-eq$choice){return}
+                    $fresh=&$captureEditor
+                    if(-not$dialog.IsVisible-or-not$dialog.Tag.Append-or[string]$RouterCombo.SelectedValue-cne$id-or
+                       [string](Control 'UnifiedExecution').SelectedItem.Tag-cne'local'-or$fresh.draft_revision-cne$captured.draft_revision-or
+                       $fresh.next_mode-cne$captured.next_mode-or(ConvertTo-Json @($fresh.nodes) -Compress)-cne(ConvertTo-Json @($captured.nodes) -Compress)){throw 'The original incomplete prefix changed. Capture it again.'}
+                    $path=@(Convert-RouterVPNOrderedAppendChoice $captured $body $choice (Api '/api/profiles' -Timeout 5))
+                    $rows.Clear();foreach($node in $path){[void]$rows.Add([pscustomobject]@{id=$node.id;mode=$node.mode})}
+                    $dialog.Tag.Revision=[Guid]::NewGuid().ToString('N');&$refresh;$list.SelectedIndex=$rows.Count-1
+                    $status.Text='Appended the measured node after the temporary path stopped. Choose a real final before using this path.'
+                    # The original modal review has closed after its request and native owners joined.
+                } while ($rows.Count-lt96)
                 return
             }
             do {

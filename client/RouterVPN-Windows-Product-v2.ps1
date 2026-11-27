@@ -207,17 +207,31 @@ function Invoke-DesktopConnectSelfTest{
   if($Octets.Length-ne4-or-not($Octets[0]-eq10-or($Octets[0]-eq172-and$Octets[1]-ge16-and$Octets[1]-le31)-or($Octets[0]-eq192-and$Octets[1]-eq168))){throw 'Desktop connection target is not a private IPv4 peer.'}
   if([string]$Fixture.dns_host-cne($Run+'.desktop-smoke.invalid')-or[string]$Fixture.payload_url-cne('http://'+$Fixture.dns_host+':8787/desktop-connect/'+$Run)-or[string]$Fixture.literal_payload_url-cne('http://'+$Fixture.private_address+':8787/desktop-connect/'+$Run)){throw 'Desktop connection nonce target changed.'}
   foreach($Name in @('desktop-connect-connected.json','desktop-connect-peer-stopped.json','desktop-connect-result.json','desktop-connect-cancel.json')){if([IO.File]::Exists((Join-Path ([IO.Directory]::GetCurrentDirectory()) $Name))){throw 'Desktop connection reused a prior phase.'}}
-  $Stage='import'
-  $Imported=ApiRaw '/api/profile/import' ([Text.Encoding]::UTF8.GetBytes(($Fixture.profile_bundle|ConvertTo-Json -Depth 12 -Compress))) 25
-  $ID=[string]$Imported.profile.id
-  if(-not$Imported.ok-or-not$ID){throw 'Desktop connection did not import a real profile.'}
-  [void](Api '/api/profile/select' 'POST' @{id=$ID} 10)
-  RefreshProduct
-  SetComboTag $BaseCombo 'wg';$ModeCombo.SelectedValue='base-raw'
-  (Control 'UnifiedMultihop').IsChecked=$false
-  $Button=Control 'UnifiedConnectButton'
-  if($null-eq$Button-or-not$Button.IsEnabled-or$ModeCombo.SelectedValue-cne'base-raw'-or(BaseChoice)-cne'wg'-or$RouterCombo.SelectedValue-cne$ID){throw 'Desktop connection could not select its real profile and WG mode.'}
-  $Window.Show();$Window.UpdateLayout();$Stage='connect';$Started=$true
+  $Window.Show();$Window.UpdateLayout()
+  $RefreshTimerWasEnabled=$Timer.IsEnabled
+  $Timer.Stop()
+  try{
+   $Stage='initial-refresh'
+   Wait-DesktopConnect {-not(UnifiedRefreshBusy)} $Clock $Run
+   if($StateText.Text-ceq'Controller unavailable'){throw ('The original initial refresh failed: '+$LastErrorText.Text)}
+   $Stage='import'
+   $Imported=ApiRaw '/api/profile/import' ([Text.Encoding]::UTF8.GetBytes(($Fixture.profile_bundle|ConvertTo-Json -Depth 12 -Compress))) 25
+   $ID=[string]$Imported.profile.id
+   if(-not$Imported.ok-or-not$ID){throw 'Desktop connection did not import a real profile.'}
+   [void](Api '/api/profile/select' 'POST' @{id=$ID} 10)
+   $Stage='selection-refresh'
+   RefreshProduct
+   if(-not(UnifiedRefreshBusy)){throw ('The original selected-profile refresh did not start: '+$LastErrorText.Text)}
+   Wait-DesktopConnect {-not(UnifiedRefreshBusy)} $Clock $Run
+   if($StateText.Text-ceq'Controller unavailable'){throw ('The original selected-profile refresh failed: '+$LastErrorText.Text)}
+   SetComboTag $BaseCombo 'wg';$ModeCombo.SelectedValue='base-raw'
+   (Control 'UnifiedMultihop').IsChecked=$false
+   $Button=Control 'UnifiedConnectButton'
+   $Selected=UnifiedSelectedProfile
+   $ModeRows=@($ModeCombo.Items|Where-Object{[string]$_.id-ceq'base-raw'-and[bool]$_.available})
+   if($null-eq$Button-or-not$Button.IsEnabled-or$ModeRows.Count-ne1-or$ModeCombo.SelectedValue-cne'base-raw'-or(BaseChoice)-cne'wg'-or$null-eq$Selected-or[string]$Selected.id-cne$ID-or$RouterCombo.SelectedValue-cne$ID){throw 'Desktop connection could not select its real profile and WG mode.'}
+  }finally{if($RefreshTimerWasEnabled){$Timer.Start()}}
+  $Window.UpdateLayout();$Stage='connect';$Started=$true
   $Button.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
   Wait-DesktopConnect {
    $Current=Api '/api/status' -Timeout 3

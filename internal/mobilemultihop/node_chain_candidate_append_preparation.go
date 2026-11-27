@@ -46,7 +46,7 @@ func (s *NodeChainCandidateAppendSource) newCandidatePlan(inventory string) (*No
 	p := &NodeChainCandidatePlan{appendSource: s, metadataPages: &nodeChainCandidateMetadataCache{},
 		inventory: inventory, revision: record.Revision, prefix: s.proofs[len(s.proofs)-1],
 		measurement:            hopmeasure.CandidatePrivateResponseMeasurement,
-		preparedNativeResponse: true, responseMode: s.record.NextMode}
+		preparedNativeResponse: NodeChainPrefixMode(s.record.NextMode), responseMode: s.record.NextMode}
 	ids, proofs, keys := make(map[string]bool), make(map[string]bool), make(map[string]bool)
 	for position, node := range s.nodes {
 		if member := s.imports[position]; member != nil {
@@ -63,18 +63,42 @@ func (s *NodeChainCandidateAppendSource) newCandidatePlan(inventory string) (*No
 			keys[client], keys[server] = true, true
 		}
 	}
-	for _, input := range record.Inputs {
-		response, err := parseCandidateNativeResponseSource(input, s.record.NextMode)
-		if err != nil || ids[response.Target.ID] || proofs[response.NodeID] ||
-			response.ClientKey == response.ServerKey || keys[response.ClientKey] || keys[response.ServerKey] {
-			return nil, nodeChainCandidateAppendError
-		}
-		response.PacketOptions, err = s.candidatePacketOptions(input)
+	var streamAddresses map[string]bool
+	if p.isAppendStreamResponse() {
+		streamKeys, addresses, err := s.streamCandidateAliases()
 		if err != nil {
 			return nil, err
 		}
+		for key := range streamKeys {
+			keys[key] = true
+		}
+		streamAddresses = addresses
+	}
+	for _, input := range record.Inputs {
+		var response candidateResponseSource
+		var err error
+		if p.isAppendStreamResponse() {
+			response, err = s.candidateSSResponse(input)
+			key := importedSS2022KeyIdentity(response.Method, response.Password)
+			if err != nil || key == "" || keys[key] || streamAddresses[response.Target.Address] {
+				return nil, nodeChainCandidateAppendError
+			}
+			keys[key], streamAddresses[response.Target.Address] = true, true
+		} else {
+			response, err = parseCandidateNativeResponseSource(input, s.record.NextMode)
+			if err != nil || response.ClientKey == response.ServerKey || keys[response.ClientKey] || keys[response.ServerKey] {
+				return nil, nodeChainCandidateAppendError
+			}
+			response.PacketOptions, err = s.candidatePacketOptions(input)
+			if err != nil {
+				return nil, err
+			}
+			keys[response.ClientKey], keys[response.ServerKey] = true, true
+		}
+		if ids[response.Target.ID] || proofs[response.NodeID] {
+			return nil, nodeChainCandidateAppendError
+		}
 		ids[response.Target.ID], proofs[response.NodeID] = true, true
-		keys[response.ClientKey], keys[response.ServerKey] = true, true
 		p.targets = append(p.targets, response.Target)
 		p.responses = append(p.responses, response)
 	}
@@ -101,10 +125,16 @@ func (p *NodeChainCandidatePlan) appendDigest() string {
 	return externalDigest(raw)
 }
 
+// This descriptive branch is admitted only after the append seal and the exact
+// preparation runtime have been checked. It never selects a packet factory.
+func (p *NodeChainCandidatePlan) isAppendStreamResponse() bool {
+	return p != nil && p.appendSource != nil && p.responseMode == "shadowsocks" && !p.preparedNativeResponse
+}
+
 func (p *NodeChainCandidatePlan) validateAppend() error {
 	if p == nil || p.appendSource == nil || p.appendSource.validate() != nil ||
 		p.chain != nil || p.multiple != nil || p.multipleSeal != nil || p.connectedFinalResponse ||
-		!p.preparedNativeResponse || p.publicResponses != nil || p.measurement != hopmeasure.CandidatePrivateResponseMeasurement ||
+		p.preparedNativeResponse != NodeChainPrefixMode(p.responseMode) || p.publicResponses != nil || p.measurement != hopmeasure.CandidatePrivateResponseMeasurement ||
 		p.responseMode != p.appendSource.record.NextMode || p.prefix != p.appendSource.proofs[len(p.appendSource.proofs)-1] ||
 		len(p.targets) == 0 || len(p.targets) != len(p.responses) || p.seal == "" || p.seal != p.appendDigest() {
 		return nodeChainCandidateAppendError

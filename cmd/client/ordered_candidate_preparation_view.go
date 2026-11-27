@@ -394,7 +394,7 @@ func captureOrderedCandidateAppendView(ctx context.Context, a *app, position int
 		candidates = append(candidates, candidate)
 	}
 	if len(candidates) == 0 {
-		return nil, errors.New("no paired packet candidate preserves this exact prefix and prospective MTU")
+		return nil, errors.New("no paired candidate preserves this exact prefix, requested transport and prospective MTU")
 	}
 	view.catalog, err = combineDesktopCandidateViewSources(ctx, candidates, position, orderedCandidateAppendScope)
 	if err != nil || view.catalog == nil || view.catalog.revision != revision || view.catalog.candidateMode != q.NextMode ||

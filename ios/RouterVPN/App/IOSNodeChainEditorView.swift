@@ -54,6 +54,14 @@ struct IOSNodeChainEditorView: View {
         guard draft.unfinished, draft.nodes.contains(where: { $0.id == draft.controlID }) else { return [] }
         return model.iosNodeChainAppendFinalChoices(owner: owner, prefix: draft.nodes)
     }
+    private var lastShadowsocksFinal: RouterProfile? {
+        guard draft.unfinished, draft.nodes.count >= 2, let last = draft.nodes.last,
+              last.mode == "shadowsocks" else { return nil }
+        let originals = available.filter { $0.id == last.id }
+        guard originals.count == 1, originals[0].normalizedNodeKind == "router-vpn", originals[0].external == nil,
+              IOSNodeCandidateAppendSource.prefixModes(originals[0], position: draft.nodes.count - 1).contains("shadowsocks") else { return nil }
+        return originals[0]
+    }
     private func visibleNodes(at position: Int) -> [RouterProfile] {
         if draft.unfinished {
             return IOSNodeChainEditorVisible.unique(available).filter { candidate in
@@ -91,7 +99,7 @@ struct IOSNodeChainEditorView: View {
                     }.disabled(owner == nil || pairedAppendSources.isEmpty)
                 }
                 Text(draft.unfinished
-                    ? "This draft contains only the real prefix nodes. Choose the next packet transport and measure candidates through the last prefix. A result can be appended only after the temporary test is disconnected. Choose a real final node before saving."
+                    ? "This draft contains only the real prefix nodes. Choose WireGuard, AmneziaWG or paired Shadowsocks 2022 with Start Layer Off, then measure candidates through the last prefix. A result can be appended only after the temporary test is disconnected. Choose a real final node before saving."
                     : "Each candidate needs 50 routed samples. A qualified paired successor returns authenticated responses using its captured transport. Other eligible packet prefixes measure TCP connections. A Local public-exit route can measure verified HTTPS responses. Use in draft replaces a measured intermediate packet hop or inserts a qualified stream hop. Save a final replacement as a named profile and Load it separately.")
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(Array(draft.nodes.enumerated()), id: \.offset) { position, node in
@@ -205,14 +213,18 @@ struct IOSNodeChainEditorView: View {
                     if let added = draft.nodes.firstIndex(where: { $0.id.isEmpty }), added > 0 { schedule(after: added - 1) }
                 }.disabled(!draft.canAppend(execution: execution))
                 if draft.unfinished {
-                    Picker("Next packet transport", selection: $appendMode) {
-                        ForEach(IOSMultihopNodeSelection.nativePrefixModes, id: \.self) { mode in
+                    Picker("Next transport", selection: $appendMode) {
+                        ForEach(IOSNodeCandidateAppendSource.nextModes, id: \.self) { mode in
                             Text(IOSMultihopNodeSelection.transportName(mode)).tag(mode)
                         }
                     }
-                    Button("Measure next packet node") {
+                    Button("Measure next node") {
                         schedule(after: draft.nodes.count - 1)
                     }.disabled(owner == nil || (try? draft.appendMeasurementPath(profiles: available)) == nil)
+                    if let last = lastShadowsocksFinal {
+                        Button("Use last Shadowsocks node as final") { chooseDraftFinal(last.id) }
+                            .disabled(owner == nil || finalChoiceRequest != nil)
+                    }
                     Button("Choose selected router as the real final node") {
                         change { try draft.finishPrefixWithSelectedFinal() }
                     }.disabled(draft.nodes.contains(where: { $0.id == draft.controlID }) ||
@@ -232,7 +244,9 @@ struct IOSNodeChainEditorView: View {
             if let completedDraft {
                 Section("Complete draft profile") {
                     LabeledContent("Final node", value: completedDraft.finalName)
-                    Text("The complete path keeps all \(completedDraft.prefix.count) prefix nodes. Load the saved profile and Connect to verify the final path.")
+                    Text(completedDraft.usesLastNodeAsFinal
+                         ? "The complete path keeps all \(completedDraft.prefix.count) draft nodes, using the last as the final. Load the saved profile and Connect to verify the path."
+                         : "The complete path keeps all \(completedDraft.prefix.count) prefix nodes. Load the saved profile and Connect to verify the final path.")
                         .font(.caption).foregroundStyle(.secondary)
                     TextField("Profile name", text: $completedDraftName)
                     Button("Save completed draft as profile") { saveCompletedDraft(completedDraft) }
@@ -385,7 +399,7 @@ struct IOSNodeChainEditorView: View {
 
     private func chooseDraftFinal(_ finalID: String) {
         do {
-            let nodes = try draft.appendMeasurementPath(profiles: available)
+            let nodes = try draft.appendCompletionPath(profiles: available)
             guard draft.unfinished, execution == "local", let owner else { throw CancellationError() }
             try model.requireIOSNodeChainAppendSources(owner, nodes: nodes)
             request = nil; candidates.cancel(); firstHop.cancel(); completedDraft = nil; completedDraftName = ""

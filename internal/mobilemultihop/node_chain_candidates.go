@@ -617,7 +617,7 @@ func (p *NodeChainCandidatePlan) NewMeasurementContext(ctx context.Context, owne
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if p.validate() != nil || p.preparedNativeResponse || owner == nil {
+	if p.validate() != nil || p.appendSource != nil || p.preparedNativeResponse || owner == nil {
 		return nil, errors.New("candidate measurement lost its original source owner")
 	}
 	active, err := owner.MeasurementChainContext(ctx)

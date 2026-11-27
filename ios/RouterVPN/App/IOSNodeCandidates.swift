@@ -59,10 +59,15 @@ private final class IOSCandidateReply: @unchecked Sendable {
         let completeSource = pairedSource || importedSource
         let appendSource = appendSourceMetadataSHA256 != nil && preparedResponse &&
             IOSCandidateCatalogPublication.isDigest(appendSourceMetadataSHA256 ?? "") &&
-            IOSMultihopNodeSelection.supportsNativePrefix(responseMode ?? "") &&
+            IOSNodeCandidateAppendSource.supportsNextMode(responseMode ?? "") &&
             (1..<IOSMultihopNodeSelection.physicalTraversalDepth).contains(responseNodes.count) &&
             Set(responseNodes.map(\.id)).count == responseNodes.count &&
-            responseNodes.allSatisfy({ !$0.id.isEmpty && $0.kind == "router-vpn" && IOSMultihopNodeSelection.supportsNativePrefix($0.mode) })
+            responseNodes.first?.kind == "router-vpn" &&
+            IOSMultihopNodeSelection.supportsNativePrefix(responseNodes.first?.mode ?? "") &&
+            responseNodes.enumerated().allSatisfy { index, row in
+                !row.id.isEmpty && (row.kind == "router-vpn" && IOSMultihopNodeSelection.supportsNativePrefix(row.mode) ||
+                    index > 0 && row.mode == "shadowsocks" && ["router-vpn", "external"].contains(row.kind))
+            }
         let packetResponse = IOSMultihopNodeSelection.supportsNativePrefix(responseMode ?? "") &&
             ["shadowsocks", "hysteria2"].contains(responseNodes.last?.mode ?? "") &&
             ((3...IOSMultihopNodeSelection.maximumNodes).contains(responseNodes.count) || extendedPacket)

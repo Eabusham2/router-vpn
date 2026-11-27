@@ -843,8 +843,9 @@ public final class ProductActivity extends Activity {
             }
             if(draft.unfinished()) {
                 if(draft.canAddPrefix()){labels.add("Add prefix node");actions.add(-2);}
-                if(!members.isEmpty()&&members.size()<AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH){labels.add("Measure next packet node");actions.add(-4);}
+                if(!members.isEmpty()&&members.size()<AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH){labels.add("Measure next node");actions.add(-4);}
                 if(!members.isEmpty()){labels.add("Choose final Router node");actions.add(-1);}
+                if(draft.canCompleteAppend()){labels.add("Use last Shadowsocks node as final");actions.add(-5);}
             } else {
                 if(members.isEmpty()){labels.add("Choose final Router node");actions.add(-1);}
                 else if(draft.canAddPrefix()){labels.add("Add another intermediate node");actions.add(-2);}
@@ -852,13 +853,14 @@ public final class ProductActivity extends Activity {
             }
             if(orderedEditorDialog!=null && orderedEditorDialog.isShowing())orderedEditorDialog.dismiss();
             String help=draft.unfinished()
-                    ?"This draft contains only the real prefix shown above. Choose the next WireGuard or AmneziaWG mode, measure its candidates through this prefix, and apply a result after the temporary VPN has stopped. Choose a real final node before saving a complete path. The selected saved connection stays unchanged until Save."
+                    ?"This draft contains only the real prefix shown above. Choose the next WireGuard, AmneziaWG or paired Shadowsocks 2022 transport with Start Layer Off, measure its candidates through this prefix, and apply a result after the temporary VPN has stopped. Choose a real final node before saving a complete path. The selected saved connection stays unchanged until Save."
                     :"Start with two nodes. Tap a hop to edit it or measure candidates through a supported prefix. Save path keeps your choice for Connect.\n\n"
                     +"Most paths support two to eight nodes. Longer Local paths can use paired WireGuard hops, or begin with paired WireGuard or AmneziaWG hops followed by imported and paired Shadowsocks 2022 streams. These paths end at a paired Shadowsocks 2022 node and require Start Layer Off. The native source, MTU and traversal limits apply.\n\n"
                     +"A three-node Local path can start with two distinct saved Shadowsocks 2022 nodes with literal IPs and Start Layer Off. It ends at a paired Shadowsocks 2022 node.";
             orderedEditorDialog=choiceDialog(draft.unfinished()?"Unfinished Router prefix":"Ordered Router path",help)
                     .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
                         int action=actions.get(w);
+                        if(action==-5){completeOrderedAppend(draft);return;}
                         if(action==-4){measureOrderedAppend(draft);return;}
                         if(action==-3){chooseOrderedPrefixStart(draft);return;}
                         if(action==-2){chooseOrderedNode(draft,false);return;}
@@ -872,6 +874,39 @@ public final class ProductActivity extends Activity {
                         catch(Exception error){toast(safe(error));}
                     }).setNegativeButton("Cancel",null).show();
         } catch(Exception error) { toast(safe(error)); }
+    }
+
+    private void completeOrderedAppend(AndroidOrderedPathSelection draft) {
+        try {
+            if(mutationBusy()||AndroidNodeCandidatePreparation.retained()!=null||AndroidMTUMeasurementGate.held())
+                throw new IllegalStateException("Close the current candidate review and wait for its original cleanup, then use the last node as final.");
+            draft.requireCurrent();
+            final long revision=draft.revision();
+            final AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(this);
+            final AndroidDeviceMTU deviceMTU=AndroidDeviceMTU.capture(this);
+            final String selection=AndroidConnectionSelection.digest(this,nodeStore);
+            if(home.connected||!home.sessionId.isEmpty()||!"off".equals(home.phase))throw new IllegalStateException("Wait for the original tunnel to return to Disconnected.");
+            Runnable current=()->{
+                if(!resumed||isFinishing()||isDestroyed()||mutationBusy()||AndroidNodeCandidatePreparation.retained()!=null
+                        ||AndroidMTUMeasurementGate.held()||!connection.pathCurrent(home)||draft.revision()!=revision||!draft.unfinished())
+                    throw new IllegalStateException("The original idle editor or VPN owner changed before completion.");
+                deviceMTU.requireCurrent(this);
+                try{AndroidConnectionSelection.requireCurrent(this,nodeStore,selection);draft.requireCurrent();}
+                catch(Exception changed){throw new IllegalStateException("The original prefix or selected device changed before completion.",changed);}
+            };
+            AndroidOrderedPathSelection.AppendCompletion proposal=draft.prepareAppendCompletion(current);
+            current.run();
+            EditText name=new EditText(this);name.setSingleLine(true);name.setHint("Profile name");
+            choiceDialog("Use last Shadowsocks node as final",proposal.description+"\n\nThe complete path keeps every draft node in order. Save it as a named future profile; Load and Connect remain separate choices.")
+                    .setView(name).setPositiveButton("Save profile",(d,w)->{
+                        try{
+                            current.run();
+                            AndroidConnectionProfileStore.Record saved=draft.saveAppendCompletion(proposal,name.getText().toString(),current);
+                            statusView.setText("Saved "+saved.name+". Load it separately, then Connect to verify the complete path.");
+                            refreshConnectionLater();
+                        }catch(Exception changed){toast(safe(changed));}
+                    }).setNegativeButton("Back",(d,w)->showOrderedEditor(draft)).show();
+        }catch(Exception failed){toast(safe(failed));}
     }
 
     private void chooseOrderedPrefixStart(AndroidOrderedPathSelection draft) {
@@ -897,12 +932,12 @@ public final class ProductActivity extends Activity {
 
     private void measureOrderedAppend(AndroidOrderedPathSelection draft) {
         try {
-            if(mutationBusy())throw new IllegalStateException("Stop the current VPN before measuring the next packet node.");
+            if(mutationBusy())throw new IllegalStateException("Stop the current VPN before measuring the next node.");
             draft.requireCurrent();
             final long revision=draft.revision();
-            List<String> modes=List.of("wg","awg2-fast","awg2-strong");List<String> labels=new ArrayList<>();
-            for(String mode:modes)labels.add(AndroidOrderedPathSelection.prefixModeTitle(mode));
-            choiceDialog("Next packet transport","Measure saved candidates in this exact mode through the unfinished prefix. Applying a result adds one node after the last prefix.")
+            List<String> modes=AndroidNodeCandidateAppendSource.NEXT_MODES;List<String> labels=new ArrayList<>();
+            for(String mode:modes)labels.add(AndroidOrderedPathSelection.finalModeTitle(mode));
+            choiceDialog("Next transport","Measure saved candidates in this exact mode through the unfinished prefix. Applying a result adds one node after the last prefix.")
                     .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
                         try {
                             startOrderedAppend(draft,modes.get(w),revision);
@@ -1010,7 +1045,7 @@ public final class ProductActivity extends Activity {
             draft.requireCurrent();
             var members=draft.members();
             if(draft.unfinished()) {
-                if(inserted!=members.size()-1||!List.of("wg","awg2-fast","awg2-strong").contains(members.get(inserted).mode))
+                if(inserted!=members.size()-1||!AndroidNodeCandidateAppendSource.supportsNextMode(members.get(inserted).mode))
                     throw new IllegalStateException("The measured append no longer ends this original prefix.");
                 if(members.size()<AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH) {
                     startOrderedAppend(draft,members.get(inserted).mode,draft.revision());

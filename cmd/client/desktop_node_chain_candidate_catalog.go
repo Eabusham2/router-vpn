@@ -168,7 +168,7 @@ func captureDesktopCandidateSourceProfiles(ctx context.Context, a *app, launch *
 	} else if scope == orderedCandidateSelectedDraftScope {
 		candidateMode = desktopSelectedPacketCandidateMode(launch, position)
 	}
-	result, err := captureDesktopCandidateSourceInventory(ctx, a, launch, profiles, revision, candidateMode)
+	result, err := captureDesktopCandidateSourceInventory(ctx, a, launch, profiles, revision, candidateMode, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -184,9 +184,12 @@ func captureDesktopCandidateSourceProfiles(ctx context.Context, a *app, launch *
 
 // This shared parser grants no runtime or source purpose; callers seal the
 // resulting inventory against their exact complete-route or append owner.
-func captureDesktopCandidateSourceInventory(ctx context.Context, a *app, launch *desktopNodeLaunch, profiles []common.RouterProfile, revision, mode string) (*desktopNodeChainCandidateCatalog, error) {
+func captureDesktopCandidateSourceInventory(ctx context.Context, a *app, launch *desktopNodeLaunch, profiles []common.RouterProfile, revision, mode string, appendSource *mobilemultihop.NodeChainCandidateAppendSource) (*desktopNodeChainCandidateCatalog, error) {
 	if ctx == nil || ctx.Err() != nil || a == nil || launch == nil || len(profiles) == 0 || revision == "" {
 		return nil, errors.New("candidate source inventory lost its original caller")
+	}
+	if appendSource != nil && appendSource.CandidateMode() != mode || mode == "shadowsocks" && appendSource == nil {
+		return nil, errors.New("explicit SS response inventory requires its original append source")
 	}
 	seen := map[string]bool{}
 	for _, profile := range profiles {
@@ -255,7 +258,14 @@ func captureDesktopCandidateSourceInventory(ctx context.Context, a *app, launch 
 		var err error
 		if result.candidateMode != "" {
 			input, _, _, err = capture.compileMember(ctx, desktopNodeChainMember{Profile: p, Mode: result.candidateMode}, &total, nil)
-			if err == nil {
+			if err == nil && appendSource != nil && result.candidateMode == "shadowsocks" {
+				if !appendSource.CandidateInputFitsSource(input) {
+					return nil, errors.New("SS candidate changed its exact append prefix, identity or prospective closure")
+				}
+				// This descriptive TCP parse grants no response purpose. The
+				// exclusive append factory seals the complete inventory below.
+				parsed, err = mobilemultihop.ParseNodeChainCandidateInput(input)
+			} else if err == nil {
 				parsed, err = mobilemultihop.ParseNodeChainResponseCandidateInput(input, result.candidateMode)
 			}
 		} else if p.NodeKind == "external" && desktopNodeChainImported(p, "shadowsocks") {

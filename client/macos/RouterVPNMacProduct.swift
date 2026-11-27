@@ -1201,6 +1201,15 @@ private func productConnectionTrue(_ value: Any?) -> Bool {
     return number.boolValue
 }
 
+private enum ProductConnectionPrerequisite: String, Error {
+    case processIdentity = "process-identity", suppliedPath = "supplied-path", canonicalPath = "canonical-path"
+    case manifestName = "manifest-name", directoryMetadata = "directory-metadata", directoryACL = "directory-acl"
+    case directoryOpen = "directory-open", directoryIdentity = "directory-identity", manifestMissing = "manifest-missing"
+    case siblingExists = "sibling-exists", fileOpen = "file-open", fileMetadata = "file-metadata", fileLinks = "file-links"
+    case fileACL = "file-acl", fileRead = "file-read", fileReadback = "file-readback"
+    case fixtureFields = "fixture-fields", fixtureAddress = "fixture-address", installedBundle = "installed-bundle"
+}
+
 private final class ProductConnectionFiles: @unchecked Sendable {
     let path: String, name: String
     private var directory: Int32
@@ -1208,28 +1217,28 @@ private final class ProductConnectionFiles: @unchecked Sendable {
     private var manifestIdentity: stat?
     private(set) var manifest = Data()
     init(_ supplied: String) throws {
-        guard getuid() != 0, getuid() == geteuid(), supplied.hasPrefix("/"),
-              !supplied.utf8.contains(0), supplied.utf8.count < 4096 else { throw productConnectionCheckFailure() }
+        guard getuid() != 0, getuid() == geteuid() else { throw ProductConnectionPrerequisite.processIdentity }
+        guard supplied.hasPrefix("/"), !supplied.utf8.contains(0), supplied.utf8.count < 4096 else { throw ProductConnectionPrerequisite.suppliedPath }
         let url = URL(fileURLWithPath: supplied).standardizedFileURL
-        guard url.path == supplied, url.resolvingSymlinksInPath().path == supplied else { throw productConnectionCheckFailure() }
+        guard url.path == supplied, url.resolvingSymlinksInPath().path == supplied else { throw ProductConnectionPrerequisite.canonicalPath }
         path = url.deletingLastPathComponent().path; name = url.lastPathComponent
         guard !name.isEmpty, !["desktop-connect-connected.json", "desktop-connect-peer-stopped.json",
-                             "desktop-connect-cancel.json", "desktop-connect-result.json"].contains(name) else { throw productConnectionCheckFailure() }
+                             "desktop-connect-cancel.json", "desktop-connect-result.json"].contains(name) else { throw ProductConnectionPrerequisite.manifestName }
         var before = stat()
         guard lstat(path, &before) == 0, before.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
-              before.st_uid == getuid(), before.st_mode & 0o777 == 0o700 else { throw productConnectionCheckFailure() }
-        try RouterVPNMacPathACL.validate(path)
+              before.st_uid == getuid(), before.st_mode & 0o777 == 0o700 else { throw ProductConnectionPrerequisite.directoryMetadata }
+        do { try RouterVPNMacPathACL.validate(path) } catch { throw ProductConnectionPrerequisite.directoryACL }
         let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        guard fd >= 0 else { throw productConnectionCheckFailure() }
+        guard fd >= 0 else { throw ProductConnectionPrerequisite.directoryOpen }
         directory = fd; original = before
         do {
             try current()
-            guard let captured = try read(name, limit: 1 << 20, marker: false) else { throw productConnectionCheckFailure() }
+            guard let captured = try read(name, limit: 1 << 20, marker: false) else { throw ProductConnectionPrerequisite.manifestMissing }
             manifest = captured.0; manifestIdentity = captured.1
             for sibling in ["desktop-connect-connected.json", "desktop-connect-peer-stopped.json",
                             "desktop-connect-cancel.json", "desktop-connect-result.json"] {
                 var info = stat()
-                guard fstatat(directory, sibling, &info, AT_SYMLINK_NOFOLLOW) != 0, errno == ENOENT else { throw productConnectionCheckFailure() }
+                guard fstatat(directory, sibling, &info, AT_SYMLINK_NOFOLLOW) != 0, errno == ENOENT else { throw ProductConnectionPrerequisite.siblingExists }
             }
         } catch { directory = -1; close(fd); throw error }
     }
@@ -1248,35 +1257,35 @@ private final class ProductConnectionFiles: @unchecked Sendable {
               named.st_dev == original.st_dev, named.st_ino == original.st_ino,
               held.st_mode == original.st_mode, named.st_mode == original.st_mode,
               held.st_uid == original.st_uid, named.st_uid == original.st_uid,
-              held.st_gid == original.st_gid, named.st_gid == original.st_gid else { throw productConnectionCheckFailure() }
-        try RouterVPNMacPathACL.validate(path)
+              held.st_gid == original.st_gid, named.st_gid == original.st_gid else { throw ProductConnectionPrerequisite.directoryIdentity }
+        do { try RouterVPNMacPathACL.validate(path) } catch { throw ProductConnectionPrerequisite.directoryACL }
     }
     private func read(_ leaf: String, limit: Int, marker: Bool) throws -> (Data, stat)? {
         try current()
         let fd = openat(directory, leaf, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
         if fd < 0 {
             if marker && errno == ENOENT { return nil }
-            throw productConnectionCheckFailure()
+            throw ProductConnectionPrerequisite.fileOpen
         }
         defer { close(fd) }
         var before = stat(), after = stat(), named = stat()
         guard fstat(fd, &before) == 0, before.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
               before.st_uid == getuid(), before.st_mode & 0o777 == 0o600,
-              before.st_size > 0, before.st_size <= limit else { throw productConnectionCheckFailure() }
+              before.st_size > 0, before.st_size <= limit else { throw ProductConnectionPrerequisite.fileMetadata }
         // A hard-link publisher has not finished removing its private temp yet.
         if marker && before.st_nlink == 2 { return nil }
-        guard before.st_nlink == 1 else { throw productConnectionCheckFailure() }
-        try RouterVPNMacPathACL.validate(path + "/" + leaf)
+        guard before.st_nlink == 1 else { throw ProductConnectionPrerequisite.fileLinks }
+        do { try RouterVPNMacPathACL.validate(path + "/" + leaf) } catch { throw ProductConnectionPrerequisite.fileACL }
         var bytes = Data(count: Int(before.st_size))
         var offset = 0
         while offset < bytes.count {
             let amount = bytes.withUnsafeMutableBytes { raw in Darwin.read(fd, raw.baseAddress!.advanced(by: offset), raw.count - offset) }
             if amount < 0 && errno == EINTR { continue }
-            guard amount > 0 else { throw productConnectionCheckFailure() }
+            guard amount > 0 else { throw ProductConnectionPrerequisite.fileRead }
             offset += amount
         }
         guard fstat(fd, &after) == 0, fstatat(directory, leaf, &named, AT_SYMLINK_NOFOLLOW) == 0,
-              same(before, after), same(before, named) else { throw productConnectionCheckFailure() }
+              same(before, after), same(before, named) else { throw ProductConnectionPrerequisite.fileReadback }
         try current()
         return (bytes, after)
     }
@@ -1344,12 +1353,12 @@ private struct ProductConnectionFixture {
               object["payload_url"] as? String == "http://" + run + ".desktop-smoke.invalid:8787/desktop-connect/" + run,
               object["literal_payload_url"] as? String == "http://" + ip + ":8787/desktop-connect/" + run,
               let payload = URL(string: object["payload_url"] as? String ?? ""),
-              let literal = URL(string: object["literal_payload_url"] as? String ?? "") else { throw productConnectionCheckFailure() }
+              let literal = URL(string: object["literal_payload_url"] as? String ?? "") else { throw ProductConnectionPrerequisite.fixtureFields }
         let octets = ip.split(separator: ".", omittingEmptySubsequences: false).compactMap { UInt8($0) }
         var raw = in_addr()
         guard octets.count == 4, octets.map(String.init).joined(separator: ".") == ip,
               inet_pton(AF_INET, ip, &raw) == 1,
-              octets[0] == 10 || (octets[0] == 172 && (16...31).contains(octets[1])) || (octets[0] == 192 && octets[1] == 168) else { throw productConnectionCheckFailure() }
+              octets[0] == 10 || (octets[0] == 172 && (16...31).contains(octets[1])) || (octets[0] == 192 && octets[1] == 168) else { throw ProductConnectionPrerequisite.fixtureAddress }
         runID = run; profile = bundle; mode = "base-raw"; address = ip; self.digest = digest
         self.payload = payload; self.literal = literal
     }
@@ -1493,10 +1502,18 @@ private final class ProductConnectionLifetime: @unchecked Sendable {
 
 @MainActor private func runProductConnectionSelfTest(_ path: String) -> Int32 {
     let files: ProductConnectionFiles, fixture: ProductConnectionFixture
+    var prerequisiteStage = "fixture-files"
     do {
-        files = try ProductConnectionFiles(path); fixture = try ProductConnectionFixture(files.manifest)
-        guard RouterVPNMacLocalAuthorization.installedBundle() else { throw productConnectionCheckFailure() }
-    } catch { fputs("macOS connection self-test: invalid installed fixture prerequisites\n", stderr); return 2 }
+        files = try ProductConnectionFiles(path)
+        prerequisiteStage = "fixture-schema"
+        fixture = try ProductConnectionFixture(files.manifest)
+        prerequisiteStage = "installed-bundle"
+        guard RouterVPNMacLocalAuthorization.installedBundle() else { throw ProductConnectionPrerequisite.installedBundle }
+    } catch {
+        let category = (error as? ProductConnectionPrerequisite)?.rawValue ?? "unclassified"
+        fputs("macOS connection self-test: prerequisite stage=\(prerequisiteStage) category=\(category)\n", stderr)
+        return 2
+    }
     let app = NSApplication.shared; app.setActivationPolicy(.regular); app.finishLaunching()
     let delegate = ProductDelegate(); app.delegate = delegate
     let lifetime = ProductConnectionLifetime(files, fixture)

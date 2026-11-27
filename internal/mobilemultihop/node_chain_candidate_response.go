@@ -752,7 +752,7 @@ func (p *NodeChainCandidatePlan) ResponseCandidateDepth(position int, id, tag st
 	}
 	if p.appendSource != nil {
 		// This depth belongs exclusively to the sealed incomplete prefix and
-		// its one prospective packet append, never to a complete NodeChain.
+		// its one prospective append, never to a complete NodeChain.
 		return len(p.appendSource.nodes) + 1
 	}
 	// Only the existing independently owned all-WG-to-SS Local capture grants
@@ -800,7 +800,18 @@ func (p *NodeChainCandidatePlan) newService(ctx context.Context, engine hopmeasu
 	if p.measurement == hopmeasure.CandidatePublicResponseMeasurement {
 		return p.newPublicResponseService(ctx, engine, prefix)
 	}
-	if p.responseMode != "" {
+	appendStream := p.isAppendStreamResponse()
+	if appendStream {
+		owner, ok := engine.(*NodeChainCandidatePreparationRuntime)
+		if !ok || owner == nil || p.validateAppend() != nil || owner.preparation == nil || owner.preparation.candidates != p ||
+			owner.preparation.appendSource != p.appendSource || capture != owner.preparation.capture {
+			return nil, hopmeasure.ErrStale
+		}
+		if err := owner.VerifyMeasurement(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if p.responseMode != "" && !appendStream {
 		var base NodeChainCandidatePacketRequest
 		base.plan = p
 		switch owner := engine.(type) {

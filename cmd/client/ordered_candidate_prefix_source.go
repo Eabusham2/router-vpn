@@ -346,7 +346,7 @@ func captureDesktopAppendCandidateSourceProfiles(ctx context.Context, a *app, se
 		launch.root != selection.Native.root || launch.endpoint != selection.Native.endpoint || candidateServerRequested(ctx) {
 		return nil, errors.New("append catalog cannot borrow a complete or selected launch")
 	}
-	result, err := captureDesktopCandidateSourceInventory(ctx, a, launch, profiles, revision, c.source.CandidateMode())
+	result, err := captureDesktopCandidateSourceInventory(ctx, a, launch, profiles, revision, c.source.CandidateMode(), c.source)
 	if err != nil {
 		return nil, err
 	}

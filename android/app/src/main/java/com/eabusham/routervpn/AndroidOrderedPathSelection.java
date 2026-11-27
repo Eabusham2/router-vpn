@@ -95,7 +95,7 @@ final class AndroidOrderedPathSelection {
     java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> candidateDraftCapture(int prefix) throws Exception {
         long capturedRevision=revision;
         requireCurrent();requireBound();
-        if(unfinished)throw new IllegalStateException("Choose an explicit next packet mode for this unfinished prefix.");
+        if(unfinished)throw new IllegalStateException("Choose an explicit next transport for this unfinished prefix.");
         String capturedExecution=execution;
         List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();List<String> modes=new ArrayList<>();
         for(Member member:members){sources.add(member.source);modes.add(member.mode);}
@@ -107,7 +107,7 @@ final class AndroidOrderedPathSelection {
     java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> candidateAppendCapture(String nextMode)throws Exception {
         requireCurrent();requireBound();
         if(!unfinished||!"local".equals(execution)||members.isEmpty()||members.size()>=AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH
-                ||!PREFIX_MODES.contains(nextMode))throw new IllegalStateException("Choose the next packet mode for the original unfinished prefix.");
+                ||!AndroidNodeCandidateAppendSource.supportsNextMode(nextMode))throw new IllegalStateException("Choose the next transport for the original unfinished prefix.");
         long capturedRevision=revision;
         List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();List<String> modes=new ArrayList<>();
         for(Member member:members){sources.add(member.source);modes.add(member.mode);}
@@ -355,7 +355,8 @@ final class AndroidOrderedPathSelection {
             java.util.function.BooleanSupplier fresh)throws Exception {
         requireCurrent();
         if(!unfinished||!original.appendDraft()||!"local".equals(execution)||!mode.equals(original.appendMode)
-                ||candidate.imported||members.size()!=original.members.size()||members.size()>=AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH)
+                ||!AndroidNodeCandidateAppendSource.supportsNextMode(mode)||candidate.imported
+                ||members.size()!=original.members.size()||members.size()>=AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH)
             throw new IllegalStateException("This measured node belongs to a different unfinished prefix.");
         for(int i=0;i<members.size();i++)if(!members.get(i).mode.equals(original.modes.get(i))
                 ||!members.get(i).source.id.equals(original.members.get(i).id)
@@ -440,6 +441,14 @@ final class AndroidOrderedPathSelection {
         if(members.size()<2)throw new IllegalStateException("Add at least one intermediate node before saving.");
         if((members.get(0).source.imported || members.get(members.size()-1).source.imported) && members.size()==2)
             throw new IllegalStateException("Choose a second custom Shadowsocks 2022 node before saving this route.");
+        compileCompletePath();
+        List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();List<String> modes=new ArrayList<>();
+        for(Member member:members){sources.add(member.source);modes.add(member.mode);}
+        AndroidNodeStore.ChainCapture captured=profiles.selectOrderedPath(catalog,sources,modes,preferences,execution);
+        saved=true;revision++;return captured;
+    }
+
+    private String compileCompletePath() throws Exception {
         JSONArray references=new JSONArray();
         for(Member member:members)references.put(new JSONObject().put("id",member.source.profileId).put("mode",member.mode));
         JSONArray inputs=new JSONArray(),identities=new JSONArray();List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();List<String> modes=new ArrayList<>();
@@ -473,8 +482,56 @@ final class AndroidOrderedPathSelection {
                 requireCurrent();
             } finally { preview.close(); }
         }
-        AndroidNodeStore.ChainCapture captured=profiles.selectOrderedPath(catalog,sources,modes,preferences,execution);
-        saved=true;revision++;return captured;
+        return source;
+    }
+
+    static final class AppendCompletion {
+        private final AndroidOrderedPathSelection owner;
+        private final long revision;
+        private final String source;
+        private final List<AndroidNodeStore.ChainSource> sources;
+        private final List<String> modes;
+        final String description;
+        private AppendCompletion(AndroidOrderedPathSelection owner,long revision,String source) {
+            this.owner=owner;this.revision=revision;this.source=source;
+            List<AndroidNodeStore.ChainSource> originals=new ArrayList<>();List<String> transports=new ArrayList<>();
+            StringBuilder text=new StringBuilder();
+            for(Member member:owner.members){
+                originals.add(member.source);transports.add(member.mode);
+                if(text.length()>0)text.append(" → ");
+                text.append(member.source.profileId).append(" (").append(member.mode).append(")");
+            }
+            sources=Collections.unmodifiableList(originals);modes=Collections.unmodifiableList(transports);
+            description=text.toString();
+        }
+    }
+    boolean canCompleteAppend() {
+        if(!unfinished||!"local".equals(execution)||members.size()<2||members.size()>AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH)return false;
+        Member last=members.get(members.size()-1);
+        return !last.source.imported&&"shadowsocks".equals(last.mode);
+    }
+    AppendCompletion prepareAppendCompletion(Runnable current) throws Exception {
+        current.run();requireCurrent();requireBound();
+        if(!canCompleteAppend())throw new IllegalStateException("Keep the actual last paired Shadowsocks node as the final.");
+        long expected=revision;String source=compileCompletePath();
+        current.run();requireCurrent();
+        if(revision!=expected)throw new IllegalStateException("The original prefix changed before completion.");
+        return new AppendCompletion(this,expected,source);
+    }
+    AndroidConnectionProfileStore.Record saveAppendCompletion(AppendCompletion proposal,String name,Runnable current) throws Exception {
+        current.run();requireAppendCompletion(proposal);
+        if(!proposal.source.equals(compileCompletePath()))throw new IllegalStateException("The complete original source changed before Save.");
+        current.run();requireAppendCompletion(proposal);
+        return profiles.appendOrderedProposal(name,proposal.sources,proposal.modes,"local",()->{
+            current.run();
+            try{requireAppendCompletion(proposal);}
+            catch(Exception changed){throw new IllegalStateException("The complete draft changed before saving its named profile.",changed);}
+        });
+    }
+    private void requireAppendCompletion(AppendCompletion proposal) throws Exception {
+        requireCurrent();requireBound();
+        if(proposal==null||proposal.owner!=this||proposal.revision!=revision||!canCompleteAppend())
+            throw new IllegalStateException("The complete draft no longer belongs to this original editor.");
     }
 
     private static List<String> jsonStrings(JSONArray values)throws Exception {

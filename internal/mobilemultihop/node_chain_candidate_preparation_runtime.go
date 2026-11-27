@@ -110,7 +110,7 @@ func (p *NodeChainCandidatePreparation) AllowsDial(tag, address string) bool {
 			return true
 		}
 	}
-	if p.candidates.responseMode != "" || tag != p.proofs[p.position].Tag {
+	if p.candidates.responseMode != "" && !p.candidates.isAppendStreamResponse() || tag != p.proofs[p.position].Tag {
 		return false
 	}
 	for _, target := range p.candidates.targets {

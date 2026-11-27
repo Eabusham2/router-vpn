@@ -516,9 +516,9 @@ struct RouterVPNOrderedNodeDraft {
         self=updated
     }
     func appendBody(mode: String, revision: UUID, current: [String:Any]) throws -> [String:Any] {
-        guard prefixOnly, execution == "local", externalExit == nil, RouterVPNOrderedNodes.prefixModes.contains(mode),
+        guard prefixOnly, execution == "local", externalExit == nil, ["wg","awg2-fast","awg2-strong","shadowsocks"].contains(mode),
               validAppendPrefix(prefixNodes,maximum:95), current["selected_id"] as? String == control,
-              let profiles=current["profiles"] as? [[String:Any]] else { throw RouterVPNOrderedNodes.issue("Recapture the original Local packet prefix and device selection.") }
+              let profiles=current["profiles"] as? [[String:Any]] else { throw RouterVPNOrderedNodes.issue("Recapture the original Local prefix and device selection.") }
         let required=Set(prefixes+[control])
         var expected:[String:String]=[:]
         for id in required {
@@ -533,10 +533,66 @@ struct RouterVPNOrderedNodeDraft {
                 "append_position":prefixes.count,"next_mode":mode,"nodes":prefixNodes,
                 "expected_selected_node_id":control,"expected_profile_tokens":expected]
     }
+
+    var canCompleteWithLastShadowsocks: Bool {
+        guard prefixOnly, execution == "local", externalExit == nil, prefixes.count >= 2,
+              validAppendPrefix(prefixNodes), modes.last == "shadowsocks", let id=prefixes.last,
+              !importedIDs.contains(id), let row=capturedCatalog.first(where:{$0["id"] as? String == id}) else { return false }
+        return RouterVPNOrderedNodes.externalFinalEntry(row) && RouterVPNOrderedNodes.startLayerOff(row)
+    }
+    func completionBody(revision: UUID, current: [String:Any]) throws -> [String:Any] {
+        guard canCompleteWithLastShadowsocks, current["selected_id"] as? String == control,
+              let profiles=current["profiles"] as? [[String:Any]], let deviceToken=tokens[control], let final=prefixes.last else {
+            throw RouterVPNOrderedNodes.issue("Keep the unchanged Local prefix, actual last Shadowsocks node and original device selection.")
+        }
+        var expected:[String:String]=[:]
+        for id in Set(prefixes+[control]) {
+            let matches=profiles.filter{$0["id"] as? String == id}
+            guard matches.count == 1, let token=tokens[id], matches[0]["profile_token"] as? String == token else {
+                throw RouterVPNOrderedNodes.issue("An original completion source changed. Reopen the editor.")
+            }
+            if id == control && !RouterVPNOrderedNodes.externalFinalEntry(matches[0]) { throw RouterVPNOrderedNodes.issue("The original device control changed.") }
+            if let position=prefixes.firstIndex(of:id) {
+                guard RouterVPNOrderedNodes.appendPrefixModes(matches[0],position:position).contains(modes[position]) else { throw RouterVPNOrderedNodes.issue("An original prefix transport changed.") }
+                expected[id]=token
+            }
+            if id == final && (!RouterVPNOrderedNodes.externalFinalEntry(matches[0]) || !RouterVPNOrderedNodes.startLayerOff(matches[0])) { throw RouterVPNOrderedNodes.issue("Keep the actual last paired Shadowsocks node with Start Layer Off.") }
+        }
+        return ["schema":1,"purpose":"draft-last-ss-final","execution":"local",
+                "draft_revision":revision.uuidString.replacingOccurrences(of:"-",with:"").lowercased(),
+                "device_id":control,"device_revision":deviceToken,"final_id":final,"nodes":prefixNodes,
+                "expected_selected_node_id":control,"expected_profile_tokens":expected]
+    }
+    static func validateCompletion(_ value:[String:Any], body:[String:Any], saved:Bool=false) throws {
+        var fields=Set(["schema","purpose","compiled","draft_revision","device_id","device_revision","final_id","nodes",
+                        "source_sha256","device_source_sha256","device_mtu_revision","completion_sha256","active_path_changed"])
+        if saved { fields.formUnion(["profile_id","profile_name"]) }
+        func boolean(_ key:String,_ expected:Bool)->Bool {
+            guard let number=value[key] as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return false }
+            return number.boolValue == expected
+        }
+        guard Set(value.keys) == fields, let schema=value["schema"] as? NSNumber,
+              CFGetTypeID(schema) != CFBooleanGetTypeID(), schema.doubleValue == 1,
+              value["purpose"] as? String == "draft-last-ss-final", boolean("compiled",true), boolean("active_path_changed",false),
+              let original=body["nodes"] as? [[String:String]], original.count >= 2,
+              let rows=value["nodes"] as? [[String:String]], rows == original else { throw RouterVPNOrderedNodes.issue("The completion response changed its original purpose or path.") }
+        for key in ["draft_revision","device_id","device_revision","final_id"] {
+            guard let expected=body[key] as? String, value[key] as? String == expected else { throw RouterVPNOrderedNodes.issue("The completion belongs to another original editor or device.") }
+        }
+        for key in ["source_sha256","device_source_sha256","device_mtu_revision","completion_sha256"] {
+            guard let digest=value[key] as? String, digest.range(of:"\\A[0-9a-f]{64}\\z",options:.regularExpression) != nil else { throw RouterVPNOrderedNodes.issue("The completion source digest is unavailable.") }
+        }
+        if saved {
+            guard let digest=body["expected_completion_sha256"] as? String, value["completion_sha256"] as? String == digest,
+                  let name=body["name"] as? String, value["profile_name"] as? String == name,
+                  let id=value["profile_id"] as? String, id.range(of:"\\A[A-Za-z0-9_-]{1,64}\\z",options:.regularExpression) != nil else { throw RouterVPNOrderedNodes.issue("The saved future profile differs from the reviewed complete path.") }
+        }
+    }
+
     mutating func appendMeasured(_ response: [String:Any], body: [String:Any], current: [String:Any]) throws {
         func flag(_ key:String)->Bool { guard let value=response[key] as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() else { return false };return value.boolValue }
         func number(_ key:String)->Double? { guard let value=response[key] as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(), value.doubleValue.isFinite else { return nil };return value.doubleValue }
-        guard prefixOnly, let mode=body["next_mode"] as? String, RouterVPNOrderedNodes.prefixModes.contains(mode),
+        guard prefixOnly, let mode=body["next_mode"] as? String, ["wg","awg2-fast","awg2-strong","shadowsocks"].contains(mode),
               let revision=body["draft_revision"] as? String,
               let expected=body["expected_profile_tokens"] as? [String:String],
               body["nodes"] as? [[String:String]] == prefixNodes,
@@ -1558,6 +1614,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
     private let appendMode = NSPopUpButton(frame:.zero,pullsDown:false)
     private let prefixOnlyButton = NSButton(title:"Build prefix only",target:nil,action:nil)
     private let applyButton = NSButton(title:"Apply path",target:nil,action:nil)
+    private let completePrefixButton = NSButton(title:"Use last Shadowsocks node as final",target:nil,action:nil)
 
     init(owner: ProductWindowController, draft: RouterVPNOrderedNodeDraft) {
         self.productOwner = owner; self.draft = draft
@@ -1577,8 +1634,9 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         root.addArrangedSubview(move)
         let appendRow=NSStackView();appendRow.orientation = .horizontal;appendRow.spacing=8
         prefixOnlyButton.target=self;prefixOnlyButton.action = #selector(togglePrefixOnly);appendRow.addArrangedSubview(prefixOnlyButton)
-        for mode in RouterVPNOrderedNodes.prefixModes { appendMode.addItem(withTitle:RouterVPNOrderedNodes.modeName(mode));appendMode.lastItem?.representedObject=mode }
-        appendMode.target=self;appendMode.action = #selector(appendTransportChanged);appendMode.setAccessibilityLabel("Next measured packet transport");appendRow.addArrangedSubview(appendMode);root.addArrangedSubview(appendRow)
+        for mode in ["wg","awg2-fast","awg2-strong","shadowsocks"] { appendMode.addItem(withTitle:RouterVPNOrderedNodes.modeName(mode));appendMode.lastItem?.representedObject=mode }
+        appendMode.target=self;appendMode.action = #selector(appendTransportChanged);appendMode.setAccessibilityLabel("Next measured transport");appendRow.addArrangedSubview(appendMode);root.addArrangedSubview(appendRow)
+        completePrefixButton.target=self;completePrefixButton.action = #selector(completePrefix);root.addArrangedSubview(completePrefixButton)
         candidates.menu?.delegate = self
         candidates.setAccessibilityLabel("Available linked entry and hop nodes")
         for id in draft.candidates { candidates.addItem(withTitle: "\(draft.names[id] ?? id) · \(id)"); candidates.lastItem?.representedObject = id }
@@ -1598,6 +1656,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         revision = UUID()
         path.removeAllItems()
         appendMode.isHidden = !draft.prefixOnly;applyButton.isEnabled = !draft.prefixOnly
+        completePrefixButton.isHidden = !draft.prefixOnly;completePrefixButton.isEnabled = draft.canCompleteWithLastShadowsocks
         prefixOnlyButton.title=draft.prefixOnly ? "Use selected node as final":"Build prefix only"
         candidates.removeAllItems()
         let available=draft.prefixOnly ? draft.names.keys.sorted().filter { id in !draft.prefixes.contains(id) && !draft.appendModes(for:id,at:draft.prefixes.count).isEmpty } : draft.candidates
@@ -1608,7 +1667,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         }
         path.selectItem(at: min(max(selected ?? 0, 0), draft.nodes.count - 1))
         selectedHopChanged()
-        status.stringValue = draft.prefixOnly ? "\(draft.prefixes.count) real prefix nodes. Measure the next packet node, then select a real final before using this path.":"\(draft.nodes.count) nodes. Apply stages this selection; Connect starts it."
+        status.stringValue = draft.prefixOnly ? "\(draft.prefixes.count) real prefix nodes. Measure the next node, then select a real final before using this path.":"\(draft.nodes.count) nodes. Apply stages this selection; Connect starts it."
     }
     @objc private func togglePrefixOnly() {
         do {
@@ -1638,7 +1697,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         catch { status.stringValue = error.localizedDescription }
     }
     @objc private func addHop() {
-        do { guard let id = candidates.selectedItem?.representedObject as? String else { throw RouterVPNOrderedNodes.issue("Link another router node first.") }; try draft.add(id); render(selected: draft.prefixes.count - 1) }
+        do { guard let id = candidates.selectedItem?.representedObject as? String else { throw RouterVPNOrderedNodes.issue("Link another router node first.") }; try draft.add(id); render(selected: draft.prefixes.count - 1); if draft.prefixOnly { queueAppendMeasurement() } }
         catch { status.stringValue = error.localizedDescription }
     }
     private func move(_ offset: Int) {
@@ -1698,9 +1757,25 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
             }
         } catch { status.stringValue = error.localizedDescription }
     }
+    private func queueAppendMeasurement() {
+        guard draft.prefixOnly, (1...95).contains(draft.prefixes.count), let owner=productOwner,
+              let mode=appendMode.selectedItem?.representedObject as? String else { return }
+        let original=revision, nodes=draft.prefixNodes, position=nodes.count-1
+        DispatchQueue.main.async { [weak self, weak owner] in
+            guard let self, let owner, self.window?.isVisible == true, self.draft.prefixOnly,
+                  self.revision == original, self.draft.prefixNodes == nodes, self.path.indexOfSelectedItem == position,
+                  self.appendMode.selectedItem?.representedObject as? String == mode,
+                  owner.connectionProfileSelectionGeneration == self.draft.generation,
+                  owner.captureConnectionProfileSelection().selectedNodeID == self.draft.control else { return }
+            do {
+                try owner.requireMutationIdle("measuring the next node through the original prefix")
+                self.measureAppend()
+            } catch { self.status.stringValue=error.localizedDescription }
+        }
+    }
     private func measureAppend() {
         do {
-            guard let owner=productOwner, let mode=appendMode.selectedItem?.representedObject as? String else { throw RouterVPNOrderedNodes.issue("Choose the next packet transport.") }
+            guard let owner=productOwner, let mode=appendMode.selectedItem?.representedObject as? String else { throw RouterVPNOrderedNodes.issue("Choose the next transport.") }
             let current=try owner.api.json("/api/profiles",timeout:5) as? [String:Any] ?? [:]
             let original=revision, position=draft.prefixes.count-1
             let body=try draft.appendBody(mode:mode,revision:original,current:current)
@@ -1714,9 +1789,55 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
                 var updated=self.draft;try updated.appendMeasured(response,body:body,current:current);self.draft=updated
                 self.render(selected:updated.prefixes.count-1)
                 self.status.stringValue="Appended the measured node after the temporary path stopped. Select a real final before using this path."
+                self.queueAppendMeasurement()
             }
         } catch { status.stringValue=error.localizedDescription }
     }
+
+    private func requireCompletionEditor(_ original:UUID, nodes:[[String:String]], owner:ProductWindowController) throws {
+        guard window?.isVisible == true, draft.prefixOnly, revision == original, draft.prefixNodes == nodes,
+              owner.connectionProfileSelectionGeneration == draft.generation,
+              owner.captureConnectionProfileSelection().selectedNodeID == draft.control else { throw RouterVPNOrderedNodes.issue("The original incomplete editor changed. Review its complete path again.") }
+        try owner.requireMutationIdle("completing the original ordered prefix")
+    }
+    @objc private func completePrefix() {
+        do {
+            guard let owner=productOwner, let window else { throw RouterVPNOrderedNodes.issue("Reopen the original ordered editor.") }
+            let original=revision, nodes=draft.prefixNodes
+            try requireCompletionEditor(original,nodes:nodes,owner:owner)
+            let current=try owner.api.json("/api/profiles",timeout:5) as? [String:Any] ?? [:]
+            let body=try draft.completionBody(revision:original,current:current)
+            let data=try owner.api.request("/api/connection-profile/setup/complete-prefix",method:"POST",body:body,timeout:15)
+            guard let preview=try JSONSerialization.jsonObject(with:data) as? [String:Any] else { throw RouterVPNOrderedNodes.issue("The completion preview returned invalid JSON.") }
+            try RouterVPNOrderedNodeDraft.validateCompletion(preview,body:body)
+            try requireCompletionEditor(original,nodes:nodes,owner:owner)
+            _ = try draft.completionBody(revision:original,current:try owner.api.json("/api/profiles",timeout:5) as? [String:Any] ?? [:])
+            let alert=NSAlert();alert.messageText="Use last Shadowsocks node as final"
+            alert.informativeText="The complete path compiled with every original node in order. Name this future profile, then Save explicitly. Load and Connect remain separate choices."
+            let name=NSTextField(frame:NSRect(x:0,y:0,width:320,height:24));name.placeholderString="Profile name";alert.accessoryView=name
+            alert.addButton(withTitle:"Save profile");alert.addButton(withTitle:"Back")
+            alert.beginSheetModal(for:window) { [weak self, weak owner] choice in
+                guard choice == .alertFirstButtonReturn, let self, let owner else { return }
+                do {
+                    try self.requireCompletionEditor(original,nodes:nodes,owner:owner)
+                    _ = try self.draft.completionBody(revision:original,current:try owner.api.json("/api/profiles",timeout:5) as? [String:Any] ?? [:])
+                    let profileName=name.stringValue.trimmingCharacters(in:.whitespacesAndNewlines)
+                    guard !profileName.isEmpty else { throw RouterVPNOrderedNodes.issue("Enter a name and review the complete future profile again.") }
+                    var request=body;request["name"]=profileName;request["expected_completion_sha256"]=preview["completion_sha256"]
+                    let raw=try owner.api.request("/api/connection-profile/setup/save-completed-prefix",method:"POST",body:request,timeout:15)
+                    guard let saved=try JSONSerialization.jsonObject(with:raw) as? [String:Any] else { throw RouterVPNOrderedNodes.issue("The named-profile response returned invalid JSON.") }
+                    try RouterVPNOrderedNodeDraft.validateCompletion(saved,body:request,saved:true)
+                    for key in ["source_sha256","device_source_sha256","device_mtu_revision","completion_sha256"] {
+                        guard saved[key] as? String == preview[key] as? String else { throw RouterVPNOrderedNodes.issue("The saved source differs from the reviewed preview.") }
+                    }
+                    try self.requireCompletionEditor(original,nodes:nodes,owner:owner)
+                    _ = try self.draft.completionBody(revision:original,current:try owner.api.json("/api/profiles",timeout:5) as? [String:Any] ?? [:])
+                    self.status.stringValue="Saved \(profileName). Load this future profile separately, then Connect to verify its complete path."
+                } catch { self.status.stringValue=error.localizedDescription }
+            }
+        } catch { status.stringValue=error.localizedDescription }
+    }
+
     @objc private func applyPath() {
         do { guard let owner = productOwner else { throw RouterVPNOrderedNodes.issue("Reopen the editor from the current Router VPN window.") }; try owner.applyOrderedNodeDraft(draft); close() }
         catch { status.stringValue = error.localizedDescription }

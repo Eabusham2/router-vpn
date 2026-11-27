@@ -4,6 +4,8 @@ import Libbox
 /// A genuine unfinished prefix and its independent device policy. This owner
 /// never creates a complete NodeChain or grants a selected-final connection.
 struct IOSNodeCandidateAppendSource {
+    static let nextModes = IOSMultihopNodeSelection.nativePrefixModes + ["shadowsocks"]
+    static func supportsNextMode(_ mode: String) -> Bool { nextModes.contains(mode) }
     let plan: LibboxRouterNodeChainCandidateAppendSource
     let source: String, metadata: String
     let members: [IOSNodeChainCapture.Member]
@@ -31,7 +33,7 @@ struct IOSNodeCandidateAppendSource {
         guard !nodes.isEmpty, nodes.count < IOSMultihopNodeSelection.physicalTraversalDepth,
               Set(nodes.map(\.id)).count == nodes.count,
               nodes.allSatisfy({ !$0.id.isEmpty }),
-              IOSMultihopNodeSelection.supportsNativePrefix(nextMode) else { throw issue() }
+              supportsNextMode(nextMode) else { throw issue() }
         let root = try object(deviceBundle, maximum: 32 * 1024 * 1024)
         guard let selected = root["selectedRouterID"] as? String,
               let profiles = root["routerProfiles"] as? [[String: Any]],
@@ -89,7 +91,7 @@ struct IOSNodeCandidateAppendSource {
               let nodes = value["nodes"] as? [String], !nodes.isEmpty, nodes.count < IOSMultihopNodeSelection.physicalTraversalDepth,
               let identities = value["identity_sources"] as? [String], identities.count == nodes.count,
               let deviceInput = value["device_source"] as? String, let mode = value["next_mode"] as? String,
-              IOSMultihopNodeSelection.supportsNativePrefix(mode), mode == plan.candidateMode(),
+              Self.supportsNextMode(mode), mode == plan.candidateMode(),
               value["append_position"] as? Int == nodes.count, Int(plan.appendPosition()) == nodes.count,
               safe["schema"] as? Int == 1, safe["purpose"] as? String == "draft-prefix-append",
               safe["source_sha256"] as? String == plan.sourceSHA256(), safe["config_sha256"] as? String == plan.configSHA256(),
@@ -220,5 +222,5 @@ struct IOSNodeCandidateAppendSource {
         return String(decoding: data, as: UTF8.self)
     }
     static func issue() -> NSError { NSError(domain: "RouterVPN.CandidateAppend", code: 1,
-        userInfo: [NSLocalizedDescriptionKey: "The unfinished prefix, next packet mode or independently captured device policy changed."]) }
+        userInfo: [NSLocalizedDescriptionKey: "The unfinished prefix, next transport or independently captured device policy changed."]) }
 }

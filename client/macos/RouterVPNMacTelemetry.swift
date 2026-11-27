@@ -1513,7 +1513,7 @@ private enum RouterVPNOrderedCandidateDisplay {
               value["origin"] as? String == "editor-draft", value["requested_execution"] as? String == "local",
               number(value,"schema") == 1, number(value,"prefix_position") == Double(position),
               value["measurement"] as? String == "routed-candidate-response",
-              let mode=value["candidate_mode"] as? String, ["wg","awg2-fast","awg2-strong"].contains(mode), mode == draft["next_mode"] as? String,
+              let mode=value["candidate_mode"] as? String, ["wg","awg2-fast","awg2-strong","shadowsocks"].contains(mode), mode == draft["next_mode"] as? String,
               let nodes=value["response_source_nodes"] as? [[String:String]], (1...95).contains(nodes.count), position == nodes.count-1,
               number(value,"append_position") == Double(nodes.count), number(draft,"append_position") == Double(nodes.count),
               let original=draft["nodes"] as? [[String:String]], original.count == nodes.count,
@@ -1751,7 +1751,7 @@ private final class RouterVPNMacOrderedCandidates: NSWindowController, NSWindowD
         for button in [refresh,test,useDraft,save,cancel] {button.target=self;button.bezelStyle = .rounded}
         refresh.action = #selector(capture);test.action = #selector(measure);useDraft.action = #selector(useInDraft);save.action = #selector(saveProfile);cancel.action = #selector(cancelTest)
         if draft != nil { profileName.isHidden = true; save.title = "Add measured hop to draft" }
-        if isAppend { panel.title = "Measure next packet node"; useDraft.title = "Append measured node"; save.isHidden = true }
+        if isAppend { panel.title = "Measure next node"; useDraft.title = "Append measured node"; save.isHidden = true }
         panel.contentView=stack;controls()
         timer=Timer.scheduledTimer(withTimeInterval:0.25,repeats:true){[weak self] _ in self?.tick()}
         capture()

@@ -39,7 +39,7 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
     }
     func appendResponse(in proofs: [Self]) -> Bool {
         guard purpose == "draft-prefix-append", metric == "routed-candidate-response",
-              IOSMultihopNodeSelection.supportsNativePrefix(candidate_mode ?? ""),
+              IOSNodeCandidateAppendSource.supportsNextMode(candidate_mode ?? ""),
               (1..<IOSMultihopNodeSelection.physicalTraversalDepth).contains(proofs.count),
               position == proofs.count - 1, proofs.last == self,
               Set(proofs.map(\.profile_id)).count == proofs.count else { return false }
@@ -55,7 +55,7 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
     var supported: Bool {
         if purpose != nil {
             return purpose == "draft-prefix-append" && metric == "routed-candidate-response" &&
-                IOSMultihopNodeSelection.supportsNativePrefix(candidate_mode ?? "") &&
+                IOSNodeCandidateAppendSource.supportsNextMode(candidate_mode ?? "") &&
                 (IOSMultihopNodeSelection.supportsNativePrefix(mode) && !node_id.isEmpty || position > 0 && mode == "shadowsocks") &&
                 (0..<(IOSMultihopNodeSelection.physicalTraversalDepth - 1)).contains(position)
         }

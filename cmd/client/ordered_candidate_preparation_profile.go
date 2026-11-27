@@ -565,7 +565,7 @@ func (a *app) chooseOrderedCandidateAppend(w http.ResponseWriter, request *http.
 	if err != nil || compiled == nil || compiled.prefixPreparation == nil || !compiled.prefixPreparation.IsAppend() ||
 		compiled.prefixPreparation.OriginalSourceSHA256() != p.selection.Native.source || compiled.candidateMode != job.view.candidateMode ||
 		compiled.revision != p.revision || compiled.profiles[q.CandidateID] != p.inventory.profiles[q.CandidateID] {
-		http.Error(w, "the exact appended packet source no longer compiles through the retained prefix", 409)
+		http.Error(w, "the exact appended source no longer compiles through the retained prefix", 409)
 		return
 	}
 	nodes := append(append([]common.MultihopNodeSelection(nil), p.request.append.Nodes...), common.MultihopNodeSelection{ID: q.CandidateID, Mode: job.view.candidateMode})

@@ -1486,8 +1486,8 @@ function New-RouterVPNOrderedAppendPayload($Draft,$Store){
  $id=[string]$Draft.control_id;$nodes=@($Draft.nodes)
  if($Draft.purpose-cne'draft-prefix-append'-or$Draft.execution-cne'local'-or
     $Draft.draft_revision-cnotmatch'\A[0-9a-f]{32}\z'-or
-    -not(Test-RouterVPNOrderedPrefixMode ([string]$Draft.next_mode))-or
-    [string]$Store.selected_id-cne$id-or-not(Test-RouterVPNOrderedAppendNodes $nodes $Store.profiles 95)){throw 'Recapture the original Local packet prefix and device selection.'}
+    [string]$Draft.next_mode-cnotin@('wg','awg2-fast','awg2-strong','shadowsocks')-or
+    [string]$Store.selected_id-cne$id-or-not(Test-RouterVPNOrderedAppendNodes $nodes $Store.profiles 95)){throw 'Recapture the original Local prefix and device selection.'}
  $index=Get-RouterVPNOrderedProfileIndex $Store.profiles
  if(-not(Test-RouterVPNOrderedPairedLayer $index[$id] -AllowAuthenticated)){throw 'The selected device control must remain a paired node.'}
  $tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
@@ -1524,4 +1524,49 @@ function Convert-RouterVPNOrderedAppendChoice($Draft,$Body,$Choice,$Store){
   if([string]$token-cnotmatch'\A[0-9a-f]{64}\z'-or[string]$token-cne[string](Get-RouterVPNOrderedValue $index[[string]$node.id] 'profile_token')){throw 'An appended source changed before adoption.'}
  }
  return $path
+}
+
+
+function New-RouterVPNOrderedCompletionPayload($Draft,$Store){
+ $id=[string]$Draft.control_id;$nodes=@($Draft.nodes)
+ if($Draft.purpose-cne'draft-prefix-append'-or$Draft.execution-cne'local'-or
+    [string]$Draft.draft_revision-cnotmatch'\A[0-9a-f]{32}\z'-or[string]$Store.selected_id-cne$id-or
+    $nodes.Count-lt2-or-not(Test-RouterVPNOrderedAppendNodes $nodes $Store.profiles 96)){
+  throw 'Recapture the unchanged Local prefix before choosing its last node as final.'
+ }
+ $index=Get-RouterVPNOrderedProfileIndex $Store.profiles;$last=$nodes[-1]
+ if($last.mode-cne'shadowsocks'-or-not(Test-RouterVPNOrderedPairedOff $index[[string]$last.id])-or
+    -not(Test-RouterVPNOrderedPairedLayer $index[$id] -AllowAuthenticated)){throw 'Keep the actual last paired Shadowsocks node and original device selection.'}
+ $device=[string](Get-RouterVPNOrderedValue $Draft.profile_tokens $id)
+ if($device-cnotmatch'\A[0-9a-f]{64}\z'-or$device-cne[string](Get-RouterVPNOrderedValue $index[$id] 'profile_token')){throw 'The original device profile changed.'}
+ $tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
+ foreach($node in $nodes){
+  $token=[string](Get-RouterVPNOrderedValue $Draft.profile_tokens ([string]$node.id))
+  if($token-cnotmatch'\A[0-9a-f]{64}\z'-or$token-cne[string](Get-RouterVPNOrderedValue $index[[string]$node.id] 'profile_token')){throw 'An original path profile changed.'}
+  $tokens.Add([string]$node.id,$token)
+ }
+ $keys=if($Draft.profile_tokens-is[Collections.IDictionary]){@($Draft.profile_tokens.Keys)}else{@($Draft.profile_tokens.PSObject.Properties.Name)}
+ $expected=$tokens.Count;if(-not$tokens.ContainsKey($id)){$expected++}
+ if($keys.Count-ne$expected){throw 'The original completion source set changed.'}
+ return [ordered]@{schema=1;purpose='draft-last-ss-final';execution='local';draft_revision=[string]$Draft.draft_revision;device_id=$id;device_revision=$device;final_id=[string]$last.id;nodes=$nodes;expected_selected_node_id=$id;expected_profile_tokens=$tokens}
+}
+
+function Confirm-RouterVPNOrderedCompletion($Body,$Reply,[switch]$Saved){
+ $fields=@('schema','purpose','compiled','draft_revision','device_id','device_revision','final_id','nodes','source_sha256','device_source_sha256','device_mtu_revision','completion_sha256','active_path_changed')
+ if($Saved){$fields+=@('profile_id','profile_name')}
+ $keys=if($Reply-is[Collections.IDictionary]){@($Reply.Keys)}else{@($Reply.PSObject.Properties.Name)}
+ if($keys.Count-ne$fields.Count-or@($keys|Where-Object{$_-cnotin$fields}).Count-ne0-or
+    ($Reply.schema-isnot[int]-and$Reply.schema-isnot[long])-or$Reply.schema-ne1-or$Reply.purpose-cne'draft-last-ss-final'-or
+    $Reply.compiled-isnot[bool]-or-not$Reply.compiled-or$Reply.active_path_changed-isnot[bool]-or$Reply.active_path_changed){throw 'The complete-path response changed its purpose.'}
+ foreach($key in @('draft_revision','device_id','device_revision','final_id')){if($Reply.$key-isnot[string]-or$Reply.$key-cne[string]$Body.$key){throw 'The completion response belongs to another original editor or device.'}}
+ foreach($key in @('source_sha256','device_source_sha256','device_mtu_revision','completion_sha256')){if($Reply.$key-isnot[string]-or$Reply.$key-cnotmatch'\A[0-9a-f]{64}\z'){throw 'The completion source digest is unavailable.'}}
+ $original=@($Body.nodes);$path=@($Reply.nodes)
+ if($path.Count-ne$original.Count){throw 'The completion changed the original path length.'}
+ for($i=0;$i-lt$original.Count;$i++){
+  $rowKeys=if($path[$i]-is[Collections.IDictionary]){@($path[$i].Keys)}else{@($path[$i].PSObject.Properties.Name)}
+  if($rowKeys.Count-ne2-or$path[$i].id-isnot[string]-or$path[$i].mode-isnot[string]-or$path[$i].id-cne$original[$i].id-or$path[$i].mode-cne$original[$i].mode){throw 'The completion changed an original path row.'}
+ }
+ if($Saved-and([string]$Reply.completion_sha256-cne[string]$Body.expected_completion_sha256-or$Reply.profile_id-isnot[string]-or$Reply.profile_name-isnot[string]-or
+    [string]$Reply.profile_id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'-or[string]$Reply.profile_name-cne[string]$Body.name)){throw 'The saved future profile differs from its reviewed complete path.'}
+ return $Reply
 }
