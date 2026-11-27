@@ -528,7 +528,7 @@ func (a *app) chooseOrderedCandidateAppend(w http.ResponseWriter, request *http.
 	job := owner.prepared
 	offered := false
 	for _, choice := range job.view.candidates {
-		if choice.ID == q.CandidateID && choice.DraftAction == orderedCandidateDraftAppendAction && choice.ProposalAction == "" &&
+		if choice.ID == q.CandidateID && choice.Kind == job.view.append.candidateKind() && choice.DraftAction == orderedCandidateDraftAppendAction && choice.ProposalAction == "" &&
 			choice.SaveReason == "" && reflect.DeepEqual(choice.Proposal, q.ProposedPath) && reflect.DeepEqual(choice.DraftProposal, q.ProposedPath) {
 			offered = true
 			break
@@ -553,6 +553,8 @@ func (a *app) chooseOrderedCandidateAppend(w http.ResponseWriter, request *http.
 	p := job.preparation
 	if !valid || p == nil || !p.closedPurposeCurrent() || p.request.append != job.view.append || p.request.draft != nil ||
 		p.prefixPreparation == nil || !p.prefixPreparation.IsAppend() || p.prefixPreparation.CandidateMode() != job.view.candidateMode ||
+		p.prefixPreparation.CandidateKind() != job.view.append.candidateKind() ||
+		p.prefixPreparation.CandidateMeasurement() != candidateViewMetric(job.view.prefixes, job.view.position) ||
 		job.view.appendSource == nil || p.selection.Native.source != job.view.appendSource.SourceSHA {
 		http.Error(w, "append requires its original completed native DOWN result", 409)
 		return
@@ -564,6 +566,8 @@ func (a *app) chooseOrderedCandidateAppend(w http.ResponseWriter, request *http.
 	compiled, err := captureDesktopAppendCandidateSources(ctx, a, p.selection, p.inventory.launch, []string{q.CandidateID})
 	if err != nil || compiled == nil || compiled.prefixPreparation == nil || !compiled.prefixPreparation.IsAppend() ||
 		compiled.prefixPreparation.OriginalSourceSHA256() != p.selection.Native.source || compiled.candidateMode != job.view.candidateMode ||
+		compiled.prefixPreparation.CandidateKind() != p.prefixPreparation.CandidateKind() ||
+		compiled.prefixPreparation.CandidateMeasurement() != p.prefixPreparation.CandidateMeasurement() ||
 		compiled.revision != p.revision || compiled.profiles[q.CandidateID] != p.inventory.profiles[q.CandidateID] {
 		http.Error(w, "the exact appended source no longer compiles through the retained prefix", 409)
 		return

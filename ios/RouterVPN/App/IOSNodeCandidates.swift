@@ -18,7 +18,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
     struct Envelope: Decodable {
         let session_id: String, owner_request: String, request_id: String
         let metadata: String?, status: String?, closed: Bool?
-        let candidate_mode: String?
+        let candidate_mode: String?, candidate_kind: String?
         let response_source_nodes: [IOSNodeCandidateResponseNode]?
         let candidate_purpose: String?, append_source_metadata_sha256: String?
     }
@@ -35,9 +35,10 @@ private final class IOSCandidateReply: @unchecked Sendable {
     private let responseMode: String?
     private let responseSourceNodes: [IOSNodeCandidateResponseNode]?
     private let appendSourceMetadataSHA256: String?
+    private let appendCandidateKind: String?
     private var cancelled = false, observationActive = false
     init(epoch: String, owner: String, responseMode: String? = nil, responseSourceNodes: [IOSNodeCandidateResponseNode]? = nil,
-         preparedResponse: Bool = false, appendSourceMetadataSHA256: String? = nil, send: @escaping Send, recovered: @escaping @MainActor () -> Bool,
+         preparedResponse: Bool = false, appendSourceMetadataSHA256: String? = nil, appendCandidateKind: String? = nil, send: @escaping Send, recovered: @escaping @MainActor () -> Bool,
          pause: @escaping @MainActor () async -> Void = { try? await Task.sleep(for: .milliseconds(250)) }) throws {
         let responseNodes = responseSourceNodes ?? []
         let extendedPacket = responseMode == "wg" &&
@@ -59,14 +60,16 @@ private final class IOSCandidateReply: @unchecked Sendable {
         let completeSource = pairedSource || importedSource
         let appendSource = appendSourceMetadataSHA256 != nil && preparedResponse &&
             IOSCandidateCatalogPublication.isDigest(appendSourceMetadataSHA256 ?? "") &&
-            IOSNodeCandidateAppendSource.supportsNextMode(responseMode ?? "") &&
+            (appendCandidateKind == nil || appendCandidateKind == "external") &&
+            IOSNodeCandidateAppendSource.supportsNext(kind: appendCandidateKind ?? "router-vpn", mode: responseMode ?? "") &&
             (1..<IOSMultihopNodeSelection.physicalTraversalDepth).contains(responseNodes.count) &&
             Set(responseNodes.map(\.id)).count == responseNodes.count &&
             responseNodes.first?.kind == "router-vpn" &&
             IOSMultihopNodeSelection.supportsNativePrefix(responseNodes.first?.mode ?? "") &&
             responseNodes.enumerated().allSatisfy { index, row in
                 !row.id.isEmpty && (row.kind == "router-vpn" && IOSMultihopNodeSelection.supportsNativePrefix(row.mode) ||
-                    index > 0 && row.mode == "shadowsocks" && ["router-vpn", "external"].contains(row.kind))
+                    index > 0 && (row.mode == "shadowsocks" && ["router-vpn", "external"].contains(row.kind) ||
+                         row.mode == "hysteria2" && row.kind == "router-vpn"))
             }
         let packetResponse = IOSMultihopNodeSelection.supportsNativePrefix(responseMode ?? "") &&
             ["shadowsocks", "hysteria2"].contains(responseNodes.last?.mode ?? "") &&
@@ -75,11 +78,11 @@ private final class IOSCandidateReply: @unchecked Sendable {
             responseNodes.last?.mode == responseMode &&
             (2...IOSMultihopNodeSelection.maximumNodes).contains(responseNodes.count)
         guard UUID(uuidString: epoch) != nil, IOSCandidateCatalogPublication.validRequest(owner),
-               appendSource || appendSourceMetadataSHA256 == nil &&
+               appendSource || appendSourceMetadataSHA256 == nil && appendCandidateKind == nil &&
                 ((responseMode == nil && responseSourceNodes == nil) || completeSource && (packetResponse || preparedFinal)) else { throw IOSNodeCandidateResult.issue() }
         self.epoch = epoch; self.owner = owner; self.send = send; self.recovered = recovered; self.pause = pause
         self.responseMode = responseMode; self.responseSourceNodes = responseSourceNodes
-        self.appendSourceMetadataSHA256 = appendSourceMetadataSHA256
+        self.appendSourceMetadataSHA256 = appendSourceMetadataSHA256; self.appendCandidateKind = appendCandidateKind
     }
     func cancel() { cancelled = true }
     private func reply(_ operation: String, request: String, candidate: String = "", prefix: String = "", deadline: TimeInterval? = nil) async throws -> Envelope {
@@ -89,9 +92,9 @@ private final class IOSCandidateReply: @unchecked Sendable {
         guard value.session_id == epoch, value.owner_request == owner, value.request_id == request else { throw IOSNodeCandidateResult.issue() }
         // The protected close receipt survives the retired native owner. It
         // grants no score or proposal authority when a Close reply was lost.
-        if operation == "candidate-close", value.closed == true, value.candidate_mode == nil, value.response_source_nodes == nil,
+        if operation == "candidate-close", value.closed == true, value.candidate_mode == nil, value.candidate_kind == nil, value.response_source_nodes == nil,
            value.candidate_purpose == nil, value.append_source_metadata_sha256 == nil { return value }
-        guard value.candidate_mode == responseMode, value.response_source_nodes == responseSourceNodes,
+        guard value.candidate_mode == responseMode, value.candidate_kind == appendCandidateKind, value.response_source_nodes == responseSourceNodes,
               value.candidate_purpose == (appendSourceMetadataSHA256 == nil ? nil : "draft-prefix-append"),
               value.append_source_metadata_sha256 == appendSourceMetadataSHA256 else { throw IOSNodeCandidateResult.issue() }
         return value
@@ -567,7 +570,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
               let binding = temporary.prefixBinding, capture.source.request == owner else { throw CancellationError() }
         let owned = try IOSNodeCandidateTransaction(epoch: temporary.prefixEpoch.uuidString, owner: owner,
             responseMode: prefix.responseMode, responseSourceNodes: prefix.responseSourceNodes,
-            preparedResponse: prefix.responseMode != nil, appendSourceMetadataSHA256: prefix.appendSourceMetadataSHA256, send: { op, request, candidate, selected, deadline in
+            preparedResponse: prefix.responseMode != nil, appendSourceMetadataSHA256: prefix.appendSourceMetadataSHA256, appendCandidateKind: prefix.responseKind, send: { op, request, candidate, selected, deadline in
                 try await self.send(binding.connection, operation: "prefix-" + op, request: request,
                     epoch: temporary.prefixEpoch.uuidString, owner: owner, candidate: candidate, prefix: selected, deadline: deadline)
             }, recovered: { IOSCandidateCatalogPublication.shared.closed(epoch: temporary.prefixEpoch.uuidString, request: owner) })
@@ -583,7 +586,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         try metadata.validate(prefix: capture.prefix, source: prefix.sourceSHA256, config: prefix.configSHA256,
             ids: Set(capture.rows.filter { !$0.input.isEmpty }.map(\.id)))
         guard metadata.capture_sha256 == prefix.captureSHA256,
-              metadata.append_source_metadata_sha256 == prefix.appendSourceMetadataSHA256 else { throw IOSNodeCandidateResult.issue() }
+              metadata.append_source_metadata_sha256 == prefix.appendSourceMetadataSHA256, metadata.candidate_kind == prefix.responseKind else { throw IOSNodeCandidateResult.issue() }
         var detached: [Score] = [], proposals: [UUID: IOSNodeCandidateProposal] = [:], failures: [UUID: String] = [:]
         var last = ""
         for target in metadata.targets {
@@ -591,7 +594,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
             guard let row = capture.rows.first(where: { $0.id == target.id }) else { throw IOSNodeCandidateResult.issue() }
             let request = Self.nonce(); last = request
             text = prefix.isAppend
-                ? "50 private-agent responses through this unfinished prefix: \(row.name.prefix(100))."
+                ? "50 \(IOSNodeCandidateMetadata.label(metadata.metric)) through this unfinished prefix: \(row.name.prefix(100))."
                 : "50 \(IOSNodeCandidateMetadata.label(metadata.metric)) through the selected prefix: \(row.name.prefix(100)). The saved suffix remains unused."
             let raw = try await owned.measure(request: request, candidate: target.id, current: current)
             try current()
@@ -830,11 +833,11 @@ struct IOSCandidateProfileChoices: View {
     }
 
     func startEditorAppend(model: RouterVPNModel, nodes: [IOSMultihopNodeSelection], editorOwner: IOSNodeChainEditorOwner,
-                           nextMode: String, draftRevision: String, current: @escaping @MainActor () throws -> Void) throws {
+                           nextKind: String, nextMode: String, draftRevision: String, current: @escaping @MainActor () throws -> Void) throws {
         guard !running else { throw CancellationError() }
         let request = Self.nonce(), position = nodes.count - 1
         let temporary = try IOSNodeCandidatePreparation.reserveAppend(model: model, nodes: nodes, editorOwner: editorOwner,
-            nextMode: nextMode, draftRevision: draftRevision, request: request, current: current) { [weak self] in self?.cancel() }
+            nextKind: nextKind, nextMode: nextMode, draftRevision: draftRevision, request: request, current: current) { [weak self] in self?.cancel() }
         selectedPrefix = position
         begin(model: model, temporary: temporary, position: position, owner: request, editor: true)
     }

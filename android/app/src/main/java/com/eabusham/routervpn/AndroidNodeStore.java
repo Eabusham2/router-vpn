@@ -166,7 +166,7 @@ final class AndroidNodeStore {
         final List<ChainSource> members;
         final List<String> modes;
         final String execution;
-        final String appendMode,appendRevision;
+        final String appendKind,appendMode,appendRevision;
         private final AndroidNodeStore owner;
         private final long generation;
         private final ChainCatalog draftCatalog;
@@ -180,13 +180,13 @@ final class AndroidNodeStore {
         }
         private ChainCapture(AndroidNodeStore owner,ChainSource control,List<ChainSource> members,List<String> modes,String execution,
                              ChainCatalog draftCatalog,int draftPrefix,java.util.function.BooleanSupplier draftCurrent,String draftReferences) {
-            this(owner,control,members,modes,execution,draftCatalog,draftPrefix,draftCurrent,draftReferences,"","");
+            this(owner,control,members,modes,execution,draftCatalog,draftPrefix,draftCurrent,draftReferences,"","","");
         }
         private ChainCapture(AndroidNodeStore owner,ChainSource control,List<ChainSource> members,List<String> modes,String execution,
                              ChainCatalog draftCatalog,int draftPrefix,java.util.function.BooleanSupplier draftCurrent,String draftReferences,
-                             String appendMode,String appendRevision) {
+                             String appendKind,String appendMode,String appendRevision) {
             this.owner=owner;this.control=control;generation=selectionGeneration;this.execution=execution;
-            this.appendMode=appendMode;this.appendRevision=appendRevision;
+            this.appendKind=appendKind;this.appendMode=appendMode;this.appendRevision=appendRevision;
             this.members=Collections.unmodifiableList(new ArrayList<>(members));this.modes=Collections.unmodifiableList(new ArrayList<>(modes));
             this.draftCatalog=draftCatalog;this.draftPrefix=draftPrefix;this.draftCurrent=draftCurrent;this.draftReferences=draftReferences;
         }
@@ -308,8 +308,8 @@ final class AndroidNodeStore {
         ChainCapture captureCandidateDraft(List<ChainSource> sources,List<String> modes,int prefix,java.util.function.BooleanSupplier current) throws Exception {
             return owner.captureCandidateDraft(this,sources,modes,prefix,current);
         }
-        ChainCapture captureCandidateAppend(List<ChainSource> sources,List<String> modes,String nextMode,String revision,java.util.function.BooleanSupplier current)throws Exception {
-            return owner.captureCandidateAppend(this,sources,modes,nextMode,revision,current);
+        ChainCapture captureCandidateAppend(List<ChainSource> sources,List<String> modes,String nextKind,String nextMode,String revision,java.util.function.BooleanSupplier current)throws Exception {
+            return owner.captureCandidateAppend(this,sources,modes,nextKind,nextMode,revision,current);
         }
         ChainCapture captureSelectedCandidateDraft(List<ChainSource> sources,List<String> modes,int prefix,String execution,java.util.function.BooleanSupplier current) throws Exception {
             return owner.captureSelectedCandidateDraft(this,sources,modes,prefix,execution,current);
@@ -636,10 +636,10 @@ final class AndroidNodeStore {
 
     /** A genuine unfinished prefix has no route-final or selected execution authority. */
     private synchronized ChainCapture captureCandidateAppend(ChainCatalog catalog,List<ChainSource> sources,List<String> modes,
-            String nextMode,String revision,java.util.function.BooleanSupplier current)throws Exception { synchronized(STORE_LOCK) {
+            String nextKind,String nextMode,String revision,java.util.function.BooleanSupplier current)throws Exception { synchronized(STORE_LOCK) {
         requireChainCatalog(catalog);
         if(current==null||!current.getAsBoolean()||sources.isEmpty()||sources.size()>=PHYSICAL_TRAVERSAL_DEPTH
-                ||sources.size()!=modes.size()||!AndroidNodeCandidateAppendSource.supportsNextMode(nextMode)
+                ||sources.size()!=modes.size()||!AndroidNodeCandidateAppendSource.supportsNext(nextKind,nextMode)
                 ||revision==null||!revision.matches("[A-Za-z0-9_.-]{1,128}"))
             throw new IllegalStateException("The unfinished draft or next transport changed.");
         ChainSource device=catalog.source(catalog.selectedId);
@@ -655,7 +655,7 @@ final class AndroidNodeStore {
             bytes+=original.bytes().length;if(bytes>MAX_CHAIN_SOURCE)throw new IllegalStateException("The unfinished draft exceeds its private source bound.");
             originals.add(original);refs.put(new JSONObject().put("id",original.profileId).put("mode",mode));
         }
-        ChainCapture captured=new ChainCapture(this,device,originals,modes,"local",catalog,sources.size()-1,current,refs.toString(),nextMode,revision);
+        ChainCapture captured=new ChainCapture(this,device,originals,modes,"local",catalog,sources.size()-1,current,refs.toString(),nextKind,nextMode,revision);
         captured.requireCurrent();return captured;
     } }
 

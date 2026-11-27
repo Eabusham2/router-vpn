@@ -13,7 +13,7 @@ const nodeChainCandidateAppendPurpose = "draft-prefix-append"
 // NodeChainCandidateAppendNextMode is only a source classifier for the distinct
 // incomplete Local append purpose. It grants no complete or selected route.
 func NodeChainCandidateAppendNextMode(mode string) bool {
-	return NodeChainPrefixMode(mode) || mode == "shadowsocks"
+	return NodeChainPrefixMode(mode) || nodeChainAppendProxyMode(mode)
 }
 
 // The device source is captured separately from the forwarding prefix. It
@@ -28,6 +28,7 @@ type nodeChainCandidateAppendSourceRecord struct {
 	DeviceMTURevision string   `json:"device_mtu_revision,omitempty"`
 	DeviceFixedMTU    int      `json:"device_fixed_mtu,omitempty"`
 	NextMode          string   `json:"next_mode"`
+	NextKind          string   `json:"next_kind,omitempty"`
 	AppendPosition    int      `json:"append_position"`
 	Nodes             []string `json:"nodes"`
 	IdentitySources   []string `json:"identity_sources"`
@@ -60,7 +61,7 @@ func NewNodeChainCandidateAppendSource(input string) (*NodeChainCandidateAppendS
 		record.Kind != nodeChainCandidateAppendSourceKind || record.Schema != 1 && record.Schema != 2 || record.Execution != "local" ||
 		!nodeChainIdentityText(record.DraftRevision) || !nodeChainIdentityText(record.DeviceRevision) ||
 		len(record.DraftRevision) > 256 || len(record.DeviceRevision) > 256 ||
-		!NodeChainCandidateAppendNextMode(record.NextMode) || len(record.Nodes) < 1 || len(record.Nodes) >= NodeChainExtendedLocalMaximumNodes ||
+		!NodeChainCandidateAppendNextMode(record.NextMode) || record.NextKind != "" && (record.NextKind != "external" || record.NextMode != "shadowsocks") || len(record.Nodes) < 1 || len(record.Nodes) >= NodeChainExtendedLocalMaximumNodes ||
 		record.AppendPosition != len(record.Nodes) || len(record.IdentitySources) != len(record.Nodes) ||
 		record.DeviceMTURevision != "" && (!nodeChainIdentityText(record.DeviceMTURevision) || len(record.DeviceMTURevision) > 256) ||
 		record.DeviceFixedMTU != 0 && (record.DeviceMTURevision == "" || record.DeviceFixedMTU < 1280 || record.DeviceFixedMTU > 9000) {
@@ -229,6 +230,7 @@ func (s *NodeChainCandidateAppendSource) validate() error {
 		s.device.validateNodeDesktopCapture() != nil || len(s.nodes) < 1 || len(s.nodes) >= NodeChainExtendedLocalMaximumNodes ||
 		s.memberCapturesCurrent() != nil || len(s.proofs) != len(s.nodes) ||
 		s.record.AppendPosition != len(s.nodes) || !NodeChainCandidateAppendNextMode(s.record.NextMode) ||
+		s.record.NextKind != "" && (s.record.NextKind != "external" || s.record.NextMode != "shadowsocks") ||
 		s.seal == "" || s.seal != s.digest() {
 		return nodeChainCandidateAppendError
 	}
@@ -301,14 +303,18 @@ func (s *NodeChainCandidateAppendSource) Metadata() string {
 	if s.validate() != nil {
 		return ""
 	}
-	raw, err := json.Marshal(map[string]any{
+	metadata := map[string]any{
 		"schema": 1, "purpose": nodeChainCandidateAppendPurpose,
 		"source_sha256": s.sourceSHA, "config_sha256": s.configSHA,
 		"draft_revision": s.record.DraftRevision, "device_revision": s.record.DeviceRevision,
 		"device_source_sha256": s.device.source, "device_mtu_revision": s.record.DeviceMTURevision,
 		"candidate_mode": s.record.NextMode, "append_position": len(s.nodes), "prefix_position": len(s.nodes) - 1,
 		"prefixes": s.proofs, "mtu": s.mtu, "application_open": false, "dns_open": false, "ready": false,
-	})
+	}
+	if s.record.NextKind == "external" {
+		metadata["candidate_kind"] = "external"
+	}
+	raw, err := json.Marshal(metadata)
 	if err != nil {
 		return ""
 	}
@@ -318,14 +324,23 @@ func (s *NodeChainCandidateAppendSource) Metadata() string {
 // Each candidate is compiled prospectively without changing or reopening the
 // original prefix. Packet and stream candidates share this exact source check.
 func (s *NodeChainCandidateAppendSource) candidateConfig(input string) (string, []NodeChainProof, error) {
-	if s.validate() != nil {
+	if s.validate() != nil || s.record.NextKind != "" {
 		return "", nil, nodeChainCandidateAppendError
 	}
 	candidate, err := ParseNodeLaunchInput(input)
 	if err != nil || candidate == nil || candidate.mode != s.record.NextMode {
 		return "", nil, nodeChainCandidateAppendError
 	}
-	config, proofs, physical, err := s.compileGraph(candidate)
+	return s.candidateGraphConfig(candidate, nil)
+}
+
+// Compare the one prospective member against the same original append prefix.
+// This never installs a candidate into the closed native preparation.
+func (s *NodeChainCandidateAppendSource) candidateGraphConfig(candidate *NodeProfile, imported *nodeChainImportedMember) (string, []NodeChainProof, error) {
+	if s.validate() != nil || candidate == nil && imported == nil || candidate != nil && imported != nil {
+		return "", nil, nodeChainCandidateAppendError
+	}
+	config, proofs, physical, err := s.compileGraphCandidate(candidate, imported)
 	if err != nil || len(proofs) != len(s.proofs)+1 || !reflect.DeepEqual(proofs[:len(s.proofs)], s.proofs) ||
 		!nodeChainSamePhysical(physical, s.physical) {
 		return "", nil, errors.Join(err, nodeChainCandidateAppendError)

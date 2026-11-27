@@ -92,12 +92,15 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
                     ||!AndroidTorProfile.digest(originalMetadata.getBytes(StandardCharsets.UTF_8)).equals(meta.getString("append_source_metadata_sha256"))
                     ||integer(meta,"prefix_count")!=original.memberInputs.size()
                     ||!"draft-prefix-append".equals(meta.getString("purpose"))
-                    ||integer(meta,"append_position")!=original.memberInputs.size())throw invalid();
+                    ||integer(meta,"append_position")!=original.memberInputs.size()
+                    ||!original.append.kind.equals(plan.candidateKind())||!original.append.measurement.equals(plan.candidateMeasurement())
+                    ||!original.append.measurement.equals(meta.getString("measurement"))
+                    ||("external".equals(original.append.kind)?!"external".equals(meta.optString("candidate_kind","")):meta.has("candidate_kind")))throw invalid();
             JSONObject retained=new JSONObject(originalMetadata);
             for(String key:new String[]{"draft_revision","device_revision","device_source_sha256","device_mtu_revision","candidate_mode"})
                 if(!retained.get(key).equals(meta.get(key)))throw invalid();
             meta.put("prefixes",retained.getJSONArray("prefixes")).put("mtu",retained.getJSONObject("mtu"));
-        } else if(plan.isAppend()||meta.has("purpose"))throw invalid();
+        } else if(plan.isAppend()||meta.has("purpose")||meta.has("candidate_kind"))throw invalid();
         metadata=meta.toString();
         sourceSHA256=plan.sourceSHA256();configSHA256=plan.configSHA256();captureSHA256=plan.captureSHA256();
         JSONObject source=new JSONObject(launchInput),graph=new JSONObject(config);
@@ -108,7 +111,7 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
                 ||original.socks!=null&&!original.socks.source.equals(source.getString("original_source"))
                 ||!responseMode.equals(plan.candidateMode())
                 ||(responseMode.isEmpty()?meta.has("candidate_mode"):!responseMode.equals(meta.optString("candidate_mode"))
-                    ||!"routed-candidate-response".equals(meta.optString("measurement")))
+                    ||!(original.append==null?"routed-candidate-response":original.append.measurement).equals(meta.optString("measurement")))
                 ||integer(source,"prefix_position")!=prefix||!inventory.equals(source.getString("inventory"))
                 ||integer(meta,"schema")!=1||integer(meta,"prefix_position")!=prefix
                 ||!sourceSHA256.equals(meta.getString("source_sha256"))||!configSHA256.equals(meta.getString("config_sha256"))

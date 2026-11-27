@@ -326,6 +326,7 @@ type orderedCandidateAppendRequest struct {
 	DraftRevision  string                         `json:"draft_revision"`
 	AppendPosition int                            `json:"append_position"`
 	NextMode       string                         `json:"next_mode"`
+	NextKind       string                         `json:"next_kind,omitempty"`
 	Nodes          []common.MultihopNodeSelection `json:"nodes"`
 	desktopProfileExpectations
 }
@@ -335,13 +336,14 @@ func (q *orderedCandidateAppendRequest) validate() error {
 	if q == nil || q.Schema != 1 || q.Purpose != orderedCandidateAppendScope || q.Execution != "local" ||
 		!validViaEntryRequestID(q.DraftRevision) || len(q.Nodes) < 1 || len(q.Nodes) >= mobilemultihop.NodeChainExtendedLocalMaximumNodes ||
 		q.AppendPosition != len(q.Nodes) || !mobilemultihop.NodeChainCandidateAppendNextMode(q.NextMode) ||
+		q.NextKind != "" && (q.NextKind != "external" || q.NextMode != "shadowsocks") ||
 		q.ExpectedSelectedNodeID == nil || !validProfileID(*q.ExpectedSelectedNodeID) || q.ExpectedProfileTokens == nil {
 		return bad
 	}
 	seen := map[string]bool{}
 	for position, node := range q.Nodes {
 		if !validProfileID(node.ID) || seen[node.ID] ||
-			!mobilemultihop.NodeChainPrefixMode(node.Mode) && (position == 0 || node.Mode != "shadowsocks") {
+			!mobilemultihop.NodeChainPrefixMode(node.Mode) && (position == 0 || node.Mode != "shadowsocks" && node.Mode != "hysteria2") {
 			return bad
 		}
 		seen[node.ID] = true
@@ -356,6 +358,16 @@ func (q *orderedCandidateAppendRequest) validate() error {
 		}
 	}
 	return nil
+}
+
+func (q *orderedCandidateAppendRequest) candidateKind() string {
+	if q == nil {
+		return ""
+	}
+	if q.NextKind == "external" {
+		return "external"
+	}
+	return "router-vpn"
 }
 
 func (q *orderedCandidateAppendRequest) requiredIDs() []string {
@@ -392,12 +404,20 @@ func decodeOrderedCandidateAppendRequest(body io.Reader) (*orderedCandidateAppen
 	}
 	for name := range fields {
 		switch name {
-		case "schema", "purpose", "execution", "draft_revision", "append_position", "next_mode", "nodes", "expected_selected_node_id", "expected_profile_tokens":
+		case "schema", "purpose", "execution", "draft_revision", "append_position", "next_mode", "next_kind", "nodes", "expected_selected_node_id", "expected_profile_tokens":
 		default:
 			return nil, errors.New("append source cannot mix complete-route, selected or unknown fields")
 		}
 	}
-	if len(fields) != 9 {
+	expectedFields := 9
+	if kind, present := fields["next_kind"]; present {
+		var value string
+		if json.Unmarshal(kind, &value) != nil || value != "external" {
+			return nil, errors.New("append candidate kind must explicitly select an imported Shadowsocks node")
+		}
+		expectedFields++
+	}
+	if len(fields) != expectedFields {
 		return nil, errors.New("append source requires every original prefix and device field")
 	}
 	expectations, err := decodeDesktopProfileExpectations(fields)

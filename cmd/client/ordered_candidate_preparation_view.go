@@ -249,6 +249,11 @@ func (view *orderedCandidatePreparedView) matchesPreparation(p *orderedCandidate
 		view.network != p.network || view.catalog.revision != p.revision || p.inventory == nil || view.candidateMode != p.inventory.candidateMode {
 		return false
 	}
+	if view.append != nil && (view.appendSource == nil || view.appendSource.CandidateKind != view.append.NextKind ||
+		p.prefixPreparation == nil || !p.prefixPreparation.IsAppend() || p.prefixPreparation.CandidateKind() != view.append.candidateKind() ||
+		p.prefixPreparation.CandidateMeasurement() != candidateViewMetric(view.prefixes, view.position)) {
+		return false
+	}
 	for id, token := range p.inventory.profiles {
 		if view.catalog.profiles[id] != token {
 			return false
@@ -293,6 +298,7 @@ type orderedCandidateAppendViewSource struct {
 	DeviceSourceSHA   string `json:"device_source_sha256"`
 	DeviceMTURevision string `json:"device_mtu_revision"`
 	CandidateMode     string `json:"candidate_mode"`
+	CandidateKind     string `json:"candidate_kind,omitempty"`
 	AppendPosition    int    `json:"append_position"`
 	PrefixPosition    int    `json:"prefix_position"`
 }
@@ -305,6 +311,9 @@ func (source *orderedCandidateAppendViewSource) publish(response map[string]any)
 	response["draft_revision"], response["device_revision"] = source.DraftRevision, source.DeviceRevision
 	response["device_source_sha256"], response["device_mtu_revision"] = source.DeviceSourceSHA, source.DeviceMTURevision
 	response["append_position"] = source.AppendPosition
+	if source.CandidateKind != "" {
+		response["candidate_kind"] = source.CandidateKind
+	}
 	response["origin"], response["requested_execution"] = "editor-draft", "local"
 }
 
@@ -369,7 +378,8 @@ func captureOrderedCandidateAppendView(ctx context.Context, a *app, position int
 	if captured == nil || json.Unmarshal([]byte(captured.source.Metadata()), metadata) != nil ||
 		metadata.Purpose != orderedCandidateAppendScope || metadata.SourceSHA != selection.Native.source || metadata.ConfigSHA != captured.source.ConfigSHA256() ||
 		metadata.DraftRevision != q.DraftRevision || metadata.DeviceRevision != q.ExpectedProfileTokens[control.ID] ||
-		metadata.DeviceSourceSHA == "" || metadata.DeviceMTURevision != mtu.token || metadata.CandidateMode != q.NextMode ||
+		metadata.DeviceSourceSHA == "" || metadata.DeviceMTURevision != mtu.token || metadata.CandidateMode != q.NextMode || metadata.CandidateKind != q.NextKind ||
+		captured.source.CandidateKind() != q.candidateKind() ||
 		metadata.AppendPosition != q.AppendPosition || metadata.PrefixPosition != position {
 		return nil, errors.New("append view lost its exact source metadata")
 	}
@@ -377,7 +387,7 @@ func captureOrderedCandidateAppendView(ctx context.Context, a *app, position int
 		token: token, network: network, expires: time.Now().Add(120 * time.Second), position: position, selection: selection, candidateMode: q.NextMode,
 		responseNodes: originalCandidateResponseNodes(selection)}
 	for i, member := range selection.Nodes {
-		view.prefixes = append(view.prefixes, orderedPrefixChoice(i, member, hopmeasure.CandidatePrivateResponseMeasurement))
+		view.prefixes = append(view.prefixes, orderedPrefixChoice(i, member, captured.source.CandidateMeasurement()))
 	}
 	var candidates []*desktopNodeChainCandidateCatalog
 	for _, profile := range profiles {
@@ -389,16 +399,18 @@ func captureOrderedCandidateAppendView(ctx context.Context, a *app, position int
 			continue
 		}
 		rows := append(append([]common.MultihopNodeSelection(nil), q.Nodes...), common.MultihopNodeSelection{ID: profile.ID, Mode: q.NextMode})
-		view.candidates = append(view.candidates, orderedCandidateChoice{ID: profile.ID, Name: profile.Name, Kind: "router-vpn",
+		view.candidates = append(view.candidates, orderedCandidateChoice{ID: profile.ID, Name: profile.Name, Kind: captured.source.CandidateKind(),
 			Proposal: rows, DraftProposal: append([]common.MultihopNodeSelection(nil), rows...), DraftAction: orderedCandidateDraftAppendAction})
 		candidates = append(candidates, candidate)
 	}
 	if len(candidates) == 0 {
-		return nil, errors.New("no paired candidate preserves this exact prefix, requested transport and prospective MTU")
+		return nil, errors.New("no candidate preserves this exact prefix, requested kind, transport and prospective MTU")
 	}
 	view.catalog, err = combineDesktopCandidateViewSources(ctx, candidates, position, orderedCandidateAppendScope)
 	if err != nil || view.catalog == nil || view.catalog.revision != revision || view.catalog.candidateMode != q.NextMode ||
 		view.catalog.prefixPreparation == nil || !view.catalog.prefixPreparation.IsAppend() ||
+		view.catalog.prefixPreparation.CandidateKind() != captured.source.CandidateKind() ||
+		view.catalog.prefixPreparation.CandidateMeasurement() != captured.source.CandidateMeasurement() ||
 		view.catalog.prefixPreparation.OriginalSourceSHA256() != selection.Native.source || view.catalog.plan != nil ||
 		view.catalog.typedPlan != nil || view.catalog.selectedPlan != nil {
 		return nil, errors.Join(err, errors.New("append catalog lost its distinct source seal"))

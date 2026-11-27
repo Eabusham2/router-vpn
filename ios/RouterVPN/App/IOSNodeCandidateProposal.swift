@@ -45,12 +45,16 @@ import Libbox
             profiles.append(try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: captured.profile)))
         }
         let candidate = try IOSNodeCandidateAppendSource.saved(candidateID, records: records)
-        if original.nextMode == "shadowsocks" {
+        if original.nextKind == "external" {
+            let typed = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: candidate.profile))
+            guard original.nextMode == "shadowsocks", typed.normalizedNodeKind == "external",
+                  IOSImportedShadowsocksSource.eligibleLiteral(typed) else { throw IOSNodeCandidateCapture.issue() }
+        } else if ["shadowsocks", "hysteria2"].contains(original.nextMode) {
             guard candidate.profile["node_kind"] as? String == "router-vpn", candidate.profile["external"] == nil else {
                 throw IOSNodeCandidateCapture.issue()
             }
             // Validate the actual saved WG identity companion independently of
-            // the measured SS transport; retain the original asset map in records.
+            // the measured proxy transport; retain the original asset map in records.
             _ = try IOSNodeCandidateAppendSource.memberInput(profile: candidate.profile, assets: candidate.assets, mode: "wg")
         }
         guard try IOSNodeCandidateCapture.member(profile: candidate.profile, files: candidate.assets, mode: original.nextMode) == measuredInput,

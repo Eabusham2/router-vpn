@@ -334,11 +334,16 @@ struct IOSCandidateMetadataPages {
                         Self.integer(body["prefix_position"]) == selectedResponse?.position && body["prefix_id"] as? String == selectedResponse?.id) else { throw Self.issue() }
             fields.insert("measurement")
         }
+        let appendKind = body["candidate_kind"] as? String ?? "router-vpn"
+        if let kind = body["candidate_kind"] {
+            guard family == .appendPreparation, kind as? String == "external" else { throw Self.issue() }
+            fields.insert("candidate_kind")
+        }
         if let mode = body["candidate_mode"] {
             guard let mode = mode as? String,
-                  (family == .appendPreparation ? IOSNodeCandidateAppendSource.supportsNextMode(mode) :
+                  (family == .appendPreparation ? IOSNodeCandidateAppendSource.supportsNext(kind: appendKind, mode: mode) :
                     ["hysteria2", "wg", "awg2-fast", "awg2-strong"].contains(mode)),
-                  body["measurement"] as? String == "routed-candidate-response",
+                  body["measurement"] as? String == (family == .appendPreparation ? IOSNodeCandidateAppendSource.measurement(kind: appendKind) : "routed-candidate-response"),
                   family != .selected || mode == selectedResponseMode && IOSMultihopNodeSelection.supportsNativePrefix(mode) &&
                     selectedResponse != nil && Self.integer(body["prefix_position"]) == selectedResponse?.position &&
                     body["prefix_id"] as? String == selectedResponse?.id else { throw Self.issue() }
@@ -353,8 +358,8 @@ struct IOSCandidateMetadataPages {
                 "original_source_sha256","prefix_count","prefixes_sha256","mtu_sha256","append_source_metadata_sha256",
                 "application_open","dns_open","ready","stage","mtu_measurement"])
             guard body["purpose"] as? String == "draft-prefix-append",
-                  body["measurement"] as? String == "routed-candidate-response",
-                  IOSNodeCandidateAppendSource.supportsNextMode(body["candidate_mode"] as? String ?? ""),
+                  body["measurement"] as? String == IOSNodeCandidateAppendSource.measurement(kind: appendKind),
+                  IOSNodeCandidateAppendSource.supportsNext(kind: appendKind, mode: body["candidate_mode"] as? String ?? ""),
                   let count = Self.integer(body["prefix_count"]), (1..<IOSMultihopNodeSelection.physicalTraversalDepth).contains(count),
                   Self.integer(body["append_position"]) == count, Self.integer(body["prefix_position"]) == count - 1,
                   ["device_source_sha256","original_source_sha256","prefixes_sha256","mtu_sha256","append_source_metadata_sha256"].allSatisfy({

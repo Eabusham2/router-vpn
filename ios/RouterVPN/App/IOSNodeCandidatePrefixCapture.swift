@@ -21,7 +21,7 @@ struct IOSNodeCandidatePrefixCapture {
         }
         let schema: Int, prefix_position: Int
         let measurement: String?
-        let candidate_mode: String?
+        let candidate_mode: String?, candidate_kind: String?
         let purpose: String?, append_source_metadata_sha256: String?
         let prefix_id: String, capture_sha256: String, source_sha256: String, config_sha256: String, original_source_sha256: String
         let targets: [Target]
@@ -38,6 +38,7 @@ struct IOSNodeCandidatePrefixCapture {
     let metadata: Metadata
     let responseSourceNodes: [IOSNodeCandidateResponseNode]?
     var responseMode: String? { metadata.candidate_mode }
+    var responseKind: String? { metadata.candidate_kind }
     var appendSourceMetadataSHA256: String? { metadata.append_source_metadata_sha256 }
     var isAppend: Bool { metadata.purpose == "draft-prefix-append" }
     let strict: Bool
@@ -114,6 +115,7 @@ struct IOSNodeCandidatePrefixCapture {
         if let append = original.appendSource {
             let originalMetadata = native.appendSourceMetadata()
             guard native.isAppend(), Int(native.appendPosition()) == original.members.count,
+                  native.candidateKind() == append.nextKind, native.candidateMeasurement() == append.measurement,
                   source["prefix_source"] as? String == append.source,
                   Self.integer(source["append_position"]) == original.members.count,
                   originalMetadata == append.metadata,
@@ -122,7 +124,8 @@ struct IOSNodeCandidatePrefixCapture {
                   body["append_source_metadata_sha256"] as? String == append.metadataSHA256,
                   Self.integer(body["prefix_count"]) == original.members.count,
                   Self.integer(body["append_position"]) == original.members.count,
-                  body["purpose"] as? String == "draft-prefix-append" else { throw Self.issue() }
+                  body["purpose"] as? String == "draft-prefix-append", body["measurement"] as? String == append.measurement,
+                  append.nextKind == "external" ? body["candidate_kind"] as? String == "external" : body["candidate_kind"] == nil else { throw Self.issue() }
             for key in ["draft_revision","device_revision","device_source_sha256","device_mtu_revision","candidate_mode"] {
                 guard let expected = retained[key] as? String, body[key] as? String == expected else { throw Self.issue() }
             }
@@ -133,7 +136,8 @@ struct IOSNodeCandidatePrefixCapture {
         } else if native.isAppend() { throw Self.issue() }
         let value = try JSONDecoder().decode(Metadata.self, from: metadataBytes)
         guard (value.measurement ?? "routed-tcp-connect") == prefixes[position].metric,
-              value.candidate_mode == responseMode, value.purpose == (original.isAppend ? "draft-prefix-append" : nil),
+              value.candidate_mode == responseMode, value.candidate_kind == prefixes[position].candidate_kind,
+              value.purpose == (original.isAppend ? "draft-prefix-append" : nil),
               value.append_source_metadata_sha256 == original.appendSource?.metadataSHA256,
               value.schema == 1, value.prefix_position == position, value.prefix_id == original.members[position].id,
               value.source_sha256 == native.sourceSHA256(), value.config_sha256 == native.configSHA256(),
@@ -145,7 +149,7 @@ struct IOSNodeCandidatePrefixCapture {
               !value.targets.isEmpty, Set(value.targets.map(\.id)).count == value.targets.count,
               value.targets.allSatisfy({ !$0.id.isEmpty && $0.id.utf8.count <= 128 && Self.digest($0.source_sha256) }) else { throw Self.issue() }
         var appendProofs: [Metadata.Prefix] = [], appendOutbounds: [[String: Any]] = []
-        if let append = original.appendSource, append.members.contains(where: { $0.mode == "shadowsocks" }) {
+        if let append = original.appendSource, append.members.contains(where: { ["shadowsocks", "hysteria2"].contains($0.mode) }) {
             guard let retained = try JSONSerialization.jsonObject(with: Data(append.metadata.utf8)) as? [String: Any],
                   let rows = retained["prefixes"] as? [[String: Any]], rows.count == value.prefixes.count,
                   let graph = try JSONSerialization.jsonObject(with: Data(append.config.utf8)) as? [String: Any],
@@ -159,12 +163,12 @@ struct IOSNodeCandidatePrefixCapture {
             guard prefix.position == index, prefix.profile_id == member.id, prefix.mode == member.mode,
                   prefix.start_layer == (layer.isEmpty ? "off" : layer), Self.digest(prefix.source_sha256),
                   !prefix.tag.isEmpty else { throw Self.issue() }
-            if original.isAppend && member.mode == "shadowsocks" {
-                guard index > 0, prefix.start_layer == "off", value.measurement == "routed-candidate-response",
+            if original.isAppend && ["shadowsocks", "hysteria2"].contains(member.mode) {
+                guard index > 0, prefix.start_layer == "off", value.measurement == original.appendSource?.measurement,
                       appendProofs.indices.contains(index), appendProofs[index] == prefix,
-                      appendOutbounds.filter({ $0["tag"] as? String == prefix.tag && $0["type"] as? String == "shadowsocks" }).count == 1 else { throw Self.issue() }
+                      appendOutbounds.filter({ $0["tag"] as? String == prefix.tag && $0["type"] as? String == member.mode }).count == 1 else { throw Self.issue() }
                 if member.profile["node_kind"] as? String == "external" {
-                    guard prefix.node_id.isEmpty, prefix.node_kind == "external", prefix.kind == "public-path" else { throw Self.issue() }
+                    guard member.mode == "shadowsocks", prefix.node_id.isEmpty, prefix.node_kind == "external", prefix.kind == "public-path" else { throw Self.issue() }
                 } else {
                     guard member.profile["node_kind"] as? String == "router-vpn", member.profile["external"] == nil,
                           !prefix.node_id.isEmpty, prefix.node_id == member.profile["node_proof_id"] as? String,

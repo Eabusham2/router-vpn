@@ -404,7 +404,7 @@ function StartUnifiedRefreshAsync {
 function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Timeline,$Protection){
     $script:Busy=$true
     try{
-        $Phase=[string]$Status.phase;$CandidateTest=$Phase-like'candidate:*';$Connected=[bool]$Status.connected-and-not$CandidateTest
+        $Phase=[string](UnifiedMultihopValue $Status 'phase');$CandidateTest=$Phase-like'candidate:*';$Connected=[bool]$Status.connected-and-not$CandidateTest
         $ControllerBusy=Test-RouterVPNMutationBusyFromStatus $Status
         try{if(GetUnifiedStopRetryToken $Status){$ControllerBusy=$true}}catch{$ControllerBusy=$true}
         $ProtectionView=Get-RouterVPNProtectionPresentation -Captured $Protection -DisplayedProfileID ([string]$Store.selected_id)
@@ -414,8 +414,8 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
         $Disconnecting=$Phase -match '(?i)(disconnecting|stopping)'
         $StateText.Text=if($CandidateTest){'Testing saved path'}elseif($Connected){'Connected'}elseif($Phase){$Phase}else{'Off'}
         $StateDot.Fill=if($Connected){'#35D07F'}elseif($Phase-eq'failed'){'#FF5D6C'}else{'#6B7280'}
-        $Runtime=if($Status.runtime_mode){$Status.runtime_mode}else{$Status.mode}
-        $ConnectionDetail.Text="Phase: $Phase Logical: $($Status.logical_mode) Runtime: $Runtime Base: $($Status.base) Router: $($Status.router_id)"
+        $Runtime=if((UnifiedMultihopValue $Status 'runtime_mode')){(UnifiedMultihopValue $Status 'runtime_mode')}else{$Status.mode}
+        $ConnectionDetail.Text="Phase: $Phase Logical: $((UnifiedMultihopValue $Status 'logical_mode')) Runtime: $Runtime Base: $((UnifiedMultihopValue $Status 'base')) Router: $($Status.router_id)"
         $LastErrorText.Text=[string]$Status.last_error
         if($Store.selected_id -and -not[string]::IsNullOrWhiteSpace([string]$ProtectionView.Message)){$LastErrorText.Text+=([Environment]::NewLine+[string]$ProtectionView.Message)}
         if($CandidateTest){$ProofText.Text='Temporary path test. Disconnect stops this test; it does not select a daily connection.'}elseif($Connected){$ProofText.Text='Connected - selected-router private path proof passed.'}else{$ProofText.Text='Selected-node private path proof is not active.'}
@@ -439,22 +439,22 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
         if($null-ne$UnifiedKill){$UnifiedKill.Content=[string]$ProtectionView.Label;$UnifiedKill.IsChecked=$ProtectionView.Checked;$UnifiedKill.ToolTip=[string]$ProtectionView.Message;$UnifiedKill.IsEnabled=([bool]$ProtectionView.Enabled -and -not(TestUnifiedProtectionStatusBusy $Status) -and (-not$ControllerBusy -or [bool]$ProtectionView.Checked -or [bool]$ProtectionView.Pending))}
         if($Selected.Count){
             $Profile=$Selected[0]
-            $Success=if($Profile.effective_mtu_success_ratio){[double]$Profile.effective_mtu_success_ratio*100}else{0}
-            $Perf=if($Profile.effective_mtu_mbps){" Retest=$([Math]::Round([double]$Profile.effective_mtu_mbps,1))Mbps/$([Math]::Round([double]$Profile.effective_mtu_median_rtt_ms,2))ms/$([Math]::Round($Success,1))% success"}else{''}
-            $AdvancedSummary.Text="LAN=$($Profile.home_lan_access) Kill switch=$($Profile.kill_switch_policy) MTU policy=$($Profile.mtu_policy) Effective MTU=$($Profile.effective_mtu) source=$($Profile.effective_mtu_source)$Perf tested=$($Profile.effective_mtu_tested_at) Multihop=$($Profile.multihop_enabled)"
-            $SettingsSummary.Text="Node=$($Profile.name) Endpoint=$($Profile.endpoint) Location=$($Profile.location)"
+            $Success=if((UnifiedMultihopValue $Profile 'effective_mtu_success_ratio')){[double](UnifiedMultihopValue $Profile 'effective_mtu_success_ratio')*100}else{0}
+            $Perf=if((UnifiedMultihopValue $Profile 'effective_mtu_mbps')){" Retest=$([Math]::Round([double](UnifiedMultihopValue $Profile 'effective_mtu_mbps'),1))Mbps/$([Math]::Round([double](UnifiedMultihopValue $Profile 'effective_mtu_median_rtt_ms'),2))ms/$([Math]::Round($Success,1))% success"}else{''}
+            $AdvancedSummary.Text="LAN=$($Profile.home_lan_access) Kill switch=$((UnifiedMultihopValue $Profile 'kill_switch_policy')) MTU policy=$((UnifiedMultihopValue $Profile 'mtu_policy')) Effective MTU=$((UnifiedMultihopValue $Profile 'effective_mtu')) source=$((UnifiedMultihopValue $Profile 'effective_mtu_source'))$Perf tested=$((UnifiedMultihopValue $Profile 'effective_mtu_tested_at')) Multihop=$((UnifiedMultihopValue $Profile 'multihop_enabled'))"
+            $SettingsSummary.Text="Node=$($Profile.name) Endpoint=$((UnifiedMultihopValue $Profile 'endpoint')) Location=$((UnifiedMultihopValue $Profile 'location'))"
             $UnifiedSettings=Control 'UnifiedSettingsSummary'
             if($null-ne$UnifiedSettings){
                 $AutoReq=@();if([bool]$Profile.auto_require_encrypted){$AutoReq+='Encrypted'};if([bool]$Profile.auto_require_obfuscation){$AutoReq+='Obfuscation'}
                 $AutoReqText=if($AutoReq.Count){$AutoReq -join '+'}else{'Off'}
-                $UnifiedSettings.Text="IPv6=$($Profile.ipv6_mode) • MTU=$($Profile.mtu_policy)/$($Profile.effective_mtu) • LAN=$($Profile.home_lan_access) • AUTO requirements=$AutoReqText"
+                $UnifiedSettings.Text="IPv6=$((UnifiedMultihopValue $Profile 'ipv6_mode')) • MTU=$((UnifiedMultihopValue $Profile 'mtu_policy'))/$((UnifiedMultihopValue $Profile 'effective_mtu')) • LAN=$($Profile.home_lan_access) • AUTO requirements=$AutoReqText"
             }
             $UnifiedDns=Control 'UnifiedDnsCombo'
-            if($null-ne$UnifiedDns -and $Profile.dns_mode){SetComboTag $UnifiedDns ([string]$Profile.dns_mode)}
+            if($null-ne$UnifiedDns -and (UnifiedMultihopValue $Profile 'dns_mode')){SetComboTag $UnifiedDns ([string](UnifiedMultihopValue $Profile 'dns_mode'))}
         }
 
         $Dns=$Session.dns_proof
-        $DnsSummary.Text="$script:DnsPolicySummary$([Environment]::NewLine)$([Environment]::NewLine)Runtime proof: mode=$($Dns.mode) resolver=$($Dns.host) status=$($Dns.status) latency=$($Dns.latency_ms)ms reason=$($Dns.reason)"
+        $DnsSummary.Text="$script:DnsPolicySummary$([Environment]::NewLine)$([Environment]::NewLine)Runtime proof: mode=$((UnifiedMultihopValue $Dns 'mode')) resolver=$((UnifiedMultihopValue $Dns 'host')) status=$($Dns.status) latency=$((UnifiedMultihopValue $Dns 'latency_ms'))ms reason=$((UnifiedMultihopValue $Dns 'reason'))"
         $Modes=DecorateModes @($ModesRaw);$ModesGrid.ItemsSource=$Modes;RefreshUnifiedModeChoices $Modes
         $HeaderDetail.Text="Native Windows product - $($Profiles.Count) linked node(s) - order $($script:NodeSort)"
 
@@ -465,10 +465,12 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
         $MultihopSummary.Text="Supported=$($MH.platform_supported) Connected=$($MH.connected) Actual exit=$($MH.actual_exit_id) Runtime=$($MH.runtime_exit_mode) Entry bases=$(@($MH.supported_entry_bases)-join',') Exit modes=$(@($MH.supported_exit_modes)-join',')"
         RefreshUnifiedMultihopComparison $MH
 
+        if($null-ne$Timeline.events){
         foreach($Event in @($Timeline.events)){
             $Seq=[uint64]$Event.seq;if($Seq-le$script:EventSeq){continue}
-            $Parts=@([string]$Event.phase);if($Event.runtime_mode){$Parts+=("runtime="+$Event.runtime_mode)};if($Event.base){$Parts+=("base="+$Event.base)};if($Event.message){$Parts+=$Event.message}
+            $Parts=@([string]$Event.phase);if((UnifiedMultihopValue $Event 'runtime_mode')){$Parts+=("runtime="+(UnifiedMultihopValue $Event 'runtime_mode'))};if((UnifiedMultihopValue $Event 'base')){$Parts+=("base="+(UnifiedMultihopValue $Event 'base'))};if((UnifiedMultihopValue $Event 'message')){$Parts+=(UnifiedMultihopValue $Event 'message')}
             Log ("Session #$Seq $($Event.type): $($Parts-join' | ')");$script:EventSeq=$Seq
+        }
         }
         if([uint64]$Timeline.last_event_seq-gt$script:EventSeq){$script:EventSeq=[uint64]$Timeline.last_event_seq}
 
@@ -921,7 +923,7 @@ function ShowUnifiedOrderedNodes {
         $dialog=[Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $x));$dialog.Owner=$Window;$dialog.Tag=@{Append=$false;Revision=[Guid]::NewGuid().ToString('N')}
         $rows=New-Object 'Collections.Generic.List[object]';foreach($node in $initial|Select-Object -SkipLast 1){[void]$rows.Add([pscustomobject]@{id=$node.id;mode=$node.mode})}
         $available=$dialog.FindName('Available');$list=$dialog.FindName('Order');$status=$dialog.FindName('Status');$prefixMode=$dialog.FindName('PrefixMode');$finalMode=$dialog.FindName('FinalMode')
-        $appendMode=$dialog.FindName('AppendMode');$appendMode.ItemsSource=@('wg','awg2-fast','awg2-strong','shadowsocks'|ForEach-Object{[pscustomobject]@{id=$_;display=(Get-RouterVPNOrderedModeTitle $_)}});$appendMode.SelectedIndex=0
+        $appendMode=$dialog.FindName('AppendMode');$appendMode.ItemsSource=@('wg','awg2-fast','awg2-strong','shadowsocks','hysteria2'|ForEach-Object{[pscustomobject]@{id=$_;display=(Get-RouterVPNOrderedModeTitle $_)}})+@([pscustomobject]@{id='external-shadowsocks';display='Imported Shadowsocks'});$appendMode.SelectedIndex=0
         $finalMode.Tag=if($initial.Count){$initial[-1].mode}else{'shadowsocks'}
         $prefixMode.ItemsSource=@('wg','awg2-fast','awg2-strong','shadowsocks','socks5','http-connect','https-connect','openvpn'|ForEach-Object{[pscustomobject]@{id=$_;display=(Get-RouterVPNOrderedModeTitle $_)}});$prefixMode.SelectedIndex=0
         if($initial.Count -and $initial[0].id -ceq $id){$dialog.FindName('Final').Tag=[string]$initial[-1].id}
@@ -929,8 +931,10 @@ function ShowUnifiedOrderedNodes {
         $refresh={
             $dialog.FindName('CompletePrefix').Visibility=if($dialog.Tag.Append){'Visible'}else{'Collapsed'}
             $canComplete=$dialog.Tag.Append-and$rows.Count-ge2-and(Test-RouterVPNOrderedAppendNodes @($rows.ToArray()) $store.profiles 96)
-            if($canComplete){$last=$rows[$rows.Count-1];$source=@($store.profiles|Where-Object{[string]$_.id-ceq$last.id});$canComplete=$last.mode-ceq'shadowsocks'-and$source.Count-eq1-and(Test-RouterVPNOrderedPairedOff $source[0])}
+            if($canComplete){$last=$rows[$rows.Count-1];$source=@($store.profiles|Where-Object{[string]$_.id-ceq$last.id});$canComplete=$last.mode-cin@('shadowsocks','hysteria2')-and$source.Count-eq1-and(Test-RouterVPNOrderedPairedOff $source[0])}
             $dialog.FindName('CompletePrefix').IsEnabled=$canComplete
+            $completeMode=if($rows.Count){[string]$rows[$rows.Count-1].mode}else{''}
+            $dialog.FindName('CompletePrefix').Content=if($completeMode-ceq'hysteria2'){'Use last Hysteria2 node as final'}else{'Use last Shadowsocks node as final'}
             if($dialog.Tag.Append){
                 $dialog.FindName('Final').Text='Incomplete prefix — select a real final before using this path.'
                 $finalMode.Visibility='Collapsed';$appendMode.Visibility='Visible';$dialog.FindName('Apply').IsEnabled=$false
@@ -942,7 +946,7 @@ function ShowUnifiedOrderedNodes {
                 $list.ItemsSource=$labels;$list.SelectedIndex=[Math]::Min($index,$rows.Count-1)
                 $used=@($rows|ForEach-Object{[string]$_.id})
                 $available.ItemsSource=@($store.profiles|Where-Object{[string]$_.id-cnotin$used-and@(Get-RouterVPNOrderedAppendModes $_ $rows.Count).Count-gt0});$available.SelectedIndex=0
-                $selectedMode=[string]$prefixMode.SelectedValue;$appendChoices=@('wg','awg2-fast','awg2-strong','shadowsocks')
+                $selectedMode=[string]$prefixMode.SelectedValue;$appendChoices=@('wg','awg2-fast','awg2-strong','shadowsocks','hysteria2')
                 $prefixMode.ItemsSource=@($appendChoices|ForEach-Object{[pscustomobject]@{id=$_;display=(Get-RouterVPNOrderedModeTitle $_)}})
                 $prefixMode.SelectedIndex=[Math]::Max(0,[Array]::IndexOf($appendChoices,$selectedMode))
                 $dialog.FindName('Add').IsEnabled=$rows.Count-lt95-and$available.Items.Count-gt0
@@ -1010,7 +1014,7 @@ function ShowUnifiedOrderedNodes {
         $dialog.FindName('PrefixOnly').Add_Click({try{
             if(-not$dialog.Tag.Append){
                 if([string](Control 'UnifiedExecution').SelectedItem.Tag-cne'local'-or$dialog.FindName('Final').Tag-or
-                   ($rows.Count-gt0-and-not(Test-RouterVPNOrderedAppendNodes @($rows.ToArray()) $store.profiles 95))){throw 'Start the Local prefix with a paired WireGuard or AWG2 node; later Shadowsocks hops must have Start Layer Off.'}
+                   ($rows.Count-gt0-and-not(Test-RouterVPNOrderedAppendNodes @($rows.ToArray()) $store.profiles 95))){throw 'Start the Local prefix with a paired WireGuard or AWG2 node; later Shadowsocks or Hysteria2 hops must have Start Layer Off.'}
                 $dialog.Tag.Append=$true;$dialog.Tag.Revision=[Guid]::NewGuid().ToString('N')
                 $status.Text='This editor now holds only real prefix nodes. Select the next transport and measure it; choose a real final when the prefix is ready.'
             }else{
@@ -1051,7 +1055,7 @@ if(Test-RouterVPNOrderedImportedMiddle $available.SelectedItem){if([string]$fina
             if($dialog.Tag.Append){
                 if($list.SelectedIndex-lt0-or$list.SelectedIndex-ge$rows.Count){throw 'Choose a real prefix row.'}
                 $at=$list.SelectedIndex;$source=@($store.profiles|Where-Object{[string]$_.id-ceq$rows[$at].id})
-                if($source.Count-ne1-or[string]$prefixMode.SelectedValue-cnotin@(Get-RouterVPNOrderedAppendModes $source[0] $at)){throw 'Keep the entry paired and packet-based, and later Shadowsocks hops unlayered.'}
+                if($source.Count-ne1-or[string]$prefixMode.SelectedValue-cnotin@(Get-RouterVPNOrderedAppendModes $source[0] $at)){throw 'Keep the entry paired and packet-based, and later Shadowsocks or Hysteria2 hops unlayered.'}
                 $rows[$at]=[pscustomobject]@{id=$rows[$at].id;mode=[string]$prefixMode.SelectedValue};&$refresh;$list.SelectedIndex=$at;return
             }
 if($dialog.FindName('Final').Tag -and ($list.SelectedIndex -ne 0 -or -not (Test-RouterVPNOrderedPrefixMode $prefixMode.SelectedValue))){return};if($list.SelectedIndex-ge0-and$list.SelectedIndex-lt$rows.Count){$mode=$prefixMode.SelectedValue;$position=$list.SelectedIndex;$source=@($store.profiles|Where-Object{[string]$_.id-ceq$rows[$position].id});if($source.Count-ne1){throw 'The source changed.'};if(Test-RouterVPNOrderedImportedMiddle $source[0]){if($mode-cne(Get-RouterVPNOrderedImportedMode $source[0])){throw 'The imported hop retains its saved transport.'}}elseif(-not(Test-RouterVPNOrderedPrefixMode $mode) -and -not ($mode -ceq 'shadowsocks' -and
@@ -1077,7 +1081,10 @@ if($dialog.FindName('Final').Tag -and ($list.SelectedIndex -ne 0 -or -not (Test-
                 $nodes=@($rows.ToArray());$tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
                 $ids=@($nodes|ForEach-Object{[string]$_.id});if($id-cnotin$ids){$ids+=@($id)}
                 foreach($key in $ids){$origin=@($store.profiles|Where-Object{[string]$_.id-ceq$key});if($origin.Count-ne1){throw 'The original prefix or device catalog changed.'};$tokens.Add($key,$origin[0].profile_token)}
-                return [pscustomobject]@{purpose='draft-prefix-append';control_id=$id;nodes=$nodes;profile_tokens=$tokens;execution='local';draft_revision=[string]$dialog.Tag.Revision;next_mode=[string]$appendMode.SelectedValue}
+                $choice=[string]$appendMode.SelectedValue;$nextMode=if($choice-ceq'external-shadowsocks'){'shadowsocks'}else{$choice}
+                $capture=[ordered]@{purpose='draft-prefix-append';control_id=$id;nodes=$nodes;profile_tokens=$tokens;execution='local';draft_revision=[string]$dialog.Tag.Revision;next_mode=$nextMode}
+                if($choice-ceq'external-shadowsocks'){$capture['next_kind']='external'}
+                return [pscustomobject]$capture
             }
             $exitID=if($dialog.FindName('Final').Tag){[string]$dialog.FindName('Final').Tag}else{$id}
             $nodes=@($rows.ToArray())+@([pscustomobject]@{id=$exitID;mode=[string]$finalMode.SelectedValue})
@@ -1100,6 +1107,7 @@ if($dialog.FindName('Final').Tag -and ($list.SelectedIndex -ne 0 -or -not (Test-
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Use last Shadowsocks node as final" Width="470" Height="260" MinWidth="420" MinHeight="240" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><StackPanel Margin="18"><TextBlock Text="The complete path compiled with every original node in order. Name this future profile, then Save explicitly. Load and Connect remain separate choices." TextWrapping="Wrap"/><TextBox Name="Name" Margin="0,12"/><TextBlock Name="Status" TextWrapping="Wrap" Foreground="#FFBD8D"/><StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0"><Button Name="Cancel" Content="Back" Padding="12,6" Margin="4"/><Button Name="Save" Content="Save profile" Padding="12,6" Margin="4"/></StackPanel></StackPanel></Window>
 "@
             $completion=[Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $completeXaml));$completion.Owner=$dialog
+            $completion.Title=if($body.purpose-ceq'draft-last-hy2-final'){'Use last Hysteria2 node as final'}else{'Use last Shadowsocks node as final'}
             $completion.FindName('Cancel').Add_Click({$completion.Close()})
             $completion.FindName('Save').Add_Click({
                 $name=$completion.FindName('Name').Text.Trim()
@@ -1151,7 +1159,7 @@ if($dialog.FindName('Final').Tag -and ($list.SelectedIndex -ne 0 -or -not (Test-
                     $fresh=&$captureEditor
                     if(-not$dialog.IsVisible-or-not$dialog.Tag.Append-or[string]$RouterCombo.SelectedValue-cne$id-or
                        [string](Control 'UnifiedExecution').SelectedItem.Tag-cne'local'-or$fresh.draft_revision-cne$captured.draft_revision-or
-                       $fresh.next_mode-cne$captured.next_mode-or(ConvertTo-Json @($fresh.nodes) -Compress)-cne(ConvertTo-Json @($captured.nodes) -Compress)){throw 'The original incomplete prefix changed. Capture it again.'}
+                       $fresh.next_mode-cne$captured.next_mode-or(Get-RouterVPNOrderedValue $fresh 'next_kind')-cne(Get-RouterVPNOrderedValue $captured 'next_kind')-or(ConvertTo-Json @($fresh.nodes) -Compress)-cne(ConvertTo-Json @($captured.nodes) -Compress)){throw 'The original incomplete prefix changed. Capture it again.'}
                     $path=@(Convert-RouterVPNOrderedAppendChoice $captured $body $choice (Api '/api/profiles' -Timeout 5))
                     $rows.Clear();foreach($node in $path){[void]$rows.Add([pscustomobject]@{id=$node.id;mode=$node.mode})}
                     $dialog.Tag.Revision=[Guid]::NewGuid().ToString('N');&$refresh;$list.SelectedIndex=$rows.Count-1

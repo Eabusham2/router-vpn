@@ -7,7 +7,9 @@ struct IOSNodeChainEditorView: View {
     @State private var owner: IOSNodeChainEditorOwner?
     @State private var detail = ""
     @State private var execution = "local"
-    @State private var appendMode = "wg"
+    @State private var appendChoice = IOSNodeCandidateAppendSource.NextChoice(kind: "router-vpn", mode: "wg")
+    private var appendMode: String { appendChoice.mode }
+    private var appendKind: String { appendChoice.kind }
     @StateObject private var candidates = IOSNodeCandidates()
     @StateObject private var firstHop = IOSViaEntryLatency()
 
@@ -26,6 +28,7 @@ struct IOSNodeChainEditorView: View {
     private struct PrefixRequest: Equatable {
         let position: Int
         var nextMode: String? = nil
+        var nextKind: String? = nil
         var draftRevision: String? = nil
         var nodes: [IOSMultihopNodeSelection]? = nil
         let id = UUID()
@@ -54,12 +57,12 @@ struct IOSNodeChainEditorView: View {
         guard draft.unfinished, draft.nodes.contains(where: { $0.id == draft.controlID }) else { return [] }
         return model.iosNodeChainAppendFinalChoices(owner: owner, prefix: draft.nodes)
     }
-    private var lastShadowsocksFinal: RouterProfile? {
+    private var lastPairedFinal: RouterProfile? {
         guard draft.unfinished, draft.nodes.count >= 2, let last = draft.nodes.last,
-              last.mode == "shadowsocks" else { return nil }
+              ["shadowsocks", "hysteria2"].contains(last.mode) else { return nil }
         let originals = available.filter { $0.id == last.id }
         guard originals.count == 1, originals[0].normalizedNodeKind == "router-vpn", originals[0].external == nil,
-              IOSNodeCandidateAppendSource.prefixModes(originals[0], position: draft.nodes.count - 1).contains("shadowsocks") else { return nil }
+              IOSNodeCandidateAppendSource.prefixModes(originals[0], position: draft.nodes.count - 1).contains(last.mode) else { return nil }
         return originals[0]
     }
     private func visibleNodes(at position: Int) -> [RouterProfile] {
@@ -189,7 +192,7 @@ struct IOSNodeChainEditorView: View {
                             ForEach(draft.unfinished ? IOSNodeCandidateAppendSource.prefixModes(available.first(where: { $0.id == node.id }), position: position) : IOSNodeChainEditorVisible.modes(available.first(where:{$0.id==node.id}), nodeCount: draft.nodes.count, mixedPacket: node.mode != "shadowsocks" && execution == "local" && draft.nodes.dropLast().contains(where: { $0.mode == "shadowsocks" }), selectedPacket: execution != "local" && position == 0 && IOSMultihopNodeSelection.extendedSelectedModeShape(draft.nodes.map(\.mode))), id: \.self) { mode in
                                 Text(IOSMultihopNodeSelection.transportName(mode)).tag(mode)
                             }
-                            if !IOSMultihopNodeSelection.supportsNativePrefix(node.mode) && !["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(node.mode) {
+                            if !IOSMultihopNodeSelection.supportsNativePrefix(node.mode) && !["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(node.mode) && !(draft.unfinished && node.mode == "hysteria2") {
                                 Text(IOSMultihopNodeSelection.transportName(node.mode)).tag(node.mode)
                             }
                         }
@@ -213,16 +216,16 @@ struct IOSNodeChainEditorView: View {
                     if let added = draft.nodes.firstIndex(where: { $0.id.isEmpty }), added > 0 { schedule(after: added - 1) }
                 }.disabled(!draft.canAppend(execution: execution))
                 if draft.unfinished {
-                    Picker("Next transport", selection: $appendMode) {
-                        ForEach(IOSNodeCandidateAppendSource.nextModes, id: \.self) { mode in
-                            Text(IOSMultihopNodeSelection.transportName(mode)).tag(mode)
+                    Picker("Next transport", selection: $appendChoice) {
+                        ForEach(IOSNodeCandidateAppendSource.nextChoices, id: \.self) { choice in
+                            Text(choice.kind == "external" ? "Shadowsocks — imported public HTTPS" : IOSMultihopNodeSelection.transportName(choice.mode) + " — paired private response").tag(choice)
                         }
                     }
                     Button("Measure next node") {
                         schedule(after: draft.nodes.count - 1)
                     }.disabled(owner == nil || (try? draft.appendMeasurementPath(profiles: available)) == nil)
-                    if let last = lastShadowsocksFinal {
-                        Button("Use last Shadowsocks node as final") { chooseDraftFinal(last.id) }
+                    if let last = lastPairedFinal {
+                        Button("Use last \(IOSMultihopNodeSelection.transportName(draft.nodes.last?.mode ?? "")) node as final") { chooseDraftFinal(last.id) }
                             .disabled(owner == nil || finalChoiceRequest != nil)
                     }
                     Button("Choose selected router as the real final node") {
@@ -270,7 +273,9 @@ struct IOSNodeChainEditorView: View {
                                     guard let compiled = proposal.orderedNodes else { throw CancellationError() }
                                     if proposal.appendsPacketNode {
                                         guard let nodes = selected.nodes, let revision = selected.draftRevision,
-                                              let mode = selected.nextMode else { throw CancellationError() }
+                                              let mode = selected.nextMode, let kind = selected.nextKind,
+                                              mode == appendMode, kind == appendKind,
+                                              IOSNodeCandidateAppendSource.supportsNext(kind: kind, mode: mode) else { throw CancellationError() }
                                         try draft.appendMeasured(score.id, compiled: compiled, original: nodes, draftRevision: revision, mode: mode)
                                     } else {
                                         try draft.insertMeasured(score.id, after: position, compiled: compiled, replacingPacketSuccessor: proposal.replacesPacketSuccessor)
@@ -321,14 +326,15 @@ struct IOSNodeChainEditorView: View {
             guard !Task.isCancelled, self.request == request, let owner else { return }
             do {
                 if let nextMode = request.nextMode {
-                    guard draft.unfinished, execution == "local", let nodes = request.nodes,
+                    guard draft.unfinished, execution == "local", let nodes = request.nodes, let nextKind = request.nextKind,
+                          IOSNodeCandidateAppendSource.supportsNext(kind: nextKind, mode: nextMode),
                           let revision = request.draftRevision, draft.nodes == nodes, draft.revision == revision,
                           request.position == nodes.count - 1 else { throw CancellationError() }
                     try model.requireIOSNodeChainAppendSources(owner, nodes: nodes)
-                    try candidates.startEditorAppend(model: model, nodes: nodes, editorOwner: owner, nextMode: nextMode,
+                    try candidates.startEditorAppend(model: model, nodes: nodes, editorOwner: owner, nextKind: nextKind, nextMode: nextMode,
                         draftRevision: revision) {
                         guard self.request == request, self.draft.unfinished, self.draft.nodes == nodes,
-                              self.draft.revision == revision, self.execution == "local", self.appendMode == nextMode else { throw CancellationError() }
+                              self.draft.revision == revision, self.execution == "local", self.appendMode == nextMode, self.appendKind == nextKind else { throw CancellationError() }
                         try model.requireIOSNodeChainAppendSources(owner, nodes: nodes)
                     }
                     return
@@ -380,12 +386,12 @@ struct IOSNodeChainEditorView: View {
         .onChange(of: execution) { _, _ in
             // Starting an unfinished prefix explicitly changes execution to Local.
             // Its new request already waits for the original comparison to join.
-            if draft.unfinished, execution == "local", let request, request.nextMode == appendMode,
+            if draft.unfinished, execution == "local", let request, request.nextMode == appendMode, request.nextKind == appendKind,
                request.nodes == draft.nodes, request.draftRevision == draft.revision,
                request.position == draft.nodes.count - 1 { return }
             candidates.cancel(); firstHop.cancel(); request = nil; finalChoiceRequest = nil; completedDraft = nil
         }
-        .onChange(of: appendMode) { _, _ in candidates.cancel(); request = nil; finalChoiceRequest = nil; completedDraft = nil }
+        .onChange(of: appendChoice) { _, _ in candidates.cancel(); request = nil; finalChoiceRequest = nil; completedDraft = nil }
         .onDisappear { candidates.cancel(); firstHop.cancel(); finalChoiceRequest = nil }
         .navigationTitle("Ordered nodes")
         .onAppear {
@@ -424,7 +430,7 @@ struct IOSNodeChainEditorView: View {
                 guard execution == "local", let owner else { throw CancellationError() }
                 let nodes = try draft.appendMeasurementPath(profiles: available)
                 try model.requireIOSNodeChainAppendSources(owner, nodes: nodes)
-                request = PrefixRequest(position: position, nextMode: appendMode,
+                request = PrefixRequest(position: position, nextMode: appendMode, nextKind: appendKind,
                     draftRevision: draft.revision, nodes: nodes)
             } catch { request = nil; detail = error.localizedDescription }
             return

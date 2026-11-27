@@ -1219,9 +1219,18 @@ private final class ProductConnectionFiles: @unchecked Sendable {
     init(_ supplied: String) throws {
         guard getuid() != 0, getuid() == geteuid() else { throw ProductConnectionPrerequisite.processIdentity }
         guard supplied.hasPrefix("/"), !supplied.utf8.contains(0), supplied.utf8.count < 4096 else { throw ProductConnectionPrerequisite.suppliedPath }
-        let url = URL(fileURLWithPath: supplied).standardizedFileURL
-        guard url.path == supplied, url.resolvingSymlinksInPath().path == supplied else { throw ProductConnectionPrerequisite.canonicalPath }
-        path = url.deletingLastPathComponent().path; name = url.lastPathComponent
+        // Foundation may strip /private from an existing path; require the
+        // original POSIX canonical spelling supplied by the fixture owner.
+        var resolved = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let canonical = supplied.withCString { input in
+            resolved.withUnsafeMutableBufferPointer { output -> Bool in
+                guard let result = Darwin.realpath(input, output.baseAddress) else { return false }
+                return String(validatingUTF8: result) == supplied
+            }
+        }
+        guard canonical, let separator = supplied.lastIndex(of: "/") else { throw ProductConnectionPrerequisite.canonicalPath }
+        path = separator == supplied.startIndex ? "/" : String(supplied[..<separator])
+        name = String(supplied[supplied.index(after: separator)...])
         guard !name.isEmpty, !["desktop-connect-connected.json", "desktop-connect-peer-stopped.json",
                              "desktop-connect-cancel.json", "desktop-connect-result.json"].contains(name) else { throw ProductConnectionPrerequisite.manifestName }
         var before = stat()

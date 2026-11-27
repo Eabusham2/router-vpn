@@ -108,10 +108,12 @@ final class AndroidNodeCandidateMeasurement {
             AndroidNodeCandidatePrefixCapture append=catalog.session.candidatePrefix;
             if(!catalog.preparedAppendResponse()||append==null)throw new IllegalStateException("The append result lost its original closed owner.");
             JSONObject captured=new JSONObject(append.metadata);
+            if(captured.has("candidate_kind")?!captured.get("candidate_kind").equals(metadata.opt("candidate_kind")):metadata.has("candidate_kind"))
+                throw new IllegalStateException("The append result changed its captured candidate kind.");
             for(String key:new String[]{"purpose","append_position","draft_revision","device_revision","device_source_sha256",
                     "device_mtu_revision","append_source_metadata_sha256","prefix_count","prefixes_sha256","mtu_sha256"})
                 if(!captured.get(key).equals(metadata.get(key)))throw new IllegalStateException("The append result changed its original prefix or device policy.");
-        } else if(metadata.has("purpose"))throw new IllegalStateException("A complete route cannot borrow unfinished-prefix authority.");
+        } else if(metadata.has("purpose")||metadata.has("candidate_kind"))throw new IllegalStateException("A complete route cannot borrow unfinished-prefix authority.");
         if(catalog.executionOwner!=null){
             var owner=catalog.executionOwner;
             Object epoch=metadata.get("selection_epoch");

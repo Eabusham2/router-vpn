@@ -11,6 +11,7 @@ struct IOSNodeCandidateMetadata: Decodable {
     let targets: [Target]
     var measurement: String? = nil
     var candidate_mode: String? = nil
+    var candidate_kind: String? = nil
     var purpose: String? = nil
     var append_source_metadata_sha256: String? = nil
     var metric: String { measurement ?? "routed-tcp-connect" }
@@ -29,8 +30,8 @@ struct IOSNodeCandidateMetadata: Decodable {
     func validate(prefix: IOSNodeCandidatePrefix, source: String, config: String, ids: Set<String>,
                   requestedExecution: String? = nil, selectedExecution: String? = nil, selectedPositions: [Int] = [0],
                   selectedResponse: IOSNodeCandidatePrefix? = nil) throws {
-        guard purpose == prefix.purpose, candidate_mode == prefix.candidate_mode,
-              (purpose == nil ? append_source_metadata_sha256 == nil :
+        guard purpose == prefix.purpose, candidate_mode == prefix.candidate_mode, candidate_kind == prefix.candidate_kind,
+              (purpose == nil ? append_source_metadata_sha256 == nil && candidate_kind == nil :
                 purpose == "draft-prefix-append" && IOSCandidateCatalogPublication.isDigest(append_source_metadata_sha256 ?? "")),
               candidate_mode == nil || (prefix.pairedFinalResponse || prefix.purpose == "draft-prefix-append") &&
                 requestedExecution == nil && selectedExecution == nil ||

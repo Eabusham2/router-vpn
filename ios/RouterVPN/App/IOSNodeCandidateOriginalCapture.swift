@@ -22,10 +22,11 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
     let mode: String
     var measurement: String? = nil
     var candidate_mode: String? = nil
+    var candidate_kind: String? = nil
     var purpose: String? = nil
     var metric: String { measurement ?? "routed-tcp-connect" }
     var pairedFinalResponse: Bool {
-        purpose == nil && (candidate_mode == "hysteria2" || IOSMultihopNodeSelection.supportsNativePrefix(candidate_mode ?? "")) &&
+        purpose == nil && candidate_kind == nil && (candidate_mode == "hysteria2" || IOSMultihopNodeSelection.supportsNativePrefix(candidate_mode ?? "")) &&
             metric == "routed-candidate-response" &&
             (IOSMultihopNodeSelection.supportsNativePrefix(mode) && !node_id.isEmpty ||
              IOSMultihopNodeSelection.supportsNativePrefix(candidate_mode ?? "") && mode == "shadowsocks" && node_id.isEmpty)
@@ -35,11 +36,13 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
             position >= 0 && position < proofs.count - 2 && proofs[position] == self && candidate_mode == proofs[position + 1].mode
     }
     var typedImportedResponse: Bool {
-        candidate_mode == nil && metric == "routed-candidate-response" && ["socks5", "http-connect", "https-connect", "openvpn"].contains(mode)
+        candidate_kind == nil && candidate_mode == nil && metric == "routed-candidate-response" && ["socks5", "http-connect", "https-connect", "openvpn"].contains(mode)
     }
     func appendResponse(in proofs: [Self]) -> Bool {
-        guard purpose == "draft-prefix-append", metric == "routed-candidate-response",
-              IOSNodeCandidateAppendSource.supportsNextMode(candidate_mode ?? ""),
+        let kind = candidate_kind ?? "router-vpn"
+        guard purpose == "draft-prefix-append", metric == IOSNodeCandidateAppendSource.measurement(kind: kind),
+              candidate_kind == nil || candidate_kind == "external",
+              IOSNodeCandidateAppendSource.supportsNext(kind: kind, mode: candidate_mode ?? ""),
               (1..<IOSMultihopNodeSelection.physicalTraversalDepth).contains(proofs.count),
               position == proofs.count - 1, proofs.last == self,
               Set(proofs.map(\.profile_id)).count == proofs.count else { return false }
@@ -48,17 +51,22 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
               !proofs[0].node_id.isEmpty, IOSMultihopNodeSelection.supportsNativePrefix(proofs[0].mode) else { return false }
         return proofs.enumerated().allSatisfy { index, row in
             row.position == index && !row.profile_id.isEmpty &&
-                (IOSMultihopNodeSelection.supportsNativePrefix(row.mode) && !row.node_id.isEmpty || index > 0 && row.mode == "shadowsocks") &&
-                (index == position ? row == self : row.measurement == nil && row.candidate_mode == nil && row.purpose == nil)
+                (IOSMultihopNodeSelection.supportsNativePrefix(row.mode) && !row.node_id.isEmpty ||
+                  index > 0 && (row.mode == "shadowsocks" || row.mode == "hysteria2" && !row.node_id.isEmpty)) &&
+                (index == position ? row == self : row.measurement == nil && row.candidate_mode == nil && row.candidate_kind == nil && row.purpose == nil)
         }
     }
     var supported: Bool {
         if purpose != nil {
-            return purpose == "draft-prefix-append" && metric == "routed-candidate-response" &&
-                IOSNodeCandidateAppendSource.supportsNextMode(candidate_mode ?? "") &&
-                (IOSMultihopNodeSelection.supportsNativePrefix(mode) && !node_id.isEmpty || position > 0 && mode == "shadowsocks") &&
+            let kind = candidate_kind ?? "router-vpn"
+            return purpose == "draft-prefix-append" && (candidate_kind == nil || candidate_kind == "external") &&
+                metric == IOSNodeCandidateAppendSource.measurement(kind: kind) &&
+                IOSNodeCandidateAppendSource.supportsNext(kind: kind, mode: candidate_mode ?? "") &&
+                (IOSMultihopNodeSelection.supportsNativePrefix(mode) && !node_id.isEmpty ||
+                  position > 0 && (mode == "shadowsocks" || mode == "hysteria2" && !node_id.isEmpty)) &&
                 (0..<(IOSMultihopNodeSelection.physicalTraversalDepth - 1)).contains(position)
         }
+        guard candidate_kind == nil else { return false }
         if candidate_mode != nil {
             let limit = mode == "wg" && candidate_mode == "wg" ? IOSMultihopNodeSelection.physicalTraversalDepth - 2 : IOSMultihopNodeSelection.maximumNodes - 1
             return pairedFinalResponse && (0..<limit).contains(position)
@@ -71,7 +79,7 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
         }
     }
     func selectedResponse(in proofs: [Self]) -> Bool {
-        guard purpose == nil, proofs.allSatisfy({ $0.purpose == nil }) else { return false }
+        guard purpose == nil, candidate_kind == nil, proofs.allSatisfy({ $0.purpose == nil && $0.candidate_kind == nil }) else { return false }
         if candidate_mode != nil {
             return packetSuccessorResponse(in: proofs) && supported(in: proofs)
         }
@@ -95,7 +103,7 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
     }
     func supported(in proofs: [Self]) -> Bool {
         if proofs.contains(where: { $0.purpose != nil }) { return supported && appendResponse(in: proofs) }
-        guard supported, proofs.indices.contains(position), position < proofs.count - 1, proofs[position] == self else { return false }
+        guard proofs.allSatisfy({ $0.candidate_kind == nil }), supported, proofs.indices.contains(position), position < proofs.count - 1, proofs[position] == self else { return false }
         if pairedFinalResponse {
             let bounded = (2...IOSMultihopNodeSelection.maximumNodes).contains(proofs.count)
             let privateIDs = proofs.map(\.node_id).filter { !$0.isEmpty }

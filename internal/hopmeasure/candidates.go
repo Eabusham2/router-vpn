@@ -219,6 +219,28 @@ func NewPublicResponseCandidatesContext(ctx context.Context, engine CandidateEng
 	return service, err
 }
 
+// AppendPublicResponseCandidateAuthority reports the real retained prefix,
+// not a complete route with an invented final. Its exact source/owner is
+// checked by the native append preparation before this shared service opens.
+type AppendPublicResponseCandidateAuthority interface {
+	AppendPublicResponseCandidateDepth(position int, id, tag string) int
+}
+
+func NewAppendPublicResponseCandidatesContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, limit int, authority AppendPublicResponseCandidateAuthority, response func(context.Context, CandidateTarget, func() error, func() error) error) (*CandidateService, error) {
+	if authority == nil || response == nil || limit <= 0 || limit > 40<<20 {
+		return nil, ErrStale
+	}
+	count := authority.AppendPublicResponseCandidateDepth(prefix.Position, prefix.ID, prefix.Tag)
+	if count < 1 || count >= 96 || prefix.Position != count-1 {
+		return nil, ErrStale
+	}
+	service, err := newPrefixCandidatesContext(ctx, engine, prefix, targets, limit, count)
+	if err == nil {
+		service.publicResponse = response
+	}
+	return service, err
+}
+
 // NewRegisteredPublicResponseCandidatesContext retains the registered worker's
 // authenticated post-TLS duration. Transport to its control front is outside
 // the response timing interval, just as it is for the Local HTTPS owner.

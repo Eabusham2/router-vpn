@@ -1463,7 +1463,7 @@ function Get-RouterVPNOrderedAppendModes($Profile,[int]$Position){
  if($Position-lt0){return @()}
  if(Test-RouterVPNOrderedPairedLayer $Profile -AllowAuthenticated){
   $modes=@('wg','awg2-fast','awg2-strong')
-  if($Position-gt0-and(Test-RouterVPNOrderedPairedOff $Profile)){$modes+=@('shadowsocks')}
+  if($Position-gt0-and(Test-RouterVPNOrderedPairedOff $Profile)){$modes+=@('shadowsocks','hysteria2')}
   return $modes
  }
  if($Position-gt0-and(Test-RouterVPNOrderedLiteralOff $Profile)){return @('shadowsocks')}
@@ -1484,9 +1484,11 @@ function Test-RouterVPNOrderedAppendNodes($Nodes,$Profiles,[int]$Maximum=96){
 }
 function New-RouterVPNOrderedAppendPayload($Draft,$Store){
  $id=[string]$Draft.control_id;$nodes=@($Draft.nodes)
+ $nextKind=Get-RouterVPNOrderedValue $Draft 'next_kind'
+ if($null-ne$nextKind-and($nextKind-isnot[string]-or$nextKind-cne'external'-or$Draft.next_mode-cne'shadowsocks')){throw 'Choose the original paired or imported next-node source.'}
  if($Draft.purpose-cne'draft-prefix-append'-or$Draft.execution-cne'local'-or
     $Draft.draft_revision-cnotmatch'\A[0-9a-f]{32}\z'-or
-    [string]$Draft.next_mode-cnotin@('wg','awg2-fast','awg2-strong','shadowsocks')-or
+    [string]$Draft.next_mode-cnotin@('wg','awg2-fast','awg2-strong','shadowsocks','hysteria2')-or
     [string]$Store.selected_id-cne$id-or-not(Test-RouterVPNOrderedAppendNodes $nodes $Store.profiles 95)){throw 'Recapture the original Local prefix and device selection.'}
  $index=Get-RouterVPNOrderedProfileIndex $Store.profiles
  if(-not(Test-RouterVPNOrderedPairedLayer $index[$id] -AllowAuthenticated)){throw 'The selected device control must remain a paired node.'}
@@ -1500,20 +1502,28 @@ function New-RouterVPNOrderedAppendPayload($Draft,$Store){
  }
  $tokenKeys=if($Draft.profile_tokens-is[Collections.IDictionary]){@($Draft.profile_tokens.Keys)}else{@($Draft.profile_tokens.PSObject.Properties.Name)}
  if($tokenKeys.Count-ne$tokens.Count){throw 'The captured prefix profile set changed.'}
- return [ordered]@{schema=1;purpose='draft-prefix-append';execution='local';draft_revision=[string]$Draft.draft_revision;append_position=$nodes.Count;next_mode=[string]$Draft.next_mode;nodes=$nodes;expected_selected_node_id=$id;expected_profile_tokens=$tokens}
+ $body=[ordered]@{schema=1;purpose='draft-prefix-append';execution='local';draft_revision=[string]$Draft.draft_revision;append_position=$nodes.Count;next_mode=[string]$Draft.next_mode;nodes=$nodes;expected_selected_node_id=$id;expected_profile_tokens=$tokens}
+ if($nextKind-ceq'external'){$body['next_kind']='external'}
+ return $body
 }
 function Convert-RouterVPNOrderedAppendChoice($Draft,$Body,$Choice,$Store){
  [void](New-RouterVPNOrderedAppendPayload $Draft $Store)
  $original=@($Draft.nodes);$path=@($Choice.proposed_path);$mode=[string]$Draft.next_mode
  $id=[string]$Draft.control_id;$index=Get-RouterVPNOrderedProfileIndex $Store.profiles
+ $external=(Get-RouterVPNOrderedValue $Draft 'next_kind')-ceq'external'
+ $metric=if($external){'routed-public-candidate-response'}else{'routed-candidate-response'}
+ $fields=if($Choice-is[Collections.IDictionary]){$Choice.Keys}else{$Choice.PSObject.Properties.Name}
+ $candidate=$index[[string]$Choice.candidate_id]
+ $sourceFits=if($external){$Choice.candidate_kind-ceq'external'-and(Test-RouterVPNOrderedLiteralOff $candidate)}else{'candidate_kind'-cnotin$fields-and(Test-RouterVPNOrderedPairedOff $candidate)}
  if($Choice.scope-cne'draft-prefix-append'-or$Choice.purpose-cne'draft-prefix-append'-or$Choice.origin-cne'editor-draft'-or
     $Choice.requested_execution-cne'local'-or$Choice.draft_action-cne'append-measured-hop'-or
-    $Choice.candidate_mode-cne$mode-or$Choice.draft_revision-cne$Body.draft_revision-or
+    $Choice.candidate_mode-cne$mode-or$Choice.measurement-cne$metric-or-not$sourceFits-or
+    (Get-RouterVPNOrderedValue $Body 'next_kind')-cne(Get-RouterVPNOrderedValue $Draft 'next_kind')-or$Choice.draft_revision-cne$Body.draft_revision-or
     $Choice.expected_selected_node_id-cne$id-or$Choice.device_revision-cne(Get-RouterVPNOrderedValue $Body.expected_profile_tokens $id)-or
     $Choice.chosen-isnot[bool]-or-not$Choice.chosen-or$Choice.native_down-isnot[bool]-or-not$Choice.native_down-or
     $Choice.append_position-ne$original.Count-or$Choice.prefix_position-ne($original.Count-1)-or
     $path.Count-ne($original.Count+1)-or$path[-1].id-cne$Choice.candidate_id-or$path[-1].mode-cne$mode-or
-    -not(Test-RouterVPNOrderedAppendNodes $path $Store.profiles)-or-not(Test-RouterVPNOrderedPairedOff $index[[string]$Choice.candidate_id])){
+    -not(Test-RouterVPNOrderedAppendNodes $path $Store.profiles)){
   throw 'The measured append no longer belongs to this original closed prefix.'
  }
  for($i=0;$i-lt$original.Count;$i++){foreach($key in @('id','mode')){if($path[$i].$key-cne$original[$i].$key){throw 'The measured append changed an original prefix node.'}}}
@@ -1535,8 +1545,9 @@ function New-RouterVPNOrderedCompletionPayload($Draft,$Store){
   throw 'Recapture the unchanged Local prefix before choosing its last node as final.'
  }
  $index=Get-RouterVPNOrderedProfileIndex $Store.profiles;$last=$nodes[-1]
- if($last.mode-cne'shadowsocks'-or-not(Test-RouterVPNOrderedPairedOff $index[[string]$last.id])-or
-    -not(Test-RouterVPNOrderedPairedLayer $index[$id] -AllowAuthenticated)){throw 'Keep the actual last paired Shadowsocks node and original device selection.'}
+ if($last.mode-cnotin@('shadowsocks','hysteria2')-or-not(Test-RouterVPNOrderedPairedOff $index[[string]$last.id])-or
+    -not(Test-RouterVPNOrderedPairedLayer $index[$id] -AllowAuthenticated)){throw 'Keep the actual last paired Shadowsocks or Hysteria2 node and original device selection.'}
+ $purpose=if($last.mode-ceq'hysteria2'){'draft-last-hy2-final'}else{'draft-last-ss-final'}
  $device=[string](Get-RouterVPNOrderedValue $Draft.profile_tokens $id)
  if($device-cnotmatch'\A[0-9a-f]{64}\z'-or$device-cne[string](Get-RouterVPNOrderedValue $index[$id] 'profile_token')){throw 'The original device profile changed.'}
  $tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
@@ -1548,19 +1559,23 @@ function New-RouterVPNOrderedCompletionPayload($Draft,$Store){
  $keys=if($Draft.profile_tokens-is[Collections.IDictionary]){@($Draft.profile_tokens.Keys)}else{@($Draft.profile_tokens.PSObject.Properties.Name)}
  $expected=$tokens.Count;if(-not$tokens.ContainsKey($id)){$expected++}
  if($keys.Count-ne$expected){throw 'The original completion source set changed.'}
- return [ordered]@{schema=1;purpose='draft-last-ss-final';execution='local';draft_revision=[string]$Draft.draft_revision;device_id=$id;device_revision=$device;final_id=[string]$last.id;nodes=$nodes;expected_selected_node_id=$id;expected_profile_tokens=$tokens}
+ return [ordered]@{schema=1;purpose=$purpose;execution='local';draft_revision=[string]$Draft.draft_revision;device_id=$id;device_revision=$device;final_id=[string]$last.id;nodes=$nodes;expected_selected_node_id=$id;expected_profile_tokens=$tokens}
 }
 
 function Confirm-RouterVPNOrderedCompletion($Body,$Reply,[switch]$Saved){
+ $original=@($Body.nodes)
+ if($original.Count-lt2-or$original[-1].mode-cnotin@('shadowsocks','hysteria2')){throw 'The completion lost its actual final transport.'}
+ $purpose=if($original[-1].mode-ceq'hysteria2'){'draft-last-hy2-final'}else{'draft-last-ss-final'}
+ if($Body.purpose-cne$purpose){throw 'The completion request changed its final purpose.'}
  $fields=@('schema','purpose','compiled','draft_revision','device_id','device_revision','final_id','nodes','source_sha256','device_source_sha256','device_mtu_revision','completion_sha256','active_path_changed')
  if($Saved){$fields+=@('profile_id','profile_name')}
  $keys=if($Reply-is[Collections.IDictionary]){@($Reply.Keys)}else{@($Reply.PSObject.Properties.Name)}
  if($keys.Count-ne$fields.Count-or@($keys|Where-Object{$_-cnotin$fields}).Count-ne0-or
-    ($Reply.schema-isnot[int]-and$Reply.schema-isnot[long])-or$Reply.schema-ne1-or$Reply.purpose-cne'draft-last-ss-final'-or
+    ($Reply.schema-isnot[int]-and$Reply.schema-isnot[long])-or$Reply.schema-ne1-or$Reply.purpose-cne$purpose-or
     $Reply.compiled-isnot[bool]-or-not$Reply.compiled-or$Reply.active_path_changed-isnot[bool]-or$Reply.active_path_changed){throw 'The complete-path response changed its purpose.'}
  foreach($key in @('draft_revision','device_id','device_revision','final_id')){if($Reply.$key-isnot[string]-or$Reply.$key-cne[string]$Body.$key){throw 'The completion response belongs to another original editor or device.'}}
  foreach($key in @('source_sha256','device_source_sha256','device_mtu_revision','completion_sha256')){if($Reply.$key-isnot[string]-or$Reply.$key-cnotmatch'\A[0-9a-f]{64}\z'){throw 'The completion source digest is unavailable.'}}
- $original=@($Body.nodes);$path=@($Reply.nodes)
+ $path=@($Reply.nodes)
  if($path.Count-ne$original.Count){throw 'The completion changed the original path length.'}
  for($i=0;$i-lt$original.Count;$i++){
   $rowKeys=if($path[$i]-is[Collections.IDictionary]){@($path[$i].Keys)}else{@($path[$i].PSObject.Properties.Name)}

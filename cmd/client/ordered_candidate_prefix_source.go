@@ -189,9 +189,9 @@ func captureDesktopCandidateAppendSelection(ctx context.Context, root string, co
 				!desktopCONNECTExecutionPairedLayer(profile.StartLayer) {
 				return empty, errors.New("append prefix lost its original paired identity or captured layer")
 			}
-			if node.Mode == "shadowsocks" {
+			if node.Mode == "shadowsocks" || node.Mode == "hysteria2" {
 				if i == 0 || profile.StartLayer != "" && profile.StartLayer != "off" {
-					return empty, errors.New("append paired SS requires its original unlayered stream capture after a packet entry")
+					return empty, errors.New("append paired proxy requires its original capture with Start Layer off after a packet entry")
 				}
 				sourceSchema = 2
 			} else if !mobilemultihop.NodeChainPrefixMode(node.Mode) {
@@ -222,10 +222,14 @@ func captureDesktopCandidateAppendSelection(ctx context.Context, root string, co
 			capture.endpoint = endpoint
 		}
 	}
-	raw, err := json.Marshal(map[string]any{"kind": "routervpn-node-chain-candidate-append-source", "schema": sourceSchema, "execution": "local",
+	appendInput := map[string]any{"kind": "routervpn-node-chain-candidate-append-source", "schema": sourceSchema, "execution": "local",
 		"draft_revision": q.DraftRevision, "device_revision": q.ExpectedProfileTokens[control.ID], "device_source": device,
 		"device_mtu_revision": mtu.token, "device_fixed_mtu": mtu.policy.FixedMTU,
-		"next_mode": q.NextMode, "append_position": q.AppendPosition, "nodes": nodes, "identity_sources": identities})
+		"next_mode": q.NextMode, "append_position": q.AppendPosition, "nodes": nodes, "identity_sources": identities}
+	if q.NextKind != "" {
+		appendInput["next_kind"] = q.NextKind
+	}
+	raw, err := json.Marshal(appendInput)
 	if err != nil || len(raw) > mobilemultihop.NodeChainInputLimit {
 		clear(raw)
 		return empty, errors.New("append source exceeds its original aggregate bound")
@@ -270,7 +274,7 @@ func (c *desktopNodeCandidateAppendCapture) validate(ctx context.Context, select
 		c.native.chain != c.original || selection.Native != c.native || c.native.imported || c.native.importedHost != nil || c.native.importedPlatform != nil || c.native.openVPN != nil ||
 		c.native.importedInput != "" || c.native.importedOriginalSource != "" || len(c.native.localPacketPublic) != 0 || len(c.native.localPQIdentity) != 0 || len(c.native.entryPhysical) != 0 ||
 		c.native.root != c.original.root || c.native.endpoint != c.original.endpoint || c.native.source != c.source.SourceSHA256() || c.native.source == "" ||
-		c.source.CandidateMode() != c.request.NextMode || c.source.AppendPosition() != len(selection.Nodes) ||
+		c.source.CandidateMode() != c.request.NextMode || c.source.CandidateKind() != c.request.candidateKind() || c.source.AppendPosition() != len(selection.Nodes) ||
 		len(c.native.configs) != 1 || c.native.configs[orderedCandidateAppendScope] != c.source.Config() || c.source.ConfigSHA256() == "" ||
 		selection.Control.ID != *c.request.ExpectedSelectedNodeID || liveMeasurementProfileToken(selection.Control) != c.original.controlToken ||
 		c.native.controlToken != c.original.controlToken || !reflect.DeepEqual(selection.Exit, common.RouterProfile{}) || selection.ExitMode != "" || c.native.exitID != "" || c.native.exitToken != "" ||
@@ -309,7 +313,8 @@ func (c *desktopNodeCandidateAppendCapture) validate(ctx context.Context, select
 func validateDesktopCandidatePurposeSelection(ctx context.Context, selection multihopSelection, preparation *mobilemultihop.NodeChainCandidatePreparation) error {
 	if c := desktopCandidateAppendCapture(selection); c != nil {
 		if preparation == nil || !preparation.IsAppend() || preparation.OriginalSourceSHA256() != c.source.SourceSHA256() ||
-			preparation.AppendPosition() != c.request.AppendPosition || preparation.CandidateMode() != c.request.NextMode {
+			preparation.AppendPosition() != c.request.AppendPosition || preparation.CandidateMode() != c.request.NextMode ||
+			preparation.CandidateKind() != c.source.CandidateKind() || preparation.CandidateMeasurement() != c.source.CandidateMeasurement() {
 			return errors.New("append source cannot borrow another closed preparation")
 		}
 		return c.validate(ctx, selection)
@@ -332,6 +337,7 @@ func (p *orderedCandidatePreparation) closedPurposeCurrent() bool {
 		c := desktopCandidateAppendCapture(p.selection)
 		return p.request.draft == nil && !p.request.serverResponse && p.request.append != nil && c != nil && c.request == p.request.append &&
 			p.prefixPreparation.IsAppend() && p.prefixPreparation.AppendPosition() == p.request.append.AppendPosition &&
+			p.prefixPreparation.CandidateKind() == c.source.CandidateKind() && p.prefixPreparation.CandidateMeasurement() == c.source.CandidateMeasurement() &&
 			p.request.Position == p.request.append.AppendPosition-1 && p.prefixPreparation.OriginalSourceSHA256() == c.source.SourceSHA256()
 	}
 	return p.request.append == nil && !p.prefixPreparation.IsAppend() && desktopCandidateAppendCapture(p.selection) == nil

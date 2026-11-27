@@ -195,6 +195,7 @@ final class RouterVPNNodeCandidatePrefixHost: NSObject, LibboxRouterNodeChainCan
             if let digest = input.capture.appendSourceMetadataSHA256 {
                 body["candidate_purpose"] = "draft-prefix-append"
                 body["append_source_metadata_sha256"] = digest
+                if let kind = input.capture.responseKind { body["candidate_kind"] = kind }
             }
         }
         guard let data = try? JSONSerialization.data(withJSONObject: body), data.count <= 131072 else { return nil }

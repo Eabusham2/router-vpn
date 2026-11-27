@@ -845,7 +845,7 @@ public final class ProductActivity extends Activity {
                 if(draft.canAddPrefix()){labels.add("Add prefix node");actions.add(-2);}
                 if(!members.isEmpty()&&members.size()<AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH){labels.add("Measure next node");actions.add(-4);}
                 if(!members.isEmpty()){labels.add("Choose final Router node");actions.add(-1);}
-                if(draft.canCompleteAppend()){labels.add("Use last Shadowsocks node as final");actions.add(-5);}
+                if(draft.canCompleteAppend()){labels.add("Use last "+AndroidOrderedPathSelection.finalModeTitle(members.get(members.size()-1).mode)+" node as final");actions.add(-5);}
             } else {
                 if(members.isEmpty()){labels.add("Choose final Router node");actions.add(-1);}
                 else if(draft.canAddPrefix()){labels.add("Add another intermediate node");actions.add(-2);}
@@ -853,7 +853,7 @@ public final class ProductActivity extends Activity {
             }
             if(orderedEditorDialog!=null && orderedEditorDialog.isShowing())orderedEditorDialog.dismiss();
             String help=draft.unfinished()
-                    ?"This draft contains only the real prefix shown above. Choose the next WireGuard, AmneziaWG or paired Shadowsocks 2022 transport with Start Layer Off, measure its candidates through this prefix, and apply a result after the temporary VPN has stopped. Choose a real final node before saving a complete path. The selected saved connection stays unchanged until Save."
+                    ?"This draft contains only the real prefix shown above. Choose the next paired WireGuard, AmneziaWG, Shadowsocks 2022 or Hysteria2 transport with Start Layer Off, or explicitly choose an imported Shadowsocks 2022 node, then measure candidates through this prefix, and apply a result after the temporary VPN has stopped. Choose a real final node before saving a complete path. The selected saved connection stays unchanged until Save."
                     :"Start with two nodes. Tap a hop to edit it or measure candidates through a supported prefix. Save path keeps your choice for Connect.\n\n"
                     +"Most paths support two to eight nodes. Longer Local paths can use paired WireGuard hops, or begin with paired WireGuard or AmneziaWG hops followed by imported and paired Shadowsocks 2022 streams. These paths end at a paired Shadowsocks 2022 node and require Start Layer Off. The native source, MTU and traversal limits apply.\n\n"
                     +"A three-node Local path can start with two distinct saved Shadowsocks 2022 nodes with literal IPs and Start Layer Off. It ends at a paired Shadowsocks 2022 node.";
@@ -897,7 +897,7 @@ public final class ProductActivity extends Activity {
             AndroidOrderedPathSelection.AppendCompletion proposal=draft.prepareAppendCompletion(current);
             current.run();
             EditText name=new EditText(this);name.setSingleLine(true);name.setHint("Profile name");
-            choiceDialog("Use last Shadowsocks node as final",proposal.description+"\n\nThe complete path keeps every draft node in order. Save it as a named future profile; Load and Connect remain separate choices.")
+            choiceDialog("Use last "+AndroidOrderedPathSelection.finalModeTitle(draft.members().get(draft.members().size()-1).mode)+" node as final",proposal.description+"\n\nThe complete path keeps every draft node in order. Save it as a named future profile; Load and Connect remain separate choices.")
                     .setView(name).setPositiveButton("Save profile",(d,w)->{
                         try{
                             current.run();
@@ -935,24 +935,24 @@ public final class ProductActivity extends Activity {
             if(mutationBusy())throw new IllegalStateException("Stop the current VPN before measuring the next node.");
             draft.requireCurrent();
             final long revision=draft.revision();
-            List<String> modes=AndroidNodeCandidateAppendSource.NEXT_MODES;List<String> labels=new ArrayList<>();
-            for(String mode:modes)labels.add(AndroidOrderedPathSelection.finalModeTitle(mode));
+            List<AndroidNodeCandidateAppendSource.NextChoice> choices=AndroidNodeCandidateAppendSource.NEXT_CHOICES;List<String> labels=new ArrayList<>();
+            for(var choice:choices)labels.add(choice.title());
             choiceDialog("Next transport","Measure saved candidates in this exact mode through the unfinished prefix. Applying a result adds one node after the last prefix.")
                     .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
                         try {
-                            startOrderedAppend(draft,modes.get(w),revision);
+                            startOrderedAppend(draft,choices.get(w),revision);
                         } catch(Exception error){toast(safe(error));}
                     }).setNegativeButton("Back",(d,w)->showOrderedEditor(draft)).show();
         } catch(Exception error){toast(safe(error));}
     }
 
-    private void startOrderedAppend(AndroidOrderedPathSelection draft,String mode,long revision)throws Exception {
+    private void startOrderedAppend(AndroidOrderedPathSelection draft,AndroidNodeCandidateAppendSource.NextChoice choice,long revision)throws Exception {
         if(mutationBusy()||AndroidNodeCandidatePreparation.retained()!=null)
             throw new IllegalStateException("Finish the original VPN and candidate review before measuring the next prefix.");
         draft.requireCurrent();
         if(!draft.unfinished()||draft.revision()!=revision)
             throw new IllegalStateException("The unfinished prefix changed before its next measurement.");
-        var capture=draft.candidateAppendCapture(mode);int position=draft.members().size()-1;
+        var capture=draft.candidateAppendCapture(choice.kind,choice.mode);int position=draft.members().size()-1;
         showOrderedEditor(draft);detachCandidatePreparation();
         preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater,this::continueOrderedDraft);
         preparedCandidateDialog.showDraft(capture,position,draft);
@@ -1048,7 +1048,7 @@ public final class ProductActivity extends Activity {
                 if(inserted!=members.size()-1||!AndroidNodeCandidateAppendSource.supportsNextMode(members.get(inserted).mode))
                     throw new IllegalStateException("The measured append no longer ends this original prefix.");
                 if(members.size()<AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH) {
-                    startOrderedAppend(draft,members.get(inserted).mode,draft.revision());
+                    startOrderedAppend(draft,draft.appendContinuation(),draft.revision());
                     return;
                 }
                 showOrderedEditor(draft);return;

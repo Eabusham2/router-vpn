@@ -30,7 +30,7 @@ func (s *NodeChainCandidateAppendSource) captureMembers() error {
 		}
 		node, err := ParseNodeLaunchInput(input)
 		if err != nil || node == nil ||
-			!NodeChainPrefixMode(node.mode) && (s.record.Schema != 2 || position == 0 || node.mode != "shadowsocks") ||
+			!NodeChainPrefixMode(node.mode) && (s.record.Schema != 2 || position == 0 || !nodeChainAppendProxyMode(node.mode)) ||
 			validateNodeChainIdentity(s.record.IdentitySources[position], node) != nil {
 			return nodeChainCandidateAppendError
 		}
@@ -72,7 +72,7 @@ func (s *NodeChainCandidateAppendSource) memberCapturesCurrent() error {
 			return nodeChainCandidateAppendError
 		}
 		if !NodeChainPrefixMode(node.mode) {
-			if s.record.Schema != 2 || position == 0 || node.mode != "shadowsocks" ||
+			if s.record.Schema != 2 || position == 0 || !nodeChainAppendProxyMode(node.mode) ||
 				predecessorText(node.profile, "start_layer") != "" && predecessorText(node.profile, "start_layer") != "off" {
 				return nodeChainCandidateAppendError
 			}
@@ -144,10 +144,19 @@ type nodeChainAppendGraphScope struct {
 }
 
 func (scope *nodeChainAppendGraphScope) validate(members []nodeChainGraphMember, closures []*externalPredecessor, physical []PhysicalEgress) error {
-	if scope == nil || scope.owner == nil || scope.owner.record.Schema != 2 ||
+	if scope == nil || scope.owner == nil ||
 		scope.owner.memberCapturesCurrent() != nil || len(scope.nodes) != len(scope.imports) ||
 		len(scope.nodes) != len(members) || len(closures) != len(members) || len(scope.closures) != len(members) ||
 		len(members) < len(scope.owner.nodes) || len(members) > len(scope.owner.nodes)+1 {
+		return nodeChainCandidateAppendError
+	}
+	// A schema-one source may prospectively append its first import. The
+	// original prefix stays schema one; only this captured extra slot needs
+	// the append resolver scope. It is never a complete imported route.
+	last := len(scope.nodes) - 1
+	if scope.owner.record.Schema != 2 && (scope.owner.record.Schema != 1 ||
+		len(scope.nodes) != len(scope.owner.nodes)+1 || scope.owner.record.NextKind != "external" ||
+		scope.imports[last] == nil) {
 		return nodeChainCandidateAppendError
 	}
 	for i, node := range scope.nodes {
@@ -156,7 +165,12 @@ func (scope *nodeChainAppendGraphScope) validate(members []nodeChainGraphMember,
 			if node != scope.owner.nodes[i] || member != scope.owner.imports[i] {
 				return nodeChainCandidateAppendError
 			}
-		} else if node == nil || member != nil || node.mode != scope.owner.record.NextMode ||
+		} else if member != nil {
+			if node != nil || scope.owner.record.NextKind != "external" || scope.owner.record.NextMode != "shadowsocks" ||
+				member.multipleSeal == nil || !member.multipleSeal.matches(member) {
+				return nodeChainCandidateAppendError
+			}
+		} else if scope.owner.record.NextKind != "" || node == nil || node.mode != scope.owner.record.NextMode ||
 			node.validateNodeDesktopCapture() != nil ||
 			predecessorText(node.profile, "start_layer") != "" && predecessorText(node.profile, "start_layer") != "off" {
 			return nodeChainCandidateAppendError
@@ -183,6 +197,10 @@ func (scope *nodeChainAppendGraphScope) validate(members []nodeChainGraphMember,
 }
 
 func (s *NodeChainCandidateAppendSource) compileGraph(candidate *NodeProfile) (string, []NodeChainProof, []PhysicalEgress, error) {
+	return s.compileGraphCandidate(candidate, nil)
+}
+
+func (s *NodeChainCandidateAppendSource) compileGraphCandidate(candidate *NodeProfile, imported *nodeChainImportedMember) (string, []NodeChainProof, []PhysicalEgress, error) {
 	fail := func(err error) (string, []NodeChainProof, []PhysicalEgress, error) {
 		return "", nil, nil, errors.Join(err, nodeChainCandidateAppendError)
 	}
@@ -192,11 +210,18 @@ func (s *NodeChainCandidateAppendSource) compileGraph(candidate *NodeProfile) (s
 	nodes := append([]*NodeProfile(nil), s.nodes...)
 	imports := append([]*nodeChainImportedMember(nil), s.imports...)
 	if candidate != nil {
-		if candidate.mode != s.record.NextMode || candidate.validateNodeDesktopCapture() != nil ||
+		if imported != nil || s.record.NextKind != "" || candidate.mode != s.record.NextMode || candidate.validateNodeDesktopCapture() != nil ||
 			predecessorText(candidate.profile, "start_layer") != "" && predecessorText(candidate.profile, "start_layer") != "off" {
 			return fail(nil)
 		}
 		nodes, imports = append(nodes, candidate), append(imports, nil)
+	}
+	if imported != nil {
+		if candidate != nil || s.record.NextKind != "external" || s.record.NextMode != "shadowsocks" ||
+			imported.hostname != nil || imported.multipleSeal == nil || !imported.multipleSeal.matches(imported) {
+			return fail(nil)
+		}
+		nodes, imports = append(nodes, nil), append(imports, imported)
 	}
 	if len(nodes) > NodeChainExtendedLocalMaximumNodes || validateAppendMemberAliases(nodes, imports) != nil {
 		return fail(nil)
@@ -205,7 +230,7 @@ func (s *NodeChainCandidateAppendSource) compileGraph(candidate *NodeProfile) (s
 	members := make([]nodeChainGraphMember, len(nodes))
 	streams := make([]*externalPredecessor, 0, len(nodes))
 	targets := map[netip.AddrPort]bool{}
-	withStreams := s.record.Schema == 2 || candidate != nil && candidate.mode == "shadowsocks"
+	withStreams := s.record.Schema == 2 || imported != nil || candidate != nil && nodeChainAppendProxyMode(candidate.mode)
 	for i, node := range nodes {
 		var closure *externalPredecessor
 		var err error
@@ -224,6 +249,11 @@ func (s *NodeChainCandidateAppendSource) compileGraph(candidate *NodeProfile) (s
 		}
 		if members[i].mode == "shadowsocks" {
 			if i == 0 || !nodeChainAppendSSClosure(closure) {
+				return fail(nil)
+			}
+			streams = append(streams, closure)
+		} else if members[i].mode == "hysteria2" {
+			if i == 0 || !nodeChainAppendHysteriaClosure(node, closure) {
 				return fail(nil)
 			}
 			streams = append(streams, closure)
@@ -252,9 +282,12 @@ func (s *NodeChainCandidateAppendSource) compileGraph(candidate *NodeProfile) (s
 		if len(streams) == 0 {
 			return fail(nil)
 		}
-		if err := validateExtendedStreamTargets(streams, targets, nil); err != nil {
+		if err := validateNodeChainAppendProxyTargets(streams, targets); err != nil {
 			return fail(err)
 		}
+	}
+	if err := validateNodeChainAppendHybridKeys(closures); err != nil {
+		return fail(err)
 	}
 	expected, err := nodes[0].PhysicalEgress()
 	if err != nil {
@@ -263,7 +296,7 @@ func (s *NodeChainCandidateAppendSource) compileGraph(candidate *NodeProfile) (s
 	var config string
 	var proofs []NodeChainProof
 	var physical []PhysicalEgress
-	if s.record.Schema == 1 {
+	if s.record.Schema == 1 && imported == nil {
 		config, proofs, _, physical, err = compileNodeChainGraph(members, closures, expected, nil, nil, nil)
 	} else {
 		scope := &nodeChainAppendGraphScope{owner: s, nodes: nodes, imports: imports, closures: append([]*externalPredecessor(nil), closures...)}
@@ -320,6 +353,14 @@ func (s *NodeChainCandidateAppendSource) streamCandidateAliases() (map[string]bo
 				return nil, nil, nodeChainCandidateAppendError
 			}
 			keys[key] = true
+		case "hysteria2":
+			captured, err := nodeChainAppendHysteriaKeys(row)
+			if err != nil || !rememberAddress(predecessorText(row, "server"), row["server_port"]) {
+				return nil, nil, nodeChainCandidateAppendError
+			}
+			for key := range captured {
+				keys[key] = true
+			}
 		case "wireguard", AmneziaType:
 			if !rememberKey(predecessorText(row, "private_key")) {
 				return nil, nil, nodeChainCandidateAppendError

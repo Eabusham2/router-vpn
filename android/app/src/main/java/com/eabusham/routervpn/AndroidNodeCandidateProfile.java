@@ -75,8 +75,9 @@ final class AndroidNodeCandidateProfile {
         int replacement=catalog.prefix+1;
         if(original.appendDraft()) {
             if(authority==null||!retainFinal||!catalog.preparedAppendResponse()||replacement!=original.members.size()
-                    ||!candidateMode.equals(original.appendMode)||candidate.imported||catalog.session.capture.append==null
+                    ||!candidateMode.equals(original.appendMode)||candidate.imported!="external".equals(original.appendKind)||catalog.session.capture.append==null
                     ||!catalog.session.capture.append.fits(actual))throw new IllegalStateException("The measured append lost its original prefix or next-mode authority.");
+            AndroidNodeCandidateAppendSource.requireCandidate(candidate,original.appendKind,candidateMode);
             execution="local";preparedPacketReplacement=false;preparedPacketAppend=true;
             sources.addAll(original.members);modes.addAll(original.modes);sources.add(candidate);modes.add(candidateMode);
             StringBuilder preview=new StringBuilder();

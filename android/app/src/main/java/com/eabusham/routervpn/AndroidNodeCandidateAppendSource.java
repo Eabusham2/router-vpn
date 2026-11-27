@@ -13,18 +13,32 @@ import java.util.List;
 /** Source-only capture of a real unfinished prefix. The separately selected
  * control supplies device policy, never a fabricated route member or final. */
 final class AndroidNodeCandidateAppendSource {
-    static final List<String> NEXT_MODES=List.of("wg","awg2-fast","awg2-strong","shadowsocks");
+    static final List<String> NEXT_MODES=List.of("wg","awg2-fast","awg2-strong","shadowsocks","hysteria2");
     static boolean supportsNextMode(String mode){return mode!=null&&NEXT_MODES.contains(mode);}
+    static final class NextChoice {
+        final String kind,mode;
+        NextChoice(String kind,String mode){this.kind=kind;this.mode=mode;}
+        String title(){return "external".equals(kind)?"Shadowsocks — imported public HTTPS":AndroidOrderedPathSelection.finalModeTitle(mode)+" — paired private response";}
+    }
+    static final List<NextChoice> NEXT_CHOICES=List.of(new NextChoice("router-vpn","wg"),new NextChoice("router-vpn","awg2-fast"),
+            new NextChoice("router-vpn","awg2-strong"),new NextChoice("router-vpn","shadowsocks"),new NextChoice("router-vpn","hysteria2"),new NextChoice("external","shadowsocks"));
+    static boolean supportsNext(String kind,String mode){return "router-vpn".equals(kind)&&supportsNextMode(mode)||"external".equals(kind)&&"shadowsocks".equals(mode);}
+    static String measurement(String kind){return "external".equals(kind)?"routed-public-candidate-response":"router-vpn".equals(kind)?"routed-candidate-response":"";}
+    static void requireCandidate(AndroidNodeStore.ChainSource member,String kind,String mode)throws Exception {
+        if(member==null||!supportsNext(kind,mode)||member.imported!="external".equals(kind))throw invalid();
+        if(member.imported){AndroidNodeChainCapture.requireLiteralImportedSS(member);if(!AndroidNodeChainCapture.identityInput(member).isEmpty())throw invalid();}
+        else member.requirePairedIdentity();
+    }
     final RouterNodeChainCandidateAppendSource plan;
     final AndroidNodeStore.ChainCapture original;
     final AndroidDeviceMTU deviceMTU;
-    final String source,config,metadata,sourceSHA256,configSHA256;
+    final String source,config,metadata,sourceSHA256,configSHA256,kind,measurement;
     final List<String> memberInputs,identityInputs;
     final boolean strict,homeLANAccess;
     private final Context context;
 
     AndroidNodeCandidateAppendSource(Context context,AndroidNodeStore.ChainCapture original)throws Exception {
-        if(original==null||!original.appendDraft()||!"local".equals(original.execution)||!supportsNextMode(original.appendMode))
+        if(original==null||!original.appendDraft()||!"local".equals(original.execution)||!supportsNext(original.appendKind,original.appendMode))
             throw invalid();
         this.context=context.getApplicationContext();this.original=original;
         original.requireCurrent();deviceMTU=AndroidDeviceMTU.capture(this.context);
@@ -42,7 +56,7 @@ final class AndroidNodeCandidateAppendSource {
         for(int i=0;i<original.members.size();i++) {
             AndroidNodeStore.ChainSource member=original.members.get(i);String mode=original.modes.get(i);
             requirePrefixMember(member,mode,i);
-            if(member.imported||"shadowsocks".equals(mode))sourceSchema=2;
+            if(member.imported||List.of("shadowsocks","hysteria2").contains(mode))sourceSchema=2;
             inputs.add(AndroidNodeChainCapture.memberInput(member,mode,member.profile()));
             identities.add(AndroidNodeChainCapture.identityInput(member));
         }
@@ -54,6 +68,7 @@ final class AndroidNodeCandidateAppendSource {
                 .put("device_revision",original.deviceRevision()).put("device_source",device)
                 .put("next_mode",original.appendMode).put("append_position",inputs.size())
                 .put("nodes",new JSONArray(inputs)).put("identity_sources",new JSONArray(identities));
+        if("external".equals(original.appendKind))input.put("next_kind","external");
         if(!deviceMTU.revision.isEmpty())input.put("device_mtu_revision",deviceMTU.revision);
         if(deviceMTU.value!=0)input.put("device_fixed_mtu",deviceMTU.value);
         String request=input.toString();
@@ -63,6 +78,7 @@ final class AndroidNodeCandidateAppendSource {
         source=bounded(plan.source(),AndroidNodeChainCapture.MAX_INPUT);
         config=bounded(plan.config(),4*1024*1024);metadata=bounded(plan.metadata(),256*1024);
         sourceSHA256=plan.sourceSHA256();configSHA256=plan.configSHA256();
+        kind=plan.candidateKind();measurement=plan.candidateMeasurement();
         JSONObject returned=new JSONObject(source),meta=new JSONObject(metadata),deviceRecord=new JSONObject(device);
         if(!"routervpn-node-chain-candidate-append-source".equals(returned.getString("kind"))
                 ||returned.getInt("schema")!=sourceSchema||!"local".equals(returned.getString("execution"))
@@ -70,6 +86,8 @@ final class AndroidNodeCandidateAppendSource {
                 ||!original.deviceRevision().equals(returned.getString("device_revision"))
                 ||!device.equals(returned.getString("device_source"))
                 ||!original.appendMode.equals(returned.getString("next_mode"))
+                ||!original.appendKind.equals(kind)||!measurement(original.appendKind).equals(measurement)
+                ||("external".equals(kind)?!"external".equals(returned.optString("next_kind","")):returned.has("next_kind"))
                 ||returned.getInt("append_position")!=inputs.size()
                 ||!new JSONArray(inputs).toString().equals(returned.getJSONArray("nodes").toString())
                 ||!new JSONArray(identities).toString().equals(returned.getJSONArray("identity_sources").toString())
@@ -84,6 +102,7 @@ final class AndroidNodeCandidateAppendSource {
                 ||!original.deviceRevision().equals(meta.getString("device_revision"))
                 ||!deviceMTU.revision.equals(meta.getString("device_mtu_revision"))
                 ||!original.appendMode.equals(meta.getString("candidate_mode"))
+                ||("external".equals(kind)?!"external".equals(meta.optString("candidate_kind","")):meta.has("candidate_kind"))
                 ||meta.getInt("append_position")!=inputs.size()||meta.getInt("prefix_position")!=inputs.size()-1
                 ||!Boolean.FALSE.equals(meta.get("application_open"))||!Boolean.FALSE.equals(meta.get("dns_open"))
                 ||!Boolean.FALSE.equals(meta.get("ready")))throw invalid();
@@ -103,16 +122,16 @@ final class AndroidNodeCandidateAppendSource {
                 AndroidNodeChainCapture.requireLiteralImportedSS(member);
                 return true;
             }
-            if(!packet&&!"shadowsocks".equals(mode))return false;
+            if(!packet&&!List.of("shadowsocks","hysteria2").contains(mode))return false;
             member.requirePairedIdentity();
-            if("shadowsocks".equals(mode)&&!List.of("","off").contains(member.profile().optString("start_layer","off")))return false;
+            if(List.of("shadowsocks","hysteria2").contains(mode)&&!List.of("","off").contains(member.profile().optString("start_layer","off")))return false;
             JSONObject asset=member.bundle().getJSONObject("profiles").optJSONObject(mode);
             return asset!=null&&asset.length()>0;
         } catch(Exception unavailable) {return false;}
     }
     static void requirePrefixMember(AndroidNodeStore.ChainSource member,String mode,int position)throws Exception {
         if(!permitsPrefixMember(member,mode,position))throw new IllegalStateException(
-                "Keep the original paired packet entry and supported packet or literal Shadowsocks 2022 prefix members.");
+                "Keep the original paired packet entry and supported packet, literal Shadowsocks 2022 or paired Hysteria2 prefix members.");
         // Imported sources use their original external capture and empty paired
         // identity companion; they never acquire a Router pairing identity.
         AndroidNodeChainCapture.memberInput(member,mode,member.profile());
@@ -121,7 +140,8 @@ final class AndroidNodeCandidateAppendSource {
     void requireCurrent()throws Exception {
         original.requireCurrent();deviceMTU.requireCurrent(context);
         if(!source.equals(plan.source())||!sourceSHA256.equals(plan.sourceSHA256())
-                ||!configSHA256.equals(plan.configSHA256())||!metadata.equals(plan.metadata()))throw invalid();
+                ||!configSHA256.equals(plan.configSHA256())||!metadata.equals(plan.metadata())
+                ||!kind.equals(plan.candidateKind())||!measurement.equals(plan.candidateMeasurement()))throw invalid();
     }
     boolean fits(String input)throws Exception {requireCurrent();return Libbox.routerNodeChainCandidateAppendInputFitsSource(plan,input);}
     private static String bounded(String value,int max)throws Exception {

@@ -83,6 +83,18 @@ func (a *app) validateConnectionProfileSetupExpectationsLocked(expected desktopP
 // This completion purpose has a current device and a different future final.
 // Path-token bounds remain unchanged; the independent device has its own token.
 const connectionProfileCompletionPurpose = "draft-last-ss-final"
+const connectionProfileHY2CompletionPurpose = "draft-last-hy2-final"
+
+func connectionProfileCompletionMode(purpose string) string {
+	switch purpose {
+	case connectionProfileCompletionPurpose:
+		return "shadowsocks"
+	case connectionProfileHY2CompletionPurpose:
+		return "hysteria2"
+	default:
+		return ""
+	}
+}
 
 type connectionProfileCompletionRequest struct {
 	Schema                   int                            `json:"schema"`
@@ -141,17 +153,19 @@ func decodeConnectionProfileCompletion(raw []byte, saving bool) (connectionProfi
 		return q, bad
 	}
 	q.desktopProfileExpectations = expected
-	if q.Schema != 1 || q.Purpose != connectionProfileCompletionPurpose || q.Execution != "local" ||
+	finalMode := connectionProfileCompletionMode(q.Purpose)
+	if q.Schema != 1 || finalMode == "" || q.Execution != "local" ||
 		!validViaEntryRequestID(q.DraftRevision) || !validProfileID(q.DeviceID) || !validProfileID(q.FinalID) ||
 		!validExternalProfileExpectationToken(q.DeviceRevision) || q.ExpectedSelectedNodeID == nil ||
 		*q.ExpectedSelectedNodeID != q.DeviceID || len(q.ExpectedProfileTokens) != len(q.Nodes) ||
-		q.Nodes[len(q.Nodes)-1].ID != q.FinalID || q.Nodes[len(q.Nodes)-1].Mode != "shadowsocks" {
+		q.Nodes[len(q.Nodes)-1].ID != q.FinalID || q.Nodes[len(q.Nodes)-1].Mode != finalMode {
 		return q, bad
 	}
 	seen := map[string]bool{}
 	for position, node := range q.Nodes {
+		pairedHY2Final := q.Purpose == connectionProfileHY2CompletionPurpose && position == len(q.Nodes)-1 && node.Mode == "hysteria2"
 		if !validProfileID(node.ID) || seen[node.ID] ||
-			!mobilemultihop.NodeChainPrefixMode(node.Mode) && (position == 0 || node.Mode != "shadowsocks") ||
+			!mobilemultihop.NodeChainPrefixMode(node.Mode) && (position == 0 || node.Mode != "shadowsocks" && !pairedHY2Final) ||
 			!validExternalProfileExpectationToken(q.ExpectedProfileTokens[node.ID]) {
 			return q, bad
 		}
@@ -208,7 +222,7 @@ func (a *app) validateConnectionProfileCompletionLocked(q connectionProfileCompl
 				return bad
 			}
 		} else if profile.NodeKind != "" && profile.NodeKind != "router-vpn" || !common.ValidNodeProofID(profile.NodeProofID) ||
-			!desktopCONNECTExecutionPairedLayer(profile.StartLayer) || row.Mode == "shadowsocks" && profile.StartLayer != "" && profile.StartLayer != "off" {
+			!desktopCONNECTExecutionPairedLayer(profile.StartLayer) || (row.Mode == "shadowsocks" || row.Mode == "hysteria2") && profile.StartLayer != "" && profile.StartLayer != "off" {
 			return bad
 		}
 	}

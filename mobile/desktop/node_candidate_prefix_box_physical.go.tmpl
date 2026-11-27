@@ -16,12 +16,15 @@ func routerVPNDesktopCandidatePrefixPhysicalTarget(policy *mobilemultihop.Deskto
 		return false
 	}
 	meta := policy.Metadata()
+	original := policy.Preparation()
+	depth := original.ExtendedCandidateDepth()
+	publicAppend := original.IsAppend() && original.CandidateKind() == "external" && depth == len(meta.Prefixes)
 	if meta.TargetOS != target || meta.ApplicationOpen || meta.DNSOpen || len(meta.Prefixes) != meta.PrefixPosition+1 ||
-		len(meta.Prefixes) < 1 || len(meta.Prefixes) >= mobilemultihop.NodeChainMaximumNodes && policy.Preparation().ExtendedCandidateDepth() <= len(meta.Prefixes) {
+		len(meta.Prefixes) < 1 || len(meta.Prefixes) >= mobilemultihop.NodeChainMaximumNodes && depth <= len(meta.Prefixes) && !publicAppend {
 		return false
 	}
-	original := policy.Preparation()
 	imports := original.ImportedPrefixProofs()
+	appendProofs := original.ProofInventory()
 	for position, prefix := range meta.Prefixes {
 		if prefix.Position == position && prefix.Kind == "public-path" && prefix.NodeKind == "external" && prefix.Mode == "shadowsocks" && prefix.StartLayer == "off" {
 			found := false
@@ -34,6 +37,13 @@ func routerVPNDesktopCandidatePrefixPhysicalTarget(policy *mobilemultihop.Deskto
 			if found {
 				continue
 			}
+		}
+		// A retained paired SS/HY2 member belongs only to the original append
+		// source. Equal mode text cannot grant an ordinary prefix capability.
+		if original.IsAppend() && prefix.Position == position && (prefix.Mode == "shadowsocks" || prefix.Mode == "hysteria2") &&
+			prefix.StartLayer == "off" && prefix.NodeID != "" && prefix.NodeKind == "" && prefix.Kind == "" &&
+			position < len(appendProofs) && prefix == appendProofs[position] {
+			continue
 		}
 		if prefix.Position != position || !mobilemultihop.NodeChainPrefixMode(prefix.Mode) ||
 			!mobilemultihop.DesktopNodePhysicalGraphSupported(prefix.Mode, prefix.StartLayer) {

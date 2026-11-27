@@ -116,7 +116,7 @@ import Foundation
     }
 
     static func reserveAppend(model: RouterVPNModel, nodes: [IOSMultihopNodeSelection],
-                              editorOwner: IOSNodeChainEditorOwner, nextMode: String, draftRevision: String,
+                              editorOwner: IOSNodeChainEditorOwner, nextKind: String, nextMode: String, draftRevision: String,
                               request: String, current: @escaping @MainActor () throws -> Void,
                               onCancelled: @escaping @MainActor () -> Void) throws -> IOSNodeCandidatePreparation {
         guard retained == nil, !model.connected, !model.tunnelTransitioning,
@@ -128,7 +128,7 @@ import Foundation
         guard snapshot.stamp.ready, let control = editorOwner.fingerprints[editorOwner.controlID] else { throw CancellationError() }
         let deviceRevision = "ios-device-" + IOSCandidateCatalogPublication.digest(Data((control + ":" + snapshot.stamp.revision).utf8))
         let capture = try IOSNodeCandidateAppendSource.compile(deviceBundle: IOSNodeUsage.canonical(bundle),
-            records: snapshot.records, nodes: nodes, nextMode: nextMode, draftRevision: draftRevision,
+            records: snapshot.records, nodes: nodes, nextKind: nextKind, nextMode: nextMode, draftRevision: draftRevision,
             deviceRevision: deviceRevision, deviceMTU: IOSDeviceMTUPreference.current())
         let value = try Self(model: model, bundle: bundle, purpose: .local(.append(capture)),
             prefixPosition: nodes.count - 1, request: request, appendCurrent: current, onCancelled: onCancelled)

@@ -42,7 +42,7 @@ import Libbox
             try captured.requireDeviceCurrent()
             appendSource = captured
         } else {
-            guard proofs.allSatisfy({ $0.purpose == nil }) else { throw issue() }
+            guard proofs.allSatisfy({ $0.purpose == nil && $0.candidate_kind == nil }) else { throw issue() }
             appendSource = nil
         }
         guard stamp.ready, stamp.sources_sha256 == (try IOSCandidateCatalogPublication.sourcesDigest(records)),
@@ -104,6 +104,7 @@ import Libbox
                 let name = profile["name"] as? String ?? id
                 var input = "", reason = "This saved transport or Start Layer cannot supply this measurement"
                 do {
+                    if let appendSource { guard profile["node_kind"] as? String == appendSource.nextKind else { throw issue() } }
                     input = try member(profile: profile, files: files, mode: candidateMode)
                     if let appendSource {
                         guard try appendSource.fits(input) else { throw issue() }
@@ -132,7 +133,9 @@ import Libbox
         if pairedFinalResponse || appendResponse { offered["response_mode"] = candidateMode }
         let inventory = try JSONSerialization.data(withJSONObject: offered, options: [.sortedKeys])
         guard inventory.count <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw issue() }
-        guard publicResponse else { return (inventory, rows) }
+        // Append inventories are admitted as a whole by their original native
+        // preparation; complete-public filtering requires a different full source.
+        guard publicResponse && !appendResponse else { return (inventory, rows) }
         guard let launch = originalLaunch, launch.count <= IOSNodeChainCapture.maximumInputBytes,
               let record = try JSONSerialization.jsonObject(with: launch) as? [String: Any],
               record["kind"] as? String == "routervpn-node-chain-launch-input", record["schema"] as? Int == 8,

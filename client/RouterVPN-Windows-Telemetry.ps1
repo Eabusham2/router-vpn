@@ -886,21 +886,25 @@ function TestOrderedCandidatePacketCatalog($Value,[int]$Position){
 
 function TestOrderedCandidateAppendEnvelope($S,$Value){
  $draft=ExternalComparisonValue $S 'Draft'
+ $nextKind=ExternalComparisonValue $draft 'next_kind'
+ if($null-ne$nextKind-and($nextKind-isnot[string]-or$nextKind-cne'external'-or(ExternalComparisonValue $draft 'next_mode')-cne'shadowsocks')){return $false}
+ $external=$nextKind-ceq'external';$metric=if($external){'routed-public-candidate-response'}else{'routed-candidate-response'}
  if($null-eq$draft -or (ExternalComparisonValue $draft 'purpose')-cne'draft-prefix-append' -or
     (ExternalComparisonValue $draft 'execution')-cne'local' -or -not[bool](ExternalComparisonValue $S 'SavedPath') -or
     -not[bool](ExternalComparisonValue $S 'SavedPrefix') -or (OrderedCandidateScope $S)-cne'draft-prefix-append' -or
     (ExternalComparisonValue $Value 'purpose')-cne'draft-prefix-append' -or (ExternalComparisonValue $Value 'scope')-cne'draft-prefix-append' -or
     (ExternalComparisonValue $Value 'origin')-cne'editor-draft' -or (ExternalComparisonValue $Value 'requested_execution')-cne'local' -or
-    (ExternalComparisonValue $Value 'measurement')-cne'routed-candidate-response' -or (ExternalComparisonValue $Value 'proof_scope')-cne'selected-prefix' -or
+    (ExternalComparisonValue $Value 'measurement')-cne$metric -or (ExternalComparisonValue $Value 'proof_scope')-cne'selected-prefix' -or
     (OrderedCandidateNumber $Value 'schema')-ne1 -or (OrderedCandidateNumber $Value 'prefix_position')-ne$S.Position){return $false}
  foreach($name in @('application_open','dns_open')){$flag=ExternalComparisonValue $Value $name;if($flag-isnot[bool]-or$flag){return $false}}
  $fields=if($Value-is[Collections.IDictionary]){$Value.Keys}else{$Value.PSObject.Properties.Name}
+ if($external){if((ExternalComparisonValue $Value 'candidate_kind')-cne'external'){return $false}}elseif('candidate_kind'-cin$fields){return $false}
  foreach($name in @('original_final','selected_execution','selection_epoch','required_selected_execution','response_executions','public_response_source_nodes','external_final')){
   if($name-cin$fields){return $false}
  }
  $mode=ExternalComparisonValue $Value 'candidate_mode';$nodes=$null
  if($Value-is[Collections.IDictionary]){$nodes=$Value['response_source_nodes']}else{$property=$Value.PSObject.Properties['response_source_nodes'];if($null-ne$property){$nodes=$property.Value}}
- if($mode-cnotin@('wg','awg2-fast','awg2-strong','shadowsocks')-or$mode-cne(ExternalComparisonValue $draft 'next_mode')-or
+ if($mode-cnotin@('wg','awg2-fast','awg2-strong','shadowsocks','hysteria2')-or$mode-cne(ExternalComparisonValue $draft 'next_mode')-or
     $nodes-isnot[array]-or$nodes.Count-lt1-or$nodes.Count-ge96-or$draft.nodes-isnot[array]-or$draft.nodes.Count-ne$nodes.Count-or
     $S.Position-ne$nodes.Count-1-or(OrderedCandidateNumber $Value 'append_position')-ne$nodes.Count-or
     (OrderedCandidateNumber $draft 'append_position')-ne$nodes.Count){return $false}
@@ -920,9 +924,10 @@ function TestOrderedCandidateAppendEnvelope($S,$Value){
   $originalKeys=if($original-is[Collections.IDictionary]){$original.Keys}else{$original.PSObject.Properties.Name}
   $packet=$node.kind-ceq'router-vpn'-and$node.mode-cin@('wg','awg2-fast','awg2-strong')
   $stream=$i-gt0-and$node.kind-cin@('router-vpn','external')-and$node.mode-ceq'shadowsocks'
+  $hy2=$i-gt0-and$node.kind-ceq'router-vpn'-and$node.mode-ceq'hysteria2'
   if(@($keys).Count-ne3-or'id'-cnotin$keys-or'mode'-cnotin$keys-or'kind'-cnotin$keys-or@($originalKeys).Count-ne2-or
      'id'-cnotin$originalKeys-or'mode'-cnotin$originalKeys-or$node.id-isnot[string]-or$node.id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'-or
-     -not$ids.Add($node.id)-or-not($packet-or$stream)-or
+     -not$ids.Add($node.id)-or-not($packet-or$stream-or$hy2)-or
      $original.id-cne$node.id-or$original.mode-cne$node.mode){return $false}
  }
  return $true
@@ -930,9 +935,10 @@ function TestOrderedCandidateAppendEnvelope($S,$Value){
 function TestOrderedCandidateAppendPath($S,$View,$Choice,$Path){
  if(-not(TestOrderedCandidateAppendEnvelope $S $View)){return $false}
  $nodes=$View.response_source_nodes;$id=ExternalComparisonValue $Choice 'id'
+ $kind=if((ExternalComparisonValue $View 'candidate_kind')-ceq'external'){'external'}else{'router-vpn'}
  $fields=if($Choice-is[Collections.IDictionary]){$Choice.Keys}else{$Choice.PSObject.Properties.Name}
  if($Path-isnot[array]-or$Path.Count-ne$nodes.Count+1-or$id-isnot[string]-or$id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'-or
-    $id-cin@($nodes|ForEach-Object{$_.id})-or(ExternalComparisonValue $Choice 'kind')-cne'router-vpn'-or
+    $id-cin@($nodes|ForEach-Object{$_.id})-or(ExternalComparisonValue $Choice 'kind')-cne$kind-or
     (ExternalComparisonValue $Choice 'draft_action')-cne'append-measured-hop'-or'proposal_action'-cin$fields-or'save_reason'-cin$fields){return $false}
  for($i=0;$i-lt$Path.Count;$i++){
   $row=$Path[$i];$keys=if($row-is[Collections.IDictionary]){$row.Keys}else{$row.PSObject.Properties.Name}
@@ -953,7 +959,7 @@ function TestOrderedCandidateAppendCatalog($S,$Value){
  }
  for($i=0;$i-lt$prefixes.Count;$i++){
   if((OrderedCandidateNumber $prefixes[$i] 'position')-ne$i-or$prefixes[$i].id-cne$nodes[$i].id-or$prefixes[$i].mode-cne$nodes[$i].mode-or
-     (ExternalComparisonValue $prefixes[$i] 'measurement')-cne'routed-candidate-response'){return $false}
+     (ExternalComparisonValue $prefixes[$i] 'measurement')-cne(ExternalComparisonValue $Value 'measurement')){return $false}
  }
  return $true
 }
@@ -1237,7 +1243,7 @@ function SetOrderedCandidateControls($S){
   $S.ProfileName.Parent.Visibility=if($finalChoice){'Visible'}else{'Collapsed'}
   $S.Save.Content=if($finalChoice -and $S.Table.SelectedItem.Choice.proposal_action -ceq 'save-intermediate-profile'){'Save profile with this hop'}elseif($finalChoice){'Save profile with this final'}else{'Add measured hop to draft'}
  }
- if($null-eq$S.Task-and$Captured-and(OrderedCandidateReady $S)-and$null-ne$S.Table.SelectedItem){$Row=$S.Table.SelectedItem;if($null-ne$Row.Receipt-and$null-ne(OrderedCandidateScore $Row.Receipt ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) (OrderedCandidateViewMetric $S $S.View))-and@((ExternalComparisonValue $Row.Choice 'proposed_path')|Where-Object{$null-ne$_}).Count-ge2){$S.Save.IsEnabled=$null -eq $draft -or (OrderedCandidateViewMetric $S $S.View) -ne 'routed-candidate-response' -or $finalChoice}}
+ if($null-eq$S.Task-and$Captured-and(OrderedCandidateReady $S)-and$null-ne$S.Table.SelectedItem){$Row=$S.Table.SelectedItem;if($null-ne$Row.Receipt-and$null-ne(OrderedCandidateScore $Row.Receipt ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) (OrderedCandidateViewMetric $S $S.View))-and@((ExternalComparisonValue $Row.Choice 'proposed_path')|Where-Object{$null-ne$_}).Count-ge2){$S.Save.IsEnabled=(OrderedCandidateScope $S)-cne'draft-prefix-append'-and($null -eq $draft -or (OrderedCandidateViewMetric $S $S.View) -ne 'routed-candidate-response' -or $finalChoice)}}
 }
 function StartOrderedCandidateRequest($S,[string]$Phase,[string]$Path,$Body=$null){
  if($S.Closed-or$null-ne$S.Task){return};$S.Phase=$Phase
@@ -1285,7 +1291,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
      if($choices.Count -ne 1 -or $Value.candidate_id -cne $S.ChoiceID -or
         -not(TestOrderedCandidatePreparedPath $S $S.View $choices[0] (ExternalComparisonValue $Value 'proposed_path'))){throw 'The temporary candidate changed the measured replacement or retained suffix.'}
      if($Phase -ceq 'choose'){
-      if($Value.candidate_mode -ceq 'hysteria2' -or $null -eq (ExternalComparisonValue $S 'Draft') -or (ExternalComparisonValue $Value 'draft_action') -cne $(if((OrderedCandidateScope $S)-ceq'draft-prefix-append'){'append-measured-hop'}else{'replace-measured-hop'})){throw 'The draft update is not the measured replacement.'}
+      if((-not$appendMode -and $Value.candidate_mode -ceq 'hysteria2') -or $null -eq (ExternalComparisonValue $S 'Draft') -or (ExternalComparisonValue $Value 'draft_action') -cne $(if((OrderedCandidateScope $S)-ceq'draft-prefix-append'){'append-measured-hop'}else{'replace-measured-hop'})){throw 'The draft update is not the measured replacement.'}
      }elseif($Value.proposal_action -cne $choices[0].proposal_action){throw 'The saved replacement changed its original profile action.'}
     }
    }
@@ -1338,7 +1344,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
  $publicMetric='routed-public-candidate-response'
  $reported=ExternalComparisonValue $Value 'measurement'
  $publicJob=$Phase -cne 'catalog' -and (ExternalComparisonValue $prior 'measurement') -ceq $publicMetric
- if($reported -ceq $publicMetric -or $publicJob){
+ if(-not$appendMode-and($reported -ceq $publicMetric -or $publicJob)){
   $selectedPublic=$null -ne $owners -or $null -ne $originalOwners
   if($selectedPublic){
    if(-not(TestOrderedCandidatePublicSource $S $Value)){throw 'The selected public candidate lost its original source or execution owner.'}
@@ -1440,7 +1446,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
  if($Phase-ceq'catalog'){
   $metric=OrderedCandidateViewMetric $S $Value
   if(-not $metric -or (OrderedCandidateNumber $Value 'samples') -ne 50){throw 'The catalog does not identify an eligible original measurement prefix.'}
-  if($metric -ceq 'routed-public-candidate-response'){
+  if(-not$appendMode-and$metric -ceq 'routed-public-candidate-response'){
    foreach($choice in $Value.candidates){
     $choiceKeys=if($choice -is [Collections.IDictionary]){$choice.Keys}else{$choice.PSObject.Properties.Name}
     $path=ExternalComparisonValue $choice 'proposed_path'
@@ -1459,7 +1465,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
    foreach($row in $S.Rows){if($null -ne (ExternalComparisonValue $Value 'candidate_mode') -or $metric -ceq 'routed-public-candidate-response' -or @((ExternalComparisonValue $row.Choice 'proposed_path')|Where-Object{$null-ne$_}).Count-ge3 -or (TestOrderedCandidateDraftInsertion $S $row.Choice (ExternalComparisonValue $row.Choice 'draft_path'))){[void]$S.Table.SelectedItems.Add($row)}}
    $S.AutoRun=$S.Table.SelectedItems.Count-gt0
   }
-  $S.SavedProfileID='';$S.Status.Text=if($preparedMode){'Measure 50 authenticated responses through the selected prefix. The original route must close before using a measured replacement or saving a future profile.'}elseif((OrderedCandidateScope $S)-ceq'draft-complete-selected'){'Test the complete draft temporarily. Choose a measured hop after the route closes.'}elseif([bool](ExternalComparisonValue $S 'SavedPrefix')){'Test only the selected saved prefix. It must return to Disconnected before future-profile choices appear.'}elseif($SavedPath){'Test the complete saved Local path temporarily. It must return to Disconnected before future-profile choices appear.'}elseif($packetMode){'Measure 50 authenticated responses through a candidate tunnel. Save replaces this intermediate node and retains the complete prefix and suffix.'}elseif($null -ne (ExternalComparisonValue $Value 'original_final')){'Measure 50 authenticated responses through the captured Local prefix. Save replaces only the final node in a separate profile for the next connection.'}elseif($metric -ceq 'routed-candidate-response'){'Measure 50 authenticated private-agent responses through the captured prefix and each eligible paired candidate.'}elseif($metric -ceq 'routed-public-candidate-response'){'Measure 50 HTTPS responses after TLS through each candidate and verify its expected public exit IP.'}else{'Select candidates, then test 50 TCP handshakes through this connected prefix.'};return
+  $S.SavedProfileID='';$S.Status.Text=if($appendMode-and$metric-ceq'routed-public-candidate-response'){'Measure 50 verified public HTTPS responses through this incomplete prefix. Choose appends only after the temporary path fully stops.'}elseif($preparedMode){'Measure 50 authenticated responses through the selected prefix. The original route must close before using a measured replacement or saving a future profile.'}elseif((OrderedCandidateScope $S)-ceq'draft-complete-selected'){'Test the complete draft temporarily. Choose a measured hop after the route closes.'}elseif([bool](ExternalComparisonValue $S 'SavedPrefix')){'Test only the selected saved prefix. It must return to Disconnected before future-profile choices appear.'}elseif($SavedPath){'Test the complete saved Local path temporarily. It must return to Disconnected before future-profile choices appear.'}elseif($packetMode){'Measure 50 authenticated responses through a candidate tunnel. Save replaces this intermediate node and retains the complete prefix and suffix.'}elseif($null -ne (ExternalComparisonValue $Value 'original_final')){'Measure 50 authenticated responses through the captured Local prefix. Save replaces only the final node in a separate profile for the next connection.'}elseif($metric -ceq 'routed-candidate-response'){'Measure 50 authenticated private-agent responses through the captured prefix and each eligible paired candidate.'}elseif($metric -ceq 'routed-public-candidate-response'){'Measure 50 HTTPS responses after TLS through each candidate and verify its expected public exit IP.'}else{'Select candidates, then test 50 TCP handshakes through this connected prefix.'};return
  }
  if($SavedPath){
   if(-not(OrderedCandidateSavedEnvelope $S $Value)){throw 'The response changed its original saved-path purpose or prefix.'}
@@ -1578,7 +1584,7 @@ function ShowOrderedCandidates{
  $S.Client.Timeout=[System.Threading.Timeout]::InfiniteTimeSpan;$script:RouterVPNOrderedCandidates=$S
  if($SavedPrefix){$D.Title='Test saved prefix';$D.FindName('PurposeNote').Text='Temporarily measure each supported candidate through the selected prefix. Packet prefixes time 50 TCP handshakes. Eligible Shadowsocks prefixes time 50 private-agent responses or HTTPS responses through an independent imported candidate. HTTPS timing starts after TLS and verifies the expected exit IP. The current exit does not need to respond. The VPN returns to Disconnected before choices appear. Choose a measured candidate to save a future profile.'}elseif($SavedPath){$D.Title='Test saved Local path';$D.FindName('PurposeNote').Text='Temporarily prove the complete saved Local path. For each eligible candidate, measure 50 TCP handshakes through a packet prefix or 50 responses through a Shadowsocks prefix. Paired candidates answer private-agent challenges; imported candidates use HTTPS after TLS with their expected exit IP. The path returns to Disconnected before future-profile choices appear. Choose a measured candidate to save a future profile.'}
  if($null-ne$Draft){$D.Owner=$Editor;$D.Title='Measure the next hop';$S.ProfileName.Parent.Visibility='Collapsed';$S.Save.Content='Add measured hop to draft';$D.FindName('PurposeNote').Text='Measure 50 samples per eligible linked candidate through the selected draft prefix. The captured prefix determines whether each sample times a TCP handshake, a private-agent response, or HTTPS through an imported candidate after TLS and exit-IP verification. Add one measured hop after the temporary route closes.'}
- if((OrderedCandidateScope $S)-ceq'draft-prefix-append'){$D.Title='Measure next node';$D.FindName('PurposeNote').Text='Measure 50 authenticated responses through this incomplete prefix. Application traffic and DNS remain closed. Choose appends the measured node only after the temporary path fully stops. Select a real final before saving a connection.';$S.Save.Visibility='Collapsed'}
+ if((OrderedCandidateScope $S)-ceq'draft-prefix-append'){$D.Title='Measure next node';$D.FindName('PurposeNote').Text=if((ExternalComparisonValue $Draft 'next_kind')-ceq'external'){'Measure 50 verified public HTTPS responses through this incomplete prefix. Each response must match the expected exit captured from the import. Application traffic and DNS remain closed. Choose appends only after the temporary path fully stops.'}else{'Measure 50 authenticated responses through this incomplete prefix. Application traffic and DNS remain closed. Choose appends the measured node only after the temporary path fully stops. Select a real final before saving a connection.'};$S.Save.Visibility='Collapsed'}
  $S.Refresh.Add_Click({if($null-ne$S.Prefix.SelectedValue){$S.Position=[int]$S.Prefix.SelectedValue};$S.View=$null;$S.Receipt=$null;StartOrderedCandidateRequest $S 'catalog' (OrderedCandidateCatalogPath $S) $S.Draft}.GetNewClosure())
  $S.Run.Add_Click({SetOrderedCandidateControls $S;if(-not$S.Run.IsEnabled){$S.Status.Text='Capture the selected prefix before testing.';return};if([long]$S.View.expires_at-le[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()){$S.Status.Text='The catalog expired. Capture this prefix again before testing.';return};$IDs=@($S.Table.SelectedItems|ForEach-Object{[string]$_.ID});if($IDs.Count-lt1){$S.Status.Text='Select at least one candidate row.';return};$S.RequestID=[Guid]::NewGuid().ToString('N');$S.SelectedWinner='';$S.SelectedEpoch=0;$S.Receipt=$null;$S.PendingDrain=$true;$S.CancelWanted=$false;$S.SavedAdmitted=$false;StartOrderedCandidateRequest $S 'run' (OrderedCandidateBase $S) (OrderedCandidateScopedBody $S @{request_id=$S.RequestID;view_token=[string]$S.View.view_token;prefix_position=$S.Position;candidate_ids=$IDs;samples=50})}.GetNewClosure())
  $S.Prefix.Add_SelectionChanged({SetOrderedCandidateControls $S}.GetNewClosure())

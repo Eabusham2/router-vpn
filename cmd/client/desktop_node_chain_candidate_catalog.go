@@ -191,6 +191,10 @@ func captureDesktopCandidateSourceInventory(ctx context.Context, a *app, launch 
 	if appendSource != nil && appendSource.CandidateMode() != mode || mode == "shadowsocks" && appendSource == nil {
 		return nil, errors.New("explicit SS response inventory requires its original append source")
 	}
+	publicAppend := appendSource != nil && appendSource.CandidateKind() == "external"
+	if publicAppend && (mode != "shadowsocks" || appendSource.CandidateMeasurement() != hopmeasure.CandidatePublicResponseMeasurement) {
+		return nil, errors.New("imported response inventory lost its original public append purpose")
+	}
 	seen := map[string]bool{}
 	for _, profile := range profiles {
 		if !validProfileID(profile.ID) || seen[profile.ID] {
@@ -204,7 +208,11 @@ func captureDesktopCandidateSourceInventory(ctx context.Context, a *app, launch 
 	// inodes and modification times. Replacing then restoring a source cannot
 	// revive a previously measured catalog through an unchanged content hash.
 	for _, p := range profiles {
-		if result.candidateMode != "" && (p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || p.StartLayer != "" && p.StartLayer != "off") {
+		if publicAppend {
+			if p.NodeKind != "external" || p.External == nil || !desktopNodeChainImported(p, "shadowsocks") || p.StartLayer != "" && p.StartLayer != "off" {
+				return nil, errors.New("imported append response requires its original Shadowsocks source with Start Layer off")
+			}
+		} else if result.candidateMode != "" && (p.External != nil || p.NodeKind != "" && p.NodeKind != "router-vpn" || p.StartLayer != "" && p.StartLayer != "off") {
 			return nil, errors.New("candidate response requires an original paired node with Start Layer off")
 		}
 		switch p.StartLayer {
@@ -315,6 +323,10 @@ func (result *desktopNodeChainCandidateCatalog) sealSourcePlan(ctx context.Conte
 			return errors.New("append inventory lost its distinct original source")
 		}
 		result.prefixPreparation, err = mobilemultihop.NewNodeChainCandidateAppendPreparation(c.source.Source(), result.inventory)
+		if err == nil && (result.prefixPreparation == nil || result.prefixPreparation.CandidateKind() != c.source.CandidateKind() ||
+			result.prefixPreparation.CandidateMeasurement() != c.source.CandidateMeasurement()) {
+			return errors.New("append inventory changed its original candidate kind or measurement")
+		}
 	} else if result.appendCapture != nil {
 		return errors.New("append inventory cannot enter a complete-route purpose")
 	} else if scope == orderedCandidateSavedPrefixScope {

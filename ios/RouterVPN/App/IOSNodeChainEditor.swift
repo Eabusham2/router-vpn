@@ -254,7 +254,7 @@ struct IOSNodeChainDraft {
     mutating func chooseMode(_ mode: String, at position: Int) throws {
         if unfinished {
             guard nodes.indices.contains(position),
-                  IOSMultihopNodeSelection.supportsNativePrefix(mode) || position > 0 && mode == "shadowsocks" else { throw IOSNodeCandidateAppendSource.issue() }
+                  IOSMultihopNodeSelection.supportsNativePrefix(mode) || position > 0 && ["shadowsocks", "hysteria2"].contains(mode) else { throw IOSNodeCandidateAppendSource.issue() }
             nodes[position].mode = mode
             return
         }
@@ -343,7 +343,7 @@ struct IOSNodeChainAppendCompletion {
     let stamp: IOSCandidateCatalogPublication.Stamp
     let deviceMTU: IOSDeviceMTUPreference
     let idleGeneration: UUID
-    var usesLastNodeAsFinal: Bool { prefix.last?.id == finalID && prefix.last?.mode == "shadowsocks" }
+    var usesLastNodeAsFinal: Bool { prefix.last?.id == finalID && ["shadowsocks", "hysteria2"].contains(prefix.last?.mode ?? "") }
 }
 
 @MainActor
@@ -429,11 +429,11 @@ extension RouterVPNModel {
               !iosSpeedLabOwnership.active, !IOSMTUMeasurementGate.held,
               IOSNodeCandidatePreparation.retained == nil else { throw CancellationError() }
         try requireIOSNodeChainAppendSources(owner, nodes: prefix)
-        let keepsLast = prefix.count >= 2 && prefix.last?.id == finalID && prefix.last?.mode == "shadowsocks"
+        let keepsLast = prefix.count >= 2 && prefix.last?.id == finalID && ["shadowsocks", "hysteria2"].contains(prefix.last?.mode ?? "")
         guard keepsLast || !prefix.contains(where: { $0.id == finalID }),
               let expected = owner.fingerprints[finalID], try iosNodeChainEditorFingerprint(finalID) == expected,
               allNodeProfiles.filter({ $0.id == finalID }).count == 1 else {
-            throw IOSMultihopNodeSelection.issue("Use the actual last paired Shadowsocks node or choose a distinct final from the original linked sources.")
+            throw IOSMultihopNodeSelection.issue("Use the actual last paired Shadowsocks or Hysteria2 node, or choose a distinct final from the original linked sources.")
         }
     }
 
@@ -445,16 +445,17 @@ extension RouterVPNModel {
         let originalBundle = try IOSNodeUsage.canonical(bundle)
         let snapshot = try IOSNodeBundleStore.shared.candidateSnapshot()
         let deviceMTU = try IOSDeviceMTUPreference.current(), idleGeneration = iosConnectGeneration
-        guard snapshot.stamp.ready,
+        let finalMode = prefix.last?.id == finalID ? (prefix.last?.mode ?? "") : "shadowsocks"
+        guard ["shadowsocks", "hysteria2"].contains(finalMode), snapshot.stamp.ready,
               let raw = IOSNodeBundleStore.shared.bundleData(containing: finalID, current: bundle),
               var value = try? JSONDecoder().decode(ClientBundle.self, from: raw),
               value.routerProfiles.filter({ $0.id == finalID }).count == 1,
               let index = value.routerProfiles.firstIndex(where: { $0.id == finalID }),
               value.routerProfiles[index].normalizedNodeKind == "router-vpn", value.routerProfiles[index].external == nil,
-              value.profiles["shadowsocks"]?["sing-box.json"]?.isEmpty == false else {
-            throw IOSMultihopNodeSelection.issue("The final node needs its original paired Shadowsocks 2022 source.")
+              value.profiles[finalMode]?["sing-box.json"]?.isEmpty == false else {
+            throw IOSMultihopNodeSelection.issue("The final node needs the original paired source for its chosen transport.")
         }
-        let nodes = prefix.last?.id == finalID ? prefix : prefix + [IOSMultihopNodeSelection(id: finalID, mode: "shadowsocks")]
+        let nodes = prefix.last?.id == finalID ? prefix : prefix + [IOSMultihopNodeSelection(id: finalID, mode: finalMode)]
         try IOSMultihopNodeSelection.validate(nodes, execution: "local", entryID: nil, entryMode: nil,
                                              exitID: nil, exitMode: nil, controlID: finalID)
         value.selectedRouterID = finalID

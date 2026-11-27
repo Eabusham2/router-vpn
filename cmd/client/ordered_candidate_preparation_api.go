@@ -84,7 +84,7 @@ func (a *app) orderedCandidatePreparedCatalogWithNetwork(w http.ResponseWriter, 
 			}
 			appendRequest, decodeErr := decodeOrderedCandidateAppendRequest(http.MaxBytesReader(w, request.Body, multihopConnectRequestLimit))
 			if decodeErr != nil || position != appendRequest.AppendPosition-1 {
-				http.Error(w, "an exact incomplete prefix, next packet mode and device source are required", 400)
+				http.Error(w, "an exact incomplete prefix, next transport and kind, and device source are required", 400)
 				return
 			}
 			view, err = captureOrderedCandidateAppendView(ctx, a, position, appendRequest, observe)
@@ -142,6 +142,9 @@ func (a *app) orderedCandidatePreparedCatalogWithNetwork(w http.ResponseWriter, 
 		response["requested_execution"] = view.requestedExecution()
 		if view.append != nil {
 			response["note"] = "Measure 50 authenticated responses through this exact incomplete prefix. The temporary path closes before Choose appends the node to the editor; choose a real final before saving a complete connection."
+			if metric == hopmeasure.CandidatePublicResponseMeasurement {
+				response["note"] = "Measure 50 HTTPS responses through this exact prefix and each imported Shadowsocks candidate, verifying its recorded public exit IP. The temporary path closes before Choose appends the node; choose a real final before saving a complete connection."
+			}
 		} else if len(view.responseOwners) > 0 {
 			publishCandidateResponseOwners(response, view.responseOwners, "")
 			publishSelectedResponseSource(response, metric, view.responseNodes)

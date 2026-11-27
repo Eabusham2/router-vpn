@@ -774,6 +774,9 @@ func (p *NodeChainCandidatePreparation) ExtendedCandidateDepth() int {
 	}
 	proof := p.proofs[p.position]
 	if p.candidates.measurement == hopmeasure.CandidatePublicResponseMeasurement {
+		if p.appendSource != nil {
+			return p.candidates.AppendPublicResponseCandidateDepth(p.position, proof.ProfileID, proof.Tag)
+		}
 		return p.candidates.PublicResponseCandidateDepth(p.position, proof.ProfileID, proof.Tag)
 	}
 	if p.candidates.measurement == hopmeasure.CandidatePrivateResponseMeasurement {
@@ -802,12 +805,7 @@ func (p *NodeChainCandidatePlan) newService(ctx context.Context, engine hopmeasu
 	}
 	appendStream := p.isAppendStreamResponse()
 	if appendStream {
-		owner, ok := engine.(*NodeChainCandidatePreparationRuntime)
-		if !ok || owner == nil || p.validateAppend() != nil || owner.preparation == nil || owner.preparation.candidates != p ||
-			owner.preparation.appendSource != p.appendSource || capture != owner.preparation.capture {
-			return nil, hopmeasure.ErrStale
-		}
-		if err := owner.VerifyMeasurement(ctx); err != nil {
+		if _, err := p.appendStreamRuntime(ctx, engine, capture); err != nil {
 			return nil, err
 		}
 	}
@@ -888,6 +886,9 @@ func (p *NodeChainCandidatePlan) newService(ctx context.Context, engine hopmeasu
 				}
 				return openCandidateHysteria2(call, request, destination)
 			}, p.prefix.Tag, nonce, func(string) error { return complete() })
+		}
+		if p.appendSource != nil && len(p.appendSource.nodes)+1 > NodeChainMaximumNodes {
+			return hopmeasure.NewExtendedResponseCandidatesContext(ctx, engine, prefix, p.targets, NodeChainInputLimit, p, respond)
 		}
 		return hopmeasure.NewCapturedResponseCandidatesContext(ctx, engine, prefix, p.targets, NodeChainInputLimit, respond)
 	}

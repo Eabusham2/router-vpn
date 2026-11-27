@@ -111,6 +111,18 @@ func (s *RouterNodeChainCandidateAppendSource) CandidateMode() string {
 	}
 	return s.source.CandidateMode()
 }
+func (s *RouterNodeChainCandidateAppendSource) CandidateKind() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.CandidateKind()
+}
+func (s *RouterNodeChainCandidateAppendSource) CandidateMeasurement() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.CandidateMeasurement()
+}
 func (s *RouterNodeChainCandidateAppendSource) AppendPosition() int32 {
 	if s == nil || s.source == nil {
 		return -1
@@ -178,6 +190,18 @@ func (m *RouterNodeChainCandidatePreparation) CandidateMode() string {
 		return ""
 	}
 	return m.prep.CandidateMode()
+}
+func (m *RouterNodeChainCandidatePreparation) CandidateKind() string {
+	if m == nil || m.prep == nil {
+		return ""
+	}
+	return m.prep.CandidateKind()
+}
+func (m *RouterNodeChainCandidatePreparation) CandidateMeasurement() string {
+	if m == nil || m.prep == nil {
+		return ""
+	}
+	return m.prep.CandidateMeasurement()
 }
 func (m *RouterNodeChainCandidatePreparation) Metadata() string { return m.MetadataPage(0) }
 func (m *RouterNodeChainCandidatePreparation) MetadataPage(offset int32) string {

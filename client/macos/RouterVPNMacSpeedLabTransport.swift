@@ -187,7 +187,7 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                 guard Set(node.keys) == ["id", "mode"], let id = node["id"],
                       id.range(of: #"\A[A-Za-z0-9_-]{1,64}\z"#, options: .regularExpression) != nil,
                       let mode = node["mode"], ["wg", "awg2-fast", "awg2-strong"].contains(mode) ||
-                        position > 0 && mode == "shadowsocks" else { return nil }
+                        position > 0 && ["shadowsocks", "hysteria2"].contains(mode) else { return nil }
             }
             return nodes
         }
@@ -280,15 +280,17 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
             }
         case candidateBase + "/catalog":
             if appendCatalog {
+                let external = body?["next_kind"] as? String == "external"
                 let fields: Set<String> = ["schema", "purpose", "execution", "draft_revision", "append_position", "next_mode",
                                            "nodes", "expected_selected_node_id", "expected_profile_tokens"]
-                guard let body, Set(body.keys) == fields, number("schema", equals: 1),
+                guard let body, Set(body.keys) == (external ? fields.union(["next_kind"]):fields), number("schema", equals: 1),
+                      body["next_kind"] == nil || external && body["next_mode"] as? String == "shadowsocks",
                       body["purpose"] as? String == "draft-prefix-append", body["execution"] as? String == "local",
                       let revision = body["draft_revision"] as? String,
                       revision.range(of: #"\A[0-9a-f]{32}\z"#, options: .regularExpression) != nil,
                       let nodes = appendPath(body["nodes"], minimum: 1, maximum: 95),
                       number("append_position", equals: Double(nodes.count)), selectedPosition == nodes.count - 1,
-                      let mode = body["next_mode"] as? String, ["wg", "awg2-fast", "awg2-strong", "shadowsocks"].contains(mode),
+                      let mode = body["next_mode"] as? String, ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"].contains(mode),
                       let device = body["expected_selected_node_id"] as? String,
                       device.range(of: #"\A[A-Za-z0-9_-]{1,64}\z"#, options: .regularExpression) != nil,
                       let tokens = body["expected_profile_tokens"] as? [String: String],

@@ -66,7 +66,7 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
         if(source==null||idle==null||prefix<0||prefix>=source.modes.size())throw new IllegalStateException("The saved original prefix is missing.");
         String mode=source.modes.get(prefix);
         if(source.appendDraft()) {
-            // A real unfinished prefix can end in a packet or Shadowsocks member.
+            // A real unfinished prefix can end in an admitted packet or proxy member.
             // Its append purpose supplies no complete-route successor or final.
             if(!packetPrefix(source,prefix))throw new IllegalStateException("The unfinished prefix lost its original append position or next transport.");
         } else if(!("local".equals(source.execution)||source.selectedCandidateDraft())
@@ -107,7 +107,7 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
     static synchronized boolean cancelActive(){if(active==null)return false;active.cancelFromUser();return true;}
     static boolean packetPrefix(AndroidNodeStore.ChainCapture source,int prefix){
         if(source==null||!"local".equals(source.execution)||prefix<0)return false;
-        if(source.appendDraft())return prefix==source.modes.size()-1&&AndroidNodeCandidateAppendSource.supportsNextMode(source.appendMode);
+        if(source.appendDraft())return prefix==source.modes.size()-1&&AndroidNodeCandidateAppendSource.supportsNext(source.appendKind,source.appendMode);
         if(prefix>=source.modes.size()-1)return false;
         return AndroidNodeChainCapture.localPacketResponsePrefix(source.members,source.modes,prefix,source.execution)
                 || AndroidNodeChainCapture.localPacketPrefix(source.members,source.modes,prefix)

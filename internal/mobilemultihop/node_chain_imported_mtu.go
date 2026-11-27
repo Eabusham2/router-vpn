@@ -48,6 +48,16 @@ func applyNodeChainCapturedStreamPacketMTU(members []nodeChainGraphMember, closu
 			if NodeChainPrefixMode(members[at].mode) {
 				break
 			}
+			if members[at].mode == "hysteria2" {
+				if appendScope == nil || at >= len(appendScope.nodes) || appendScope.nodes[at] == nil ||
+					appendScope.closures[at] != closure || !nodeChainAppendHysteriaClosure(appendScope.nodes[at], closure) {
+					return nodeChainError
+				}
+				// HY2 owns native UDP message fragmentation/reassembly. The
+				// normal ordered MTU pass already retained this proxy TUN and
+				// the packet cap; raw SS overhead cannot be extended across QUIC.
+				return nil
+			}
 			if members[at].mode != "shadowsocks" {
 				return nodeChainError
 			}

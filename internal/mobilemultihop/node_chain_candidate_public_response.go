@@ -188,9 +188,21 @@ func (p *NodeChainCandidatePlan) newPublicResponseService(ctx context.Context, e
 	}
 	// The original Go runtime fixtures own their private TLS roots. The
 	// native application cannot supply an alternate trust store to a plan.
-	testTLS := p.chain.runtime.testTLS
-	if prep, ok := engine.(*NodeChainCandidatePreparationRuntime); ok {
+	var testTLS *tls.Config
+	if p.appendSource != nil {
+		prep, err := p.appendStreamRuntime(ctx, engine, prefix.CaptureSHA256)
+		if err != nil {
+			return nil, err
+		}
 		testTLS = prep.testTLS
+	} else {
+		if p.chain == nil {
+			return nil, hopmeasure.ErrStale
+		}
+		testTLS = p.chain.runtime.testTLS
+		if prep, ok := engine.(*NodeChainCandidatePreparationRuntime); ok {
+			testTLS = prep.testTLS
+		}
 	}
 	respond := func(ctx context.Context, target hopmeasure.CandidateTarget, begin, complete func() error) error {
 		for _, source := range p.publicResponses {
@@ -199,6 +211,9 @@ func (p *NodeChainCandidatePlan) newPublicResponseService(ctx context.Context, e
 			}
 		}
 		return hopmeasure.ErrStale
+	}
+	if p.appendSource != nil {
+		return hopmeasure.NewAppendPublicResponseCandidatesContext(ctx, engine, prefix, p.targets, NodeChainInputLimit, p, respond)
 	}
 	return hopmeasure.NewPublicResponseCandidatesContext(ctx, engine, prefix, p.targets, NodeChainInputLimit, p, respond)
 }

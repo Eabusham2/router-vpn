@@ -49,6 +49,8 @@ type publicProfile struct {
 	IPv6Mode                 string                         `json:"ipv6_mode,omitempty"`
 	StartupMode              string                         `json:"startup_mode,omitempty"`
 	AutoConnect              bool                           `json:"auto_connect,omitempty"`
+	AutoRequireEncrypted     bool                           `json:"auto_require_encrypted"`
+	AutoRequireObfuscation   bool                           `json:"auto_require_obfuscation"`
 	MultihopEnabled          bool                           `json:"multihop_enabled,omitempty"`
 	MultihopEntryID          string                         `json:"multihop_entry_id,omitempty"`
 	MultihopExitID           string                         `json:"multihop_exit_id,omitempty"`
@@ -141,6 +143,7 @@ func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCap
 		SocksHost: p.SocksHost, SocksPort: p.SocksPort, BaseTunnel: p.BaseTunnel, BaseFallback: p.BaseFallback,
 		CustomLayers: append([]string(nil), p.CustomLayers...), HomeLANAccess: p.HomeLANAccess, HomeLANCIDRs: append([]string(nil), p.HomeLANCIDRs...),
 		KillSwitchPolicy: p.KillSwitchPolicy, IPv6Mode: p.IPv6Mode, StartupMode: p.StartupMode, AutoConnect: p.AutoConnect,
+		AutoRequireEncrypted: p.AutoRequireEncrypted, AutoRequireObfuscation: p.AutoRequireObfuscation,
 		MultihopEnabled: p.MultihopEnabled, MultihopEntryID: p.MultihopEntryID, MultihopExitID: p.MultihopExitID,
 		MultihopExecution: p.MultihopExecution, MultihopEntryMode: p.MultihopEntryMode, StartLayer: p.StartLayer,
 		MultihopNodes: append([]common.MultihopNodeSelection(nil), p.MultihopNodes...),

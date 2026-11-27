@@ -4,10 +4,18 @@ import Libbox
 /// A genuine unfinished prefix and its independent device policy. This owner
 /// never creates a complete NodeChain or grants a selected-final connection.
 struct IOSNodeCandidateAppendSource {
-    static let nextModes = IOSMultihopNodeSelection.nativePrefixModes + ["shadowsocks"]
+    static let nextModes = IOSMultihopNodeSelection.nativePrefixModes + ["shadowsocks", "hysteria2"]
     static func supportsNextMode(_ mode: String) -> Bool { nextModes.contains(mode) }
+    struct NextChoice: Hashable { let kind: String, mode: String }
+    static let nextChoices = nextModes.map { NextChoice(kind: "router-vpn", mode: $0) } + [NextChoice(kind: "external", mode: "shadowsocks")]
+    static func supportsNext(kind: String, mode: String) -> Bool {
+        kind == "router-vpn" && supportsNextMode(mode) || kind == "external" && mode == "shadowsocks"
+    }
+    static func measurement(kind: String) -> String {
+        kind == "external" ? "routed-public-candidate-response" : kind == "router-vpn" ? "routed-candidate-response" : ""
+    }
     let plan: LibboxRouterNodeChainCandidateAppendSource
-    let source: String, metadata: String
+    let source: String, metadata: String, nextKind: String, measurement: String
     let members: [IOSNodeChainCapture.Member]
     let device: IOSNodeChainCapture.Member
     let deviceMTU: IOSDeviceMTUPreference
@@ -22,18 +30,18 @@ struct IOSNodeCandidateAppendSource {
             let last = position == members.count - 1
             return IOSNodeCandidatePrefix(position: position, profile_id: member.id,
                 node_id: member.profile["node_proof_id"] as? String ?? "", mode: member.mode,
-                measurement: last ? "routed-candidate-response" : nil, candidate_mode: last ? nextMode : nil,
-                purpose: last ? "draft-prefix-append" : nil)
+                measurement: last ? measurement : nil, candidate_mode: last ? nextMode : nil,
+                candidate_kind: last && nextKind == "external" ? "external" : nil, purpose: last ? "draft-prefix-append" : nil)
         }
     }
 
     static func compile(deviceBundle: Data, records: [String: Data], nodes: [IOSMultihopNodeSelection],
-                        nextMode: String, draftRevision: String, deviceRevision: String,
+                        nextKind: String, nextMode: String, draftRevision: String, deviceRevision: String,
                         deviceMTU: IOSDeviceMTUPreference) throws -> Self {
         guard !nodes.isEmpty, nodes.count < IOSMultihopNodeSelection.physicalTraversalDepth,
               Set(nodes.map(\.id)).count == nodes.count,
               nodes.allSatisfy({ !$0.id.isEmpty }),
-              supportsNextMode(nextMode) else { throw issue() }
+              supportsNext(kind: nextKind, mode: nextMode) else { throw issue() }
         let root = try object(deviceBundle, maximum: 32 * 1024 * 1024)
         guard let selected = root["selectedRouterID"] as? String,
               let profiles = root["routerProfiles"] as? [[String: Any]],
@@ -57,10 +65,11 @@ struct IOSNodeCandidateAppendSource {
             }
         }
         var value: [String: Any] = [
-            "kind": "routervpn-node-chain-candidate-append-source", "schema": nodes.contains(where: { $0.mode == "shadowsocks" }) ? 2 : 1, "execution": "local",
+            "kind": "routervpn-node-chain-candidate-append-source", "schema": nodes.contains(where: { ["shadowsocks", "hysteria2"].contains($0.mode) }) ? 2 : 1, "execution": "local",
             "draft_revision": draftRevision, "device_revision": deviceRevision, "device_source": deviceInput,
             "next_mode": nextMode, "append_position": nodes.count, "nodes": inputs, "identity_sources": identities
         ]
+        if nextKind == "external" { value["next_kind"] = "external" }
         if !deviceMTU.revision.isEmpty { value["device_mtu_revision"] = deviceMTU.revision }
         if deviceMTU.value != 0 { value["device_fixed_mtu"] = deviceMTU.value }
         let request = try json(value, maximum: IOSNodeChainCapture.maximumInputBytes)
@@ -86,12 +95,16 @@ struct IOSNodeCandidateAppendSource {
         let source = plan.source(), metadata = plan.metadata(), config = plan.config()
         let value = try Self.object(Data(source.utf8), maximum: IOSNodeChainCapture.maximumInputBytes)
         let safe = try Self.object(Data(metadata.utf8), maximum: 256 * 1024)
+        let nextKind = plan.candidateKind(), measurement = plan.candidateMeasurement()
         guard value["kind"] as? String == "routervpn-node-chain-candidate-append-source",
               let schema = value["schema"] as? Int, [1, 2].contains(schema), value["execution"] as? String == "local",
               let nodes = value["nodes"] as? [String], !nodes.isEmpty, nodes.count < IOSMultihopNodeSelection.physicalTraversalDepth,
               let identities = value["identity_sources"] as? [String], identities.count == nodes.count,
               let deviceInput = value["device_source"] as? String, let mode = value["next_mode"] as? String,
-              Self.supportsNextMode(mode), mode == plan.candidateMode(),
+              Self.supportsNext(kind: nextKind, mode: mode), mode == plan.candidateMode(),
+              measurement == Self.measurement(kind: nextKind),
+              nextKind == "external" ? value["next_kind"] as? String == "external" : value["next_kind"] == nil,
+              nextKind == "external" ? safe["candidate_kind"] as? String == "external" : safe["candidate_kind"] == nil,
               value["append_position"] as? Int == nodes.count, Int(plan.appendPosition()) == nodes.count,
               safe["schema"] as? Int == 1, safe["purpose"] as? String == "draft-prefix-append",
               safe["source_sha256"] as? String == plan.sourceSHA256(), safe["config_sha256"] as? String == plan.configSHA256(),
@@ -113,7 +126,7 @@ struct IOSNodeCandidateAppendSource {
         guard safe["device_source_sha256"] as? String == deviceRecord["source_sha256"] as? String else { throw Self.issue() }
         let members = try nodes.map(Self.member), device = try Self.member(deviceInput)
         guard device.mode == "wg", device.profile["node_kind"] as? String == "router-vpn", device.profile["external"] == nil,
-              schema == (members.contains(where: { $0.mode == "shadowsocks" }) ? 2 : 1),
+              schema == (members.contains(where: { ["shadowsocks", "hysteria2"].contains($0.mode) }) ? 2 : 1),
               Set(members.map(\.id)).count == members.count else { throw Self.issue() }
         for (position, member) in members.enumerated() {
             let typed = try JSONDecoder().decode(RouterProfile.self, from: Data(member.profileJSON.utf8))
@@ -128,14 +141,14 @@ struct IOSNodeCandidateAppendSource {
             protect = protect || policy != "off" || (profile["kill_switch"] as? Bool == true)
             lan = lan && (profile["home_lan_access"] as? Bool ?? true)
         }
-        self.plan = plan; self.source = source; self.metadata = metadata
+        self.plan = plan; self.source = source; self.metadata = metadata; self.nextKind = nextKind; self.measurement = measurement
         self.members = members; self.device = device; self.deviceMTU = deviceMTU
         strict = protect; homeLANAccess = lan
     }
 
     func requireDeviceCurrent() throws {
         try deviceMTU.requireCurrent()
-        guard plan.source() == source, plan.metadata() == metadata,
+        guard plan.source() == source, plan.metadata() == metadata, plan.candidateKind() == nextKind, plan.candidateMeasurement() == measurement,
               IOSCandidateCatalogPublication.digest(Data(plan.config().utf8)) == plan.configSHA256() else { throw Self.issue() }
     }
     func fits(_ input: String) throws -> Bool {
@@ -162,7 +175,7 @@ struct IOSNodeCandidateAppendSource {
         }
         guard profile.normalizedNodeKind == "router-vpn", profile.external == nil else { return [] }
         return IOSMultihopNodeSelection.nativePrefixModes +
-            (position > 0 && [nil, "", "off"].contains(profile.startLayer) ? ["shadowsocks"] : [])
+            (position > 0 && [nil, "", "off"].contains(profile.startLayer) ? ["shadowsocks", "hysteria2"] : [])
     }
     static func memberInput(profile: [String: Any], assets: [String: [String: String]], mode: String) throws -> String {
         if profile["node_kind"] as? String == "external" {
@@ -175,10 +188,10 @@ struct IOSNodeCandidateAppendSource {
             return input
         }
         guard profile["node_kind"] as? String == "router-vpn", profile["external"] == nil,
-              IOSMultihopNodeSelection.supportsNativePrefix(mode) || mode == "shadowsocks",
+              IOSMultihopNodeSelection.supportsNativePrefix(mode) || ["shadowsocks", "hysteria2"].contains(mode),
               let files = assets[mode], !files.isEmpty else { throw issue() }
         let layer = try IOSMultihopStartLayer.capture(profile: profile, profiles: assets)
-        guard mode != "shadowsocks" || layer.mode == "off" else { throw issue() }
+        guard !["shadowsocks", "hysteria2"].contains(mode) || layer.mode == "off" else { throw issue() }
         var start = ""
         if layer.mode != "off" {
             guard let source = layer.source,

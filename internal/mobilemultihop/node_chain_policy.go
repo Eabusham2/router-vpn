@@ -29,7 +29,8 @@ func applyNodeChainMemberMTUWithAppendScope(nodes []nodeChainGraphMember, closur
 		// The complete imported source or distinct append scope retains every
 		// SS member crossed before the next packet interface. Its packet budget
 		// uses that complete proxy path, not the proxy's OS TUN baseline.
-		if (nodes[i-1].imported || appendScope != nil) && nodes[i-1].mode == "shadowsocks" && NodeChainPrefixMode(nodes[i].mode) &&
+		if ((nodes[i-1].imported || appendScope != nil) && nodes[i-1].mode == "shadowsocks" ||
+			appendScope != nil && nodes[i-1].mode == "hysteria2") && NodeChainPrefixMode(nodes[i].mode) &&
 			(server == nil || !server.firstPhysicalPacket(i)) {
 			if err := applyNodeChainCapturedStreamPacketMTU(nodes, closures, i, appendScope); err != nil {
 				return err

@@ -848,7 +848,7 @@ func (capture *connectionProfileCompletionCapture) currentLocked(ctx context.Con
 
 func (capture *connectionProfileCompletionCapture) response() map[string]any {
 	q := capture.request
-	return map[string]any{"schema": 1, "purpose": connectionProfileCompletionPurpose, "compiled": true,
+	return map[string]any{"schema": 1, "purpose": q.Purpose, "compiled": true,
 		"draft_revision": q.DraftRevision, "device_id": q.DeviceID, "device_revision": q.DeviceRevision,
 		"final_id": q.FinalID, "nodes": q.Nodes, "source_sha256": connectionProfileCompletionSHA([]byte(capture.compiled.input)),
 		"device_source_sha256": connectionProfileCompletionSHA([]byte(capture.deviceInput)), "device_mtu_revision": capture.mtu.token,

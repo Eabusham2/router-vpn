@@ -50,6 +50,7 @@ type NodeChainCandidateOwner interface {
 
 type NodeChainCandidatePlan struct {
 	appendSource           *NodeChainCandidateAppendSource
+	appendImportSeals      []*nodeChainMultipleImportedMemberSeal
 	chain                  *NodeChain
 	multiple               *nodeChainCandidateMultipleOriginal
 	multipleSeal           *nodeChainMultipleCandidatePlanSeal
@@ -591,7 +592,7 @@ func (p *NodeChainCandidatePlan) validate() error {
 	if p != nil && p.appendSource != nil {
 		return p.validateAppend()
 	}
-	if p == nil || p.chain == nil || p.chain.validateCapture() != nil || p.seal == "" || p.seal != p.digest() ||
+	if p == nil || p.chain == nil || p.appendImportSeals != nil || p.chain.validateCapture() != nil || p.seal == "" || p.seal != p.digest() ||
 		p.prefix.Position < 0 || p.prefix.Position >= len(p.chain.proofs) || p.prefix != p.chain.proofs[p.prefix.Position] {
 		return errors.New("candidate plan changed its sealed original capture")
 	}

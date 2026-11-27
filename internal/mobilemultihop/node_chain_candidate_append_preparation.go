@@ -43,10 +43,13 @@ func (s *NodeChainCandidateAppendSource) newCandidatePlan(inventory string) (*No
 		!nodeChainIdentityText(record.Revision) || len(record.Inputs) == 0 || record.ResponseMode != s.record.NextMode {
 		return nil, nodeChainCandidateAppendError
 	}
+	if s.record.NextKind == "external" {
+		return s.newPublicAppendCandidatePlan(inventory, record)
+	}
 	p := &NodeChainCandidatePlan{appendSource: s, metadataPages: &nodeChainCandidateMetadataCache{},
 		inventory: inventory, revision: record.Revision, prefix: s.proofs[len(s.proofs)-1],
 		measurement:            hopmeasure.CandidatePrivateResponseMeasurement,
-		preparedNativeResponse: NodeChainPrefixMode(s.record.NextMode), responseMode: s.record.NextMode}
+		preparedNativeResponse: nodeChainNativeResponseMode(s.record.NextMode), responseMode: s.record.NextMode}
 	ids, proofs, keys := make(map[string]bool), make(map[string]bool), make(map[string]bool)
 	for position, node := range s.nodes {
 		if member := s.imports[position]; member != nil {
@@ -64,7 +67,7 @@ func (s *NodeChainCandidateAppendSource) newCandidatePlan(inventory string) (*No
 		}
 	}
 	var streamAddresses map[string]bool
-	if p.isAppendStreamResponse() {
+	if p.isAppendStreamResponse() || p.responseMode == "hysteria2" || s.hasHysteriaPrefix() {
 		streamKeys, addresses, err := s.streamCandidateAliases()
 		if err != nil {
 			return nil, err
@@ -84,9 +87,28 @@ func (s *NodeChainCandidateAppendSource) newCandidatePlan(inventory string) (*No
 				return nil, nodeChainCandidateAppendError
 			}
 			keys[key], streamAddresses[response.Target.Address] = true, true
+		} else if p.responseMode == "hysteria2" {
+			response, err = s.candidateHysteriaResponse(input)
+			var options map[string]any
+			if err != nil || json.Unmarshal([]byte(response.Hysteria2Options), &options) != nil || streamAddresses[response.Target.Address] {
+				return nil, nodeChainCandidateAppendError
+			}
+			captured, err := nodeChainAppendHysteriaKeys(options)
+			if err != nil {
+				return nil, err
+			}
+			for key := range captured {
+				if keys[key] {
+					return nil, nodeChainCandidateAppendError
+				}
+			}
+			for key := range captured {
+				keys[key] = true
+			}
+			streamAddresses[response.Target.Address] = true
 		} else {
 			response, err = parseCandidateNativeResponseSource(input, s.record.NextMode)
-			if err != nil || response.ClientKey == response.ServerKey || keys[response.ClientKey] || keys[response.ServerKey] {
+			if err != nil || response.ClientKey == response.ServerKey || keys[response.ClientKey] || keys[response.ServerKey] || streamAddresses[response.Target.Address] {
 				return nil, nodeChainCandidateAppendError
 			}
 			response.PacketOptions, err = s.candidatePacketOptions(input)
@@ -94,6 +116,9 @@ func (s *NodeChainCandidateAppendSource) newCandidatePlan(inventory string) (*No
 				return nil, err
 			}
 			keys[response.ClientKey], keys[response.ServerKey] = true, true
+			if streamAddresses != nil {
+				streamAddresses[response.Target.Address] = true
+			}
 		}
 		if ids[response.Target.ID] || proofs[response.NodeID] {
 			return nil, nodeChainCandidateAppendError
@@ -116,8 +141,19 @@ func (p *NodeChainCandidatePlan) appendDigest() string {
 	if p == nil || p.appendSource == nil {
 		return ""
 	}
-	raw, err := json.Marshal([]any{nodeChainCandidateAppendPurpose, p.appendSource.seal, p.inventory, p.revision,
-		p.prefix, p.targets, p.responses, p.measurement, p.preparedNativeResponse, p.responseMode, p.capture})
+	fields := []any{nodeChainCandidateAppendPurpose, p.appendSource.seal, p.inventory, p.revision,
+		p.prefix, p.targets, p.responses, p.measurement, p.preparedNativeResponse, p.responseMode, p.capture}
+	if p.appendSource.record.NextKind == "external" {
+		seals := make([]string, len(p.appendImportSeals))
+		for i, original := range p.appendImportSeals {
+			if original == nil {
+				return ""
+			}
+			seals[i] = original.seal
+		}
+		fields = append(fields, "external", p.publicResponses, seals)
+	}
+	raw, err := json.Marshal(fields)
 	if err != nil {
 		return ""
 	}
@@ -134,9 +170,16 @@ func (p *NodeChainCandidatePlan) isAppendStreamResponse() bool {
 func (p *NodeChainCandidatePlan) validateAppend() error {
 	if p == nil || p.appendSource == nil || p.appendSource.validate() != nil ||
 		p.chain != nil || p.multiple != nil || p.multipleSeal != nil || p.connectedFinalResponse ||
-		p.preparedNativeResponse != NodeChainPrefixMode(p.responseMode) || p.publicResponses != nil || p.measurement != hopmeasure.CandidatePrivateResponseMeasurement ||
+		p.preparedNativeResponse != nodeChainNativeResponseMode(p.responseMode) ||
 		p.responseMode != p.appendSource.record.NextMode || p.prefix != p.appendSource.proofs[len(p.appendSource.proofs)-1] ||
-		len(p.targets) == 0 || len(p.targets) != len(p.responses) || p.seal == "" || p.seal != p.appendDigest() {
+		len(p.targets) == 0 || p.seal == "" || p.seal != p.appendDigest() {
+		return nodeChainCandidateAppendError
+	}
+	if p.appendSource.record.NextKind == "external" {
+		return p.validatePublicAppend()
+	}
+	if p.publicResponses != nil || p.appendImportSeals != nil ||
+		p.measurement != hopmeasure.CandidatePrivateResponseMeasurement || len(p.targets) != len(p.responses) {
 		return nodeChainCandidateAppendError
 	}
 	return nil
@@ -156,14 +199,18 @@ func (p *NodeChainCandidatePlan) appendMetadata() string {
 		targets[i] = map[string]string{"id": target.ID, "source_sha256": target.SourceSHA256}
 	}
 	s := p.appendSource
-	raw, err := json.Marshal(map[string]any{
+	metadata := map[string]any{
 		"schema": 1, "purpose": nodeChainCandidateAppendPurpose, "capture_sha256": p.capture,
 		"prefix_position": p.prefix.Position, "prefix_id": p.prefix.ProfileID, "append_position": len(s.nodes),
 		"source_sha256": s.sourceSHA, "config_sha256": s.configSHA, "targets": targets,
 		"measurement": p.measurement, "candidate_mode": p.responseMode,
 		"draft_revision": s.record.DraftRevision, "device_revision": s.record.DeviceRevision,
 		"device_source_sha256": s.device.source, "device_mtu_revision": s.record.DeviceMTURevision,
-	})
+	}
+	if s.record.NextKind == "external" {
+		metadata["candidate_kind"] = "external"
+	}
+	raw, err := json.Marshal(metadata)
 	if err != nil {
 		return ""
 	}
