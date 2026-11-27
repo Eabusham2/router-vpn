@@ -358,8 +358,8 @@ def check_windows_dependencies(directory, target):
     return inspected
 
 
-def check_target(binary, target, env):
-    metadata = run(['go', 'version', '-m', binary], env=env)
+def check_target(binary, target, env, metadata_reader=None):
+    metadata = (metadata_reader or run)(['go', 'version', '-m', binary], env=env)
     system, arch = target.split('/')
     for value in (TOOLCHAIN, 'GOOS='+system, 'GOARCH='+arch, 'CGO_ENABLED=1',
                   'github.com/amnezia-vpn/amneziawg-go/v3\t'+POLICY.AMNEZIA.VERSION,
@@ -383,7 +383,7 @@ def receipt_fields(target, policy):
             'native_pq_abi': 1}
 
 
-def reuse(directory, target, policy=None, env=None):
+def reuse(directory, target, policy=None, env=None, metadata_reader=None):
     if target not in TARGETS or directory.is_symlink() or not directory.is_dir():
         raise ValueError('Invalid native runtime target or directory')
     policy = policy or digest()
@@ -406,7 +406,7 @@ def reuse(directory, target, policy=None, env=None):
         DNSSEC.verify(directory, target)
     if marker(policy).encode() not in regular(directory/binary, MAX_BINARY):
         raise ValueError('Native runtime source fingerprint is missing')
-    check_target(directory/binary, target, env)
+    check_target(directory/binary, target, env, metadata_reader=metadata_reader)
     return receipt
 
 
@@ -1388,7 +1388,502 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
     return destination
 
 
-def desktop_connect(package, family, evidence):
+
+class AndroidConnectionQualification:
+    """One original emulator, normal app controls and OS VPN Settings UI.
+
+    The same-run APK is never rebuilt or replaced. App-private files contain
+    observation phases only; neither adb settings writes nor an alternate VPN
+    start/import API are used. Emergency process shutdown is containment and
+    cannot replace the app's original service/descriptor join receipt.
+    """
+    package = 'com.eabusham.routervpn'
+    serial = 'emulator-5556'
+    name = 'routervpn-connect'
+
+    def __init__(self, apk, work, evidence, run_id, command, publish, result, deadline, logs):
+        self.apk, self.work, self.evidence, self.run = apk, work, evidence, run_id
+        self.command, self.publish, self.result, self.deadline, self.logs = command, publish, result, deadline, logs
+        self.owners, self.phases = [], {}
+        self.installed = self.app_started = self.settings_changed = self.restored = False
+        self.original_settings = self.before = self.final = None
+        self.sdk = Path(os.environ['ANDROID_HOME']).resolve(strict=True)
+        self.adb_path = self.sdk/'platform-tools/adb'
+        self.emulator_path = self.sdk/'emulator/emulator'
+        self.env = os.environ.copy()
+        user = work/'android-user'
+        user.mkdir(mode=0o700)
+        (user/'avd').mkdir(mode=0o700)
+        (user/'keys').mkdir(mode=0o700)
+        self.env.update(ANDROID_USER_HOME=str(user), ANDROID_EMULATOR_HOME=str(user),
+                        ANDROID_AVD_HOME=str(user/'avd'), ANDROID_SERIAL=self.serial,
+                        ANDROID_ADB_SERVER_PORT='5038', ADB_SERVER_SOCKET='tcp:127.0.0.1:5038',
+                        ADB_VENDOR_KEYS=str(user/'keys'))
+        self.adb_prefix = [self.adb_path, '-H', '127.0.0.1', '-P', '5038', '-s', self.serial]
+        self.emulator = self.adb_server = None
+
+    def adb(self, *args, timeout=20, input_data=None):
+        return self.command(self.adb_prefix+list(args), timeout, env=self.env, input_data=input_data)
+
+    def spawn(self, role, argv):
+        log = (self.evidence/(role+'.log')).open('xb')
+        self.logs.append(log)
+        child = subprocess.Popen([str(v) for v in argv], cwd=self.work, env=self.env,
+                                 stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                                 start_new_session=True)
+        owner = {'role': role, 'child': child, 'pidfd': None, 'pgid': child.pid}
+        self.owners.append(owner)  # retain the original handle before fallible pidfd acquisition
+        self.result['processes'].append({'role': role, 'pid': child.pid})
+        owner['pidfd'] = os.pidfd_open(child.pid)
+        return child
+
+    def start(self):
+        import xml.etree.ElementTree as ET
+        if sys.platform != 'linux' or platform.machine().lower() not in ('x86_64', 'amd64') or not hasattr(os, 'pidfd_open'):
+            raise ValueError('Actual x86_64 Linux emulator ownership is required')
+        if not os.access('/dev/kvm', os.R_OK | os.W_OK):
+            raise ValueError('Actual emulator KVM access is unavailable')
+        for path in (self.adb_path, self.emulator_path, self.sdk/'cmdline-tools/latest/bin/avdmanager'):
+            if not path.is_file():
+                raise ValueError('An actual Android SDK prerequisite is unavailable')
+        spec = importlib.util.spec_from_file_location('routervpn_android_delivery_gate', ROOT/'android/verify-delivery.py')
+        verifier = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(verifier)
+        receipt = verifier.load_receipt(self.apk, os.environ['GITHUB_SHA'])
+        # Verify the shipped APK again with the same delivery verifier. No
+        # signing key or substitute debug build is provided to this job.
+        metadata = verifier.delivery_metadata(self.apk, os.environ['GITHUB_SHA'])
+        badging = self.command([self.sdk/'build-tools/36.0.0/aapt', 'dump', 'badging', self.apk], 60, env=self.env)
+        signatures = self.command([self.sdk/'build-tools/36.0.0/apksigner', 'verify', '--verbose', '--print-certs', self.apk], 60, env=self.env)
+        verified = verifier.verified_receipt(metadata, badging, signatures, True, metadata['variant'],
+                                             metadata['version_code'], metadata['certificate_sha256'], False)
+        with self.apk.open('rb') as stream:
+            verified['apk_sha256'] = hashlib.file_digest(stream, 'sha256').hexdigest()
+        verified['apk_size'] = self.apk.stat().st_size
+        if verified != receipt:
+            raise ValueError('Original Android delivery changed during admission')
+        self.result['android_delivery'] = receipt
+        raw = self.command([self.sdk/'cmdline-tools/latest/bin/apkanalyzer', 'manifest', 'print', self.apk], 30, env=self.env)
+        manifest = ET.fromstring(raw)
+        ns = '{http://schemas.android.com/apk/res/android}'
+        app = manifest.find('application')
+        if manifest.get('package') != self.package or app is None or app.get(ns+'debuggable') != 'true':
+            raise ValueError('The exact APK does not expose debug-only private observation; no substitute APK is allowed')
+        services = [s for s in app.findall('service') if any(a.get(ns+'name') == 'android.net.VpnService'
+                    for f in s.findall('intent-filter') for a in f.findall('action'))]
+        names = [s.get(ns+'name', '') for s in services]
+        if not any(n in ('.LayeredVpnService', self.package+'.LayeredVpnService') for n in names):
+            raise ValueError('The merged APK lacks the original native VpnService')
+        if any(s.get(ns+'permission') != 'android.permission.BIND_VPN_SERVICE' or
+               any(m.get(ns+'name') == 'android.net.VpnService.SUPPORTS_ALWAYS_ON' and m.get(ns+'value') == 'false'
+                   for m in s.findall('meta-data')) for s in services):
+            raise ValueError('The merged APK is not eligible for genuine Android Always-on VPN')
+        self.result['merged_vpn_services'] = names
+        self.command([self.sdk/'cmdline-tools/latest/bin/avdmanager', 'create', 'avd', '-n', self.name,
+                      '-p', Path(self.env['ANDROID_AVD_HOME'])/(self.name+'.avd'),
+                      '-k', 'system-images;android-35;google_apis;x86_64'], 60, env=self.env, input_data=b'no\n')
+        # These fixed loopback ports must belong only to the new original
+        # server/emulator. No existing adb server or emulator is adopted.
+        for port in (5038, 5556, 5557):
+            with socket.socket() as reservation:
+                reservation.bind(('127.0.0.1', port))
+        self.adb_server = self.spawn('android-adb-server', [self.adb_path, '-L', 'tcp:127.0.0.1:5038', 'nodaemon', 'server'])
+        end = time.monotonic()+10
+        while True:
+            if self.adb_server.poll() is not None:
+                raise ValueError('The original adb server exited before emulator startup')
+            try:
+                with socket.create_connection(('127.0.0.1', 5038), 0.2):
+                    break
+            except OSError:
+                if time.monotonic() >= end:
+                    raise ValueError('The original adb server did not become available')
+                time.sleep(0.05)
+        self.emulator = self.spawn('android-emulator', [self.emulator_path, '-avd', self.name, '-port', '5556',
+                '-no-window', '-no-audio', '-no-snapshot', '-no-boot-anim', '-gpu', 'swiftshader'])
+        self.adb('wait-for-device', timeout=120)
+        end = min(self.deadline-430, time.monotonic()+360)
+        while self.adb('shell', 'getprop', 'sys.boot_completed', timeout=5) != '1':
+            if self.emulator.poll() is not None or time.monotonic() >= end:
+                raise ValueError('The original emulator did not boot within its setup budget')
+            time.sleep(1)
+        if self.adb('shell', 'getprop', 'ro.build.version.sdk') != '35':
+            raise ValueError('The actual emulator API differs from the captured fixture')
+        self.adb('shell', 'input', 'keyevent', 'KEYCODE_WAKEUP')
+        self.adb('shell', 'wm', 'dismiss-keyguard')
+        display=self.adb('shell','wm','size')
+        match=re.fullmatch(r'Physical size: ([0-9]+)x([0-9]+)',display)
+        if not match or min(map(int,match.groups()))<240:
+            raise ValueError('The original emulator display dimensions are unavailable')
+        self.display=tuple(map(int,match.groups()))
+        self.original_settings = self.settings()
+        if self.original_settings != {'package': '', 'lockdown': False, 'allowlist': ''}:
+            raise ValueError('The fresh original emulator already has a VPN policy owner')
+        self.before = self.snapshot('before')
+        if any('tun' in row['name'] for row in self.before['interfaces']):
+            raise ValueError('The original emulator already has a TUN')
+        self.adb('install', '--no-streaming', '-r', self.apk, timeout=90)
+        self.installed = True
+        uid = self.adb('exec-out', 'run-as', self.package, 'id', '-u')
+        if not re.fullmatch(r'[0-9]+', uid):
+            raise ValueError('The exact installed APK has no private observation owner')
+        self.result['android_app_uid'] = int(uid)
+        self.result['android_api'] = 35
+        self.result['android_traffic_family'] = 'ipv4'
+        return self.before
+
+    def settings(self):
+        raw = {key: self.adb('shell', 'settings', 'get', 'secure', key) for key in
+               ('always_on_vpn_app', 'always_on_vpn_lockdown', 'always_on_vpn_lockdown_whitelist')}
+        self.result.setdefault('android_settings_readbacks', []).append(raw)
+        if raw['always_on_vpn_lockdown'] not in ('null', '0', '1'):
+            raise ValueError('Android returned an unknown lockdown state')
+        return {'package': '' if raw['always_on_vpn_app'] == 'null' else raw['always_on_vpn_app'],
+                'lockdown': raw['always_on_vpn_lockdown'] == '1',
+                'allowlist': '' if raw['always_on_vpn_lockdown_whitelist'] == 'null' else raw['always_on_vpn_lockdown_whitelist']}
+
+    def snapshot(self, phase):
+        links = self.adb('shell', 'ip', '-o', 'link', 'show')
+        addresses = self.adb('shell', 'ip', '-o', 'addr', 'show')
+        routes4 = self.adb('shell', 'ip', '-4', 'route', 'show', 'table', 'all')
+        routes6 = self.adb('shell', 'ip', '-6', 'route', 'show', 'table', 'all')
+        interfaces = []
+        for line in links.splitlines():
+            match = re.match(r'([0-9]+): ([^:@ ]+)(?:@[^: ]+)?:.*\bmtu ([0-9]+)', line)
+            if not match:
+                raise ValueError('Actual Android interface output is not recognized')
+            interfaces.append({'index': int(match[1]), 'name': match[2], 'mtu': int(match[3])})
+        prefixes = []
+        for line in (routes4+'\n'+routes6).splitlines():
+            words = line.split()
+            if not words:
+                continue
+            value = words[1] if words[0] in ('local', 'broadcast', 'unreachable', 'throw', 'blackhole', 'prohibit') and len(words)>1 else words[0]
+            prefixes.append({'prefix': value})
+        result = {'interfaces': sorted(interfaces,key=lambda row:row['index']),
+                  'addresses': [{'address': match[1]} for match in re.finditer(r'\binet ([0-9.]+)/[0-9]+', addresses)],
+                  'routes': sorted(prefixes,key=lambda row:row['prefix']),
+                  'link_rows': sorted(links.splitlines()), 'address_rows': sorted(addresses.splitlines()),
+                  'route4_rows': sorted(routes4.splitlines()), 'route6_rows': sorted(routes6.splitlines()),
+                  'settings': self.settings()}
+        self.publish(self.evidence/('android-network-'+phase+'.json'),result)
+        return result
+
+    def ui(self):
+        import xml.etree.ElementTree as ET
+        self.adb('shell', 'uiautomator', 'dump', '--compressed', '/data/local/tmp/routervpn-connect-ui.xml', timeout=20)
+        raw = self.adb('exec-out', 'cat', '/data/local/tmp/routervpn-connect-ui.xml')
+        if len(raw) > 512*1024:
+            raise ValueError('Actual Android UI hierarchy exceeded its bound')
+        self.last_ui = raw
+        return ET.fromstring(raw)
+
+    def tap_node(self, node):
+        match = re.fullmatch(r'\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]',node.get('bounds',''))
+        if not match or node.get('enabled') != 'true':
+            raise ValueError('The actual Android control is unavailable')
+        x1,y1,x2,y2 = map(int,match.groups())
+        if x2<=x1 or y2<=y1:
+            raise ValueError('The actual Android control has empty bounds')
+        self.adb('shell','input','tap',str((x1+x2)//2),str((y1+y2)//2))
+
+    def find(self, text=None, description=None, resource=None, root=None):
+        root = self.ui() if root is None else root
+        rows = [n for n in root.iter('node') if (text is None or n.get('text')==text) and
+                (description is None or n.get('content-desc')==description) and
+                (resource is None or n.get('resource-id')==resource) and n.get('enabled')=='true']
+        if len(rows)>1:
+            raise ValueError('The actual Android control is ambiguous')
+        return rows[0] if rows else None
+
+    def tap(self, text=None, description=None, resource=None, timeout=20):
+        end = min(self.deadline-100,time.monotonic()+timeout)
+        while True:
+            node=self.find(text,description,resource)
+            if node is not None:
+                self.tap_node(node)
+                return
+            if time.monotonic()>=end:
+                raise ValueError('The required normal Android control did not appear')
+            time.sleep(0.1)
+
+    def foreground(self):
+        self.adb('shell','am','start','-W','-n',self.package+'/.ProductActivity')
+
+    def private_script(self, script):
+        return self.adb('shell','run-as',self.package,'sh',input_data=('set -eu\n'+script+'\n').encode())
+
+    def publish_device(self, phase, value):
+        if phase not in ('fixture','peer-stopped','settings-restored','cancel'):
+            raise ValueError('Unknown Android observation phase')
+        path=self.work/('android-'+phase+'.json')
+        self.publish(path,value)
+        remote='/data/local/tmp/routervpn-'+self.run+'-'+phase+'.json'
+        self.adb('push',path,remote)
+        self.adb('shell','chmod','644',remote)  # nonsecret phase metadata; app copy is exclusively0600
+        script='umask 077\n'
+        if phase=='fixture':
+            script+='mkdir -p -m 700 files\ntest ! -e files/android-connect\nmkdir -m 700 files/android-connect\n'
+        script+=('test ! -e files/android-connect/'+phase+'.json\n'
+                 'cp '+remote+' files/android-connect/.'+phase+'.tmp\n'
+                 'chmod 600 files/android-connect/.'+phase+'.tmp\n'
+                 'ln files/android-connect/.'+phase+'.tmp files/android-connect/'+phase+'.json\n'
+                 'rm files/android-connect/.'+phase+'.tmp\n')
+        self.private_script(script)
+        self.adb('shell','rm',remote)
+
+    def phase(self, phase):
+        if phase not in ('armed','strict-refused','connected','loss','disconnected','result'):
+            raise ValueError('Unknown actual Android result phase')
+        raw=self.private_script('if test -f files/android-connect/'+phase+'.json; then cat files/android-connect/'+phase+'.json; else printf missing; fi')
+        if raw=='missing':
+            return None
+        if len(raw.encode())>32768:
+            raise ValueError('Actual Android phase exceeded its bound')
+        value=json.loads(raw,object_pairs_hook=unique_object)
+        if type(value.get('schema')) is not int or value.get('schema')!=1 or value.get('run_id')!=self.run or value.get('phase')!=phase:
+            raise ValueError('Actual Android phase lost its original run identity')
+        if phase in self.phases and self.phases[phase]!=value:
+            raise ValueError('An original Android phase changed after publication')
+        if phase not in self.phases:
+            self.phases[phase]=value
+            self.publish(self.evidence/('android-connect-'+phase+'.json'),value)
+        return value
+
+    def wait_phase(self, phase, timeout=60, cleanup=False):
+        end=min(self.deadline-(15 if cleanup else 100),time.monotonic()+timeout)
+        while time.monotonic()<end:
+            if self.emulator is None or self.emulator.poll() is not None:
+                raise ValueError('The original emulator exited before app evidence')
+            value=self.phase(phase)
+            if value is not None:
+                return value
+            if phase!='result':
+                failed=self.phase('result')
+                if failed is not None:
+                    raise ValueError('The original Android observer failed at '+str(failed.get('failure_stage','unknown')))
+            time.sleep(0.2)
+        raise ValueError('Actual Android phase exceeded its original bound: '+phase)
+
+    def settings_screen(self):
+        self.adb('shell','am','start','-W','-a','android.settings.VPN_SETTINGS')
+        self.tap(description='Settings')
+
+    def set_switch(self, label, wanted):
+        root=self.ui()
+        label_node=self.find(text=label,root=root)
+        if label_node is None:
+            raise ValueError('The actual VPN Settings control is absent: '+label)
+        parents={child:parent for parent in root.iter() for child in parent}
+        node=label_node
+        matches=[]
+        while node in parents:
+            node=parents[node]
+            matches=[n for n in node.iter('node') if n.get('checkable')=='true']
+            if matches:
+                break
+        if len(matches)!=1 or matches[0].get('enabled')!='true':
+            raise ValueError('The actual VPN Settings switch is ambiguous or disabled')
+        state=matches[0].get('checked')=='true'
+        if state==wanted:
+            return
+        self.settings_changed=True
+        self.tap_node(matches[0])
+        # AOSP may present a normal confirmation dialog for enabling lockdown.
+        # Only its actual positive button is clicked, never a secure-settings write.
+        root=self.ui()
+        positive=self.find(resource='android:id/button1',root=root)
+        if positive is not None:
+            words=' '.join(n.get('text','') for n in root.iter('node'))
+            if 'Block connections without VPN' not in words and 'Always-on VPN' not in words:
+                raise ValueError('Unexpected Android VPN policy confirmation')
+            self.tap_node(positive)
+
+    def enable_lockdown(self):
+        self.settings_screen()
+        self.set_switch('Always-on VPN',True)
+        self.set_switch('Block connections without VPN',True)
+        if self.settings()!={'package':self.package,'lockdown':True,'allowlist':''}:
+            raise ValueError('The actual OS Always-on/lockdown settings were not enabled')
+        self.foreground()
+
+    def restore_settings(self):
+        if self.original_settings is None:
+            return
+        if self.settings()!=self.original_settings:
+            self.settings_screen()
+            self.set_switch('Block connections without VPN',False)
+            self.set_switch('Always-on VPN',False)
+        if self.settings()!=self.original_settings:
+            raise ValueError('Original OS VPN settings did not return')
+        self.foreground()
+        self.restored=True
+
+    def arm(self,bundle,node_id,private,client,host,body_hash,control_port):
+        if self.deadline-time.monotonic()<400:
+            raise ValueError('Android setup left insufficient original app/cleanup budget')
+        source=json.dumps(bundle,sort_keys=True,separators=(',',':')).encode()
+        bundle_path=self.work/('routervpn-connect-'+self.run+'.json')
+        fd=os.open(bundle_path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+        with os.fdopen(fd,'wb') as stream:
+            stream.write(source);stream.flush();os.fsync(stream.fileno())
+        download='/sdcard/Download/'+bundle_path.name
+        self.adb('push',bundle_path,download)
+        self.adb('shell','am','broadcast','-a','android.intent.action.MEDIA_SCANNER_SCAN_FILE','-d','file://'+download)
+        fixture={'schema':1,'kind':'routervpn-android-connect','run_id':self.run,
+                 'bundle_sha256':hashlib.sha256(source).hexdigest(),'node_proof_id':node_id,
+                 'private_address':private,'client_address':client,'dns_host':host,
+                 'payload_sha256':body_hash,'control_port':control_port,'logical_mode':'base-raw'}
+        self.publish_device('fixture',fixture)
+        self.app_started=True
+        self.foreground()
+        self.wait_phase('armed',30)
+        # Navigate the actual in-app Add Router menu and Android's document picker.
+        # There is no broadcast, intent extra or private store write for import.
+        if self.find(text='Add Router') is None:
+            expand=self.find(description='Expand connection controls')
+            if expand is not None:
+                self.tap_node(expand)
+        for _ in range(4):
+            button=self.find(text='Add Router')
+            if button is not None:
+                self.tap_node(button);break
+            width,height=self.display
+            self.adb('shell','input','swipe',str(width//2),str(height*4//5),str(width//2),str(height*2//5),'350')
+        else:
+            raise ValueError('Normal Add Router control is unavailable')
+        self.tap(text='Import Router bundle file')
+        self.tap(description='Show roots')
+        self.tap(text='Downloads')
+        self.tap(text=bundle_path.name)
+        end=time.monotonic()+30
+        while True:
+            root=self.ui()
+            spinners=[n for n in root.iter('node') if n.get('class')=='android.widget.Spinner' and
+                      any(c.get('text') in ('SMART AUTO — recommended','AUTO — first proven path','Raw tunnel') for c in n.iter('node'))]
+            if len(spinners)==1:
+                self.tap_node(spinners[0]);break
+            if time.monotonic()>=end:
+                raise ValueError('Normal captured mode selector is unavailable after import')
+            time.sleep(0.1)
+        self.tap(text='Raw tunnel')
+        self.tap(text='Connect')
+        end=time.monotonic()+20
+        while True:
+            consent=self.ui()
+            button=self.find(resource='android:id/button1',root=consent)
+            if button is not None and button.get('package')=='com.android.vpndialogs':
+                self.tap_node(button);break
+            if time.monotonic()>=end:
+                raise ValueError('The actual Android VPN consent dialog did not appear')
+            time.sleep(0.1)
+        self.wait_phase('strict-refused',60)
+        if self.settings()!=self.original_settings:
+            raise ValueError('Strict refusal changed the OS VPN settings')
+        self.enable_lockdown()
+        self.tap(text='Connect')
+        return self.wait_phase('connected',60)
+
+    def capture(self, phase):
+        if phase not in ('connected','disconnected'):
+            raise ValueError('Unknown Android capture phase')
+        remote='/data/local/tmp/routervpn-connect-'+phase+'.png'
+        self.adb('shell','screencap','-p',remote)
+        path=self.evidence/('android-'+phase+'.png')
+        self.adb('pull',remote,path)
+        raw=regular(path,16*1024*1024)
+        if not raw.startswith(b'\x89PNG\r\n\x1a\n'):
+            raise ValueError('The original Android screenshot is not a PNG')
+        self.result.setdefault('android_captures',[]).append({'phase':phase,'sha256':hashlib.sha256(raw).hexdigest(),'bytes':len(raw)})
+
+    def close(self):
+        import select
+        failures=[]
+        if self.app_started:
+            try:
+                self.final=self.phase('result')
+                if self.final is None:
+                    self.publish_device('cancel',{'schema':1,'run_id':self.run,'phase':'cancel'})
+                    self.final=self.wait_phase('result',45,cleanup=True)
+            except BaseException as failure:
+                failures.append('app-original-'+type(failure).__name__)
+            try:
+                original_cleanup=bool(self.final and all(self.final.get(key) is True for key in
+                                      ('cleanup_proved','worker_joined','supervisor_joined')))
+                if self.settings()!=self.original_settings:
+                    if not original_cleanup:
+                        self.result['android_policy_restoration_withheld']=True
+                        raise ValueError('Original service and observer retirement is unproved; retain OS lockdown')
+                    self.restore_settings()
+                else:
+                    self.restored=True  # read-only equality; no policy change without original cleanup
+                if 'android-network-after' not in self.result:
+                    self.result['android-network-cleanup']=self.snapshot('cleanup')
+            except BaseException as failure:
+                failures.append('settings-restoration-'+type(failure).__name__)
+        # Terminating the emulator is separate containment. It never supplies
+        # the service/PFD/Network cleanup proof required above.
+        # Every Popen is retained before pidfd acquisition or convenience-field
+        # assignment. Retire those exact records even when either setup step failed.
+        for owner in reversed(self.owners):
+            role,child=owner['role'],owner['child']
+            owner['joined']=False
+            running=True
+            try:running=child.poll() is None
+            except BaseException as failure:failures.append(role+'-poll-'+type(failure).__name__)
+            args={'android-emulator':('emu','kill'),'android-adb-server':('kill-server',)}.get(role)
+            if running and args is not None:
+                try:self.adb(*args,timeout=10)
+                except BaseException as failure:failures.append(role+'-stop-'+type(failure).__name__)
+            try:
+                child.wait(10);owner['joined']=True
+            except BaseException as failure:
+                failures.append(role+'-join-'+type(failure).__name__)
+                try:child.terminate()
+                except BaseException as failure:failures.append(role+'-term-'+type(failure).__name__)
+                try:
+                    child.wait(5);owner['joined']=True
+                except BaseException as failure:
+                    failures.append(role+'-term-join-'+type(failure).__name__)
+                    try:child.kill()
+                    except BaseException as failure:failures.append(role+'-kill-'+type(failure).__name__)
+                    try:
+                        child.wait(5);owner['joined']=True
+                    except BaseException as failure:failures.append(role+'-kill-join-'+type(failure).__name__)
+        receipts=[]
+        for owner in self.owners:
+            child,fd=owner['child'],owner['pidfd']
+            terminal=False
+            if fd is not None:
+                try:
+                    poll=select.poll();poll.register(fd,select.POLLIN);terminal=bool(poll.poll(0))
+                except BaseException as failure:failures.append(owner['role']+'-pidfd-'+type(failure).__name__)
+            group_empty=False
+            try:os.killpg(owner['pgid'],0)
+            except ProcessLookupError:group_empty=True
+            except BaseException as failure:failures.append(owner['role']+'-group-'+type(failure).__name__)
+            joined=owner.get('joined') is True
+            receipts.append({'role':owner['role'],'pid':child.pid,'joined':joined,'exit_code':child.returncode,
+                             'pidfd_terminal':terminal,'original_group_empty':group_empty})
+            if not joined or not terminal or not group_empty:failures.append(owner['role']+'-original-owner-retained')
+            if fd is not None and terminal:
+                try:os.close(fd);owner['pidfd']=None
+                except BaseException as failure:failures.append(owner['role']+'-pidfd-close-'+type(failure).__name__)
+        if hasattr(self,'last_ui'):
+            try:
+                path=self.evidence/'android-last-ui.xml'
+                fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+                with os.fdopen(fd,'wb') as stream:stream.write(self.last_ui.encode())
+            except BaseException as failure:failures.append('ui-receipt-'+type(failure).__name__)
+        self.result['android_process_retirement']=receipts
+        self.result['android_app_result']=self.final
+        self.result['android_cleanup_errors']=failures
+        self.result['android_original_service_cleanup_proved']=bool(self.final and all(self.final.get(key) is True for key in ('cleanup_proved','worker_joined','supervisor_joined')))
+        self.result['android_containment_proved']=not failures and bool(receipts) and all(r['joined'] and r['pidfd_terminal'] and r['original_group_empty'] for r in receipts)
+        return failures
+
+
+def desktop_connect(package, family, evidence, android_apk=None):
     """One real packaged App/WG/system-TUN cycle on this native desktop."""
     import ipaddress
     import socketserver
@@ -1396,21 +1891,25 @@ def desktop_connect(package, family, evidence):
     import signal
 
     windows = os.name == 'nt'
-    if (windows and family not in ('windows', 'portable-windows')) or (
-            not windows and (sys.platform != 'darwin' or family != 'macos')):
+    android = family == 'android'
+    if android and (sys.platform != 'linux' or android_apk is None):
+        raise ValueError('The Android connection gate requires its exact APK and native Linux peer')
+    if not android and ((windows and family not in ('windows', 'portable-windows')) or (
+            not windows and (sys.platform != 'darwin' or family != 'macos'))):
         raise ValueError('The connection gate requires the actual native desktop')
     package = package.resolve(strict=True)
     evidence = evidence.resolve()
     evidence.mkdir(parents=True, exist_ok=False)
     os.chmod(evidence, 0o700)
     run_id = uuid.uuid4().hex
-    result = {'schema': 1, 'kind': 'routervpn-desktop-connect', 'run_id': run_id,
+    result = {'schema': 1, 'kind': 'routervpn-android-connect' if android else 'routervpn-desktop-connect', 'run_id': run_id,
               'family': family, 'status': 'failed', 'processes': [], 'cleanup_proved': False}
     app = peer = None
+    android_session = None
     workers, servers, logs = [], [], []
     command_children = []
     workers_stop = threading.Event()
-    deadline_all = time.monotonic()+360
+    deadline_all = time.monotonic()+(900 if android else 360)
     phase_root = None
     counts, lock = Counter(), threading.Lock()
     error = None
@@ -1459,7 +1958,7 @@ def desktop_connect(package, family, evidence):
             raise ValueError('Desktop connection phase changed during readback')
         return value
 
-    def command(argv, timeout=20, inspection=None):
+    def command(argv, timeout=20, inspection=None, env=None, input_data=None):
         # Fixed OS inspection / package commands only. The original child is
         # retained before wait, and every timeout joins that child before error.
         if inspection not in (None, 'before', 'during', 'after', 'cleanup'):
@@ -1469,8 +1968,13 @@ def desktop_connect(package, family, evidence):
             command_deadline = min(command_deadline, deadline_all-280)
         if command_deadline <= time.monotonic():
             raise ValueError('Desktop inspection exhausted its original absolute budget')
-        with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as diagnostics:
-            child = subprocess.Popen([str(v) for v in argv], stdout=output,
+        if input_data is not None and (not isinstance(input_data,bytes) or len(input_data)>8192):
+            raise ValueError('Fixed command input exceeded its bound')
+        with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as diagnostics, tempfile.TemporaryFile() as supplied:
+            if input_data is not None:
+                supplied.write(input_data);supplied.seek(0)
+            child = subprocess.Popen([str(v) for v in argv], stdout=output, env=env,
+                                     stdin=supplied if input_data is not None else None,
                                      stderr=diagnostics if inspection is not None else subprocess.STDOUT)
             command_children.append(child)  # original handles survive every failed wait through final readback
             primary = None
@@ -1629,18 +2133,27 @@ $v | ConvertTo-Json -Depth 6 -Compress
             raise ValueError('The original WG peer did not retire normally')
 
     try:
-        target = ('windows/' if windows else 'darwin/') + ('arm64' if platform.machine().lower() in ('arm64', 'aarch64') else 'amd64')
+        target = ('linux/' if android else 'windows/' if windows else 'darwin/') + ('arm64' if platform.machine().lower() in ('arm64', 'aarch64') else 'amd64')
         payload_root = package/'App/RouterVPN' if family == 'portable-windows' else package
-        provenance = json.loads(regular(package/'ROUTER-VPN-SOURCE.json', 32768))
-        if provenance.get('source_sha') != os.environ.get('GITHUB_SHA') or provenance.get('repository') != os.environ.get('GITHUB_REPOSITORY'):
-            raise ValueError('The connection gate requires the exact same-run package')
-        native = payload_root/'runtime/native'
-        native_receipt = reuse(native, target)
+        if android:
+            if not re.fullmatch('[0-9a-f]{40}',os.environ.get('GITHUB_SHA','')) or os.environ.get('GITHUB_REPOSITORY')!='Eabusham2/router-vpn':
+                raise ValueError('The Android gate requires the exact same-run source identity')
+            provenance={'source_sha':os.environ['GITHUB_SHA']}
+            native=package
+        else:
+            provenance = json.loads(regular(package/'ROUTER-VPN-SOURCE.json', 32768))
+            if provenance.get('source_sha') != os.environ.get('GITHUB_SHA') or provenance.get('repository') != os.environ.get('GITHUB_REPOSITORY'):
+                raise ValueError('The connection gate requires the exact same-run package')
+            native = payload_root/'runtime/native'
+        native_receipt = reuse(native, target, metadata_reader=command)
         binary = native/binary_name(target)
         result.update(source_sha=provenance['source_sha'], target=target,
                       native_sha256=hashlib.sha256(regular(binary, MAX_BINARY)).hexdigest(),
                       native_policy_sha256=native_receipt['policy_sha256'])
-        if windows:
+        if android:
+            phase_root=Path(tempfile.mkdtemp(prefix='routervpn-android-connect-')).resolve(strict=True)
+            os.chmod(phase_root,0o700)
+        elif windows:
             phase_root = package/'Data' if family == 'portable-windows' else package
             phase_root.mkdir(exist_ok=True)
             launcher = package/('RouterVPNPortable.exe' if family == 'portable-windows' else 'RouterVPN.exe')
@@ -1663,9 +2176,15 @@ $v | ConvertTo-Json -Depth 6 -Compress
             if (phase_root/('desktop-connect-'+name+'.json')).exists():
                 raise ValueError('The original data root already contains a connection gate')
         stage = 'network-capture'
-        before = snapshot('before')
+        if android:
+            android_session=AndroidConnectionQualification(android_apk.resolve(strict=True),work,evidence,run_id,command,publish,result,deadline_all,logs)
+            before=android_session.start()
+        else:
+            before = snapshot('before')
         result['before'] = before
-        if windows:
+        if android:
+            physical='original-emulator-host-alias';candidates=['10.0.2.2']
+        elif windows:
             defaults = [r for r in before['routes'] if r['prefix'] == '0.0.0.0/0']
             chosen = min(defaults, key=lambda r: r['metric']+r['interface_metric'])
             physical = chosen['index']
@@ -1690,7 +2209,7 @@ $v | ConvertTo-Json -Depth 6 -Compress
             raise ValueError('No non-overlapping private test subnet is available')
         private, client_address = str(subnet[1]), str(subnet[2])
         result.update(physical_interface=physical, physical_address=outer, private_address=private,
-                      private_subnet=str(subnet), topology='own-NIC encrypted WG; private addresses exist only inside WG')
+                      private_subnet=str(subnet), topology=('Android emulator 10.0.2.2 host alias; private addresses exist only inside WG' if android else 'own-NIC encrypted WG; private addresses exist only inside WG'))
         keys = []
         for _ in range(2):
             keys.append(dict(line.split(': ', 1) for line in command([binary, 'generate', 'wg-keypair']).splitlines()))
@@ -1862,101 +2381,172 @@ $v | ConvertTo-Json -Depth 6 -Compress
         bundle = {'endpoint': outer, 'nodeProofId': node_id, 'apiToken': profile['api_token'],
                   'routerAPI': profile['router_api'], 'adGuardIPv4': private, 'selectedRouterID': profile['id'],
                   'routerProfiles': [profile], 'profiles': {'wg': {'wg.conf': base64.b64encode(wg.encode()).decode()}}}
-        fixture = {'schema': 1, 'kind': 'routervpn-desktop-connect', 'run_id': run_id, 'profile_bundle': bundle,
-                   'logical_mode': 'base-raw', 'runtime_mode': 'wg', 'private_address': private, 'dns_host': host,
-                   'payload_url': 'http://'+host+':8787'+path, 'literal_payload_url': 'http://'+private+':8787'+path,
-                   'payload_sha256': body_hash}
-        publish(phase_root/'desktop-connect-fixture.json', fixture)
-        stage = 'app-connect'
-        app_log = (evidence/'desktop-connect-app.log').open('xb')
-        logs.append(app_log)
-        env = os.environ.copy()
-        env['ROUTERVPN_CONNECTION_SELF_TEST'] = '1'
-        if windows:
-            env['ROUTERVPN_CAPTURE_SELF_TEST_LAYOUT'] = '1'
-        arguments = [str(launcher), '--self-test'] if windows else [str(launcher), '--connection-self-test', str(phase_root/'desktop-connect-fixture.json')]
-        # Reserve the complete original 180s watchdog + 85s checked cleanup
-        # before granting the App any tunnel authority. Slow setup cannot spend
-        # the shutdown budget and strand a newly admitted connection.
-        if deadline_all-time.monotonic() < 280:
-            raise ValueError('Desktop setup left insufficient original App cleanup budget')
-        app = subprocess.Popen(arguments, cwd=phase_root, env=env, stdout=app_log, stderr=subprocess.STDOUT)
-        result['processes'].append({'role': 'original-app', 'pid': app.pid})
-        deadline = min(deadline_all-15, time.monotonic()+265)
-        connected = None
-        while time.monotonic() < deadline:
-            connected = phase('desktop-connect-connected.json', 'connected')
-            if connected:
-                break
-            if app.poll() is not None or phase('desktop-connect-result.json', 'complete'):
-                raise ValueError('The original App did not complete its connection phase')
-            time.sleep(0.1)
-        if not connected:
-            raise ValueError('The original App connection phase exceeded its bound')
-        if (connected.get('runtime_mode') != 'wg' or connected.get('private_address') != private
-                or connected.get('payload_sha256') != body_hash or not connected.get('profile_id')):
-            raise ValueError('The original App reported a different connection')
-        during = snapshot('during')
-        result['during'] = during
-        if windows:
-            original = {i['index'] for i in before['interfaces']}
-            created = [i for i in during['interfaces'] if i['index'] not in original and i['status'] == 'Up']
-            matching = [r for r in during['routes'] if ':' not in r['prefix'] and
-                        ipaddress.ip_address(private) in ipaddress.ip_network(r['prefix'], strict=False)]
-            best = min(matching, key=lambda r: (-ipaddress.ip_network(r['prefix'], strict=False).prefixlen,
-                                                r['metric']+r['interface_metric']))
-            if len(created) != 1 or best['index'] != created[0]['index']:
-                raise ValueError('Fresh private traffic is not routed by the original new Windows TUN')
+        if android:
+            stage='android-app-connect'
+            profile.update(name='Android private connection',base_fallback=False,auto_connect=False)
+            bundle['modes']=[row for row in json.loads((ROOT/'configs/client/modes.json').read_text()) if row['id']=='wg']
+            bundle['logicalModes']=[row for row in json.loads((ROOT/'configs/client/logical-modes.json').read_text()) if row['id']=='base-raw']
+            if len(bundle['modes'])!=1 or len(bundle['logicalModes'])!=1:
+                raise ValueError('The captured ordinary Android WG catalog changed')
+            connected=android_session.arm(bundle,node_id,private,client_address,host,body_hash,http_server.server_address[1])
+            if connected.get('runtime_mode')!='wg' or connected.get('payload_sha256')!=body_hash or connected.get('dns_nonce') is not True or connected.get('physical_denied') is not True:
+                raise ValueError('Actual Android connected evidence changed')
+            during=android_session.snapshot('during');result['during']=during
+            vpn=connected.get('vpn',{})
+            original_indices={row['index'] for row in before['interfaces']}
+            if vpn.get('ifindex') in original_indices or not any(row['index']==vpn.get('ifindex') and row['name']==vpn.get('interface') and row['mtu']==1280 for row in during['interfaces']):
+                raise ValueError('Independent Android kernel TUN readback differs from the original service')
+            if during['settings']!={'package':android_session.package,'lockdown':True,'allowlist':''}:
+                raise ValueError('Actual Android kernel policy changed while connected')
+            with lock:
+                first_counts=dict(counts)
+            if first_counts.get('health',0)<1 or first_counts.get('payload',0)!=1 or first_counts.get('dns_nonce',0)<1 or first_counts.get('control',0)!=2:
+                raise ValueError('The original peer did not observe the exact Android private/control traffic')
+            result['connected_peer_counters']=first_counts
+            android_session.capture('connected')
+            def live_control():
+                control=http.client.HTTPConnection('127.0.0.1',http_server.server_address[1],timeout=5)
+                try:
+                    control.request('GET','/control/'+run_id)
+                    response=control.getresponse()
+                    try:
+                        value=response.read(65537)
+                        if response.status!=200 or len(value)>65536 or hashlib.sha256(value).hexdigest()!=body_hash:
+                            raise ValueError('The original host control did not remain live')
+                    finally:response.close()
+                finally:control.close()
+            stage='android-peer-loss';stop_peer();live_control()
+            android_session.publish_device('peer-stopped',{'schema':1,'run_id':run_id,'phase':'peer-stopped'})
+            loss=android_session.wait_phase('loss',30)
+            if loss.get('private_denied') is not True or loss.get('physical_denied') is not True:
+                raise ValueError('Actual Android fail-closed evidence is absent')
+            with lock:
+                if counts['payload']!=first_counts['payload'] or counts['control']!=first_counts['control']+1:
+                    raise ValueError('Android application traffic bypassed the stopped original peer')
+            live_control()
+            stage='android-original-disconnect'
+            android_session.foreground();android_session.tap(text='Disconnect')
+            disconnected=android_session.wait_phase('disconnected',45)
+            if disconnected.get('owned_vpn_absent') is not True or disconnected.get('physical_still_denied') is not True:
+                raise ValueError('Actual Android disconnect/remaining lockdown is unproved')
+            if android_session.settings()!={'package':android_session.package,'lockdown':True,'allowlist':''}:
+                raise ValueError('OS lockdown was released before the original disconnect proof')
+            with lock:
+                if counts['control']!=first_counts['control']+2:
+                    raise ValueError('Android physical traffic escaped before OS lockdown restoration')
+            android_session.capture('disconnected')
+            stage='android-settings-restoration';android_session.restore_settings()
+            android_session.publish_device('settings-restored',{'schema':1,'run_id':run_id,'phase':'settings-restored'})
+            final=android_session.wait_phase('result',30);android_session.final=final
+            if final.get('status')!='passed' or any(final.get(key) is not True for key in ('connect','traffic','loss','disconnect','worker_joined','supervisor_joined','cleanup_proved')) or final.get('connect_clicks')!=2 or final.get('disconnect_clicks')!=1:
+                raise ValueError('The original Android service did not prove its complete lifecycle')
+            after=android_session.snapshot('after');result['after']=after;result['android-network-after']=after
+            if canonical(before)!=canonical(after):
+                raise ValueError('Original emulator interfaces, routes or OS VPN settings did not return')
+            with lock:
+                if counts['payload']!=first_counts['payload'] or counts['control']!=first_counts['control']+3:
+                    raise ValueError('Fresh physical control did not resume exactly after OS policy restoration')
+            result['controller_cleanup_proved']=True;result['status']='passed'
         else:
-            original = {i['name'] for i in before['interfaces']}
-            created = [i for i in during['interfaces'] if i['name'] not in original and i['name'].startswith('utun')]
-            route = command(['/sbin/route', '-n', 'get', private])
-            if len(created) != 1 or not re.search(r'^\s*interface:\s*'+re.escape(created[0]['name'])+r'\s*$', route, re.M):
-                raise ValueError('Fresh private traffic is not routed by the original new utun')
-        if canonical(during['dns']) == canonical(before['dns']):
-            raise ValueError('The original connection did not change the OS DNS configuration')
-        with lock:
-            first_counts = dict(counts)
-        if any(first_counts.get(k, 0) < 1 for k in ('health', 'payload', 'dns_nonce', 'dns_readiness')):
-            raise ValueError('The real private HTTP/DNS peer did not observe all connection proofs')
-        result.update(connected=connected, tunnel_interface=created[0], connected_peer_counters=first_counts)
-        stage = 'peer-loss'
-        stop_peer()
-        # The decrypted destination stays independently live; only the exact
-        # encrypted upstream is retired before the App's fresh literal probe.
-        control = http.client.HTTPConnection('127.0.0.1', http_server.server_address[1], timeout=3)
-        try:
-            control.request('GET', '/control/'+run_id)
-            response = control.getresponse()
-            if response.status != 200 or hashlib.sha256(response.read(65537)).hexdigest() != body_hash:
-                raise ValueError('The independent private destination control failed')
-        finally:
-            control.close()
-        publish(phase_root/'desktop-connect-peer-stopped.json', {'schema': 1, 'run_id': run_id, 'phase': 'peer-stopped'})
-        stage = 'app-disconnect'
-        code = app.wait(max(1, deadline-time.monotonic()))
-        result['app_exit_code'] = code
-        final = phase('desktop-connect-result.json', 'complete')
-        result['app_result'] = final
-        if (code != 0 or not final or final.get('status') != 'passed' or
-                any(final.get(k) is not True for k in ('connect', 'traffic', 'loss', 'disconnect')) or
-                (not windows and final.get('cleanup_proved') is not True)):
-            raise ValueError('The original App did not prove its full connection and shutdown')
-        with lock:
-            if counts['payload'] != first_counts['payload']:
-                raise ValueError('The stopped encrypted peer was bypassed')
-        stage = 'restoration'
-        after = snapshot('after')
-        result['after'] = after
-        if canonical(after) != canonical(before):
-            raise ValueError('Original desktop interfaces, routes or DNS were not restored')
-        result['controller_cleanup_proved'] = True
-        result['status'] = 'passed'
+            fixture = {'schema': 1, 'kind': 'routervpn-desktop-connect', 'run_id': run_id, 'profile_bundle': bundle,
+                       'logical_mode': 'base-raw', 'runtime_mode': 'wg', 'private_address': private, 'dns_host': host,
+                       'payload_url': 'http://'+host+':8787'+path, 'literal_payload_url': 'http://'+private+':8787'+path,
+                       'payload_sha256': body_hash}
+            publish(phase_root/'desktop-connect-fixture.json', fixture)
+            stage = 'app-connect'
+            app_log = (evidence/'desktop-connect-app.log').open('xb')
+            logs.append(app_log)
+            env = os.environ.copy()
+            env['ROUTERVPN_CONNECTION_SELF_TEST'] = '1'
+            if windows:
+                env['ROUTERVPN_CAPTURE_SELF_TEST_LAYOUT'] = '1'
+            arguments = [str(launcher), '--self-test'] if windows else [str(launcher), '--connection-self-test', str(phase_root/'desktop-connect-fixture.json')]
+            # Reserve the complete original 180s watchdog + 85s checked cleanup
+            # before granting the App any tunnel authority. Slow setup cannot spend
+            # the shutdown budget and strand a newly admitted connection.
+            if deadline_all-time.monotonic() < 280:
+                raise ValueError('Desktop setup left insufficient original App cleanup budget')
+            app = subprocess.Popen(arguments, cwd=phase_root, env=env, stdout=app_log, stderr=subprocess.STDOUT)
+            result['processes'].append({'role': 'original-app', 'pid': app.pid})
+            deadline = min(deadline_all-15, time.monotonic()+265)
+            connected = None
+            while time.monotonic() < deadline:
+                connected = phase('desktop-connect-connected.json', 'connected')
+                if connected:
+                    break
+                if app.poll() is not None or phase('desktop-connect-result.json', 'complete'):
+                    raise ValueError('The original App did not complete its connection phase')
+                time.sleep(0.1)
+            if not connected:
+                raise ValueError('The original App connection phase exceeded its bound')
+            if (connected.get('runtime_mode') != 'wg' or connected.get('private_address') != private
+                    or connected.get('payload_sha256') != body_hash or not connected.get('profile_id')):
+                raise ValueError('The original App reported a different connection')
+            during = snapshot('during')
+            result['during'] = during
+            if windows:
+                original = {i['index'] for i in before['interfaces']}
+                created = [i for i in during['interfaces'] if i['index'] not in original and i['status'] == 'Up']
+                matching = [r for r in during['routes'] if ':' not in r['prefix'] and
+                            ipaddress.ip_address(private) in ipaddress.ip_network(r['prefix'], strict=False)]
+                best = min(matching, key=lambda r: (-ipaddress.ip_network(r['prefix'], strict=False).prefixlen,
+                                                    r['metric']+r['interface_metric']))
+                if len(created) != 1 or best['index'] != created[0]['index']:
+                    raise ValueError('Fresh private traffic is not routed by the original new Windows TUN')
+            else:
+                original = {i['name'] for i in before['interfaces']}
+                created = [i for i in during['interfaces'] if i['name'] not in original and i['name'].startswith('utun')]
+                route = command(['/sbin/route', '-n', 'get', private])
+                if len(created) != 1 or not re.search(r'^\s*interface:\s*'+re.escape(created[0]['name'])+r'\s*$', route, re.M):
+                    raise ValueError('Fresh private traffic is not routed by the original new utun')
+            if canonical(during['dns']) == canonical(before['dns']):
+                raise ValueError('The original connection did not change the OS DNS configuration')
+            with lock:
+                first_counts = dict(counts)
+            if any(first_counts.get(k, 0) < 1 for k in ('health', 'payload', 'dns_nonce', 'dns_readiness')):
+                raise ValueError('The real private HTTP/DNS peer did not observe all connection proofs')
+            result.update(connected=connected, tunnel_interface=created[0], connected_peer_counters=first_counts)
+            stage = 'peer-loss'
+            stop_peer()
+            # The decrypted destination stays independently live; only the exact
+            # encrypted upstream is retired before the App's fresh literal probe.
+            control = http.client.HTTPConnection('127.0.0.1', http_server.server_address[1], timeout=3)
+            try:
+                control.request('GET', '/control/'+run_id)
+                response = control.getresponse()
+                if response.status != 200 or hashlib.sha256(response.read(65537)).hexdigest() != body_hash:
+                    raise ValueError('The independent private destination control failed')
+            finally:
+                control.close()
+            publish(phase_root/'desktop-connect-peer-stopped.json', {'schema': 1, 'run_id': run_id, 'phase': 'peer-stopped'})
+            stage = 'app-disconnect'
+            code = app.wait(max(1, deadline-time.monotonic()))
+            result['app_exit_code'] = code
+            final = phase('desktop-connect-result.json', 'complete')
+            result['app_result'] = final
+            if (code != 0 or not final or final.get('status') != 'passed' or
+                    any(final.get(k) is not True for k in ('connect', 'traffic', 'loss', 'disconnect')) or
+                    (not windows and final.get('cleanup_proved') is not True)):
+                raise ValueError('The original App did not prove its full connection and shutdown')
+            with lock:
+                if counts['payload'] != first_counts['payload']:
+                    raise ValueError('The stopped encrypted peer was bypassed')
+            stage = 'restoration'
+            after = snapshot('after')
+            result['after'] = after
+            if canonical(after) != canonical(before):
+                raise ValueError('Original desktop interfaces, routes or DNS were not restored')
+            result['controller_cleanup_proved'] = True
+            result['status'] = 'passed'
     except BaseException as failure:
         error = failure
         result['failure_stage'] = stage
+        if android:result['android_failure']=str(failure)[:240]
     finally:
         cleanup = []
+        if android_session is not None:
+            try:cleanup.extend(android_session.close())
+            except BaseException as failure:cleanup.append('original-android-cleanup-'+type(failure).__name__)
         if error is not None and phase_root is not None and app is not None and app.poll() is None:
             try:
                 publish(phase_root/'desktop-connect-cancel.json', {'schema': 1, 'run_id': run_id, 'phase': 'cancel'})
@@ -1999,7 +2589,7 @@ $v | ConvertTo-Json -Depth 6 -Compress
             result['final_peer_counters'] = dict(counts)
         if app is not None and app.poll() is not None:
             result['app_exit_code'] = app.wait()
-        if 'before' in result and 'after' not in result and app is not None and app.poll() is not None:
+        if not android and 'before' in result and 'after' not in result and app is not None and app.poll() is not None:
             try:
                 result['after'] = snapshot('cleanup')
             except BaseException as failure:
@@ -2018,14 +2608,15 @@ $v | ConvertTo-Json -Depth 6 -Compress
         result['inspection_children'] = inspections
         result['cleanup_errors'] = cleanup
         result['cleanup_proved'] = (not cleanup and all(child['joined'] for child in inspections) and
-                                   app is not None and app.poll() == 0 and
+                                   ((android and result.get('android_original_service_cleanup_proved') is True and result.get('android_containment_proved') is True) or
+                                    (not android and app is not None and app.poll() == 0)) and
                                    peer is not None and peer.poll() is not None and
                                    result.get('controller_cleanup_proved') is True and
                                    result['restoration_proved'])
         if not result['cleanup_proved']:
             result['status'] = 'failed'
         try:
-            publish(evidence/'desktop-connect-qualification.json', result)
+            publish(evidence/('android-connect-qualification.json' if android else 'desktop-connect-qualification.json'), result)
         except BaseException as publication_error:
             if error is None:
                 error = publication_error
@@ -2036,10 +2627,19 @@ $v | ConvertTo-Json -Depth 6 -Compress
         raise ValueError('Desktop connection gate failed at '+result['failure_stage']) from error
     if result['status'] != 'passed':
         raise ValueError('Desktop connection ownership cleanup was not proved')
-    print('Verified real packaged App Connect / WG system TUN / private DNS+HTTP / loss / original disconnect restoration', flush=True)
+    print('Verified actual Android App / strict VpnService / kernel TUN / private DNS+HTTP / peer loss / lockdown / original retirement and OS restoration' if android else 'Verified real packaged App Connect / WG system TUN / private DNS+HTTP / loss / original disconnect restoration', flush=True)
 
 
 if __name__ == '__main__':
+    if sys.argv[1:2] == ['--android-connect']:
+        connection=argparse.ArgumentParser(description='Actual same-run Android App/VpnService/lockdown qualification')
+        connection.add_argument('--android-connect',action='store_true')
+        connection.add_argument('--native',type=Path,required=True)
+        connection.add_argument('--apk',type=Path,required=True)
+        connection.add_argument('--evidence',type=Path,required=True)
+        request=connection.parse_args()
+        desktop_connect(request.native,'android',request.evidence,android_apk=request.apk)
+        raise SystemExit(0)
     if sys.argv[1:2] == ['--desktop-connect']:
         connection = argparse.ArgumentParser(description='Actual packaged desktop Connect/TUN connection gate')
         connection.add_argument('--desktop-connect', action='store_true')

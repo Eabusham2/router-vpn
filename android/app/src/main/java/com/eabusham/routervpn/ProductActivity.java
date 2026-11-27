@@ -89,6 +89,282 @@ public final class ProductActivity extends Activity {
     private final android.os.Handler telemetryHandler=new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable telemetryTick=new Runnable(){public void run(){if(!resumed||isFinishing()||isDestroyed())return;requestOrderedPresentation();refreshTelemetry(false);refreshLiveRoute();telemetryHandler.postDelayed(this,5000);}};
 
+
+    private static volatile ConnectionQualification retainedConnectionQualification;
+    private ConnectionQualification connectionQualification;
+    /** Only a debug delivery with an original app-private manifest can arm this
+     * observer. All import, selection, permission, Connect and Disconnect actions
+     * still come through the normal Android controls and OS Settings screens. */
+    private static final class ConnectionQualification {
+        final ProductActivity activity;
+        final java.io.File directory;
+        final JSONObject manifest;
+        final String run, bundleSHA, privateAddress, clientAddress, dnsHost, payloadSHA;
+        final int controlPort;
+        final LayeredVpnService.ServiceQualification service;
+        final android.net.ConnectivityManager connectivity;
+        final long deadline=android.os.SystemClock.elapsedRealtime()+300_000L;
+        final Object socketLock=new Object();
+        java.net.Socket activeSocket;
+        final Thread worker, supervisor;
+        volatile boolean cancelled, destroyed, workerComplete, passed;
+        volatile int connectClicks, disconnectClicks, failures, successes;
+        volatile String importedID="", stage="initial", failureStage="";
+        volatile JSONObject completed;
+        android.net.Network originalNetwork;
+        String beforeNetwork;
+
+        static ConnectionQualification arm(ProductActivity activity) throws Exception {
+            java.io.File directory=new java.io.File(activity.getFilesDir().getCanonicalFile(),"android-connect");
+            if(!directory.exists())return null;
+            if((activity.getApplicationInfo().flags&android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE)==0
+                    ||android.os.Build.VERSION.SDK_INT<30||retainedConnectionQualification!=null)
+                throw new IllegalStateException("Actual Android connection qualification is unavailable.");
+            ConnectionQualification value=new ConnectionQualification(activity,directory);
+            retainedConnectionQualification=value; // retain every original owner before either Start
+            value.worker.start();value.supervisor.start();return value;
+        }
+        ConnectionQualification(ProductActivity activity,java.io.File directory)throws Exception {
+            this.activity=activity;this.directory=directory;requireDirectory();
+            manifest=read("fixture.json");
+            java.util.Set<String> keys=new java.util.HashSet<>();manifest.keys().forEachRemaining(keys::add);
+            if(!keys.equals(new java.util.HashSet<>(java.util.Arrays.asList("schema","kind","run_id","bundle_sha256","node_proof_id","private_address","client_address","dns_host","payload_sha256","control_port","logical_mode")))
+                    ||!(manifest.opt("schema") instanceof Integer)||manifest.getInt("schema")!=1||!(manifest.opt("control_port") instanceof Integer)||!"routervpn-android-connect".equals(manifest.getString("kind")))
+                throw new IllegalStateException("Invalid Android connection fixture.");
+            run=manifest.getString("run_id");bundleSHA=manifest.getString("bundle_sha256");
+            privateAddress=manifest.getString("private_address");clientAddress=manifest.getString("client_address");
+            dnsHost=manifest.getString("dns_host");payloadSHA=manifest.getString("payload_sha256");controlPort=manifest.getInt("control_port");
+            if(!run.matches("[0-9a-f]{32}")||!bundleSHA.matches("[0-9a-f]{64}")||!payloadSHA.matches("[0-9a-f]{64}")
+                    ||!manifest.getString("node_proof_id").matches("[0-9a-f]{64}")
+                    ||!privateAddress.matches("10\\.253\\.(24[0-9]|25[0-4])\\.1")
+                    ||!clientAddress.equals(privateAddress.substring(0,privateAddress.length()-1)+"2")
+                    ||!dnsHost.equals(run+".desktop-smoke.invalid")||controlPort<1024||controlPort>65535
+                    ||!"base-raw".equals(manifest.getString("logical_mode")))
+                throw new IllegalStateException("Invalid Android connection fixture values.");
+            connectivity=(android.net.ConnectivityManager)activity.getSystemService(CONNECTIVITY_SERVICE);
+            if(connectivity==null)throw new IllegalStateException("Android connectivity is unavailable.");
+            service=LayeredVpnService.armServiceQualification(activity,run);
+            worker=new Thread(this::observe,"routervpn-actual-connection-observer");
+            supervisor=new Thread(this::supervise,"routervpn-actual-connection-watchdog");
+        }
+        void requireDirectory()throws Exception {
+            android.system.StructStat value=android.system.Os.lstat(directory.getAbsolutePath());
+            if(!directory.getCanonicalFile().equals(directory)||value.st_uid!=android.os.Process.myUid()
+                    ||(value.st_mode&android.system.OsConstants.S_IFMT)!=android.system.OsConstants.S_IFDIR
+                    ||(value.st_mode&0777)!=0700)throw new IllegalStateException("Connection evidence directory changed.");
+        }
+        JSONObject read(String name)throws Exception {
+            requireDirectory();java.io.File file=new java.io.File(directory,name);
+            android.system.StructStat before=android.system.Os.lstat(file.getAbsolutePath());
+            if((before.st_mode&android.system.OsConstants.S_IFMT)!=android.system.OsConstants.S_IFREG
+                    ||before.st_uid!=android.os.Process.myUid()||(before.st_mode&0777)!=0600
+                    ||before.st_nlink!=1||before.st_size<2||before.st_size>32768)
+                throw new IllegalStateException("Connection evidence file is not private regular state.");
+            byte[] bytes=AndroidPrivateFileStore.read(file,32768);
+            android.system.StructStat after=android.system.Os.lstat(file.getAbsolutePath());
+            if(before.st_dev!=after.st_dev||before.st_ino!=after.st_ino||before.st_size!=after.st_size)
+                throw new IllegalStateException("Connection evidence file changed.");
+            return new JSONObject(AndroidTorProfile.strictText(bytes));
+        }
+        void publish(String phase,JSONObject value)throws Exception {
+            requireDirectory();value.put("schema",1).put("run_id",run).put("phase",phase);
+            byte[] bytes=value.toString().getBytes(StandardCharsets.UTF_8);
+            if(bytes.length>32768)throw new IllegalStateException("Connection evidence exceeded its bound.");
+            java.io.File target=new java.io.File(directory,phase+".json");
+            java.io.File temporary=new java.io.File(directory,"."+phase+"-"+java.util.UUID.randomUUID()+".tmp");
+            if(!temporary.createNewFile())throw new IllegalStateException("Connection evidence already exists.");
+            Exception original=null;
+            try {
+                android.system.Os.chmod(temporary.getAbsolutePath(),0600);
+                try(java.io.FileOutputStream out=new java.io.FileOutputStream(temporary)){out.write(bytes);out.flush();out.getFD().sync();}
+                android.system.Os.link(temporary.getAbsolutePath(),target.getAbsolutePath());
+            }catch(Exception failure){original=failure;throw failure;}
+            finally{if(!temporary.delete()){Exception failure=new IllegalStateException("Connection evidence temporary did not retire.");if(original==null)throw failure;else original.addSuppressed(failure);}}
+        }
+        boolean marker(String phase)throws Exception {
+            java.io.File file=new java.io.File(directory,phase+".json");if(!file.exists())return false;
+            JSONObject value=read(phase+".json");
+            if(value.length()!=3||!(value.opt("schema") instanceof Integer)||value.getInt("schema")!=1||!run.equals(value.getString("run_id"))||!phase.equals(value.getString("phase")))
+                throw new IllegalStateException("Connection phase changed.");
+            return true;
+        }
+        void check()throws Exception {
+            if(cancelled||destroyed||android.os.SystemClock.elapsedRealtime()>=deadline||marker("cancel"))
+                throw new IllegalStateException("Original connection observation cancelled.");
+        }
+        interface Condition { boolean ready()throws Exception; }
+        void await(Condition condition)throws Exception {
+            while(true){check();if(condition.ready())return;Thread.sleep(50);}
+        }
+        synchronized void imported(byte[] source,AndroidNodeStore.Node node) {
+            try {if(!importedID.isEmpty()||!bundleSHA.equals(sha(source)))cancelled=true;else importedID=node.id;}
+            catch(Exception invalid){cancelled=true;}
+        }
+        synchronized void clicked(boolean disconnect) { if(disconnect)disconnectClicks++;else connectClicks++; }
+        synchronized void finished(boolean ok) { if(ok)successes++;else failures++; }
+        void requireSource()throws Exception {
+            AndroidNodeStore.Node node=activity.nodeById(importedID);
+            if(node==null||!importedID.equals(activity.nodeStore.activeId())||!"router-vpn".equals(activity.prefs().getString(SELECTED_KIND,""))
+                    ||!importedID.equals(activity.prefs().getString(SELECTED_ID,""))
+                    ||!"base-raw".equals(activity.prefs().getString(MODE_KEY,""))
+                    ||activity.prefs().getBoolean(MULTI_ON,false)
+                    ||!bundleSHA.equals(sha(AndroidPrivateFileStore.read(node.file,AndroidNodeStore.MAX_BUNDLE))))
+                throw new IllegalStateException("The original imported source or selected mode changed.");
+        }
+        static String sha(byte[] bytes)throws Exception {
+            byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest(bytes);StringBuilder out=new StringBuilder();
+            for(byte value:digest)out.append(String.format(Locale.ROOT,"%02x",value&255));return out.toString();
+        }
+        boolean ownsVPN(android.net.Network network) {
+            android.net.NetworkCapabilities caps=network==null?null:connectivity.getNetworkCapabilities(network);
+            return caps!=null&&caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)&&caps.getOwnerUid()==android.os.Process.myUid();
+        }
+        boolean noOwnedVPN() {
+            for(android.net.Network value:connectivity.getAllNetworks())if(ownsVPN(value))return false;return true;
+        }
+        String physicalSnapshot()throws Exception {
+            android.net.Network value=connectivity.getActiveNetwork();
+            android.net.LinkProperties properties=value==null?null:connectivity.getLinkProperties(value);
+            if(properties==null||ownsVPN(value))throw new IllegalStateException("Original physical network is unavailable.");
+            java.util.List<String> rows=new java.util.ArrayList<>();
+            rows.add("interface="+properties.getInterfaceName());rows.add("mtu="+properties.getMtu());
+            for(android.net.LinkAddress address:properties.getLinkAddresses())rows.add("address="+address.toString());
+            for(java.net.InetAddress address:properties.getDnsServers())rows.add("dns="+address.getHostAddress());
+            for(android.net.RouteInfo route:properties.getRoutes())rows.add("route="+route.toString());
+            java.util.Collections.sort(rows);return rows.toString();
+        }
+        JSONObject actualVPN()throws Exception {
+            android.net.Network network=connectivity.getActiveNetwork();
+            android.net.LinkProperties properties=network==null?null:connectivity.getLinkProperties(network);
+            if(!ownsVPN(network)||properties==null||properties.getMtu()!=1280||properties.getInterfaceName()==null)
+                throw new IllegalStateException("Actual owned VPN interface or MTU is missing.");
+            boolean address=false,dns=false,route=false;
+            for(android.net.LinkAddress value:properties.getLinkAddresses())address|=clientAddress.equals(value.getAddress().getHostAddress())&&value.getPrefixLength()==32;
+            for(java.net.InetAddress value:properties.getDnsServers())dns|=privateAddress.equals(value.getHostAddress());
+            for(android.net.RouteInfo value:properties.getRoutes())route|=value.isDefaultRoute()&&value.getDestination().getAddress() instanceof java.net.Inet4Address;
+            java.net.NetworkInterface iface=java.net.NetworkInterface.getByName(properties.getInterfaceName());
+            if(!address||!dns||!route||iface==null||iface.getIndex()<=0)throw new IllegalStateException("Actual VPN address, DNS or route is missing.");
+            if(originalNetwork!=null&&!originalNetwork.equals(network))throw new IllegalStateException("The original VPN Network changed.");
+            originalNetwork=network;
+            return new JSONObject().put("network",network.getNetworkHandle()).put("interface",properties.getInterfaceName())
+                .put("ifindex",iface.getIndex()).put("mtu",properties.getMtu()).put("client_address",clientAddress)
+                .put("private_dns",privateAddress).put("default_ipv4_route",true).put("owner_uid",android.os.Process.myUid());
+        }
+        boolean response(String address,int port,String path)throws Exception {
+            java.net.Socket socket=new java.net.Socket();
+            synchronized(socketLock){if(cancelled){socket.close();throw new IllegalStateException("Connection probe cancelled.");}activeSocket=socket;}
+            try {
+                socket.connect(new java.net.InetSocketAddress(address,port),4000);socket.setSoTimeout(4000);
+                byte[] request=("GET "+path+" HTTP/1.1\r\nHost: "+address+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII);
+                socket.getOutputStream().write(request);socket.getOutputStream().flush();
+                ByteArrayOutputStream bytes=new ByteArrayOutputStream();byte[] block=new byte[4096];int count;
+                while((count=socket.getInputStream().read(block))!=-1){if(bytes.size()+count>65536)throw new IllegalStateException("Private response exceeded its bound.");bytes.write(block,0,count);}
+                byte[] raw=bytes.toByteArray();int split=-1;
+                for(int i=0;i+3<raw.length;i++)if(raw[i]==13&&raw[i+1]==10&&raw[i+2]==13&&raw[i+3]==10){split=i+4;break;}
+                if(split<0)throw new IllegalStateException("Unexpected private HTTP framing.");
+                String headers=new String(raw,0,split,StandardCharsets.US_ASCII);
+                if(!headers.matches("(?s)HTTP/1\\.[01] 200 [^\\r\\n]*\\r\\n.*")||!payloadSHA.equals(sha(java.util.Arrays.copyOfRange(raw,split,raw.length))))
+                    throw new IllegalStateException("Unexpected private HTTP identity.");
+                return true;
+            }catch(java.io.IOException denied){return false;}
+            finally {
+                try{socket.close();}finally{synchronized(socketLock){if(activeSocket==socket&&socket.isClosed())activeSocket=null;}}
+            }
+        }
+        void requireResponse(String address,int port,String path,boolean expected)throws Exception {
+            check();boolean actual=response(address,port,path);check();
+            if(actual!=expected)throw new IllegalStateException("Actual unbound application response did not match the connection phase.");
+        }
+        JSONObject attempt(int index)throws Exception {
+            JSONObject value=service.snapshot();if(!value.getBoolean("valid"))throw new IllegalStateException("Unexpected native service attempt.");
+            JSONArray rows=value.getJSONArray("attempts");return index<rows.length()?rows.getJSONObject(index):null;
+        }
+        void observe() {
+            try {
+                stage="physical-control";if(!noOwnedVPN())throw new IllegalStateException("A VPN existed before the original App attempt.");
+                beforeNetwork=physicalSnapshot();requireResponse("10.0.2.2",controlPort,"/control/"+run,true);
+                publish("armed",new JSONObject().put("physical_control",true).put("physical_network_sha256",sha(beforeNetwork.getBytes(StandardCharsets.UTF_8))));
+                stage="strict-refusal";
+                await(()->{JSONObject value=attempt(0);return failures>0&&value!=null&&value.getBoolean("joined")&&service.allJoined();});
+                requireSource();JSONObject refused=attempt(0);
+                if(connectClicks!=1||disconnectClicks!=0||!refused.getBoolean("strict_marker")||!refused.getBoolean("strict_refused")
+                        ||refused.getBoolean("native_created")||refused.getBoolean("tun_created")||refused.getBoolean("ready")
+                        ||VpnService.prepare(activity)!=null||!noOwnedVPN())throw new IllegalStateException("Strict mode did not refuse before native/TUN creation.");
+                requireResponse("10.0.2.2",controlPort,"/control/"+run,true);
+                publish("strict-refused",new JSONObject().put("service",service.snapshot()).put("physical_control",true));
+                stage="connected";
+                await(()->{AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(activity);JSONObject value=attempt(1);
+                    return successes>0&&home.connected&&"passed".equals(home.pathProof)&&value!=null&&value.getBoolean("ready")&&value.getBoolean("start_returned");});
+                requireSource();JSONObject connected=attempt(1);AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(activity);
+                if(connectClicks!=2||failures!=1||successes!=1||!"base-raw".equals(home.logicalMode)||!"wg".equals(home.runtimeMode)||!importedID.equals(home.activeNodeId)
+                        ||!connected.getBoolean("always_on")||!connected.getBoolean("lockdown")||!connected.getBoolean("current")
+                        ||!connected.getBoolean("strict_marker")||!connected.getBoolean("native_created")||!connected.getBoolean("tun_created"))
+                    throw new IllegalStateException("The actual connected original path or OS lockdown changed.");
+                JSONObject vpn=actualVPN();java.net.InetAddress[] resolved=java.net.InetAddress.getAllByName(dnsHost);
+                if(resolved.length==0)throw new IllegalStateException("Private DNS nonce was not resolved.");
+                for(java.net.InetAddress value:resolved)if(!privateAddress.equals(value.getHostAddress()))throw new IllegalStateException("Private DNS nonce resolved outside its original peer.");
+                requireResponse(resolved[0].getHostAddress(),8787,"/desktop-connect/"+run,true);actualVPN();
+                requireResponse("10.0.2.2",controlPort,"/control/"+run,false);actualVPN();
+                publish("connected",new JSONObject().put("profile_id",importedID).put("runtime_mode","wg").put("vpn",vpn)
+                    .put("service",service.snapshot()).put("payload_sha256",payloadSHA).put("dns_nonce",true).put("physical_denied",true));
+                stage="peer-loss";await(()->marker("peer-stopped"));requireSource();
+                requireResponse(privateAddress,8787,"/desktop-connect/"+run,false);
+                requireResponse("10.0.2.2",controlPort,"/control/"+run,false);
+                publish("loss",new JSONObject().put("private_denied",true).put("physical_denied",true));
+                stage="disconnect";
+                await(()->{JSONObject value=attempt(1);return disconnectClicks==1&&successes==2&&failures==1&&value!=null&&value.getBoolean("stop_acknowledged")&&service.allJoined()
+                    &&!AndroidHomeStateStore.snapshot(activity).connected&&!activity.connection.isActiveOrTransitioning()&&noOwnedVPN();});
+                requireSource();requireResponse("10.0.2.2",controlPort,"/control/"+run,false);
+                publish("disconnected",new JSONObject().put("service",service.snapshot()).put("owned_vpn_absent",true).put("physical_still_denied",true));
+                stage="restoration";await(()->marker("settings-restored"));requireSource();
+                requireResponse("10.0.2.2",controlPort,"/control/"+run,true);
+                if(!noOwnedVPN()||!beforeNetwork.equals(physicalSnapshot())||!service.allJoined())throw new IllegalStateException("Original service or physical network restoration is incomplete.");
+                passed=true;
+            }catch(Throwable failed){failureStage=stage;}
+            finally{workerComplete=true;}
+        }
+        void supervise() {
+            boolean workerJoined=false,cleanup=false,retirementError=false;
+            try {worker.join(Math.max(1,deadline-android.os.SystemClock.elapsedRealtime()));}
+            catch(Throwable failed){retirementError=true;failureStage="observer-join";}
+            if(worker.isAlive()){cancelled=true;failureStage="observer-deadline";}
+            if(!passed||worker.isAlive()) {
+                cancelled=true;
+                try{synchronized(socketLock){if(activeSocket!=null)activeSocket.close();}}catch(Throwable failed){retirementError=true;}
+                try{service.stopOriginal();}catch(Throwable failed){retirementError=true;}
+                // A failed close or stop dispatch must never skip this exact wait.
+                try{worker.join(10_000);}catch(Throwable failed){retirementError=true;}
+            }
+            workerJoined=!worker.isAlive()&&workerComplete;
+            try {
+                long end=android.os.SystemClock.elapsedRealtime()+20_000;
+                while(!service.allJoined()&&android.os.SystemClock.elapsedRealtime()<end)Thread.sleep(50);
+                synchronized(socketLock){cleanup=!retirementError&&workerJoined&&activeSocket==null&&service.allJoined()&&noOwnedVPN();}
+            }catch(Throwable failed){if(failureStage.isEmpty())failureStage="original-owner-cleanup";}
+            try {
+                completed=new JSONObject().put("status",passed&&cleanup?"passed":"failed").put("failure_stage",failureStage)
+                    .put("connect",passed).put("traffic",passed).put("loss",passed).put("disconnect",passed)
+                    .put("worker_joined",workerJoined).put("cleanup_proved",cleanup).put("service",service.snapshot())
+                    .put("connect_clicks",connectClicks).put("disconnect_clicks",disconnectClicks).put("successful_callbacks",successes).put("failed_callbacks",failures);
+                activity.runOnUiThread(this::publishAfterSupervisor);
+            }catch(Exception failed){android.util.Log.e("RouterVPN-Connect","Original connection receipt unavailable.");}
+        }
+        void publishAfterSupervisor() {
+            if(supervisor.isAlive()){activity.telemetryHandler.postDelayed(this::publishAfterSupervisor,10);return;}
+            boolean supervisorJoined=false;
+            String joinFailure="";
+            try {supervisor.join(1);supervisorJoined=!supervisor.isAlive();if(!supervisorJoined)joinFailure="not-terminal";}
+            catch(InterruptedException interrupted){Thread.currentThread().interrupt();joinFailure="interrupted";}
+            catch(Throwable failed){joinFailure="failed";}
+            try {
+                completed.put("supervisor_joined",supervisorJoined).put("supervisor_join_failure",joinFailure);
+                if(!supervisorJoined){completed.put("status","failed").put("cleanup_proved",false);if(completed.optString("failure_stage","").isEmpty())completed.put("failure_stage","supervisor-join");}
+                publish("result",completed);
+            }catch(Exception failed){android.util.Log.e("RouterVPN-Connect","Original connection receipt publication failed.");}
+        }
+        void destroyed() { destroyed=true;cancelled=true; }
+    }
+
     private static final class ModeChoice {
         final String id, title;
         final List<String> layers;
@@ -105,11 +381,11 @@ public final class ProductActivity extends Activity {
     }
     private static final class CustomPreset { String name; List<String> layers; CustomPreset(String name,List<String>layers){this.name=name;this.layers=layers;} }
 
-    @Override protected void onCreate(Bundle state){super.onCreate(state);nodeStore=new AndroidNodeStore(this);exitStore=new AndroidStandardExitStore(this);catalog=new AndroidUnifiedNodeCatalog(nodeStore,exitStore);connection=new AndroidUnifiedConnectionController(this,nodeStore);telemetry=new AndroidTelemetry(this,nodeStore);externalTelemetry=new AndroidExternalLiveTelemetry(this,AndroidRuntimeRegistry.get(this).standardExit);forwardingMaster=new AndroidForwardingMaster(this,nodeStore);viaEntryProbe=new AndroidViaEntryLatencyProbe(this,AndroidRuntimeRegistry.get(this),telemetry);if(state!=null){importDecision=state.getString(STATE_IMPORT_DECISION,"");pendingProbeEntryId=state.getString(STATE_PROBE_ENTRY,"");ArrayList<String> ids=state.getStringArrayList(STATE_PROBE_CANDIDATES);if(ids!=null)pendingProbeCandidateIds=ids;}setContentView(buildUi());refreshAll();if(state!=null&&!AndroidExternalNodeComparison.hasActiveOperation())connection.restorePending(state,callback());applyStartupPolicy(state!=null);AndroidProductOnboarding.showIfNeeded(this);}
+    @Override protected void onCreate(Bundle state){super.onCreate(state);nodeStore=new AndroidNodeStore(this);exitStore=new AndroidStandardExitStore(this);catalog=new AndroidUnifiedNodeCatalog(nodeStore,exitStore);connection=new AndroidUnifiedConnectionController(this,nodeStore);telemetry=new AndroidTelemetry(this,nodeStore);externalTelemetry=new AndroidExternalLiveTelemetry(this,AndroidRuntimeRegistry.get(this).standardExit);forwardingMaster=new AndroidForwardingMaster(this,nodeStore);viaEntryProbe=new AndroidViaEntryLatencyProbe(this,AndroidRuntimeRegistry.get(this),telemetry);if(state!=null){importDecision=state.getString(STATE_IMPORT_DECISION,"");pendingProbeEntryId=state.getString(STATE_PROBE_ENTRY,"");ArrayList<String> ids=state.getStringArrayList(STATE_PROBE_CANDIDATES);if(ids!=null)pendingProbeCandidateIds=ids;}setContentView(buildUi());refreshAll();if(state!=null&&!AndroidExternalNodeComparison.hasActiveOperation())connection.restorePending(state,callback());applyStartupPolicy(state!=null);AndroidProductOnboarding.showIfNeeded(this);try{connectionQualification=ConnectionQualification.arm(this);}catch(Exception unavailable){android.util.Log.e("RouterVPN-Connect","Actual connection qualification prerequisites failed.");}}
     @Override protected void onResume(){super.onResume();resumed=true;if(connection!=null)connection.resumePending();resumeCandidatePreparation();telemetryHandler.removeCallbacks(telemetryTick);telemetryHandler.post(telemetryTick);refreshAll();if(viaEntryProbe!=null&&viaEntryProbe.isBusy()&&!pendingProbeEntryId.isEmpty())statusView.setText("Measuring live via-entry multihop candidate RTT…");}
     @Override protected void onPause(){fastestCatalogTicket++;fastestCatalogKey="";if(orderedPicker!=null)orderedPicker.pause();closeOrderedLatency();closeRoutedHopMeasurement();closeCandidateMeasurement();detachCandidatePreparation();resumed=false;telemetryGeneration++;telemetryHandler.removeCallbacks(telemetryTick);if(externalTelemetry!=null)externalTelemetry.cancel();clearCurrentTelemetry();if(telemetry!=null){telemetry.cancelCurrent();telemetry.cancelFastest();}if(currentSpeedDialog!=null){currentSpeedDialog.dismiss();currentSpeedDialog=null;}if(externalBenchmarkDialog!=null){externalBenchmarkDialog.close();externalBenchmarkDialog=null;}super.onPause();}
     @Override protected void onSaveInstanceState(Bundle out){if(!importDecision.isEmpty())out.putString(STATE_IMPORT_DECISION,importDecision);if(connection!=null)connection.savePending(out);if(viaEntryProbe==null||!viaEntryProbe.isBusy()){if(!pendingProbeEntryId.isEmpty())out.putString(STATE_PROBE_ENTRY,pendingProbeEntryId);if(!pendingProbeCandidateIds.isEmpty())out.putStringArrayList(STATE_PROBE_CANDIDATES,new ArrayList<>(pendingProbeCandidateIds));}super.onSaveInstanceState(out);}
-    @Override protected void onDestroy(){closeOrderedPicker();if(liveRouteDialog!=null)liveRouteDialog.dismiss();closeOrderedLatency();closeRoutedHopMeasurement();closeCandidateMeasurement();detachCandidatePreparation();importGeneration++;telemetryGeneration++;telemetryHandler.removeCallbacks(telemetryTick);if(externalTelemetry!=null)externalTelemetry.cancel();if(telemetry!=null)telemetry.close();if(fastestProgressDialog!=null){fastestProgressDialog.dismiss();fastestProgressDialog=null;}if(externalBenchmarkDialog!=null){externalBenchmarkDialog.close();externalBenchmarkDialog=null;}viaEntryGeneration++;if(viaEntryProbe!=null)viaEntryProbe.cancel();if(viaEntryDialog!=null){viaEntryDialog.dismiss();viaEntryDialog=null;}if(externalComparisonDialog!=null){externalComparisonDialog.close();externalComparisonDialog=null;}if(isFinishing())AndroidStartupPolicy.cancelPending();if(connection!=null)connection.close();super.onDestroy();}
+    @Override protected void onDestroy(){if(connectionQualification!=null&&connectionQualification.completed==null)connectionQualification.destroyed();closeOrderedPicker();if(liveRouteDialog!=null)liveRouteDialog.dismiss();closeOrderedLatency();closeRoutedHopMeasurement();closeCandidateMeasurement();detachCandidatePreparation();importGeneration++;telemetryGeneration++;telemetryHandler.removeCallbacks(telemetryTick);if(externalTelemetry!=null)externalTelemetry.cancel();if(telemetry!=null)telemetry.close();if(fastestProgressDialog!=null){fastestProgressDialog.dismiss();fastestProgressDialog=null;}if(externalBenchmarkDialog!=null){externalBenchmarkDialog.close();externalBenchmarkDialog=null;}viaEntryGeneration++;if(viaEntryProbe!=null)viaEntryProbe.cancel();if(viaEntryDialog!=null){viaEntryDialog.dismiss();viaEntryDialog=null;}if(externalComparisonDialog!=null){externalComparisonDialog.close();externalComparisonDialog=null;}if(isFinishing())AndroidStartupPolicy.cancelPending();if(connection!=null)connection.close();super.onDestroy();}
     @Override protected void onActivityResult(int requestCode,int resultCode,Intent data){if(AndroidOrderedCandidatePicker.isPermissionRequest(requestCode)){if(orderedPicker!=null)orderedPicker.permission(requestCode,resultCode==RESULT_OK);return;}if(requestCode==IMPORT_ROUTER_BUNDLE){receiveRouterBundle(resultCode,data);return;}if(requestCode==PREPARE_VIA_ENTRY_RTT){if(resultCode==RESULT_OK)runPendingViaEntryProbe();else{AndroidNodeStore.Node entry=quietNode(pendingProbeEntryId);List<AndroidNodeStore.Node> exits=quietNodes(pendingProbeCandidateIds);clearPendingProbe();try{showViaEntryExitPicker(viaEntryProbe.unmeasured(entry,exits),new IllegalStateException("Android VPN permission was not granted; via-entry RTT is unavailable."));}catch(Exception error){toast(safe(error));}}return;}if(connection!=null&&connection.onActivityResult(requestCode,resultCode)){refreshConnectionLater();return;}super.onActivityResult(requestCode,resultCode,data);}
 
     @Override public void onRequestPermissionsResult(int requestCode,String[] permissions,int[] grantResults){if(AndroidUpdateDialog.onPermissionResult(this,requestCode))return;super.onRequestPermissionsResult(requestCode,permissions,grantResults);}
@@ -170,7 +446,7 @@ public final class ProductActivity extends Activity {
         killSwitch.setOnClickListener(v -> setQuickKillSwitch(killSwitch.isChecked()));
         killSwitch.setSingleLine(false);
         connectRow.addView(killSwitch);
-        connectButton=primaryButton("Connect");connectButton.setMinimumHeight(dp(50));connectButton.setOnClickListener(v->connectOrDisconnect());
+        connectButton=primaryButton("Connect");connectButton.setMinimumHeight(dp(50));connectButton.setOnClickListener(v->{if(connectionQualification!=null)connectionQualification.clicked(connection.isActiveOrTransitioning());connectOrDisconnect();});
         connectButton.setSingleLine(false);
         primaryAction.addView(connectButton,new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT));
         connectRow.addView(primaryAction,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));
@@ -274,7 +550,7 @@ public final class ProductActivity extends Activity {
         },"routervpn-ordered-choice-capture").start();
     }
 
-    private AndroidUnifiedConnectionController.Callback callback(){return new AndroidUnifiedConnectionController.Callback(){public boolean recordsNodeUsage(){return true;}public void progress(String message){runOnUiThread(()->{if(isFinishing()||isDestroyed())return;statusView.setText(message);connectButton.setText("Disconnect");});}public void finished(boolean ok,String message){runOnUiThread(()->{if(isFinishing()||isDestroyed())return;statusView.setText(message);String usageWarning=AndroidNodeUsage.saveWarning(message);if(!ok)toast(message);else if(!usageWarning.isEmpty())toast(usageWarning);refreshAll();refreshConnectionLater();});}};}
+    private AndroidUnifiedConnectionController.Callback callback(){return new AndroidUnifiedConnectionController.Callback(){public boolean recordsNodeUsage(){return true;}public void progress(String message){runOnUiThread(()->{if(isFinishing()||isDestroyed())return;statusView.setText(message);connectButton.setText("Disconnect");});}public void finished(boolean ok,String message){runOnUiThread(()->{if(isFinishing()||isDestroyed())return;if(connectionQualification!=null)connectionQualification.finished(ok);statusView.setText(message);String usageWarning=AndroidNodeUsage.saveWarning(message);if(!ok)toast(message);else if(!usageWarning.isEmpty())toast(usageWarning);refreshAll();refreshConnectionLater();});}};}
     private void refreshConnectionState(){boolean active=connection!=null&&connection.isActiveOrTransitioning(),busy=mutationBusy(),candidate=AndroidNodeCandidatePreparation.busy()||AndroidViaEntryLatencyProbe.hasActiveOperation()||AndroidExternalNodeComparison.hasActiveOperation(),startup=startupCapturePending||connection!=null&&connection.isStartupPending(),permission=orderedConnectCapturePending||connection!=null&&connection.isPermissionPending();connectButton.setText(startup?"Cancel startup":candidate?"Cancel test":permission?"Cancel connection":active?"Disconnect":"Connect");nodeButton.setEnabled(!busy);fastestButton.setEnabled((!busy||connection.isConnected())&&!candidate&&!permission&&!startup&&!AndroidMTUMeasurementGate.held());killSwitch.setEnabled(!busy);multihopToggle.setEnabled(!busy);modeSpinner.setEnabled(!busy&&!isExternalSelected()&&!(prefs().getBoolean(MULTI_ON,false)&&!prefs().getString("multihop_nodes","").isEmpty()));dnsSpinner.setEnabled(!busy&&!isExternalSelected());if(startupCapturePending)statusView.setText("Checking saved startup settings…");else if(startup)statusView.setText("Waiting for Android permission for the captured startup path. Cancel startup keeps the app disconnected.");else if(AndroidNodeCandidatePreparation.busy())statusView.setText("Testing saved path. Cancel test waits for the temporary VPN and candidate connections to stop.");else if(permission)statusView.setText("Waiting for Android permission for the captured connection. Cancel connection keeps the app disconnected.");else if(!candidate)statusView.setText(AndroidHomeSummary.status(this,nodeStore,isExternalSelected()));else if(AndroidExternalNodeComparison.hasActiveOperation())statusView.setText("Comparing captured external paths. Cancel test waits for native cleanup and original restoration.");else if(!viaEntryProbe.isBusy())statusView.setText("A captured candidate test is draining. Cancel test retries only its temporary entry cleanup.");if(!connection.isConnected()){liveLatency.setText("-- ms");}}
 
     private void showConnectionDetails(){String truth=AndroidHomeSummary.format(this,nodeStore)+multihopExecutionSummary();new AlertDialog.Builder(this).setTitle("Connection details & proof").setMessage(truth+"\n\nConnected is not treated as a proved public exit until the current app-owned VPN network, frozen session node/path and current-session exit proof all agree.").setPositiveButton("Prove actual exit",(d,w)->{statusView.setText("Proving actual public VPN exit for this session…");AndroidHomeSummary.proveActualExit(this,nodeStore,(message,error)->runOnUiThread(()->{statusView.setText(message);if(error!=null)toast(message);refreshAll();}));}).setNeutralButton("Emergency disconnect",(d,w)->{statusView.setText("Emergency disconnect requested…");AndroidHomeSummary.emergencyDisconnect(this,(message,error)->runOnUiThread(()->{statusView.setText(message);if(error!=null)toast(message);refreshAll();refreshConnectionLater();}));}).setNegativeButton("Close",null).show();}
@@ -1407,7 +1683,7 @@ if(isExternalSelected()){boolean on=prefs().getBoolean(MULTI_ON,false);multihopT
             final byte[] ready=bytes;final Throwable error=failure;runOnUiThread(()->{
                 if(ticket!=importGeneration||isFinishing()||isDestroyed())return;
                 try{if(error!=null)throw new IllegalStateException(safe(error));
-                    AndroidNodeStore.Node node;synchronized(prefs()){AndroidRouterBundleImport.requireCurrent(this,nodeStore,captured);node=nodeStore.importBundle(ready);AndroidConnectionProfileStore.applySelection(prefs(),prefs().edit().putString(SELECTED_KIND,"router-vpn").putString(SELECTED_ID,node.id).putBoolean(MULTI_ON,false).putString(MULTI_ENTRY,"").putString(MULTI_EXIT,""));}refreshAll();toast("Imported and selected "+node.name+". Press Connect when ready.");
+                    AndroidNodeStore.Node node;synchronized(prefs()){AndroidRouterBundleImport.requireCurrent(this,nodeStore,captured);node=nodeStore.importBundle(ready);AndroidConnectionProfileStore.applySelection(prefs(),prefs().edit().putString(SELECTED_KIND,"router-vpn").putString(SELECTED_ID,node.id).putBoolean(MULTI_ON,false).putString(MULTI_ENTRY,"").putString(MULTI_EXIT,""));}if(connectionQualification!=null)connectionQualification.imported(ready,node);refreshAll();toast("Imported and selected "+node.name+". Press Connect when ready.");
                 }catch(Exception rejected){refreshAll();toast("Bundle not imported: "+safe(rejected));}
             });
         },"routervpn-bundle-import").start();

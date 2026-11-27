@@ -80,6 +80,138 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         return service == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ? null : service.isLockdownEnabled();
     }
 
+
+    /** Debug-delivery qualification observes the real service; it never grants
+     * permission, changes lockdown, substitutes a server, or writes readiness. */
+    private static volatile ServiceQualification serviceQualification;
+    private volatile QualificationAttempt qualificationAttempt;
+    static final class ServiceQualification {
+        final String run;
+        final java.util.List<QualificationAttempt> attempts = new java.util.ArrayList<>();
+        final java.util.List<LayeredVpnService> hosts = new java.util.ArrayList<>();
+        synchronized void created(LayeredVpnService host) { hosts.add(host); }
+        synchronized java.util.List<LayeredVpnService> capturedHosts() { return new java.util.ArrayList<>(hosts); }
+        boolean invalid;
+        ServiceQualification(String run) { this.run = run; }
+        synchronized QualificationAttempt start(LayeredVpnService host, long generation, String session, String mode) {
+            if (attempts.size() >= 2 || !"wg".equals(mode)) invalid = true;
+            QualificationAttempt value = new QualificationAttempt(host, generation, session, mode);
+            attempts.add(value);
+            return value;
+        }
+        synchronized java.util.List<QualificationAttempt> captured() { return new java.util.ArrayList<>(attempts); }
+        synchronized boolean valid() { return !invalid; }
+        org.json.JSONObject snapshot() throws Exception {
+            org.json.JSONArray rows = new org.json.JSONArray();
+            for (QualificationAttempt value : captured()) rows.put(value.snapshot());
+            org.json.JSONArray services=new org.json.JSONArray();
+            for(LayeredVpnService host:capturedHosts()) synchronized(host.lock) {
+                services.put(new org.json.JSONObject().put("host_destroyed",host.hostDestroyed)
+                    .put("executor_terminated",host.executor.isTerminated())
+                    .put("observation_executor_terminated",host.nodeChainObservations.isTerminated())
+                    .put("current",currentService.get()==host).put("native_absent",host.commandServer==null)
+                    .put("tun_absent",host.tunDescriptor==null).put("session_absent",host.activeSession==null));
+            }
+            return new org.json.JSONObject().put("run_id", run).put("valid", valid()).put("attempts", rows).put("services",services);
+        }
+        boolean allJoined() throws Exception {
+            if (!valid()) return false;
+            for (QualificationAttempt value : captured()) if (!value.snapshot().getBoolean("joined")) return false;
+            for (LayeredVpnService host : capturedHosts()) {
+                synchronized(host.lock) {
+                    if(!host.hostDestroyed || !host.executor.isTerminated() || !host.nodeChainObservations.isTerminated()
+                            || currentService.get()==host || host.activeSession!=null || host.commandServer!=null || host.tunDescriptor!=null)
+                        return false;
+                }
+            }
+            return true;
+        }
+        void stopOriginal() {
+            java.util.List<LayeredVpnService> rows = capturedHosts();
+            if (rows.isEmpty()) return;
+            LayeredVpnService host = rows.get(rows.size()-1);
+            // Failure cleanup dispatches the ordinary acknowledged stop only to
+            // the still-current captured service. A replacement is never used.
+            synchronized (PUBLICATION_LOCK) {
+                if (currentService.get() != host || host.hostDestroyed) return;
+                AndroidServiceStopConfirmation.request(STATE_KEY, command ->
+                    host.startService(new Intent(host, LayeredVpnService.class).setAction(ACTION_STOP)
+                        .putExtra(AndroidServiceStopConfirmation.EXTRA_COMMAND, command)));
+            }
+        }
+    }
+    static final class QualificationAttempt {
+        final LayeredVpnService host;
+        final long generation;
+        final String session, mode;
+        CommandServer server;
+        ParcelFileDescriptor descriptor;
+        boolean strictMarker, strictRefused, ready, finished, closeFailed;
+        boolean serverServiceClosed, serverClosed, descriptorClosed, alwaysOn, lockdown;
+        long stopCommand, acknowledged;
+        QualificationAttempt(LayeredVpnService host, long generation, String session, String mode) {
+            this.host=host; this.generation=generation; this.session=session; this.mode=mode;
+        }
+        synchronized void server(CommandServer value) {
+            if (server != null && server != value) closeFailed=true;
+            server=value;
+        }
+        synchronized void descriptor(ParcelFileDescriptor value) {
+            if (descriptor != null && descriptor != value) closeFailed=true;
+            descriptor=value;
+        }
+        synchronized void closed(CommandServer value, boolean service, boolean ok) {
+            if (server != value) { closeFailed=true; return; }
+            if (!ok) closeFailed=true;
+            if (service) serverServiceClosed=ok; else serverClosed=ok;
+        }
+        synchronized void descriptorClosed(ParcelFileDescriptor value, boolean ok) {
+            if (descriptor != value || !ok) closeFailed=true;
+            else descriptorClosed=true;
+        }
+        org.json.JSONObject snapshot() throws Exception {
+            // Same lock order as native cleanup: host then observation. Never
+            // hold the qualification-list monitor while acquiring host locks.
+            synchronized (host.lock) { synchronized (this) {
+                boolean fdClosed=descriptor==null || descriptorClosed && !descriptor.getFileDescriptor().valid();
+                boolean nativeClosed=server==null || serverServiceClosed && serverClosed;
+                boolean noCurrent=currentService.get()!=host;
+                boolean joined=finished && host.hostDestroyed && host.executor.isTerminated()
+                    && host.nodeChainObservations.isTerminated() && noCurrent && host.activeSession==null
+                    && nativeClosed && fdClosed && !closeFailed
+                    && !new File(new File(host.getFilesDir(), "layered-sessions"), session).exists();
+                return new org.json.JSONObject().put("generation", generation).put("mode", mode)
+                    .put("strict_marker", strictMarker).put("strict_refused", strictRefused)
+                    .put("ready", ready).put("always_on", alwaysOn).put("lockdown", lockdown)
+                    .put("start_returned", finished).put("native_created", server!=null)
+                    .put("tun_created", descriptor!=null).put("native_closed", nativeClosed)
+                    .put("tun_closed", fdClosed).put("close_failed", closeFailed)
+                    .put("stop_command", stopCommand).put("stop_acknowledged", acknowledged>0 && acknowledged==stopCommand)
+                    .put("joined", joined).put("current", currentService.get()==host)
+                    .put("service_state", host.state).put("host_destroyed", host.hostDestroyed)
+                    .put("executor_terminated", host.executor.isTerminated())
+                    .put("observation_executor_terminated", host.nodeChainObservations.isTerminated());
+            } }
+        }
+    }
+    static synchronized ServiceQualification armServiceQualification(Context context, String run) {
+        if ((context.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE)==0
+                || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || !run.matches("[0-9a-f]{32}")
+                || serviceQualification!=null || currentService.get()!=null)
+            throw new IllegalStateException("Actual service qualification prerequisites are unavailable.");
+        serviceQualification=new ServiceQualification(run);
+        return serviceQualification;
+    }
+    private void qualificationReady() {
+        QualificationAttempt value=qualificationAttempt;
+        if (value==null) return;
+        synchronized(value) {
+            value.ready=true;
+            try { value.alwaysOn=isAlwaysOn(); value.lockdown=isLockdownEnabled(); }
+            catch(RuntimeException failed) { value.closeFailed=true; }
+        }
+    }
+
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Object lock = new Object();
     private final Object tunAccess = new Object();
@@ -1129,6 +1261,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         synchronized (PUBLICATION_LOCK) {
             currentService=new java.lang.ref.WeakReference<>(this);
         }
+        ServiceQualification observed=serviceQualification;
+        if(observed!=null)observed.created(this);
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -1171,6 +1305,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 if (!shutdownRetainingOwner("DOWN", "")) return;
                 // Do not acknowledge in finally: failed teardown must remain busy.
                 AndroidServiceStopConfirmation.acknowledge(STATE_KEY, command);
+                QualificationAttempt observed=qualificationAttempt;
+                if(observed!=null)synchronized(observed){observed.stopCommand=command;observed.acknowledged=command;}
             });
             return Service.START_NOT_STICKY;
         }
@@ -1207,7 +1343,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         }
         startForeground(NOTIFICATION_ID, buildNotification("Starting layered VPN…"));
         final String deviceMTU=intent.getStringExtra(AndroidDeviceMTU.KEY);
-        executor.execute(() -> startLayered(sessionId, modeId, generation, maxOwner, homeSession, deviceMTU));
+        ServiceQualification observed=serviceQualification;
+        final QualificationAttempt attempt=observed==null?null:observed.start(this,generation,sessionId,modeId);
+        qualificationAttempt=attempt;
+        executor.execute(() -> {
+            try { startLayered(sessionId, modeId, generation, maxOwner, homeSession, deviceMTU); }
+            finally { if(attempt!=null)synchronized(attempt){attempt.finished=true;} }
+        });
         return Service.START_NOT_STICKY;
     }
 
@@ -1255,10 +1397,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             File session = new File(sessionsRoot, sessionId).getCanonicalFile();
             if (!session.getParentFile().equals(sessionsRoot) || !session.isDirectory()) throw new IllegalStateException("Layered session is missing or unsafe.");
             if (new File(session, AndroidKillSwitchPolicy.SESSION_MARKER).isFile()) {
+                QualificationAttempt observed=qualificationAttempt;
+                if(observed!=null)synchronized(observed){observed.strictMarker=true;}
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                     throw new IllegalStateException("Strict Android kill switch requires Android 10 or newer lockdown APIs.");
                 }
                 if (!isAlwaysOn() || !isLockdownEnabled()) {
+                    if(observed!=null)synchronized(observed){observed.strictRefused=true;}
                     throw new IllegalStateException(AndroidKillSwitchPolicy.requirementMessage());
                 }
             }
@@ -1427,6 +1572,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 }));
                 if(startLayerRelay!=null)startLayerRelay.start();
                 commandServer = preparedChain==null?new CommandServer(this, this):preparedChain.newCommandServer(this,this);
+                if(qualificationAttempt!=null)qualificationAttempt.server(commandServer);
                 if (preparedChain != null) preparedChain.bindNative(commandServer);
                 commandServer.start();
                 commandServer.startOrReloadService(config, new OverrideOptions());
@@ -1526,7 +1672,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                         ||nodeChainSession!=null&&!(nodeChainSession.candidatePrefix==null?nodeChainSession.healthy():nodeChainSession.prefixHealthy())
                         ||torSession!=null&&!torSession.healthy()||externalSession!=null&&!externalSession.healthy()||maxSession!=null&&!maxSession.current(true))throw new IllegalStateException("VPN ownership changed during path proof.");
                 performanceActive = performanceServices > 0 && (nodeChainSession==null||nodeChainSession.candidatePrefix==null);
-                executionProved=true;publish("UP",modeId,"");
+                executionProved=true;publish("UP",modeId,"");qualificationReady();
             }
             if(capturedComparison!=null)capturedComparison.finished(true,"");
             if (performanceActive) executionHandler.post(performanceWatch);
@@ -1937,13 +2083,22 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         }
         multihopMetadata=null;multihopHomeOwner=null;executionProved=false;
         if (commandServer != null) {
-            try { commandServer.closeService(); } catch (Throwable ignored) { }
-            try { commandServer.close(); } catch (Throwable ignored) { }
+            QualificationAttempt observed=qualificationAttempt;
+            boolean serviceClosed=false, serverClosed=false;
+            try { commandServer.closeService(); serviceClosed=true; } catch (Throwable ignored) { }
+            if(observed!=null)observed.closed(commandServer,true,serviceClosed);
+            try { commandServer.close(); serverClosed=true; } catch (Throwable ignored) { }
+            if(observed!=null)observed.closed(commandServer,false,serverClosed);
             commandServer = null;
         }
         startLayerRelay = null;
         synchronized(tunAccess){
-            if (tunDescriptor != null) {try { tunDescriptor.close(); } catch (Throwable ignored) { } tunDescriptor=null;}
+            if (tunDescriptor != null) {
+                boolean closed=false;
+                try { tunDescriptor.close(); closed=true; } catch (Throwable ignored) { }
+                if(qualificationAttempt!=null)qualificationAttempt.descriptorClosed(tunDescriptor,closed);
+                tunDescriptor=null;
+            }
         }
         unregisterInterfaceMonitorLocked();
         externalHomeOwner = null;
@@ -2138,6 +2293,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             if(opening!=mtuSession||explicitStop){pfd.close();throw new IllegalStateException("TUN establishment became stale.");}
             try{opening.established(options.getMTU());}catch(Exception error){pfd.close();throw error;}
             ParcelFileDescriptor previous=tunDescriptor;tunDescriptor=pfd;
+            if(qualificationAttempt!=null)qualificationAttempt.descriptor(pfd);
             if(previous!=null)previous.close();
         }
         return pfd.getFd();
