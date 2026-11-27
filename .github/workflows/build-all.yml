@@ -873,6 +873,22 @@ jobs:
         run: |
           sudo apt-get install -y --no-install-recommends kbd libpam0g-dev wireguard-tools dnsmasq-base openssl tcpdump
           python3 deploy/verify-linux-smart.py --archive "dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.tar.gz"
+      - name: Prove installed ordered Local path, automatic Last and per-hop performance
+        timeout-minutes: 20
+        run: |
+          python3 deploy/verify-linux-smart.py --ordered-ci-archive \
+            "dist/linux-native/RouterVPN-linux-${{ matrix.arch }}.tar.gz" \
+            "$RUNNER_TEMP/routervpn-linux-ordered-evidence"
+      - name: Preserve installed ordered owner and performance receipts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: RouterVPN-Linux-ordered-${{ matrix.arch }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/routervpn-linux-ordered-evidence/*.json
+            ${{ runner.temp }}/routervpn-linux-ordered-evidence/*.log
+          if-no-files-found: warn
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
           name: RouterVPN-Linux-${{ matrix.arch }}-release-candidate

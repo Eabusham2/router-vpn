@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 import secrets
 import signal
+import select
 import stat
 import subprocess
 import time
@@ -454,5 +455,325 @@ def open_peers(namespace, workdir, source, candidate, layer='off'):
         raise ValueError('Unsupported SMART qualification Start Layer')
     with ExitStack() as stack:
         peers = Peers(namespace, workdir, source, candidate, stack, layer)
+        peers.start()
+        yield peers
+
+
+# The installed complete-path gate is separate from the SMART candidate matrix.
+# These owners never grant native readiness; they provide real private peers.
+class OrderedChild:
+    def __init__(self, stack, args, *, log, cwd, env=None):
+        self.process = self.pidfd = None
+        self.closed = False
+        self.waited = False
+        self.receipt = {}
+        self.failure = None
+        stack.callback(self.close)
+        # Retain Popen before pidfd, /proc or other fallible admission work.
+        self.process = subprocess.Popen(list(args), stdout=log, stderr=log,
+                                        cwd=cwd, env=env, start_new_session=True)
+        self.pidfd = os.pidfd_open(self.process.pid)
+        self.original = os.stat('/proc/%d' % self.process.pid)
+
+    @staticmethod
+    def group_members(group):
+        members = []
+        for entry in Path('/proc').iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                fields = (entry/'stat').read_text().rsplit(')', 1)[1].split()
+                if int(fields[2]) == group:
+                    members.append(int(entry.name))
+            except FileNotFoundError:
+                continue
+        return sorted(members)
+
+    def wait(self, timeout):
+        result = self.process.wait(timeout=timeout)
+        self.waited = True
+        return result
+
+    def close(self):
+        if self.closed:
+            if self.failure is not None:
+                raise self.failure
+            return
+        self.closed = True
+        if self.process is None:
+            return
+        errors, forced, joined = [], False, False
+        process = self.process
+        was_running = process.poll() is None
+        if not was_running and not self.waited:
+            errors.append('unexpected-peer-exit')
+        if was_running:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except BaseException as error:
+                errors.append('TERM:' + type(error).__name__)
+        def wait_original(seconds):
+            until = time.monotonic()+seconds
+            while True:
+                try:
+                    process.wait(timeout=max(0,until-time.monotonic()))
+                    return True
+                except subprocess.TimeoutExpired:
+                    return False
+                except BaseException as error:
+                    errors.append('wait:' + type(error).__name__)
+                    if time.monotonic() >= until:
+                        return False
+        joined = wait_original(4)
+        if not joined:
+            forced = True
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except BaseException as error:
+                errors.append('KILL:' + type(error).__name__)
+            joined = wait_original(4)
+        terminal, members = False, None
+        try:
+            terminal = self.pidfd is not None and bool(select.select([self.pidfd], [], [], 0)[0])
+        except BaseException as error:
+            errors.append('pidfd:' + type(error).__name__)
+        try:
+            members = self.group_members(process.pid)
+        except BaseException as error:
+            errors.append('group:' + type(error).__name__)
+        self.receipt = {'pid': process.pid, 'returncode': process.returncode,
+                        'joined': joined, 'pidfd_terminal': terminal,
+                        'process_group_members': members, 'forced': forced,
+                        'cleanup_errors': errors}
+        if self.pidfd is not None:
+            try:
+                os.close(self.pidfd)
+            except BaseException as error:
+                errors.append('pidfd-close:' + type(error).__name__)
+            self.pidfd = None
+        if not joined or not terminal or members != [] or forced or errors:
+            self.failure = RuntimeError('Original ordered peer/process retirement was not proved')
+            raise self.failure
+
+
+class OrderedPeer(Peers):
+    def __init__(self, namespace, work, mode, identity, physical, private, port, link, stack):
+        work.mkdir(mode=0o700)
+        super().__init__(namespace, work, mode, mode, stack)
+        self.mode, self.physical, self.private, self.port = mode, physical, private, port
+        self.link, self.children = link, {}
+        self.profile.update(id=identity, name='Ordered ' + identity, endpoint=physical,
+                            router_api='http://' + private + ':8787',
+                            path_probe_url='http://' + private + ':8787/health',
+                            adguard_ipv4=private, start_layer='off', home_lan_access=False,
+                            kill_switch_policy='on-connect', mtu_policy='manual', manual_mtu=1280)
+        self.inner = '10.77.1.3'
+        client = self.wg_key('ordered-client')
+        self.client_keys['wg'] = client
+        companion_port = port if mode == 'wg' else (51821 if mode == 'hysteria2' else 51822)
+        config = ('[Interface]\nPrivateKey = ' + (self.work/'ordered-client.key').read_text().strip() +
+                  '\nAddress = ' + self.inner + '/32\nDNS = ' + private + '\nMTU = 2000\n' +
+                  '[Peer]\nPublicKey = ' + self.server_key + '\nEndpoint = ' + physical + ':' +
+                  str(companion_port) + '\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 15\n')
+        self.assets = {'wg': {'wg.conf': config.encode()}}
+
+    def spawn(self, name, args, env=None):
+        log = self.stack.enter_context((self.work/(name+'.log')).open('xb'))
+        child = OrderedChild(self.stack, self.ns+list(args), log=log, cwd=self.work, env=env)
+        self.children[name] = child
+        self.processes[name] = child.process
+        return child.process
+
+    def services(self):
+        output(self.ns+['ip', 'addr', 'add', self.private+'/32', 'dev', 'lo'])
+        self.stack.callback(output, self.ns+['ip', 'addr', 'del', self.private+'/32', 'dev', 'lo'])
+        table = 'ordered_agent_'+secrets.token_hex(6)
+        config = self.put('agent.json', json.dumps({'listen': self.private+':8787',
+            'node_id': self.profile['node_proof_id'], 'token': self.profile['api_token'],
+            'wan_interface': self.link, 'nft_table': table,
+            'tunnel_cidrs': [self.private+'/32', self.inner+'/32'],
+            'daita_listen': self.private+':45999'}))
+        self.stack.callback(subprocess.run, self.ns+['nft','delete','table','inet',table],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.spawn('router', [os.environ['ROUTERVPN_QUALIFICATION_ROUTER_AGENT']],
+            dict(os.environ, ROUTER_VPN_CONFIG=str(config),
+                 ROUTER_VPN_MULTIHOP_CONFIG=str(self.work/'no-relays')))
+        self.wait_listening('router', 8787, True)
+        self.spawn('dns', ['dnsmasq','--no-daemon','--conf-file=/dev/null','--no-resolv','--no-hosts',
+            '--cache-size=0','--bind-interfaces','--listen-address='+self.private,
+            '--local=/#/','--address=/#/93.184.216.34'])
+        self.wait_listening('dns', 53, False)
+
+    def proxy(self, targets):
+        if self.mode == 'hysteria2':
+            cert, key = self.work/'cert.pem', self.work/'tls.key'
+            subprocess.run(['openssl','req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256',
+                '-nodes','-sha256','-days','1','-subj','/CN=router-qualification.test',
+                '-addext','subjectAltName=DNS:router-qualification.test',
+                '-addext','basicConstraints=critical,CA:TRUE','-addext','extendedKeyUsage=serverAuth',
+                '-keyout',key,'-out',cert], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            password, obfs = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+            inbound = {'type':'hysteria2','tag':'ordered-peer','listen':self.physical,'listen_port':self.port,
+                'users':[{'name':'ordered','password':password}],
+                'obfs':{'type':'salamander','password':obfs},
+                'tls':{'enabled':True,'certificate_path':str(cert),'key_path':str(key)}}
+            outbound = {'type':'hysteria2','tag':'proxy','server':self.physical,'server_port':self.port,
+                'password':password,'obfs':{'type':'salamander','password':obfs},
+                'tls':{'enabled':True,'server_name':'router-qualification.test','certificate_path':'cert.pem'}}
+            assets = {'cert.pem':cert.read_bytes()}
+        elif self.mode == 'shadowsocks':
+            password = base64.b64encode(secrets.token_bytes(32)).decode()
+            inbound = {'type':'shadowsocks','tag':'ordered-peer','listen':self.physical,'listen_port':self.port,
+                       'method':'2022-blake3-aes-256-gcm','password':password}
+            outbound = {'type':'shadowsocks','tag':'proxy','server':self.physical,'server_port':self.port,
+                        'method':'2022-blake3-aes-256-gcm','password':password}
+            assets = {}
+        else:
+            raise ValueError('Expected original ordered stream peer')
+        rules = [{'inbound':'ordered-peer','ip_cidr':host+'/32','network':network,'port':port,
+                  'action':'route','outbound':'direct'} for host,port,network in targets]
+        rules.append({'inbound':'ordered-peer','action':'reject'})
+        config = self.put('server.json',json.dumps({'log':{'level':'warn'},'inbounds':[inbound],
+            'outbounds':[{'type':'direct','tag':'direct'}],'route':{'rules':rules}}))
+        graph = {'dns':{'servers':[{'type':'udp','tag':'home-dns','server':self.private,
+                                  'server_port':53,'detour':'proxy'}],'final':'home-dns'},
+            'inbounds':[{'type':'tun','tag':'tun-in','interface_name':'router-vpn',
+                         'address':['172.19.0.1/30','fdfe:dcba:9876::1/126'],
+                         'auto_route':True,'strict_route':True,'mtu':2000}],
+            'outbounds':[outbound,{'type':'direct','tag':'direct'}],
+            'route':{'auto_detect_interface':True,'final':'proxy','rules':[{'protocol':'dns','action':'hijack-dns'}]}}
+        assets['sing-box.json'] = json.dumps(graph).encode()
+        self.assets[self.mode] = assets
+        self.spawn(self.mode,[ENGINE,'run','-c',config])
+        self.wait_listening(self.mode,self.port,self.mode=='shadowsocks')
+        self.wait_listening(self.mode,self.port,False)
+
+    def wireguard(self):
+        output(self.ns+['ip','link','add','wgordered','type','wireguard'])
+        self.stack.callback(output,self.ns+['ip','link','del','wgordered'])
+        output(self.ns+['wg','set','wgordered','listen-port',str(self.port),'private-key',self.work/'server.key',
+                        'peer',self.client_keys['wg'],'allowed-ips',self.inner+'/32'])
+        output(self.ns+['ip','link','set','wgordered','mtu','9000','up'])
+        output(self.ns+['ip','route','add',self.inner+'/32','dev','wgordered'])
+
+
+class OrderedPeers:
+    def __init__(self, topology, work, stack):
+        self.topology, self.stack = topology, stack
+        self.entry = OrderedPeer(topology['peer'],work/'entry','wg','ordered-entry',
+                                 OUTER,'10.77.1.1',51820,'smartpeer',stack)
+        self.middle = OrderedPeer(topology['peer'],work/'middle','hysteria2','ordered-middle',
+                                  OUTER,'10.77.2.1',18445,'ordered-final',stack)
+        self.final = OrderedPeer(topology['final'],work/'final','shadowsocks','ordered-final',
+                                 topology['final_private'],'10.77.3.1',8388,'ordered-peer',stack)
+        self.members = [self.entry,self.middle,self.final]
+        self.tables, self.original_rules = [], {}
+
+    def start(self):
+        if os.path.samefile('/proc/self/ns/net','/run/netns/'+self.topology['peer']) or \
+                os.path.samefile('/run/netns/'+self.topology['peer'],'/run/netns/'+self.topology['final']):
+            raise ValueError('The complete peers require their original independent namespaces')
+        for member in self.members:
+            member.services()
+        self.final.proxy([(self.final.private,8787,'tcp'),(self.final.private,53,'udp'),
+                          (self.final.private,53,'tcp'),('1.1.1.1',443,'tcp')])
+        self.middle.proxy([(self.middle.private,8787,'tcp'),(self.middle.private,53,'udp'),
+                           (self.middle.private,53,'tcp'),
+                           (self.final.physical,self.final.port,'tcp'),(self.final.physical,self.final.port,'udp')])
+        self.entry.wireguard()
+        peer_rules = [
+            'chain input { type filter hook input priority -25; policy accept;',
+            'iifname "smartpeer" ip daddr { 10.77.1.1, 10.77.2.1 } counter drop',
+            'iifname "smartpeer" ip daddr '+OUTER+' udp dport 18445 counter drop',
+            'iifname "wgordered" ip saddr != 10.77.1.3 counter drop',
+            'iifname "wgordered" ip daddr 10.77.1.1 tcp dport { 53, 8787 } accept',
+            'iifname "wgordered" ip daddr 10.77.1.1 udp dport 53 accept',
+            'iifname "wgordered" ip daddr '+OUTER+' udp dport 18445 counter accept comment "hy2-in"',
+            'iifname "wgordered" counter drop',
+            '}',
+            'chain output { type filter hook output priority -25; policy accept;',
+            'oifname "wgordered" ip saddr '+OUTER+' ip daddr 10.77.1.3 udp sport 18445 counter comment "hy2-out"',
+            '}',
+            'chain forward { type filter hook forward priority -25; policy drop; }']
+        final_rules = [
+            'chain input { type filter hook input priority -25; policy accept;',
+            'iifname "ordered-peer" ip saddr '+self.topology['peer_private']+' ip daddr '+self.final.physical+
+            ' tcp dport 8388 counter accept comment "ss-tcp-in"',
+            'iifname "ordered-peer" ip saddr '+self.topology['peer_private']+' ip daddr '+self.final.physical+
+            ' udp dport 8388 counter accept comment "ss-udp-in"',
+            'iifname "ordered-peer" counter drop',
+            '}',
+            'chain output { type filter hook output priority -25; policy accept;',
+            'oifname "ordered-peer" ip saddr '+self.final.physical+' ip daddr '+self.topology['peer_private']+
+            ' tcp sport 8388 counter comment "ss-tcp-out"',
+            'oifname "ordered-peer" ip saddr '+self.final.physical+' ip daddr '+self.topology['peer_private']+
+            ' udp sport 8388 counter comment "ss-udp-out"',
+            '}',
+            'chain forward { type filter hook forward priority -25; policy drop; }']
+        for ns, rules in ((self.topology['peer'],peer_rules),(self.topology['final'],final_rules)):
+            table = 'ordered_peer_'+secrets.token_hex(6)
+            prefix = ['ip','netns','exec',ns]
+            output(prefix+['nft','create','table','inet',table])
+            self.stack.callback(output,prefix+['nft','delete','table','inet',table])
+            output(prefix+['nft','-f','-'],data=('table inet '+table+' {\n'+'\n'.join(rules)+'\n}\n').encode())
+            self.tables.append((ns,table))
+        self.observation()
+
+    def observation(self):
+        for member in self.members:
+            for child in member.children.values():
+                if child.process.poll() is not None:
+                    raise RuntimeError('An original ordered peer stopped early')
+        result = {}
+        for ns,table in self.tables:
+            rows = json.loads(output(['ip','netns','exec',ns,'nft','-j','-a','list','table','inet',table]))['nftables']
+            for row in rows:
+                rule = row.get('rule',{})
+                name = rule.get('comment')
+                if not name:
+                    continue
+                if name in result or rule.get('family')!='inet' or rule.get('table')!=table or not rule.get('handle'):
+                    raise RuntimeError('An original ordered packet counter was replaced')
+                counters = [expr['counter'] for expr in rule['expr'] if 'counter' in expr]
+                if len(counters)!=1:
+                    raise RuntimeError('Expected one original inline packet counter')
+                sealed = dict(rule,expr=[{'counter':{}} if 'counter' in expr else expr for expr in rule['expr']])
+                old = self.original_rules.setdefault(name,sealed)
+                if old != sealed:
+                    raise RuntimeError('Original packet predicates or handles changed')
+                result[name] = counters[0]
+        if set(result) != {'hy2-in','hy2-out','ss-tcp-in','ss-tcp-out','ss-udp-in','ss-udp-out'}:
+            raise RuntimeError('The original encrypted tuple counter set is incomplete')
+        fields = output(self.entry.ns+['wg','show','wgordered','transfer']).decode().split()
+        if len(fields)!=3 or fields[0]!=self.entry.client_keys['wg']:
+            raise RuntimeError('The original WireGuard peer identity changed')
+        result['wg'] = {'received':int(fields[1]),'sent':int(fields[2])}
+        return result
+
+    def close(self):
+        failure = None
+        for member in reversed(self.members):
+            for child in reversed(list(member.children.values())):
+                try:
+                    child.close()
+                except BaseException as error:
+                    if failure is None:
+                        failure = error
+                    else:
+                        failure.add_note('Another original ordered peer did not retire')
+        if failure is not None:
+            raise failure
+        return {member.profile['id']:{name:child.receipt for name,child in member.children.items()}
+                for member in self.members}
+
+
+@contextmanager
+def open_ordered_peers(topology, work):
+    with ExitStack() as stack:
+        peers = OrderedPeers(topology,work,stack)
         peers.start()
         yield peers
