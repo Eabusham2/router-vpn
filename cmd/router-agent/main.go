@@ -41,6 +41,15 @@ type server struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "compile-server-node-chain-prefix-catalog" {
+		if len(os.Args) != 2 {
+			log.Fatal("catalog compiler accepts only bounded private stdin")
+		}
+		if err := compileServerNodeChainPrefixCatalog(os.Stdin, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && (os.Args[1] == "compile-server-node-chain-prefix-plan" || os.Args[1] == "compile-server-node-chain-prefix-source") {
 		if len(os.Args) != 2 {
 			log.Fatal("prefix compiler accepts only bounded private stdin")
@@ -154,20 +163,23 @@ func main() {
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "check-multihop-registry" {
-		if len(os.Args) < 4 || len(os.Args) > 7 {
-			log.Fatal("check-multihop-registry requires private registry and entry configuration paths, with optional staged Tor, ordered and prefix source directories")
+		if len(os.Args) < 4 || len(os.Args) > 8 {
+			log.Fatal("check-multihop-registry requires private registry and entry configuration paths, with optional staged Tor, ordered, prefix and catalog source directories")
 		}
-		sources, ordered, prefixes := serverTorSourcesDirectory, serverNodeChainSourcesDirectory, serverNodeChainPrefixSourcesDirectory
+		sources, ordered, prefixes, catalogs := serverTorSourcesDirectory, serverNodeChainSourcesDirectory, serverNodeChainPrefixSourcesDirectory, serverNodeChainPrefixCatalogsDirectory
 		if len(os.Args) >= 5 {
 			sources = os.Args[4]
 		}
 		if len(os.Args) >= 6 {
 			ordered = os.Args[5]
 		}
-		if len(os.Args) == 7 {
+		if len(os.Args) >= 7 {
 			prefixes = os.Args[6]
 		}
-		count, err := checkRelayRegistryWithPrefixSources(os.Args[2], os.Args[3], sources, ordered, prefixes)
+		if len(os.Args) == 8 {
+			catalogs = os.Args[7]
+		}
+		count, err := checkRelayRegistryWithCatalogSources(os.Args[2], os.Args[3], sources, ordered, prefixes, catalogs)
 		if err != nil {
 			log.Fatal(err)
 		}

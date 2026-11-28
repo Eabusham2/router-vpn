@@ -169,6 +169,33 @@ func (b *Bootstrap) Stop(ctx context.Context) error {
 	b.stopped.Store(true)
 	return nil
 }
+
+// RetirementAcknowledged retains only the original validated native cleanup
+// receipt and final-send authorization. A failed exchange stays revoked; this
+// method grants no live admission and does not replay its transport. The creator
+// must still join its original child successfully before releasing native state.
+func (b *Bootstrap) RetirementAcknowledged(ctx context.Context) error {
+	if err := b.enter(ctx); err != nil {
+		return err
+	}
+	defer func() { b.gate <- struct{}{} }()
+	if b.closed.Load() || !b.complete.Load() || !b.parentSide || b.capture == nil ||
+		!b.parent.Valid() || !b.child.Valid() || !b.protocol.stoppedAcknowledged || !b.protocol.finishAuthorized {
+		return errors.New("native cleanup has no authenticated original stop receipt")
+	}
+	if err := b.capture.Current(ctx); err != nil {
+		return err
+	}
+	if b.capture.Selection() != b.protocol.selection {
+		return errors.New("native cleanup changed its original capture")
+	}
+	parent, err := CaptureIdentity(b.parent.PID)
+	if err != nil || parent != b.parent {
+		return errors.Join(err, errors.New("native cleanup lost its original controller process or exec"))
+	}
+	return ctx.Err()
+}
+
 func (b *Bootstrap) WaitStop(ctx context.Context, closeNative func(context.Context) error) error {
 	if err := b.enter(ctx); err != nil {
 		return err

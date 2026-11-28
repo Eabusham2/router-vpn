@@ -22,7 +22,7 @@ type relayNodeChainPrefixRegistryCheck struct {
 }
 
 func newRelayNodeChainPrefixRegistryCheck(registry multihoprelay.Config, entry cfg, paths relayRegistryCheckPaths) (*relayNodeChainPrefixRegistryCheck, error) {
-	if len(registry.NodeChainPrefixes) == 0 {
+	if len(registry.NodeChainPrefixes) == 0 && registry.NodeChainPrefixCatalog == nil {
 		return nil, nil
 	}
 	bad := errors.New("private ordered prefix sources or native core are unavailable")
@@ -30,8 +30,10 @@ func newRelayNodeChainPrefixRegistryCheck(registry multihoprelay.Config, entry c
 	if sourceDir == "" {
 		sourceDir = serverNodeChainPrefixSourcesDirectory
 	}
-	if info, err := os.Lstat(sourceDir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0700 {
-		return nil, bad
+	if len(registry.NodeChainPrefixes) != 0 {
+		if info, err := os.Lstat(sourceDir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0700 {
+			return nil, bad
+		}
 	}
 	file, info, digest, err := captureRelayNodeChainImage(paths.core)
 	if err != nil {
@@ -109,6 +111,45 @@ func (s *relayNodeChainPrefixRegistryCheck) current() error {
 	}
 	return nil
 }
-func checkRelayRegistryWithPrefixSources(registryPath, agentPath, torSources, nodeChainSources, prefixSources string) (int, error) {
-	return checkRelayRegistryWithPaths(registryPath, agentPath, relayRegistryCheckPaths{torSources: torSources, nodeChainSources: nodeChainSources, nodeChainPrefixSources: prefixSources, packagePrefix: "/usr/local", core: "/usr/local/bin/sing-box", temporary: "/run/router-vpn-relay-checks"})
+
+func checkRelayRegistryWithCatalogSources(registryPath, agentPath, torSources, nodeChainSources, prefixSources, catalogSources string) (int, error) {
+	return checkRelayRegistryWithPaths(registryPath, agentPath, relayRegistryCheckPaths{
+		torSources: torSources, nodeChainSources: nodeChainSources, nodeChainPrefixSources: prefixSources,
+		nodeChainPrefixCatalogSources: catalogSources, packagePrefix: "/usr/local", core: "/usr/local/bin/sing-box", temporary: "/run/router-vpn-relay-checks",
+	})
+}
+
+// This checker retains the actual private catalog solely to validate the same
+// Manager contract. Every worker-start method continues to refuse execution.
+type relayPrefixSelectionCheckRunner struct {
+	relayCheckOnlyRunner
+	catalog *relayPrefixCatalogOwner
+}
+
+func (r relayPrefixSelectionCheckRunner) PrefixSelectionCatalog() multihoprelay.NodeChainPrefixSelectionCatalog {
+	if r.catalog == nil {
+		return nil
+	}
+	return r.catalog
+}
+func (relayPrefixSelectionCheckRunner) StartPrefix(context.Context, multihoprelay.NodeChainPrefixCapture) (multihoprelay.NodeChainPrefixProcess, error) {
+	return nil, errors.New("configuration verification never starts a relay")
+}
+func (relayPrefixSelectionCheckRunner) StartSelectedPrefix(context.Context, multihoprelay.NodeChainPrefixCapture, multihoprelay.NodeChainPrefixSelectionSource) (multihoprelay.NodeChainPrefixProcess, error) {
+	return nil, errors.New("configuration verification never starts a relay")
+}
+func newRelayPrefixSelectionRegistryCheckRunner(registry multihoprelay.Config, entry cfg, paths relayRegistryCheckPaths) (multihoprelay.Runner, *relayPrefixCatalogOwner, error) {
+	if registry.NodeChainPrefixCatalog == nil {
+		return relayCheckOnlyRunner{}, nil, nil
+	}
+	directory := paths.nodeChainPrefixCatalogSources
+	if directory == "" {
+		directory = serverNodeChainPrefixCatalogsDirectory
+	}
+	runner := &relayNodeChainExecRunner{prefixCatalogSources: directory}
+	catalog, err := runner.capturePrefixCatalog(*registry.NodeChainPrefixCatalog, entry.NodeID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return relayPrefixSelectionCheckRunner{catalog: catalog}, catalog, nil
 }

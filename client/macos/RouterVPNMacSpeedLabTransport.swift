@@ -191,10 +191,15 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
             return nodes
         }
         func appendExecutionPath(_ nodes: [[String: String]], nextMode: String) -> Bool {
-            guard ["wg", "awg2-fast", "awg2-strong", "shadowsocks"].contains(nextMode) else { return false }
-            let packets = nodes.prefix(while: { ["wg", "awg2-fast", "awg2-strong"].contains($0["mode"] ?? "") }).count
-            return packets > 0 && (nextMode == "shadowsocks" || packets == nodes.count) &&
-                nodes.dropFirst(packets).allSatisfy({ $0["mode"] == "shadowsocks" })
+            guard ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"].contains(nextMode),
+                  ["wg", "awg2-fast", "awg2-strong"].contains(nodes.first?["mode"] ?? "") else { return false }
+            var hysteriaTail=false
+            for node in nodes {
+                guard let mode=node["mode"], ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"].contains(mode) else { return false }
+                if hysteriaTail && ["wg", "awg2-fast", "awg2-strong"].contains(mode) { return false }
+                if mode == "hysteria2" { hysteriaTail=true }
+            }
+            return !hysteriaTail || ["shadowsocks", "hysteria2"].contains(nextMode)
         }
         let performanceValid: Bool
         switch url.path {
@@ -292,7 +297,7 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                 guard let body, Set(body.keys) == (executionAppend ? fields.union(["requested_execution"]):external ? fields.union(["next_kind"]):fields), number("schema", equals: 1),
                       body["next_kind"] == nil || external && body["next_mode"] as? String == "shadowsocks",
                       body["purpose"] as? String == (executionAppend ? "draft-prefix-append-execution":"draft-prefix-append"), body["execution"] as? String == "local",
-                       !executionAppend || !external && body["next_kind"] == nil && ["server","auto"].contains(body["requested_execution"] as? String ?? "") && ["wg","awg2-fast","awg2-strong","shadowsocks"].contains(body["next_mode"] as? String ?? ""),
+                       !executionAppend || !external && body["next_kind"] == nil && ["server","auto"].contains(body["requested_execution"] as? String ?? "") && ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"].contains(body["next_mode"] as? String ?? ""),
                       let revision = body["draft_revision"] as? String,
                       revision.range(of: #"\A[0-9a-f]{32}\z"#, options: .regularExpression) != nil,
                       let nodes = appendPath(body["nodes"], minimum: 1, maximum: 95),

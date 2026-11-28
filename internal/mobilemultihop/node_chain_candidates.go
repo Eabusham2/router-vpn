@@ -17,10 +17,11 @@ import (
 // back generation. Inputs are exact validated private launch captures, not a
 // host-supplied list of addresses or outbound tags.
 type NodeChainCandidateInventory struct {
-	Schema       int      `json:"schema"`
-	Revision     string   `json:"revision"`
-	Inputs       []string `json:"inputs"`
-	ResponseMode string   `json:"response_mode,omitempty"`
+	Schema          int      `json:"schema"`
+	Revision        string   `json:"revision"`
+	Inputs          []string `json:"inputs"`
+	ResponseMode    string   `json:"response_mode,omitempty"`
+	IdentitySources []string `json:"identity_sources,omitempty"`
 }
 
 func candidateInventoryResponseMode(inventory string) (string, error) {
@@ -154,7 +155,7 @@ func (c *NodeChain) newCandidatePlanInputs(position int, inventory string, multi
 	// target or grants a dormant preparation its native owner.
 	var record NodeChainCandidateInventory
 	if exactJSON([]byte(inventory), &record, NodeChainInputLimit) != nil || record.Schema != 1 ||
-		!nodeChainIdentityText(record.Revision) || len(record.Inputs) == 0 || record.ResponseMode != responseMode {
+		!nodeChainIdentityText(record.Revision) || len(record.Inputs) == 0 || record.ResponseMode != responseMode || record.IdentitySources != nil {
 		return nil, errors.New("candidate timing requires the complete original source inventory")
 	}
 	plan := &NodeChainCandidatePlan{metadataPages: &nodeChainCandidateMetadataCache{}, chain: c, multiple: multiple, inventory: inventory, revision: record.Revision, prefix: c.proofs[position]}

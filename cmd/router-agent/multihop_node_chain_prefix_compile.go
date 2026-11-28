@@ -70,3 +70,34 @@ func compileServerNodeChainPrefix(input io.Reader, output io.Writer, plan bool) 
 	}
 	return err
 }
+
+func compileServerNodeChainPrefixCatalog(input io.Reader, output io.Writer) error {
+	bad := errors.New("invalid private ordered prefix catalog")
+	raw, err := io.ReadAll(io.LimitReader(input, mobilemultihop.NodeChainInputLimit+1))
+	if err != nil || len(raw) == 0 || len(raw) > mobilemultihop.NodeChainInputLimit {
+		return bad
+	}
+	defer clear(raw)
+	catalog, err := mobilemultihop.NewNodeChainServerPrefixCatalog(string(raw))
+	if err != nil || catalog == nil {
+		return bad
+	}
+	result := struct {
+		SourceJSON string                                        `json:"source_json"`
+		Reference  multihoprelay.NodeChainPrefixCatalogReference `json:"reference"`
+	}{catalog.Source(), catalog.Reference()}
+	if result.Reference.Validate() != nil {
+		return bad
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil || len(encoded)+1 > 2*mobilemultihop.NodeChainInputLimit+4096 {
+		return bad
+	}
+	encoded = append(encoded, '\n')
+	defer clear(encoded)
+	count, err := output.Write(encoded)
+	if err == nil && count != len(encoded) {
+		return io.ErrShortWrite
+	}
+	return err
+}

@@ -38,6 +38,9 @@ func NewNodeChainServerPrefixSessionContext(ctx, lifetime context.Context, polic
 	}
 	s := &NodeChainServerPrefixSession{policy: policy, capturedPolicy: policy, capture: capture.Clone()}
 	s.self = s
+	if s.mixedStreamRoot() {
+		s.mixedCloseGate = make(chan struct{}, 1)
+	}
 	var err error
 	s.captureSHA, err = capture.Digest()
 	if err != nil {
@@ -45,7 +48,7 @@ func NewNodeChainServerPrefixSessionContext(ctx, lifetime context.Context, polic
 	}
 	if len(policy.nodes) > 0 {
 		var target PhysicalEgress
-		if policy.record.Schema == 2 && policy.nodes[0].mode == "shadowsocks" {
+		if (policy.record.Schema == 2 || policy.record.Schema == 4 || policy.record.Schema == 5) && policy.nodes[0].mode == "shadowsocks" {
 			target, err = nodeChainPrefixStreamPhysical(policy.nodes[0], policy.record.Schema)
 			if err != nil {
 				return nil, err
@@ -60,6 +63,16 @@ func NewNodeChainServerPrefixSessionContext(ctx, lifetime context.Context, polic
 		s.carrier, err = captureNodeChainPrefixCarrier(ctx, lifetime, policy.source, policy.sourceSHA, target)
 		if err != nil {
 			return s, err
+		}
+		if s.mixedStreamRoot() {
+			udp, targetErr := nodeChainPrefixStreamUDPPhysical(policy.nodes[0])
+			if targetErr != nil {
+				return s, targetErr
+			}
+			s.udpCarrier, err = captureNodeChainPrefixCarrier(ctx, lifetime, policy.source, policy.sourceSHA, udp)
+			if err != nil {
+				return s, err
+			}
 		}
 		if err = s.bindConfig(); err != nil {
 			return s, err

@@ -196,6 +196,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
                     Libbox.routerNodeChainConnectedPacketSuccessorCandidateMode(originalPlan,prefix);
             if(!responseMode.equals(expected))throw new IllegalStateException("The original candidate measurement purpose changed.");
         }
+        boolean companionInventory=appendSource!=null&&source.appendExecutionDraft()&&"hysteria2".equals(responseMode);
         boolean publicResponse="routed-public-candidate-response".equals(metric);
         if(publicResponse && appendSource==null && (!java.util.List.of("local","server","auto").contains(source.execution) || !source.members.get(source.members.size()-1).imported))throw new IllegalStateException("A public exit response requires the original imported exit.");
         if(!publicResponse&&!"routed-candidate-response".equals(metric)&&!"routed-tcp-connect".equals(metric))throw new IllegalStateException("This prefix has no supported candidate measurement; no score is available.");
@@ -210,10 +211,10 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
             imported.put(entry.id,entry);
             available.add(new AndroidNodeStore.Node(entry.id,entry.name,entry.server,null));
         }
-        available.sort(Comparator.comparing(value->value.id));Set<String> identities=new HashSet<>();JSONArray inputs=new JSONArray();
+        available.sort(Comparator.comparing(value->value.id));Set<String> identities=new HashSet<>();JSONArray inputs=new JSONArray(),identitySources=new JSONArray();
         for(AndroidNodeStore.Node node:available){
             if(excluded.contains(node.id))continue;
-            String id=node.id,input="",reason="Unsupported saved transport or Start Layer; no candidate score";
+            String id=node.id,input="",identitySource="",reason="Unsupported saved transport or Start Layer; no candidate score";
             try {
                 AndroidNodeStore.ChainSource candidate=nodes.candidateSource(node.id,node.file==null?imported.get(node.id):null);id=candidate.profileId;
                 if(excluded.contains(candidate.profileId)||!candidate.proofId.isEmpty()&&proofs.contains(candidate.proofId))continue;
@@ -227,6 +228,10 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
                     if(!candidate.imported)throw new IllegalStateException(appendSource!=null?"Choose a saved imported Shadowsocks 2022 node.":"Choose a saved literal imported Shadowsocks 2022 node.");
                     if(appendSource!=null)AndroidNodeCandidateAppendSource.requireImportedShadowsocks(candidate);
                     else AndroidNodeChainCapture.requireLiteralImportedSS(candidate);
+                }
+                if(companionInventory) {
+                    if(candidate.imported||!List.of("","off").contains(layer))throw new IllegalStateException("Hysteria2 Server and Compare candidates require paired sources with Start Layer Off.");
+                    AndroidNumericAddress.parse(profile.getString("endpoint"));
                 }
                 input=AndroidNodeChainCapture.memberInput(candidate,measuredMode(candidate),profile);
                 boolean supported;
@@ -245,16 +250,24 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
                 if(!supported)throw new IllegalStateException("Unsupported original candidate source");
                 // The native validator retains the chosen paired response
                 // carrier or the original imported TCP candidate source.
+                if(companionInventory) {
+                    identitySource=AndroidNodeChainCapture.identityInput(candidate);
+                    if(identitySource.isEmpty())throw new IllegalStateException("The Hysteria2 candidate lost its original paired companion assets.");
+                }
                 if(!identities.add(id))throw new IllegalStateException("Duplicate candidate identity");
                 reason="";
             } catch(Exception unsupported) { input=""; }
-            if(!input.isEmpty())inputs.put(input);
+            if(!input.isEmpty()) {
+                inputs.put(input);
+                if(companionInventory)identitySources.put(identitySource);
+            }
             captured.add(new Row(node.id,id,node.name,input,reason));
         }
         if(source.appendExecutionDraft()&&inputs.length()>50)
             throw new IllegalStateException("This Server or Compare request has more than 50 captured candidates; narrow the saved catalog explicitly before measuring.");
         JSONObject offeredSource=new JSONObject().put("schema",1).put("revision",signature).put("inputs",inputs);
         if(!responseMode.isEmpty())offeredSource.put("response_mode",responseMode);
+        if(companionInventory)offeredSource.put("identity_sources",identitySources);
         String offered=offeredSource.toString();
         if(offered.getBytes(StandardCharsets.UTF_8).length>40*1024*1024)
             throw new IllegalStateException("The complete saved candidate sources exceed the native source budget.");

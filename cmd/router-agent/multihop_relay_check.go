@@ -41,7 +41,7 @@ func checkRelayRegistryWithSources(registryPath, agentPath, torSources, nodeChai
 // The production executable/package paths remain fixed; tests can exercise the
 // identical checker against a real isolated build without installing it.
 type relayRegistryCheckPaths struct {
-	torSources, nodeChainSources, nodeChainPrefixSources, packagePrefix, core, temporary string
+	torSources, nodeChainSources, nodeChainPrefixSources, nodeChainPrefixCatalogSources, packagePrefix, core, temporary string
 }
 
 func checkRelayRegistryWithPaths(registryPath, agentPath string, paths relayRegistryCheckPaths) (int, error) {
@@ -71,8 +71,15 @@ func checkRelayRegistryWithPaths(registryPath, agentPath string, paths relayRegi
 	if !covered || registry.FirstPort < 26240 || registry.LastPort > 26271 {
 		return 0, errors.New("registry must use the entry tunnel address and reserved listener pool")
 	}
-	manager, err := multihoprelay.New(registry, entry.NodeID, relayCheckOnlyRunner{})
+	runner, catalog, err := newRelayPrefixSelectionRegistryCheckRunner(registry, entry, paths)
 	if err != nil {
+		return 0, err
+	}
+	manager, err := multihoprelay.New(registry, entry.NodeID, runner)
+	if err != nil {
+		if catalog != nil {
+			err = errors.Join(err, catalog.CloseContext(context.Background()))
+		}
 		return 0, err
 	}
 	defer manager.Close(context.Background())
@@ -145,6 +152,11 @@ func checkRelayRegistryWithPaths(registryPath, agentPath string, paths relayRegi
 	}
 	if err := prefixes.current(); err != nil {
 		return 0, err
+	}
+	if catalog != nil {
+		if err := catalog.CurrentContext(context.Background()); err != nil {
+			return 0, err
+		}
 	}
 	return len(registry.Exits) + len(registry.TorExits) + len(registry.NodeChains) + len(registry.NodeChainPrefixes), nil
 }

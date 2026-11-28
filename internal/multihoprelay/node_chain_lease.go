@@ -532,6 +532,10 @@ func (m *Manager) CreateChain(ctx context.Context, peer netip.Addr, request Node
 		return NodeChainLease{}, ctx.Err()
 	}
 	key := PeerKey(peer)
+	if m.prefixSelectionBusyLocked(key) {
+		m.mu.Unlock()
+		return NodeChainLease{}, ErrBusy
+	}
 	if active := m.leases[key]; active != nil {
 		if active.chain == nil || !sameNodeChainRequest(active.chain.capture.Request, q) || active.retired {
 			m.mu.Unlock()

@@ -38,6 +38,8 @@ type nodeChainAppendExecutionRun struct {
 	localIO             *nodeChainExecutionIO
 	packet              *nodeChainAppendExecutionPacket
 	packetDeadline      time.Time
+	hysteria            *nodeChainAppendExecutionHysteria
+	hysteriaDeadline    time.Time
 	ordinal             int
 }
 
@@ -56,12 +58,19 @@ func (r *NodeChainCandidateAppendExecutionRuntime) openResponseRun(ctx context.C
 		}
 	}
 	packetMode := nodeChainAppendExecutionPacketMode(r.preparation.CandidateMode())
-	var packetDeadline time.Time
+	var packetDeadline, hysteriaDeadline time.Time
 	if packetMode {
 		var bounded bool
 		packetDeadline, bounded = ctx.Deadline()
 		if !found || !bounded || source.PacketOptions == "" || source.Hysteria2Options != "" ||
 			source.Method != "" || source.Password != "" || !nodeChainCanonicalPeer(source.ClientKey) || !nodeChainCanonicalPeer(source.ServerKey) {
+			return nil, errNodeChainAppendExecution
+		}
+	} else if r.preparation.CandidateMode() == "hysteria2" {
+		var bounded bool
+		hysteriaDeadline, bounded = ctx.Deadline()
+		if !found || !bounded || source.Hysteria2Options == "" || source.PacketOptions != "" ||
+			source.Method != "" || source.Password != "" || source.ClientKey != "" || source.ServerKey != "" {
 			return nil, errNodeChainAppendExecution
 		}
 	} else if !found || source.Method == "" || source.Password == "" || wrapCandidateSS2022 == nil {
@@ -85,7 +94,7 @@ func (r *NodeChainCandidateAppendExecutionRuntime) openResponseRun(ctx context.C
 		return nil, errNodeChainAppendExecution
 	}
 	lifetime, cancel := context.WithCancel(r.lifetime)
-	run := &nodeChainAppendExecutionRun{runtime: r, source: source, request: state.Request, ctx: lifetime, cancel: cancel, ready: make(chan struct{}), gate: make(chan struct{}, 1), packetDeadline: packetDeadline}
+	run := &nodeChainAppendExecutionRun{runtime: r, source: source, request: state.Request, ctx: lifetime, cancel: cancel, ready: make(chan struct{}), gate: make(chan struct{}, 1), packetDeadline: packetDeadline, hysteriaDeadline: hysteriaDeadline}
 	run.self = run
 	r.active = run
 	r.resultRequest, r.winning, r.selection = state.Request, "", ""
@@ -179,6 +188,18 @@ func (s *nodeChainAppendExecutionRun) initialize(ctx context.Context) error {
 				return err
 			}
 			dial = packet.dial
+		} else if s.source.Hysteria2Options != "" {
+			hysteria, err := s.captureLocalHysteria(ctx, s.ctx, "", s.current)
+			s.mu.Lock()
+			s.hysteria = hysteria
+			s.mu.Unlock()
+			if err != nil || hysteria == nil {
+				return errors.Join(err, errNodeChainAppendExecution)
+			}
+			if err = hysteria.open(ctx); err != nil {
+				return err
+			}
+			dial = hysteria.dial
 		}
 		owned, err := newNodeChainExecutionIO(tag, s.source.API, s.source.Token, dial, s.current)
 		s.mu.Lock()
@@ -246,13 +267,13 @@ func (s *nodeChainAppendExecutionRun) Respond(ctx context.Context, complete func
 		return errNodeChainAppendExecution
 	}
 	s.mu.Lock()
-	initialized, winning, remote, local, packet, ordinal := s.initialized, s.winning, s.remote, s.localIO, s.packet, s.ordinal
+	initialized, winning, remote, local, packet, hysteria, ordinal := s.initialized, s.winning, s.remote, s.localIO, s.packet, s.hysteria, s.ordinal
 	s.mu.Unlock()
 	if !initialized || ordinal < 0 || ordinal >= hopmeasure.LatencyBenchmarkSamples {
 		return errNodeChainAppendExecution
 	}
 	if winning == routechoice.Local {
-		if local == nil || remote != nil || (s.source.PacketOptions != "") != (packet != nil) {
+		if local == nil || remote != nil || (s.source.PacketOptions != "") != (packet != nil) || (s.source.Hysteria2Options != "") != (hysteria != nil) || packet != nil && hysteria != nil {
 			return errNodeChainAppendExecution
 		}
 		tag := s.runtime.preparation.original.proofs[s.runtime.preparation.original.position].Tag
@@ -261,9 +282,16 @@ func (s *nodeChainAppendExecutionRun) Respond(ctx context.Context, complete func
 			if err != nil {
 				return nil, err
 			}
+			var nativeDial func(context.Context, string, string) (net.Conn, error)
 			if packet != nil {
+				nativeDial = packet.dial
+			}
+			if hysteria != nil {
+				nativeDial = hysteria.dial
+			}
+			if nativeDial != nil {
 				return nil, s.source.exchangeChallenge(call, func(parent context.Context, actual, address string) (net.Conn, error) {
-					original, e := packet.dial(parent, actual, address)
+					original, e := nativeDial(parent, actual, address)
 					var owned net.Conn
 					var keepErr error
 					if original != nil {
@@ -383,7 +411,7 @@ func (s *nodeChainAppendExecutionRun) closeContext(ctx context.Context) error {
 		return ctx.Err()
 	}
 	s.mu.Lock()
-	closed, trial, remote, lease, local, packet := s.closed, s.trial, s.remote, s.lease, s.localIO, s.packet
+	closed, trial, remote, lease, local, packet, hysteria := s.closed, s.trial, s.remote, s.lease, s.localIO, s.packet, s.hysteria
 	s.mu.Unlock()
 	if closed {
 		return nil
@@ -404,6 +432,9 @@ func (s *nodeChainAppendExecutionRun) closeContext(ctx context.Context) error {
 	// No key can be released while an original stream or trial is unjoined.
 	if failure == nil && ctx.Err() == nil && packet != nil {
 		failure = packet.close()
+	}
+	if failure == nil && ctx.Err() == nil && hysteria != nil {
+		failure = hysteria.close()
 	}
 	if failure != nil || ctx.Err() != nil {
 		return errors.Join(failure, ctx.Err())
@@ -442,6 +473,7 @@ type nodeChainAppendExecutionTrial struct {
 	remote              *nodeChainAppendExecutionRemoteCandidate
 	proofIO             *nodeChainExecutionIO
 	packet              *nodeChainAppendExecutionPacket
+	hysteria            *nodeChainAppendExecutionHysteria
 }
 
 func (s *nodeChainAppendExecutionRun) Open(context.Context, routechoice.Candidate) (routechoice.Session, error) {
@@ -494,6 +526,17 @@ func (t *nodeChainAppendExecutionTrial) initialize(ctx context.Context) error {
 			return errors.Join(e, errNodeChainAppendExecution)
 		}
 		if e = packet.open(ctx); e != nil {
+			return e
+		}
+	} else if t.candidate.Execution == routechoice.Local && t.run.source.Hysteria2Options != "" {
+		hysteria, e := t.run.captureLocalHysteria(ctx, t.ctx, t.target, t.current)
+		t.mu.Lock()
+		t.hysteria = hysteria
+		t.mu.Unlock()
+		if e != nil || hysteria == nil {
+			return errors.Join(e, errNodeChainAppendExecution)
+		}
+		if e = hysteria.open(ctx); e != nil {
 			return e
 		}
 	}
@@ -595,7 +638,7 @@ func (t *nodeChainAppendExecutionTrial) dial(ctx context.Context, tag, address s
 		return nil, errNodeChainAppendExecution
 	}
 	t.mu.Lock()
-	remote, packet := t.remote, t.packet
+	remote, packet, hysteria := t.remote, t.packet, t.hysteria
 	t.mu.Unlock()
 	if t.candidate.Execution == routechoice.Server {
 		if remote == nil {
@@ -613,7 +656,13 @@ func (t *nodeChainAppendExecutionTrial) dial(ctx context.Context, tag, address s
 		}
 		return packet.dial(ctx, actualTag, address)
 	}
-	if packet != nil {
+	if source.Hysteria2Options != "" {
+		if hysteria == nil || packet != nil {
+			return nil, errNodeChainAppendExecution
+		}
+		return hysteria.dial(ctx, actualTag, address)
+	}
+	if packet != nil || hysteria != nil {
 		return nil, errNodeChainAppendExecution
 	}
 	return dialCandidateStream(ctx, t.run.runtime.local.Dial, wrapCandidateSS2022, actualTag, source.Target.Address, source.Method, source.Password, address)
@@ -710,7 +759,7 @@ func (t *nodeChainAppendExecutionTrial) Close(ctx context.Context) error {
 	}
 	defer func() { <-t.gate }()
 	t.mu.Lock()
-	closed, proof, remote, lease, packet := t.closed, t.proofIO, t.remote, t.lease, t.packet
+	closed, proof, remote, lease, packet, hysteria := t.closed, t.proofIO, t.remote, t.lease, t.packet, t.hysteria
 	t.mu.Unlock()
 	if closed {
 		return nil
@@ -727,6 +776,9 @@ func (t *nodeChainAppendExecutionTrial) Close(ctx context.Context) error {
 	}
 	if failure == nil && ctx.Err() == nil && packet != nil {
 		failure = packet.close()
+	}
+	if failure == nil && ctx.Err() == nil && hysteria != nil {
+		failure = hysteria.close()
 	}
 	if failure != nil || ctx.Err() != nil {
 		return errors.Join(failure, ctx.Err())

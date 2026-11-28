@@ -567,20 +567,21 @@ struct RouterVPNOrderedNodeDraft {
     var executionAppendEligible: Bool {
         let nodes=prefixNodes
         guard validAppendPrefix(nodes,maximum:95) else { return false }
-        let packets=nodes.prefix(while:{RouterVPNOrderedNodes.prefixModes.contains($0["mode"] ?? "")}).count
-        guard packets > 0, nodes.dropFirst(packets).allSatisfy({$0["mode"] == "shadowsocks"}) else { return false }
+        guard RouterVPNOrderedNodes.prefixModes.contains(nodes.first?["mode"] ?? ""),
+              nodes.allSatisfy({RouterVPNOrderedNodes.prefixModes.contains($0["mode"] ?? "") || ["shadowsocks","hysteria2"].contains($0["mode"] ?? "")}) else { return false }
+        if let firstHysteria=nodes.firstIndex(where:{$0["mode"] == "hysteria2"}),
+           nodes.dropFirst(firstHysteria).contains(where:{RouterVPNOrderedNodes.prefixModes.contains($0["mode"] ?? "")}) { return false }
         return nodes.allSatisfy { row in
             guard let id=row["id"], let mode=row["mode"],
                   let profile=capturedCatalog.first(where:{$0["id"] as? String == id}) else { return false }
             return profile["node_kind"] as? String == "router-vpn" && profile["external"] == nil && RouterVPNOrderedNodes.startLayerOff(profile) &&
-                (mode != "shadowsocks" || RouterVPNOrderedNodes.pairedLiteralOff(profile))
+                (!["shadowsocks","hysteria2"].contains(mode) || RouterVPNOrderedNodes.pairedLiteralOff(profile))
         }
     }
     func acceptsExecutionAppend(mode: String) -> Bool {
         guard executionAppendEligible else { return false }
-        if mode == "shadowsocks" { return true }
-        return RouterVPNOrderedNodes.prefixModes.contains(mode) &&
-            prefixNodes.allSatisfy { RouterVPNOrderedNodes.prefixModes.contains($0["mode"] ?? "") }
+        if modes.contains("hysteria2") { return ["shadowsocks","hysteria2"].contains(mode) }
+        return ["shadowsocks","hysteria2"].contains(mode) || RouterVPNOrderedNodes.prefixModes.contains(mode)
     }
     func appendBody(mode: String, kind: String = "router-vpn", requestedExecution: String = "local", revision: UUID, current: [String:Any]) throws -> [String:Any] {
         guard ["local","server","auto"].contains(requestedExecution),
@@ -1787,7 +1788,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         appendMode.removeAllItems()
         for mode in ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"] { appendMode.addItem(withTitle:RouterVPNOrderedNodes.modeName(mode));appendMode.lastItem?.representedObject=mode }
         if !draft.pairedProxyEntryPrefix { appendMode.addItem(withTitle:"Imported Shadowsocks");appendMode.lastItem?.representedObject="external-shadowsocks" }
-        for mode in ["wg","awg2-fast","awg2-strong","shadowsocks"] {
+        for mode in ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"] {
             let server="server-"+mode, compare="auto-"+mode
             if draft.acceptsExecutionAppend(mode: mode) || [server,compare].contains(originalNext ?? "") {
                 let name=RouterVPNOrderedNodes.modeName(mode)
@@ -1918,11 +1919,11 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
     private func measureAppend() {
         do {
             guard let owner=productOwner, let choice=appendMode.selectedItem?.representedObject as? String else { throw RouterVPNOrderedNodes.issue("Choose the next transport.") }
-            let remoteModes=["wg","awg2-fast","awg2-strong","shadowsocks"]
+            let remoteModes=["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"]
             let mode=remoteModes.first(where:{choice == "server-"+$0 || choice == "auto-"+$0}) ?? (choice == "external-shadowsocks" ? "shadowsocks":choice)
             let kind=choice == "external-shadowsocks" ? "external":"router-vpn"
             let requested=remoteModes.contains(where:{choice == "server-"+$0}) ? "server":remoteModes.contains(where:{choice == "auto-"+$0}) ? "auto":"local"
-            guard requested == "local" || draft.acceptsExecutionAppend(mode: mode) else { throw RouterVPNOrderedNodes.issue("Server and Compare require paired nodes with Start Layer Off. WireGuard and AmneziaWG next nodes require a packet-only prefix; Shadowsocks may follow a packet head with a literal Shadowsocks tail.") }
+            guard requested == "local" || draft.acceptsExecutionAppend(mode: mode) else { throw RouterVPNOrderedNodes.issue("Server and Compare require a WireGuard or AmneziaWG first hop, paired nodes with literal addresses, and Start Layer Off. After Hysteria2, choose Shadowsocks or Hysteria2.") }
             let current=try owner.api.json("/api/profiles",timeout:5) as? [String:Any] ?? [:]
             let original=revision, position=draft.prefixes.count-1
             let body=try draft.appendBody(mode:mode,kind:kind,requestedExecution:requested,revision:original,current:current)

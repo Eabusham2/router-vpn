@@ -16,12 +16,13 @@ type relayNodeChainPrefixCandidateOperation struct {
 	digest                                                    string
 	packetKeys                                                *relayNodeChainPacketKeyReservation
 	pairing                                                   string
+	hysteria                                                  string
 	mu                                                        sync.Mutex
 	attempted, prepared, drained, retired, publicationStarted bool
 }
 
 func (p *relayNodeChainPrefixProcess) NewPrefixCandidateOperation(ctx context.Context, c multihoprelay.NodeChainPrefixCandidateCapture) (multihoprelay.NodeChainPrefixCandidateOperation, error) {
-	if p == nil || p.self != p || ctx == nil || ctx.Err() != nil || c.Validate() != nil || !p.Alive() || p.current == nil || !p.current() {
+	if p == nil || p.self != p || ctx == nil || ctx.Err() != nil || c.Validate() != nil || !p.Alive() || p.current == nil || !p.current(ctx) {
 		return nil, multihoprelay.ErrOwnership
 	}
 	parent, err := c.Lease.Digest()
@@ -55,7 +56,7 @@ func (p *relayNodeChainPrefixProcess) NewPrefixCandidateOperation(ctx context.Co
 			return op, pairErr
 		}
 		keys, pairing, keyErr := p.packetCandidateKeys(c.Clone())
-		if keyErr != nil || pairing != expected || !p.current() {
+		if keyErr != nil || pairing != expected || !p.current(ctx) {
 			return op, errors.Join(keyErr, multihoprelay.ErrOwnership)
 		}
 		op.packetKeys, keyErr = p.packetKeys.reservePrefixCandidate(p, op, keys)
@@ -63,9 +64,29 @@ func (p *relayNodeChainPrefixProcess) NewPrefixCandidateOperation(ctx context.Co
 			return op, keyErr
 		}
 		op.pairing = pairing
-		if !p.current() {
+		if !p.current(ctx) {
 			return op, multihoprelay.ErrOwnership
 		}
+	}
+	if c.Request.IsHysteria() {
+		// The same original operation is retained even if its private identity
+		// check fails. No HY2 endpoint or candidate IPC has been acquired.
+		if p.hysteriaCandidateIdentity == nil {
+			return op, multihoprelay.ErrOwnership
+		}
+		pair, pairErr := c.HysteriaPair()
+		if pairErr != nil {
+			return op, pairErr
+		}
+		expected, pairErr := pair.Digest()
+		if pairErr != nil {
+			return op, pairErr
+		}
+		identity, identityErr := p.hysteriaCandidateIdentity(c.Clone())
+		if identityErr != nil || identity != expected || !p.current(ctx) {
+			return op, errors.Join(identityErr, multihoprelay.ErrOwnership)
+		}
+		op.hysteria = identity
 	}
 	if ctx.Err() != nil {
 		return op, ctx.Err()
@@ -109,7 +130,7 @@ func (p *relayNodeChainPrefixProcess) beginCandidatePreparePublication(c *multih
 	}
 	op.mu.Lock()
 	defer op.mu.Unlock()
-	if !op.attempted || op.retired || op.drained || op.publicationStarted || !op.packetCurrent() {
+	if !op.attempted || op.retired || op.drained || op.publicationStarted || !op.packetCurrent() || !op.hysteriaCurrent() {
 		return multihoprelay.ErrOwnership
 	}
 	op.publicationStarted = true
@@ -138,7 +159,7 @@ func (op *relayNodeChainPrefixCandidateOperation) exchangeLocked(ctx context.Con
 	op.mu.Lock()
 	retired := op.retired || op.drained
 	op.mu.Unlock()
-	if operation != "candidate-close" && (retired || !p.Alive() || p.current == nil || !p.current() || !time.Now().Before(op.capture.Deadline) || !op.packetCurrent()) {
+	if operation != "candidate-close" && (retired || !p.Alive() || p.current == nil || !p.current(ctx) || !time.Now().Before(op.capture.Deadline) || !op.packetCurrent() || !op.hysteriaCurrent()) {
 		return multihoprelay.NodeChainPrefixCandidateReceipt{}, bad
 	}
 	nonce := challenge
@@ -156,10 +177,10 @@ func (op *relayNodeChainPrefixCandidateOperation) exchangeLocked(ctx context.Con
 	if operation == "candidate-prepare" {
 		expected = ""
 	}
-	if err != nil || reply.CandidateReceipt == nil || reply.CandidateReceipt.Validate(op.capture, expected, began, time.Now()) != nil || ctx.Err() != nil || !op.original() || !op.packetReceiptCurrent(reply.CandidateReceipt) {
+	if err != nil || reply.CandidateReceipt == nil || reply.CandidateReceipt.Validate(op.capture, expected, began, time.Now()) != nil || ctx.Err() != nil || !op.original() || !op.packetReceiptCurrent(reply.CandidateReceipt) || !op.hysteriaReceiptCurrent(reply.CandidateReceipt) {
 		return multihoprelay.NodeChainPrefixCandidateReceipt{}, errors.Join(err, bad)
 	}
-	if operation != "candidate-close" && (p.current == nil || !p.current() || !p.Alive()) {
+	if operation != "candidate-close" && (p.current == nil || !p.current(ctx) || !p.Alive()) {
 		return multihoprelay.NodeChainPrefixCandidateReceipt{}, bad
 	}
 	if operation == "candidate-prepare" {

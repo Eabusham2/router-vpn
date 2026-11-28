@@ -34,20 +34,27 @@ type NodeChainPrefixCandidateRequest struct {
 	ExpiresAt                int64                  `json:"expires_at"`
 	CandidateMode            string                 `json:"candidate_mode,omitempty"`
 	CandidateClientPublicKey string                 `json:"candidate_client_public_key,omitempty"`
+	CandidateHysteriaSHA256  string                 `json:"candidate_hysteria_sha256,omitempty"`
 }
 
 func prefixCompareTarget(target string) bool {
 	return target == "https://1.1.1.1/cdn-cgi/trace" || target == "https://1.0.0.1/cdn-cgi/trace"
 }
 func (q NodeChainPrefixCandidateRequest) Validate() error {
-	if q.Schema != 1 && q.Schema != 2 || q.Purpose != NodeChainPrefixPurpose || q.Lease.validateShape() != nil || !proofID.MatchString(q.LeaseOwnerID) ||
+	if q.Schema != 1 && q.Schema != 2 && q.Schema != 3 || q.Purpose != NodeChainPrefixPurpose || q.Lease.validateShape() != nil || !proofID.MatchString(q.LeaseOwnerID) ||
 		!nonce.MatchString(q.TrialID) || !nonce.MatchString(q.OperationID) || q.TrialID == q.OperationID || !prefixProfileID(q.CandidateID) ||
 		!proofID.MatchString(q.CandidateSourceSHA256) || q.AppendPosition != q.Lease.ActualPrefixCount() ||
 		q.InventorySHA256 != q.Lease.InventorySHA256 || q.ExpiresAt <= 0 {
 		return errNodeChainPrefix
 	}
-	if q.IsPacket() {
-		if q.Lease.Schema != 3 || !nodeChainPacketMode(q.CandidateMode) || !nodeChainPacketPublic(q.CandidateClientPublicKey) {
+	if q.Schema == 3 {
+		if !q.IsHysteria() || q.Lease.Schema != 5 || q.CandidateClientPublicKey != "" || !proofID.MatchString(q.CandidateHysteriaSHA256) {
+			return errNodeChainPrefix
+		}
+	} else if q.CandidateHysteriaSHA256 != "" {
+		return errNodeChainPrefix
+	} else if q.IsPacket() {
+		if q.Lease.Schema != 3 && q.Lease.Schema != 4 || !nodeChainPacketMode(q.CandidateMode) || !nodeChainPacketPublic(q.CandidateClientPublicKey) {
 			return errNodeChainPrefix
 		}
 		for _, key := range q.Lease.LocalPacketPublicKeys {
@@ -74,6 +81,9 @@ func (q NodeChainPrefixCandidateRequest) Clone() NodeChainPrefixCandidateRequest
 func (q NodeChainPrefixCandidateRequest) Digest() (string, error) {
 	if err := q.Validate(); err != nil {
 		return "", err
+	}
+	if q.IsHysteria() {
+		return nodeChainDigest("routervpn-node-chain-prefix-candidate-request-v3", q)
 	}
 	if q.IsPacket() {
 		return nodeChainDigest("routervpn-node-chain-prefix-candidate-request-v2", q)
@@ -170,6 +180,7 @@ type NodeChainPrefixCandidateReceipt struct {
 	Nonce                 string    `json:"nonce"`
 	ObservedAt            time.Time `json:"observed_at"`
 	PairingSHA256         string    `json:"pairing_sha256,omitempty"`
+	HysteriaSHA256        string    `json:"hysteria_sha256,omitempty"`
 }
 
 func (r NodeChainPrefixCandidateReceipt) Validate(c NodeChainPrefixCandidateCapture, challenge string, started, now time.Time) error {
@@ -186,12 +197,23 @@ func (r NodeChainPrefixCandidateReceipt) Validate(c NodeChainPrefixCandidateCapt
 			return errNodeChainPrefix
 		}
 	}
+	hysteria := ""
+	if q.IsHysteria() {
+		pair, pairErr := c.hysteriaPair()
+		if pairErr != nil {
+			return errNodeChainPrefix
+		}
+		hysteria, pairErr = pair.Digest()
+		if pairErr != nil {
+			return errNodeChainPrefix
+		}
+	}
 	limit := NodeChainCandidateMaximumConnects
 	if q.ChildPurpose == NodeChainPrefixComparePair {
 		limit = 2
 	}
 	_, offset := r.ObservedAt.Zone()
-	if err != nil || r.PairingSHA256 != pairing || r.Schema != 1 || r.Purpose != NodeChainPrefixPurpose || r.CaptureSHA256 != digest || r.OwnerID != c.OwnerID || r.LeaseOwnerID != c.Lease.OwnerID ||
+	if err != nil || r.PairingSHA256 != pairing || r.HysteriaSHA256 != hysteria || r.Schema != 1 || r.Purpose != NodeChainPrefixPurpose || r.CaptureSHA256 != digest || r.OwnerID != c.OwnerID || r.LeaseOwnerID != c.Lease.OwnerID ||
 		r.TrialID != q.TrialID || r.OperationID != q.OperationID || r.CandidateID != q.CandidateID || r.CandidateSourceSHA256 != q.CandidateSourceSHA256 ||
 		r.AppendPosition != q.AppendPosition || r.ChildPurpose != q.ChildPurpose || r.ExternalTarget != q.ExternalTarget || r.Connections < 0 || r.Connections > limit ||
 		challenge != "" && !proofID.MatchString(challenge) || r.Nonce != challenge || offset != 0 || r.ObservedAt.Before(started) || r.ObservedAt.After(now) || r.Drained && r.Prepared {

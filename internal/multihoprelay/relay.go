@@ -62,6 +62,8 @@ type Config struct {
 	NodeChains []NodeChainDescriptor `json:"node_chains,omitempty"`
 	// Separate unfinished-prefix registrations share the same peer/port/key ledger.
 	NodeChainPrefixes []NodeChainPrefixDescriptor `json:"node_chain_prefixes,omitempty"`
+	// Optional captured operator catalog; it grants no prefix worker by itself.
+	NodeChainPrefixCatalog *NodeChainPrefixCatalogReference `json:"node_chain_prefix_catalog,omitempty"`
 }
 type Request struct {
 	SessionID      string `json:"session_id"`
@@ -122,18 +124,23 @@ type live struct {
 	packetPins []string
 }
 type Manager struct {
-	mu             sync.Mutex
-	cfg            Config
-	node           string
-	runner         Runner
-	leases         map[string]*live
-	now            func() time.Time
-	closed         bool
-	packetEpoch    string
-	packetAttempts map[string]int64
-	torAttempts    map[string]torAttempt
-	chainAttempts  map[string]nodeChainAttempt
-	prefixAttempts map[string]nodeChainPrefixAttempt
+	mu                      sync.Mutex
+	cfg                     Config
+	node                    string
+	runner                  Runner
+	leases                  map[string]*live
+	now                     func() time.Time
+	closed                  bool
+	packetEpoch             string
+	packetAttempts          map[string]int64
+	torAttempts             map[string]torAttempt
+	chainAttempts           map[string]nodeChainAttempt
+	prefixAttempts          map[string]nodeChainPrefixAttempt
+	prefixSelectionCatalog  NodeChainPrefixSelectionCatalog
+	prefixSelectionRunner   NodeChainPrefixSelectionRunner
+	prefixSelections        map[string]*nodeChainPrefixSelectionAttempt
+	prefixSelectionPending  map[string]*nodeChainPrefixSelectionAttempt
+	prefixSelectionAttempts map[string]*nodeChainPrefixSelectionAttempt
 }
 
 func New(c Config, node string, r Runner) (*Manager, error) {
@@ -216,8 +223,12 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 	if _, err := rand.Read(epochBytes); err != nil {
 		return nil, errors.New("relay ownership epoch could not be generated")
 	}
-	return &Manager{cfg: frozen, node: node, runner: r, leases: map[string]*live{}, now: time.Now,
-		packetEpoch: hex.EncodeToString(epochBytes), packetAttempts: map[string]int64{}, torAttempts: map[string]torAttempt{}, chainAttempts: map[string]nodeChainAttempt{}, prefixAttempts: map[string]nodeChainPrefixAttempt{}}, nil
+	m := &Manager{cfg: frozen, node: node, runner: r, leases: map[string]*live{}, now: time.Now,
+		packetEpoch: hex.EncodeToString(epochBytes), packetAttempts: map[string]int64{}, torAttempts: map[string]torAttempt{}, chainAttempts: map[string]nodeChainAttempt{}, prefixAttempts: map[string]nodeChainPrefixAttempt{}}
+	if err := m.initializePrefixSelection(); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 func PeerKey(peer netip.Addr) string { return peer.Unmap().String() }
 func (m *Manager) Available() []map[string]string {
@@ -373,6 +384,9 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 		return Lease{}, err
 	}
 	key := PeerKey(peer)
+	if m.prefixSelectionBusyLocked(key) {
+		return Lease{}, ErrBusy
+	}
 	if old := m.leases[key]; old != nil {
 		if old.Request != q {
 			return Lease{}, ErrBusy
@@ -577,12 +591,16 @@ func (m *Manager) reapLocked(ctx context.Context) error {
 }
 func (m *Manager) Sweep(ctx context.Context) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.reapLocked(ctx)
+	err := m.reapLocked(ctx)
+	m.mu.Unlock()
+	selectionErr := m.sweepPrefixSelections(ctx)
+	if selectionErr == nil {
+		return err
+	}
+	return errors.Join(err, selectionErr)
 }
 func (m *Manager) Close(ctx context.Context) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.closed = true
 	var last error
 	for key := range m.leases {
@@ -590,7 +608,12 @@ func (m *Manager) Close(ctx context.Context) error {
 			last = err
 		}
 	}
-	return last
+	m.mu.Unlock()
+	selectionErr := m.closePrefixSelections(ctx)
+	if selectionErr == nil {
+		return last
+	}
+	return errors.Join(last, selectionErr)
 }
 
 const maxTransportBytes = 256 * 1024

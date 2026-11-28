@@ -342,23 +342,26 @@ func (q *orderedCandidateAppendRequest) validate() error {
 		return bad
 	}
 	if q.Purpose == orderedCandidateAppendExecutionScope {
-		if (q.RequestedExecution != "server" && q.RequestedExecution != "auto") || (q.NextMode != "shadowsocks" && !mobilemultihop.NodeChainPrefixMode(q.NextMode)) || q.NextKind != "" {
+		if (q.RequestedExecution != "server" && q.RequestedExecution != "auto") || (q.NextMode != "shadowsocks" && q.NextMode != "hysteria2" && !mobilemultihop.NodeChainPrefixMode(q.NextMode)) || q.NextKind != "" {
 			return bad
 		}
 		// This checks only public row order. The original captured source
 		// still proves every member is paired, literal, Off and current.
-		streamTail := false
+		hasHysteria := false
 		for position, node := range q.Nodes {
 			if mobilemultihop.NodeChainPrefixMode(node.Mode) {
-				if streamTail {
+				if hasHysteria {
 					return bad
 				}
 				continue
 			}
-			if position == 0 || node.Mode != "shadowsocks" || mobilemultihop.NodeChainPrefixMode(q.NextMode) {
+			if position == 0 || node.Mode != "shadowsocks" && node.Mode != "hysteria2" {
 				return bad
 			}
-			streamTail = true
+			hasHysteria = hasHysteria || node.Mode == "hysteria2"
+		}
+		if hasHysteria && q.NextMode != "shadowsocks" && q.NextMode != "hysteria2" {
+			return bad
 		}
 	} else if q.RequestedExecution != "" {
 		return bad

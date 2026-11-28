@@ -329,20 +329,31 @@ func (p *desktopMacOSProcess) stopAndJoinLocked(ctx context.Context) error {
 	// private inputs and inherited locks before the exact stop exchange.
 	p.retiring.Store(true)
 	if !p.nativeAcknowledged {
-		if err := p.bootstrap.Stop(ctx); err != nil {
-			p.nativeStopErr = err
-			return err
+		// A prior terminal-send cancellation can leave the exact native
+		// cleanup already acknowledged. Join that original child without
+		// replaying the revoked exchange; its successful Wait is still required.
+		if p.bootstrap.RetirementAcknowledged(ctx) != nil {
+			if err := p.bootstrap.Stop(ctx); err != nil {
+				if p.nativeStopErr == nil {
+					p.nativeStopErr = err
+				}
+				return err
+			}
 		}
 		p.nativeAcknowledged = true
 	}
 	select {
 	case <-ctx.Done():
-		p.nativeStopErr = ctx.Err()
+		if p.nativeStopErr == nil {
+			p.nativeStopErr = ctx.Err()
+		}
 		return ctx.Err()
 	case <-p.joined:
 	}
 	if p.waitErr != nil {
-		p.nativeStopErr = p.waitErr
+		if p.nativeStopErr == nil {
+			p.nativeStopErr = p.waitErr
+		}
 		return p.waitErr
 	}
 	p.nativeStopped = true

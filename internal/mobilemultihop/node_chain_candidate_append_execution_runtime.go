@@ -94,6 +94,7 @@ type nodeChainAppendExecutionRuntimeCapture struct {
 		Nonce string `json:"nonce"`
 		Port  int    `json:"port"`
 	} `json:"proposal"`
+	PrefixSelection *multihoprelay.NodeChainPrefixSelectionReceipt `json:"prefix_selection,omitempty"`
 }
 type NodeChainCandidateAppendExecutionRuntime struct {
 	self                              *NodeChainCandidateAppendExecutionRuntime
@@ -112,6 +113,7 @@ type NodeChainCandidateAppendExecutionRuntime struct {
 	descriptor                        multihoprelay.NodeChainPrefixDescriptor
 	discovery                         multihoprelay.NodeChainPrefixDiscovery
 	control                           *nodeChainExecutionIO
+	prefixSelection                   *nodeChainAppendExecutionSelection
 	service                           *hopmeasure.CandidateService
 	active                            *nodeChainAppendExecutionRun
 	pending                           map[*nodeChainAppendExecutionLease]bool
@@ -248,7 +250,7 @@ func (r *NodeChainCandidateAppendExecutionRuntime) StartContext(parent context.C
 	}
 	bounded, finish := context.WithTimeout(lifetime, 8*time.Second)
 	defer finish()
-	discovery, descriptor, err := r.fetchDiscovery(bounded)
+	discovery, descriptor, err := r.initialDiscovery(bounded)
 	if err != nil {
 		return err
 	}
@@ -257,6 +259,16 @@ func (r *NodeChainCandidateAppendExecutionRuntime) StartContext(parent context.C
 		return err
 	}
 	capture := nodeChainAppendExecutionRuntimeCapture{Source: r.preparation.Source(), LocalPreparationSource: r.preparation.original.source, LocalPreparationCapture: r.preparation.original.capture, Identity: identity, Discovery: discovery, Descriptor: descriptor}
+	r.mu.Lock()
+	prefixSelection := r.prefixSelection
+	r.mu.Unlock()
+	if prefixSelection != nil {
+		receipt, ok := prefixSelection.receipt()
+		if !ok {
+			return errNodeChainAppendExecution
+		}
+		capture.PrefixSelection = &receipt
+	}
 	capture.Proposal.Nonce = nonce
 	// The proposal stays bound to the captured range. A later lease uses a fresh
 	// acquisition identity; a collision is refusal, never an unreviewed port retry.
@@ -283,6 +295,7 @@ func (r *NodeChainCandidateAppendExecutionRuntime) fetchDiscovery(ctx context.Co
 	}
 	r.mu.Lock()
 	control := r.control
+	prefixSelection := r.prefixSelection
 	r.mu.Unlock()
 	if control == nil {
 		return fail()
@@ -304,6 +317,9 @@ func (r *NodeChainCandidateAppendExecutionRuntime) fetchDiscovery(ctx context.Co
 		}
 	}
 	if matches != 1 || descriptor.EntryNodeID != r.preparation.policy.localMembers[0].NodeID || discovery.NodeID != descriptor.EntryNodeID {
+		return fail()
+	}
+	if prefixSelection != nil && !prefixSelection.matches(discovery, descriptor) {
 		return fail()
 	}
 	return discovery, descriptor, nil
@@ -620,6 +636,7 @@ func (r *NodeChainCandidateAppendExecutionRuntime) CloseContext(ctx context.Cont
 		leases = append(leases, lease)
 	}
 	control := r.control
+	prefixSelection := r.prefixSelection
 	r.mu.Unlock()
 	if active != nil {
 		if err := active.closeContext(ctx); err != nil {
@@ -628,6 +645,11 @@ func (r *NodeChainCandidateAppendExecutionRuntime) CloseContext(ctx context.Cont
 	}
 	for _, lease := range leases {
 		if err := lease.close(ctx); err != nil {
+			return err
+		}
+	}
+	if prefixSelection != nil {
+		if err := prefixSelection.close(ctx); err != nil {
 			return err
 		}
 	}

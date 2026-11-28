@@ -69,6 +69,14 @@ func (r *relayNodeChainExecRunner) StartPrefix(ctx context.Context, capture mult
 	if err != nil {
 		return nil, bad
 	}
+	return r.startPrefixWithSource(ctx, capture, policy, func(context.Context) bool { return currentSource() })
+}
+
+func (r *relayNodeChainExecRunner) startPrefixWithSource(ctx context.Context, capture multihoprelay.NodeChainPrefixCapture, policy *mobilemultihop.NodeChainServerPrefixPolicy, currentSource func(context.Context) bool) (multihoprelay.NodeChainPrefixProcess, error) {
+	bad := errors.New("owned ordered prefix relay could not start")
+	if policy == nil || currentSource == nil {
+		return nil, bad
+	}
 	image, info, digest, err := captureRelayNodeChainImage(r.core)
 	if err != nil {
 		return nil, bad
@@ -92,8 +100,11 @@ func (r *relayNodeChainExecRunner) StartPrefix(ctx context.Context, capture mult
 	}
 	p.original = original
 	p.packetKeys = &r.packetKeys
-	if capture.Source.Schema == 3 {
+	if capture.Source.Schema == 3 || capture.Source.Schema == 4 && capture.Source.PacketCandidateMode() != "" {
 		p.packetCandidateKeys = policy.PacketCandidateRuntimeKeys
+	}
+	if capture.Source.HysteriaCandidateMode() != "" {
+		p.hysteriaCandidateIdentity = policy.HysteriaCandidateRuntimeIdentity
 	}
 	keys, err := policy.PacketRuntimeKeys()
 	if err != nil {
@@ -121,8 +132,8 @@ func (r *relayNodeChainExecRunner) StartPrefix(ctx context.Context, capture mult
 	if atomicWritePrivilegedState(filepath.Join(dir, "node-chain-prefix-capture.json"), raw) != nil || atomicWritePrivilegedState(filepath.Join(dir, "node-chain-prefix-source.json"), []byte(policy.Source())) != nil {
 		return p, bad
 	}
-	p.current = func() bool {
-		if !currentSource() {
+	p.current = func(currentContext context.Context) bool {
+		if !currentSource(currentContext) {
 			return false
 		}
 		now, err := os.Lstat(r.core)
@@ -133,7 +144,7 @@ func (r *relayNodeChainExecRunner) StartPrefix(ctx context.Context, capture mult
 	command.Dir = dir
 	command.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C"}
 	command.Stderr = io.Discard
-	if configureRelayProcess(command) != nil || !p.current() {
+	if configureRelayProcess(command) != nil || !p.current(ctx) {
 		return p, bad
 	}
 	if err = p.start(command); err != nil {
@@ -151,32 +162,33 @@ func (r *relayNodeChainExecRunner) StartPrefix(ctx context.Context, capture mult
 }
 
 type relayNodeChainPrefixProcess struct {
-	self                *relayNodeChainPrefixProcess
-	packetKeys          *relayNodeChainPacketKeyLedger
-	packetBase          *relayNodeChainPacketKeyReservation
-	packetCandidateKeys func(multihoprelay.NodeChainPrefixCandidateCapture) ([]string, string, error)
-	capture             multihoprelay.NodeChainPrefixCapture
-	digest              string
-	started             time.Time
-	command             *exec.Cmd
-	done                chan struct{}
-	waitError           error
-	input               io.WriteCloser
-	responses           chan multihoprelay.NodeChainPrefixIPCResponse
-	readerDone          chan struct{}
-	gate                chan struct{}
-	closed, bad         atomic.Bool
-	responseMu          sync.Mutex
-	pendingNonce        string
-	responded           bool
-	sequence            uint64
-	dir                 string
-	original            os.FileInfo
-	root                *os.Root
-	removed, cleaned    bool
-	current             func() bool
-	candidateMu         sync.Mutex
-	candidate           *relayNodeChainPrefixCandidateOperation
+	self                      *relayNodeChainPrefixProcess
+	packetKeys                *relayNodeChainPacketKeyLedger
+	packetBase                *relayNodeChainPacketKeyReservation
+	packetCandidateKeys       func(multihoprelay.NodeChainPrefixCandidateCapture) ([]string, string, error)
+	hysteriaCandidateIdentity func(multihoprelay.NodeChainPrefixCandidateCapture) (string, error)
+	capture                   multihoprelay.NodeChainPrefixCapture
+	digest                    string
+	started                   time.Time
+	command                   *exec.Cmd
+	done                      chan struct{}
+	waitError                 error
+	input                     io.WriteCloser
+	responses                 chan multihoprelay.NodeChainPrefixIPCResponse
+	readerDone                chan struct{}
+	gate                      chan struct{}
+	closed, bad               atomic.Bool
+	responseMu                sync.Mutex
+	pendingNonce              string
+	responded                 bool
+	sequence                  uint64
+	dir                       string
+	original                  os.FileInfo
+	root                      *os.Root
+	removed, cleaned          bool
+	current                   func(context.Context) bool
+	candidateMu               sync.Mutex
+	candidate                 *relayNodeChainPrefixCandidateOperation
 }
 
 func newRelayNodeChainPrefixProcess(c multihoprelay.NodeChainPrefixCapture, dir string) *relayNodeChainPrefixProcess {
@@ -339,13 +351,13 @@ func (p *relayNodeChainPrefixProcess) SnapshotPrefix(ctx context.Context, nonce 
 	}
 	defer func() { <-p.gate }()
 	began := time.Now()
-	if p.current != nil && !p.current() {
-		return multihoprelay.NodeChainPrefixExecutionReceipt{}, errors.New("original ordered source changed")
-	}
 	bounded, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
+	if p.current != nil && !p.current(bounded) {
+		return multihoprelay.NodeChainPrefixExecutionReceipt{}, errors.New("original ordered source changed")
+	}
 	r, err := p.request(bounded, "snapshot", nonce, nil)
-	if err != nil || ctx.Err() != nil || r.Receipt == nil || !p.Alive() || r.Receipt.Sequence <= p.sequence || time.Since(began) > time.Second || multihoprelay.ValidateNodeChainPrefixExecutionReceipt(*r.Receipt, p.capture, nonce, p.started, time.Now()) != nil || p.current != nil && !p.current() || ctx.Err() != nil {
+	if err != nil || ctx.Err() != nil || r.Receipt == nil || !p.Alive() || r.Receipt.Sequence <= p.sequence || time.Since(began) > time.Second || multihoprelay.ValidateNodeChainPrefixExecutionReceipt(*r.Receipt, p.capture, nonce, p.started, time.Now()) != nil || p.current != nil && !p.current(bounded) || bounded.Err() != nil || ctx.Err() != nil {
 		return multihoprelay.NodeChainPrefixExecutionReceipt{}, errors.New("original ordered receipt is invalid")
 	}
 	p.sequence = r.Receipt.Sequence
@@ -359,7 +371,7 @@ func (p *relayNodeChainPrefixProcess) PreparePrefix(ctx context.Context) error {
 	if err := p.lock(ctx); err != nil {
 		return err
 	}
-	if p.current != nil && !p.current() {
+	if p.current != nil && !p.current(ctx) {
 		<-p.gate
 		return errors.New("original ordered source changed before bootstrap")
 	}

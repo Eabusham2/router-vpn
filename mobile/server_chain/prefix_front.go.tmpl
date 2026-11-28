@@ -39,6 +39,10 @@ type routerVPNServerPrefixCandidate struct {
 	packetEndpoint                                 mobilemultihop.NodeChainCandidateEndpoint
 	packetClose                                    *routerVPNServerChainClose
 	pairingSHA                                     string
+	hysteriaRequest                                *mobilemultihop.NodeChainServerPrefixCandidateHysteriaRequest
+	hysteriaEndpoint                               mobilemultihop.NodeChainCandidateEndpoint
+	hysteriaClose                                  *routerVPNServerChainClose
+	hysteriaSHA                                    string
 	prepareDone                                    chan struct{}
 	quota                                          *multihoprelay.NodeChainPrefixCandidateAdmission
 	tag, address, method, password, privateAddress string
@@ -146,6 +150,10 @@ func (op *routerVPNServerPrefixCandidate) current(ctx context.Context) bool {
 		valid = valid && op.packetRequest != nil && op.packetEndpoint != nil && op.packetClose != nil &&
 			op.packetClose.original == op.packetEndpoint && op.packetRequest.PairingSHA256() == op.pairingSHA && op.pairingSHA != ""
 	}
+	if op.capture.Request.IsHysteria() {
+		valid = valid && op.hysteriaRequest != nil && op.hysteriaEndpoint != nil && op.hysteriaClose != nil &&
+			op.hysteriaClose.original == op.hysteriaEndpoint && op.hysteriaRequest.HysteriaSHA256() == op.hysteriaSHA && op.hysteriaSHA != ""
+	}
 	target := op.target
 	op.mu.Unlock()
 	if !valid || target == nil || !op.owner.preparedCurrent(ctx) || target.CurrentContext(ctx) != nil {
@@ -252,6 +260,8 @@ func (op *routerVPNServerPrefixCandidate) NewConnectionEx(ctx context.Context, c
 	var raw net.Conn
 	if op.capture.Request.IsPacket() {
 		raw, err = op.packetRequest.DialProbe(bounded, op.packetEndpoint, destination.String())
+	} else if op.capture.Request.IsHysteria() {
+		raw, err = op.hysteriaRequest.DialProbe(bounded, op.hysteriaEndpoint, destination.String())
 	} else if op.tag != "" {
 		raw, err = op.owner.dialOriginal(bounded, op.tag, op.address)
 	} else if op.direct != nil {
@@ -277,10 +287,10 @@ func (op *routerVPNServerPrefixCandidate) NewConnectionEx(ctx context.Context, c
 	if op.capture.Request.ChildPurpose == multihoprelay.NodeChainPrefixComparePair {
 		remote := raw
 		var e error
-		if !op.capture.Request.IsPacket() {
+		if !op.capture.Request.IsPacket() && !op.capture.Request.IsHysteria() {
 			remote, e = wrap(bounded, raw, op.method, op.password, destination.String())
 		}
-		if remote != nil && !op.capture.Request.IsPacket() {
+		if remote != nil && !op.capture.Request.IsPacket() && !op.capture.Request.IsHysteria() {
 			op.retain(remote)
 		}
 		if e != nil || remote == nil || !op.current(bounded) {
@@ -323,6 +333,8 @@ func (op *routerVPNServerPrefixCandidate) NewConnectionEx(ctx context.Context, c
 	var reply string
 	if op.capture.Request.IsPacket() {
 		reply, err = op.packetRequest.ReplyPacket(bounded, raw, nonce, string(frame[32:]))
+	} else if op.capture.Request.IsHysteria() {
+		reply, err = op.hysteriaRequest.ReplyHysteria(bounded, raw, nonce, string(frame[32:]))
 	} else {
 		reply, err = op.target.Reply(bounded, raw, nonce, string(frame[32:]), wrap)
 	}
@@ -344,7 +356,7 @@ func (op *routerVPNServerPrefixCandidate) Prepare(ctx context.Context) error {
 	}
 	op.attempted = true
 	var prepareDone chan struct{}
-	if op.capture.Request.IsPacket() {
+	if op.capture.Request.IsPacket() || op.capture.Request.IsHysteria() {
 		prepareDone = make(chan struct{})
 		op.prepareDone = prepareDone
 	}
@@ -409,6 +421,25 @@ func (op *routerVPNServerPrefixCandidate) Prepare(ctx context.Context) error {
 		}
 		if !stopped || e != nil || endpoint == nil || ctx.Err() != nil ||
 			op.ServerPrefixCandidateCurrentContext(ctx, request) != nil {
+			op.cancel()
+			return errors.Join(e, ctx.Err(), errServerChainFront)
+		}
+	} else if op.capture.Request.IsHysteria() {
+		request, e := op.target.NewHysteriaRequest(ctx, op.owner.session, op.capture, op)
+		op.mu.Lock()
+		op.hysteriaRequest = request
+		op.mu.Unlock()
+		if e != nil || request == nil || request.HysteriaSHA256() != op.hysteriaSHA { return errors.Join(e, errServerChainFront) }
+		stop := context.AfterFunc(ctx, op.cancel)
+		endpoint, e := request.OpenServerPrefixHysteriaEndpoint(op.ctx, op, op.owner.session, op.capture)
+		stopped := stop()
+		if endpoint != nil {
+			op.mu.Lock()
+			op.hysteriaEndpoint = endpoint
+			op.hysteriaClose = &routerVPNServerChainClose{original: endpoint, failed: op.cancel}
+			op.mu.Unlock()
+		}
+		if !stopped || e != nil || endpoint == nil || ctx.Err() != nil || op.ServerPrefixHysteriaCurrentContext(ctx, request) != nil {
 			op.cancel()
 			return errors.Join(e, ctx.Err(), errServerChainFront)
 		}
@@ -486,7 +517,7 @@ func (op *routerVPNServerPrefixCandidate) receipt(nonce string) multihoprelay.No
 		accepted = op.quota.Snapshot().Accepted
 	}
 	q := op.capture.Request
-	return multihoprelay.NodeChainPrefixCandidateReceipt{Schema: 1, Purpose: multihoprelay.NodeChainPrefixPurpose, PairingSHA256: op.pairingSHA, CaptureSHA256: op.digest, OwnerID: op.capture.OwnerID, LeaseOwnerID: op.capture.Lease.OwnerID, TrialID: q.TrialID, OperationID: q.OperationID, CandidateID: q.CandidateID, CandidateSourceSHA256: q.CandidateSourceSHA256, AppendPosition: q.AppendPosition, ChildPurpose: q.ChildPurpose, ExternalTarget: q.ExternalTarget, Prepared: op.prepared && !op.retired, Drained: op.drained, Connections: accepted, Nonce: nonce, ObservedAt: time.Now().UTC()}
+	return multihoprelay.NodeChainPrefixCandidateReceipt{Schema: 1, Purpose: multihoprelay.NodeChainPrefixPurpose, PairingSHA256: op.pairingSHA, HysteriaSHA256: op.hysteriaSHA, CaptureSHA256: op.digest, OwnerID: op.capture.OwnerID, LeaseOwnerID: op.capture.Lease.OwnerID, TrialID: q.TrialID, OperationID: q.OperationID, CandidateID: q.CandidateID, CandidateSourceSHA256: q.CandidateSourceSHA256, AppendPosition: q.AppendPosition, ChildPurpose: q.ChildPurpose, ExternalTarget: q.ExternalTarget, Prepared: op.prepared && !op.retired, Drained: op.drained, Connections: accepted, Nonce: nonce, ObservedAt: time.Now().UTC()}
 }
 func (op *routerVPNServerPrefixCandidate) Close(ctx context.Context) error {
 	if ctx == nil {
@@ -540,6 +571,9 @@ func (op *routerVPNServerPrefixCandidate) Close(ctx context.Context) error {
 	if err := op.closePacketEndpoint(ctx); err != nil {
 		return err
 	}
+	if err := op.closeHysteriaEndpoint(ctx); err != nil {
+		return err
+	}
 	if op.target != nil {
 		if err := op.target.CloseContext(ctx); err != nil {
 			return err
@@ -588,8 +622,16 @@ func (n *routerVPNServerPrefix) CandidateCommand(ctx context.Context, q multihop
 				return nil, errors.Join(err, errServerChainFront)
 			}
 		}
+		hysteria := ""
+		if capture.Request.IsHysteria() {
+			hysteria, err = n.policy.HysteriaCandidateRuntimeIdentity(capture)
+			if err != nil || hysteria == "" || hysteria != capture.Request.CandidateHysteriaSHA256 {
+				n.mu.Unlock()
+				return nil, errors.Join(err, errServerChainFront)
+			}
+		}
 		lifetime, cancel := context.WithDeadline(n.ctx, capture.Deadline)
-		op = &routerVPNServerPrefixCandidate{owner: n, capture: capture, digest: digest, pairingSHA: pairing, ctx: lifetime, cancel: cancel, users: make(map[string]auth.User), nonces: make(map[string]bool), resources: make(map[net.Conn]*routerVPNServerChainClose), closeGate: make(chan struct{}, 1)}
+		op = &routerVPNServerPrefixCandidate{owner: n, capture: capture, digest: digest, pairingSHA: pairing, hysteriaSHA: hysteria, ctx: lifetime, cancel: cancel, users: make(map[string]auth.User), nonces: make(map[string]bool), resources: make(map[net.Conn]*routerVPNServerChainClose), closeGate: make(chan struct{}, 1)}
 		op.self = op
 		n.attempts[capture.Request.OperationID] = op
 		n.candidate = op
@@ -710,3 +752,57 @@ func (op *routerVPNServerPrefixCandidate) closePacketEndpoint(ctx context.Contex
 }
 
 var _ mobilemultihop.NodeChainServerPrefixPacketEngine = (*routerVPNServerPrefixCandidate)(nil)
+
+func (op *routerVPNServerPrefixCandidate) ServerPrefixHysteriaCurrentContext(ctx context.Context, request *mobilemultihop.NodeChainServerPrefixCandidateHysteriaRequest) error {
+ if op == nil || op.self != op || request == nil || ctx == nil || ctx.Err() != nil || op.ctx.Err() != nil ||
+  !time.Now().Before(op.capture.Deadline) || !op.capture.Request.IsHysteria() { return errServerChainFront }
+ op.mu.Lock()
+ valid := op.attempted && !op.retired && !op.drained && op.hysteriaRequest == request &&
+  op.hysteriaSHA != "" && request.HysteriaSHA256() == op.hysteriaSHA
+ target, tag, outbound, direct := op.target, op.tag, op.outbound, op.direct
+ op.mu.Unlock()
+ if !valid || target == nil || !op.owner.preparedCurrent(ctx) || target.CurrentContext(ctx) != nil { return errServerChainFront }
+ op.owner.mu.Lock()
+ same := op.owner.candidate == op
+ if tag != "" { same = same && outbound != nil && op.owner.outputs[tag] == outbound && direct == nil } else { same = same && outbound == nil && direct != nil }
+ op.owner.mu.Unlock()
+ if !same { return errServerChainFront }
+ return ctx.Err()
+}
+
+func (op *routerVPNServerPrefixCandidate) DialServerPrefixHysteriaPacketContext(ctx context.Context, request *mobilemultihop.NodeChainServerPrefixCandidateHysteriaRequest) (net.Conn, error) {
+ if op == nil || request == nil || request != op.hysteriaRequest { return nil, errServerChainFront }
+ tag, address, err := request.ReadServerPrefixHysteria(ctx, op, op.owner.session, op.capture)
+ if err != nil || tag != op.tag || address != op.address { return nil, errors.Join(err, errServerChainFront) }
+ destination := M.ParseSocksaddr(address)
+ if !destination.IsIP() || destination.Port == 0 { return nil, errServerChainFront }
+ call := adapter.WithContext(ctx, &adapter.InboundContext{Inbound: "routervpn-server-prefix-hysteria-candidate", InboundType: "socks", Network: "udp", Destination: destination})
+ var original net.Conn
+ if tag == "" {
+  if op.direct == nil || op.outbound != nil { return nil, errServerChainFront }
+  original, err = op.direct.DialContext(call, "udp", destination)
+ } else {
+  if op.outbound == nil || op.owner.outputs[tag] != op.outbound || op.direct != nil { return nil, errServerChainFront }
+  original, err = op.outbound.DialContext(call, "udp", destination)
+ }
+ conn := op.owner.trackConnection(original)
+ if conn == nil { return nil, errors.Join(err, errServerChainFront) }
+ _, _, after := request.ReadServerPrefixHysteria(ctx, op, op.owner.session, op.capture)
+ return conn, errors.Join(err, after, ctx.Err())
+}
+
+func (op *routerVPNServerPrefixCandidate) closeHysteriaEndpoint(ctx context.Context) error {
+ op.mu.Lock()
+ endpoint, owner := op.hysteriaEndpoint, op.hysteriaClose
+ op.mu.Unlock()
+ if endpoint == nil && owner == nil { return nil }
+ if endpoint == nil || owner == nil || owner.original != endpoint { return errServerChainFront }
+ if err := owner.CloseContext(ctx); err != nil { return err }
+ op.mu.Lock()
+ defer op.mu.Unlock()
+ if op.hysteriaEndpoint != endpoint || op.hysteriaClose != owner { return errServerChainFront }
+ op.hysteriaEndpoint, op.hysteriaClose = nil, nil
+ return nil
+}
+
+var _ mobilemultihop.NodeChainServerPrefixHysteriaEngine = (*routerVPNServerPrefixCandidate)(nil)

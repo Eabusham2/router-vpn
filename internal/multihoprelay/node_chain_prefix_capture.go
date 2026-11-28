@@ -46,15 +46,16 @@ type NodeChainPrefixCandidate struct {
 // independently provisioned suffix; an entry-only prefix has an empty slice.
 // Neither it nor Prepared represents a complete path or application/DNS ingress.
 type NodeChainPrefixDescriptor struct {
-	Schema               int                                  `json:"schema"`
-	Purpose              string                               `json:"purpose"`
-	SourceSHA256         string                               `json:"source_sha256"`
-	EntryNodeID          string                               `json:"entry_node_id"`
-	EntryPeerAddresses   []string                             `json:"entry_peer_addresses"`
-	LocalPrefix          []NodeChainPrefixMember              `json:"local_prefix"`
-	Members              []NodeChainPrefixMember              `json:"members"`
-	Candidates           []NodeChainPrefixCandidate           `json:"candidates"`
-	PacketCandidatePairs []NodeChainPrefixPacketCandidatePair `json:"packet_candidate_pairs,omitempty"`
+	Schema                 int                                    `json:"schema"`
+	Purpose                string                                 `json:"purpose"`
+	SourceSHA256           string                                 `json:"source_sha256"`
+	EntryNodeID            string                                 `json:"entry_node_id"`
+	EntryPeerAddresses     []string                               `json:"entry_peer_addresses"`
+	LocalPrefix            []NodeChainPrefixMember                `json:"local_prefix"`
+	Members                []NodeChainPrefixMember                `json:"members"`
+	Candidates             []NodeChainPrefixCandidate             `json:"candidates"`
+	PacketCandidatePairs   []NodeChainPrefixPacketCandidatePair   `json:"packet_candidate_pairs,omitempty"`
+	HysteriaCandidatePairs []NodeChainPrefixHysteriaCandidatePair `json:"hysteria_candidate_pairs,omitempty"`
 }
 
 func prefixProfileID(v string) bool {
@@ -87,6 +88,15 @@ func (m NodeChainPrefixCandidate) valid() bool {
 }
 
 func (s NodeChainPrefixDescriptor) Validate() error {
+	if s.Schema == 5 {
+		return s.validateHysteriaPrefix()
+	}
+	if s.HysteriaCandidatePairs != nil {
+		return errNodeChainPrefix
+	}
+	if s.Schema == 4 {
+		return s.validateMixedPrefix()
+	}
 	if s.Schema == 3 {
 		return s.validatePacketCandidates()
 	}
@@ -222,10 +232,115 @@ func (s NodeChainPrefixDescriptor) validateRetainedSS() error {
 	}
 	return nil
 }
+
+// Mixed prefixes retain actual packet and paired SS rows at their original
+// positions. Schema 4 is canonical only when the older families cannot express
+// the captured prefix and NEXT mode; it grants no native or complete authority.
+func (s NodeChainPrefixDescriptor) validateMixedPrefix() error {
+	if s.Schema != 4 || s.Purpose != NodeChainPrefixPurpose || !proofID.MatchString(s.SourceSHA256) || !proofID.MatchString(s.EntryNodeID) ||
+		len(s.LocalPrefix) < 2 || len(s.LocalPrefix) > NodeChainPrefixMaximumMembers || s.Members == nil || len(s.Members) != len(s.LocalPrefix)-1 ||
+		len(s.Candidates) < 1 || len(s.Candidates) > NodeChainPrefixMaximumCandidates || len(s.EntryPeerAddresses) < 1 || len(s.EntryPeerAddresses) > 64 ||
+		s.LocalPrefix[0].NodeID != s.EntryNodeID {
+		return errNodeChainPrefix
+	}
+	for i, address := range s.EntryPeerAddresses {
+		if !nodeChainPrivateAddress(address) || i > 0 && s.EntryPeerAddresses[i-1] >= address {
+			return errNodeChainPrefix
+		}
+	}
+	ids, nodes, sources, keys := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	companions, transports := map[string]bool{}, map[string]bool{}
+	stream, packetAfterStream := false, false
+	for i, member := range s.LocalPrefix {
+		if nodeChainPacketMode(member.Mode) {
+			if !member.valid(i) {
+				return errNodeChainPrefix
+			}
+			packetAfterStream = packetAfterStream || stream
+		} else if !member.validRetainedSS(i) {
+			return errNodeChainPrefix
+		} else {
+			stream = true
+			if companions[member.CompanionSHA256] || transports[member.TransportSHA256] {
+				return errNodeChainPrefix
+			}
+			companions[member.CompanionSHA256], transports[member.TransportSHA256] = true, true
+		}
+		client, server := member.identityKeys()
+		if ids[member.ProfileID] || nodes[member.NodeID] || sources[member.SourceSHA256] || keys[client] || keys[server] {
+			return errNodeChainPrefix
+		}
+		ids[member.ProfileID], nodes[member.NodeID], sources[member.SourceSHA256] = true, true, true
+		keys[client], keys[server] = true, true
+	}
+	if !stream {
+		return errNodeChainPrefix
+	}
+	mode := s.Candidates[0].Mode
+	packet := nodeChainPacketMode(mode)
+	if packet {
+		if len(s.PacketCandidatePairs) != len(s.Candidates) {
+			return errNodeChainPrefix
+		}
+	} else if mode != "shadowsocks" || !packetAfterStream || s.PacketCandidatePairs != nil {
+		return errNodeChainPrefix
+	}
+	serverSources, serverKeys, serverCompanions := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for i, member := range s.Members {
+		local := s.LocalPrefix[i+1]
+		if member.ProfileID != local.ProfileID || member.NodeID != local.NodeID || member.Mode != local.Mode || serverSources[member.SourceSHA256] {
+			return errNodeChainPrefix
+		}
+		client, server := member.identityKeys()
+		_, localServer := local.identityKeys()
+		if server != localServer || keys[client] || serverKeys[client] {
+			return errNodeChainPrefix
+		}
+		if nodeChainPacketMode(member.Mode) {
+			if !member.valid(i+1) || sources[member.SourceSHA256] {
+				return errNodeChainPrefix
+			}
+		} else if !member.validRetainedSS(i+1) || member.TransportSHA256 != local.TransportSHA256 ||
+			companions[member.CompanionSHA256] || serverCompanions[member.CompanionSHA256] ||
+			sources[member.SourceSHA256] && member.SourceSHA256 != local.SourceSHA256 {
+			return errNodeChainPrefix
+		} else {
+			serverCompanions[member.CompanionSHA256] = true
+		}
+		serverSources[member.SourceSHA256], serverKeys[client] = true, true
+	}
+	for i, candidate := range s.Candidates {
+		if !packet {
+			if !candidate.valid() || ids[candidate.ProfileID] || nodes[candidate.NodeID] || sources[candidate.SourceSHA256] || serverSources[candidate.SourceSHA256] {
+				return errNodeChainPrefix
+			}
+			ids[candidate.ProfileID], nodes[candidate.NodeID], sources[candidate.SourceSHA256] = true, true, true
+			continue
+		}
+		pair := s.PacketCandidatePairs[i]
+		if !candidate.validPacket(mode) || pair.Validate() != nil || pair.Position != len(s.LocalPrefix) ||
+			pair.ProfileID != candidate.ProfileID || pair.NodeID != candidate.NodeID || pair.Mode != candidate.Mode ||
+			pair.LocalSourceSHA256 != candidate.SourceSHA256 || ids[candidate.ProfileID] || nodes[candidate.NodeID] ||
+			sources[pair.LocalSourceSHA256] || sources[pair.ServerSourceSHA256] ||
+			serverSources[pair.LocalSourceSHA256] || serverSources[pair.ServerSourceSHA256] ||
+			keys[pair.LocalClientPublicKey] || keys[pair.ServerClientPublicKey] || keys[pair.PeerPublicKey] ||
+			serverKeys[pair.LocalClientPublicKey] || serverKeys[pair.ServerClientPublicKey] || serverKeys[pair.PeerPublicKey] ||
+			transports[pair.TransportSHA256] {
+			return errNodeChainPrefix
+		}
+		ids[candidate.ProfileID], nodes[candidate.NodeID] = true, true
+		sources[pair.LocalSourceSHA256], sources[pair.ServerSourceSHA256] = true, true
+		keys[pair.LocalClientPublicKey], keys[pair.ServerClientPublicKey], keys[pair.PeerPublicKey] = true, true, true
+		transports[pair.TransportSHA256] = true
+	}
+	return nil
+}
+
 func (s NodeChainPrefixDescriptor) Clone() NodeChainPrefixDescriptor {
 	s.EntryPeerAddresses = slices.Clone(s.EntryPeerAddresses)
 	s.LocalPrefix, s.Members, s.Candidates = slices.Clone(s.LocalPrefix), slices.Clone(s.Members), slices.Clone(s.Candidates)
 	s.PacketCandidatePairs = slices.Clone(s.PacketCandidatePairs)
+	s.HysteriaCandidatePairs = slices.Clone(s.HysteriaCandidatePairs)
 	return s
 }
 func (s NodeChainPrefixDescriptor) Digest() (string, error) {
@@ -237,6 +352,10 @@ func (s NodeChainPrefixDescriptor) Digest() (string, error) {
 		domain = "routervpn-node-chain-prefix-descriptor-v2"
 	} else if s.Schema == 3 {
 		domain = "routervpn-node-chain-prefix-descriptor-v3"
+	} else if s.Schema == 4 {
+		domain = "routervpn-node-chain-prefix-descriptor-v4"
+	} else if s.Schema == 5 {
+		domain = "routervpn-node-chain-prefix-descriptor-v5"
 	}
 	return nodeChainDigest(domain, s)
 }
@@ -259,17 +378,24 @@ type NodeChainPrefixRequest struct {
 	PrefixCount           int      `json:"prefix_count,omitempty"`
 	Port                  int      `json:"listen_port"`
 	FrontSeed             string   `json:"front_seed"`
+	SelectionSHA256       string   `json:"selection_sha256,omitempty"`
 }
 
 func (q NodeChainPrefixRequest) validateShape() error {
-	if q.Schema != 1 && q.Schema != 2 && q.Schema != 3 || q.Purpose != NodeChainPrefixPurpose || !nonce.MatchString(q.SessionID) || !proofID.MatchString(q.EntryNodeID) ||
+	if q.SelectionSHA256 != "" && !proofID.MatchString(q.SelectionSHA256) {
+		return errNodeChainPrefix
+	}
+	if q.Schema != 1 && q.Schema != 2 && q.Schema != 3 && q.Schema != 4 && q.Schema != 5 || q.Purpose != NodeChainPrefixPurpose || !nonce.MatchString(q.SessionID) || !proofID.MatchString(q.EntryNodeID) ||
 		!proofID.MatchString(q.SourceSHA256) || !proofID.MatchString(q.DescriptorSHA256) || !proofID.MatchString(q.LocalSourceSHA256) ||
 		!proofID.MatchString(q.InventorySHA256) || !proofID.MatchString(q.Epoch) || !proofID.MatchString(q.FrontSeed) ||
 		!nodeChainPrivateAddress(q.Peer) || q.AcquireExpiresAt <= 0 || q.Port < 1024 || q.Port > 65535 ||
 		len(q.LocalPacketPublicKeys) < 1 || len(q.LocalPacketPublicKeys) > NodeChainPrefixMaximumMembers {
 		return errNodeChainPrefix
 	}
-	if (q.Schema == 1 || q.Schema == 3) && q.PrefixCount != 0 || q.Schema == 2 && (q.PrefixCount < 2 || q.PrefixCount > NodeChainPrefixMaximumMembers || q.PrefixCount <= len(q.LocalPacketPublicKeys)) {
+	if (q.Schema == 1 || q.Schema == 3) && q.PrefixCount != 0 || (q.Schema == 2 || q.Schema == 4) && (q.PrefixCount < 2 || q.PrefixCount > NodeChainPrefixMaximumMembers || q.PrefixCount <= len(q.LocalPacketPublicKeys)) {
+		return errNodeChainPrefix
+	}
+	if q.Schema == 5 && (q.PrefixCount < 1 || q.PrefixCount > NodeChainPrefixMaximumMembers || q.PrefixCount < len(q.LocalPacketPublicKeys)) {
 		return errNodeChainPrefix
 	}
 	seen := map[string]bool{}
@@ -327,6 +453,10 @@ func (q NodeChainPrefixRequest) Digest() (string, error) {
 		domain = "routervpn-node-chain-prefix-request-v2"
 	} else if q.Schema == 3 {
 		domain = "routervpn-node-chain-prefix-request-v3"
+	} else if q.Schema == 4 {
+		domain = "routervpn-node-chain-prefix-request-v4"
+	} else if q.Schema == 5 {
+		domain = "routervpn-node-chain-prefix-request-v5"
 	}
 	return nodeChainDigest(domain, q)
 }

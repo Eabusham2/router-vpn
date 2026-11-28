@@ -110,7 +110,7 @@ func nodeChainPrefixPacketServerMatches(pair multihoprelay.NodeChainPrefixPacket
 // PacketCandidateRuntimeKeys is identity-only readback for the original shared
 // process/key ledger. It cannot construct or authorize a packet endpoint.
 func (p *NodeChainServerPrefixPolicy) PacketCandidateRuntimeKeys(c multihoprelay.NodeChainPrefixCandidateCapture) ([]string, string, error) {
-	if p == nil || p.validate() != nil || p.record.Schema != 3 || p.BindCapture(c.Lease) != nil {
+	if p == nil || p.validate() != nil || !nodeChainPrefixHasPacketCandidates(p.record) || p.BindCapture(c.Lease) != nil {
 		return nil, "", errNodeChainAppendExecution
 	}
 	pair, err := c.PacketPair()

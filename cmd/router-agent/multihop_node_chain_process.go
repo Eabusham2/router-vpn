@@ -32,6 +32,8 @@ type relayNodeChainExecRunner struct {
 	coreInfo                              os.FileInfo
 	coreSHA                               string
 	packetKeys                            relayNodeChainPacketKeyLedger
+	prefixCatalogSources                  string
+	prefixCatalog                         *relayPrefixCatalogOwner
 }
 
 func installedRelayRunner(cfg multihoprelay.Config, node string) (multihoprelay.Runner, error) {
@@ -39,10 +41,10 @@ func installedRelayRunner(cfg multihoprelay.Config, node string) (multihoprelay.
 	if err != nil {
 		return nil, err
 	}
-	if len(cfg.NodeChains) == 0 && len(cfg.NodeChainPrefixes) == 0 {
+	if len(cfg.NodeChains) == 0 && len(cfg.NodeChainPrefixes) == 0 && cfg.NodeChainPrefixCatalog == nil {
 		return base, nil
 	}
-	r := &relayNodeChainExecRunner{Runner: base, sources: serverNodeChainSourcesDirectory, prefixSources: serverNodeChainPrefixSourcesDirectory, runtime: "/run/router-vpn-relays", core: "/usr/local/bin/sing-box"}
+	r := &relayNodeChainExecRunner{Runner: base, sources: serverNodeChainSourcesDirectory, prefixSources: serverNodeChainPrefixSourcesDirectory, prefixCatalogSources: serverNodeChainPrefixCatalogsDirectory, runtime: "/run/router-vpn-relays", core: "/usr/local/bin/sing-box"}
 	file, info, digest, err := captureRelayNodeChainImage(r.core)
 	if err != nil {
 		return nil, errors.New("installed ordered relay core is unavailable")
@@ -60,6 +62,12 @@ func installedRelayRunner(cfg multihoprelay.Config, node string) (multihoprelay.
 			return nil, err
 		}
 		r.registeredPrefixes = append(r.registeredPrefixes, source.Clone())
+	}
+	if cfg.NodeChainPrefixCatalog != nil {
+		r.prefixCatalog, err = r.capturePrefixCatalog(*cfg.NodeChainPrefixCatalog, node)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return r, nil
 }

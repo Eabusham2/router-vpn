@@ -17,6 +17,7 @@ type nodeChainAppendExecutionRetirement struct {
 	runtime   *NodeChainCandidateAppendExecutionRuntime
 	lease     *nodeChainAppendExecutionLease
 	candidate *nodeChainAppendExecutionRemoteCandidate
+	selection *nodeChainAppendExecutionSelection
 	digest    string
 	io        *nodeChainExecutionIO
 }
@@ -53,6 +54,12 @@ func (r *NodeChainCandidateAppendExecutionRuntime) newRetirement(lease *nodeChai
 	return owned, err
 }
 func (s *nodeChainAppendExecutionRetirement) valid() error {
+	if s != nil && s.selection != nil {
+		if s.self != s || s.runtime == nil || s.selection.runtime != s.runtime || s.selection.stop != s || s.lease != nil || s.candidate != nil || s.digest != s.selection.digest {
+			return errNodeChainAppendExecution
+		}
+		return s.selection.validRetirement()
+	}
 	if s == nil || s.self != s || s.runtime == nil || s.lease == nil || s.lease.runtime != s.runtime || s.lease.self != s.lease || s.digest == "" {
 		return errNodeChainAppendExecution
 	}
@@ -92,6 +99,9 @@ func (s *nodeChainAppendExecutionRetirement) valid() error {
 func (s *nodeChainAppendExecutionRetirement) stop(ctx context.Context) error {
 	if ctx == nil || s.valid() != nil || s.io == nil {
 		return errNodeChainAppendExecution
+	}
+	if s.selection != nil {
+		return s.selection.retire(ctx, s.io)
 	}
 	if s.candidate != nil {
 		body, err := json.Marshal(s.candidate.request)

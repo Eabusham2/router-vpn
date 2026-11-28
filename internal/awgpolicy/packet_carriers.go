@@ -16,6 +16,46 @@ func NestedPacketEnvelope(packet map[string]any, all map[string]map[string]any) 
 	return nestedPacketEnvelope(packet, all, nil)
 }
 
+// PhysicalSSPacketEnvelope calculates only the literal SS2022 datagram path
+// ending at the caller's exact root tag. It grants no route, MTU observation or
+// native owner. The ordinary nested-packet API keeps its existing semantics.
+func PhysicalSSPacketEnvelope(packet map[string]any, all map[string]map[string]any, rootTag string) (PacketEnvelope, error) {
+	bad := errors.New("invalid captured physical SS2022 packet path")
+	if packet == nil || packet["type"] != "wireguard" && packet["type"] != Type || rootTag == "" {
+		return PacketEnvelope{}, bad
+	}
+	tag, ok := packet["tag"].(string)
+	if !ok || tag == "" || tag == rootTag {
+		return PacketEnvelope{}, bad
+	}
+	root := all[rootTag]
+	if root == nil || root["tag"] != rootTag || root["type"] != "shadowsocks" {
+		return PacketEnvelope{}, bad
+	}
+	seen := map[string]bool{tag: true}
+	layers := []map[string]any{}
+	current := packet
+	for {
+		next, ok := current["detour"].(string)
+		if !ok || next == "" || seen[next] || len(seen) >= 16 {
+			return PacketEnvelope{}, bad
+		}
+		layer := all[next]
+		if layer == nil || layer["tag"] != next || layer["type"] != "shadowsocks" {
+			return PacketEnvelope{}, bad
+		}
+		seen[next] = true
+		layers = append(layers, layer)
+		if next == rootTag {
+			if detour, exists := layer["detour"]; exists && detour != "" {
+				return PacketEnvelope{}, bad
+			}
+			return packetCarriersEnvelope(packet, layers)
+		}
+		current = layer
+	}
+}
+
 // The caller must own the captured hostname resolver policy. This pure
 // arithmetic input grants no endpoint, DNS, route or execution authority.
 // True means enforced IPv4-only; false reserves the IPv6 worst case.

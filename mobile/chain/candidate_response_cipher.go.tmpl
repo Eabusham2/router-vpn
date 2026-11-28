@@ -175,6 +175,9 @@ type nativePacketRequest interface {
 
 func (r *NodeChainCandidatePacketRequest) nativePacketCurrent(ctx context.Context) error {
 	_, _, _, err := r.current(ctx)
+	if err == nil && r.appendHysteria != nil {
+		return r.appendHysteria.validateRequest(ctx, r)
+	}
 	return err
 }
 func (r *NodeChainCandidatePacketRequest) nativePacketSource() candidateResponseSource {
@@ -204,6 +207,12 @@ func (r *NodeChainCandidatePacketRequest) OpenNativeEndpoint(ctx context.Context
 func (r *NodeChainCandidatePacketRequest) OpenPreparedNativeEndpoint(ctx context.Context, reader NodeChainPreparedPacketEngine, original *NodeChainCandidatePreparation, awg func(context.Context, AmneziaEndpointConfig, N.Dialer) (NativeCandidateDevice, error)) (NodeChainCandidateEndpoint, error) {
 	if _, _, _, err := r.ReadPrepared(ctx, reader, original); err != nil {
 		return nil, err
+	}
+	if r.appendHysteria != nil {
+		if r.appendHysteria.validateRequest(ctx, r) != nil {
+			return nil, errNodeChainAppendExecution
+		}
+		return openNativeAppendHysteriaEndpoint(ctx, r)
 	}
 	return r.openNativeEndpoint(ctx, awg)
 }
@@ -508,4 +517,153 @@ func (s *candidatePacketSocket) Close() error {
 		}
 	})
 	return s.err
+}
+
+// This distinct factory accepts only an original unfinished-prefix HY2 scope.
+// The ordinary per-sample HY2 function above and WG/AWG factory stay unchanged.
+func (r *NodeChainServerPrefixCandidateHysteriaRequest) OpenServerPrefixHysteriaEndpoint(ctx context.Context, reader NodeChainServerPrefixHysteriaEngine, original *NodeChainServerPrefixSession, capture multihoprelay.NodeChainPrefixCandidateCapture) (NodeChainCandidateEndpoint, error) {
+ if _, _, err := r.ReadServerPrefixHysteria(ctx, reader, original, capture); err != nil { return nil, err }
+ return openNativeAppendHysteriaEndpoint(ctx, r)
+}
+
+type nativeAppendHysteriaCandidate struct {
+ request nativePacketRequest
+ client *hy2.Client
+ dialer *candidatePacketDialer
+ ctx context.Context
+ cancel context.CancelFunc
+ mu sync.Mutex
+ closing bool
+ opening sync.WaitGroup
+ streams []*candidatePacketSocket
+ once sync.Once
+ closeErr error
+}
+
+func openNativeAppendHysteriaEndpoint(ctx context.Context, request nativePacketRequest) (NodeChainCandidateEndpoint, error) {
+ if ctx == nil || ctx.Err() != nil || request == nil || request.nativePacketCurrent(ctx) != nil || request.nativePacketMode() != "hysteria2" {
+  return nil, errCandidateHysteria2
+ }
+ if _, bounded := ctx.Deadline(); !bounded { return nil, errCandidateHysteria2 }
+ switch original := request.(type) {
+ case *NodeChainCandidatePacketRequest:
+  if original.appendHysteria == nil || original.appendHysteria.validateRequest(ctx, original) != nil { return nil, errCandidateHysteria2 }
+ case *NodeChainServerPrefixCandidateHysteriaRequest:
+  if original.HysteriaSHA256() == "" { return nil, errCandidateHysteria2 }
+ default:
+  return nil, errCandidateHysteria2
+ }
+ source := request.nativePacketSource()
+ endpoint := request.nativePacketAddress()
+ if source.Hysteria2Options == "" || source.PacketOptions != "" || source.Method != "" || source.Password != "" ||
+  source.ClientKey != "" || source.ServerKey != "" { return nil, errCandidateHysteria2 }
+ if _, err := privateAPI(source.API); err != nil { return nil, errCandidateHysteria2 }
+ var captured struct {
+  Type string `json:"type"`
+  Tag string `json:"tag"`
+  option.Hysteria2OutboundOptions
+ }
+ if json.Unmarshal([]byte(source.Hysteria2Options), &captured) != nil { return nil, errCandidateHysteria2 }
+ options := captured.Hysteria2OutboundOptions
+ if captured.Type != "hysteria2" || options.ServerOptions.Build().String() != endpoint || !options.ServerOptions.Build().IsIP() || options.Password == "" ||
+  options.TLS == nil || !options.TLS.Enabled || options.TLS.Insecure || options.Detour != "" ||
+  options.DomainResolver != nil || options.Realm != nil || len(options.ServerPorts) != 0 { return nil, errCandidateHysteria2 }
+ owned, cancel := context.WithCancel(ctx)
+ dialer := &candidatePacketDialer{request: request, endpoint: endpoint, ctx: owned}
+ e := &nativeAppendHysteriaCandidate{request: request, dialer: dialer, ctx: owned, cancel: cancel}
+ tlsConfig, err := boxtls.NewClient(owned, logger.NOP(), options.Server, *options.TLS)
+ if err != nil { return e, errCandidateHysteria2 }
+ var salamander, gecko string
+ var geckoMin, geckoMax int
+ if options.Obfs != nil {
+  if options.Obfs.Password == "" { return e, errCandidateHysteria2 }
+  switch options.Obfs.Type {
+  case hy2.ObfsTypeSalamander: salamander = options.Obfs.Password
+  case hy2.ObfsTypeGecko:
+   gecko = options.Obfs.Password
+   geckoMin, geckoMax = options.Obfs.GeckoOptions.MinPacketSize, options.Obfs.GeckoOptions.MaxPacketSize
+  default: return e, errCandidateHysteria2
+  }
+ }
+ e.client, err = hy2.NewClient(hy2.ClientOptions{
+  Context: owned, Dialer: dialer, Logger: logger.NOP(), BrutalDebug: options.BrutalDebug,
+  ServerAddress: options.ServerOptions.Build(), SendBPS: uint64(options.UpMbps * hysteria.MbpsToBps),
+  ReceiveBPS: uint64(options.DownMbps * hysteria.MbpsToBps), Password: options.Password,
+  SalamanderPassword: salamander, GeckoPassword: gecko, GeckoMinPacketSize: geckoMin, GeckoMaxPacketSize: geckoMax,
+  TLSConfig: tlsConfig, BBRProfile: options.BBRProfile, ChromeParrot: !options.DisableChromeParrot,
+  UDPDisabled: true,
+  QUICOptions: qtls.QUICOptions{IdleTimeout: options.IdleTimeout.Build(), KeepAlivePeriod: options.KeepAlivePeriod.Build(),
+   StreamReceiveWindow: options.StreamReceiveWindow.Value(), ConnectionReceiveWindow: options.ConnectionReceiveWindow.Value(),
+   MaxConcurrentStreams: options.MaxConcurrentStreams, InitialPacketSize: options.InitialPacketSize,
+   DisablePathMTUDiscovery: options.DisablePathMTUDiscovery},
+ })
+ if err != nil || e.client == nil || request.nativePacketCurrent(ctx) != nil || ctx.Err() != nil { return e, errCandidateHysteria2 }
+ return e, nil
+}
+
+func (e *nativeAppendHysteriaCandidate) appendExecutionPacketRequest() any {
+ if e == nil { return nil }
+ return e.request
+}
+func (e *nativeAppendHysteriaCandidate) DialPrivate(ctx context.Context, address string) (net.Conn, error) {
+ if e == nil { return nil, errCandidateHysteria2 }
+ return e.dialAppendExecutionPrivate(ctx, e.request, address)
+}
+func (e *nativeAppendHysteriaCandidate) dialAppendExecutionPrivate(ctx context.Context, request any, address string) (net.Conn, error) {
+ if e == nil || e.request == nil || request != e.request { return nil, errCandidateHysteria2 }
+ api, err := privateAPI(e.request.nativePacketSource().API)
+ if err != nil || api.Host != address { return nil, errCandidateHysteria2 }
+ return e.dialStream(ctx, address)
+}
+func (e *nativeAppendHysteriaCandidate) dialAppendExecutionPublic(ctx context.Context, grant *nodeChainAppendExecutionPacketGrant, address string) (net.Conn, error) {
+ if e == nil || e.request == nil || grant.validate(ctx, e.request, address) != nil { return nil, errCandidateHysteria2 }
+ conn, err := e.dialStream(ctx, address)
+ return conn, errors.Join(err, grant.validate(ctx, e.request, address), ctx.Err())
+}
+func (e *nativeAppendHysteriaCandidate) dialStream(ctx context.Context, address string) (net.Conn, error) {
+ if e == nil || ctx == nil || ctx.Err() != nil || e.ctx.Err() != nil || e.client == nil || e.request.nativePacketCurrent(ctx) != nil { return nil, errCandidateHysteria2 }
+ destination := M.ParseSocksaddr(address)
+ if !destination.IsIP() || destination.Port == 0 { return nil, errCandidateHysteria2 }
+ e.mu.Lock()
+ if e.closing { e.mu.Unlock(); return nil, net.ErrClosed }
+ e.opening.Add(1)
+ e.mu.Unlock()
+ defer e.opening.Done()
+ raw, err := e.client.DialConn(ctx, destination)
+ if raw == nil { return nil, errors.Join(err, errCandidateHysteria2) }
+ // Reuse the existing per-connection I/O join envelope for this actual stream.
+ // Stream Close never closes the retained client or its original UDP socket.
+ stream := &candidatePacketSocket{Conn: raw, ctx: e.ctx}
+ e.mu.Lock()
+ e.streams = append(e.streams, stream)
+ closing := e.closing
+ e.mu.Unlock()
+ observed := e.request.nativePacketCurrent(ctx)
+ if err != nil || closing || observed != nil || ctx.Err() != nil || e.ctx.Err() != nil {
+  closeErr := stream.Close()
+  return stream, errors.Join(err, observed, ctx.Err(), closeErr, errCandidateHysteria2)
+ }
+ return stream, nil
+}
+func (e *nativeAppendHysteriaCandidate) Close() error {
+ if e == nil { return nil }
+ e.once.Do(func() {
+  e.mu.Lock()
+  e.closing = true
+  streams := append([]*candidatePacketSocket(nil), e.streams...)
+  e.mu.Unlock()
+  e.cancel()
+  e.dialer.beginClose()
+  for _, stream := range streams { e.closeErr = errors.Join(e.closeErr, stream.Close()) }
+  if e.client != nil { e.closeErr = errors.Join(e.closeErr, e.client.RouterVPNCloseResponseCandidate(net.ErrClosed)) }
+  // Client retirement releases admitted offers. Every late stream is retained
+  // before its original opening joins, then closed under the same endpoint.
+  e.opening.Wait()
+  e.mu.Lock()
+  streams = append([]*candidatePacketSocket(nil), e.streams...)
+  e.mu.Unlock()
+  for _, stream := range streams { e.closeErr = errors.Join(e.closeErr, stream.Close()) }
+  e.closeErr = errors.Join(e.closeErr, e.dialer.join())
+ })
+ return e.closeErr
 }

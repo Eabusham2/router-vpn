@@ -1037,36 +1037,37 @@ static gboolean linux_ordered_editor_proxy_entry_v1(const LinuxOrderedEditorV1 *
 
 static const char *linux_ordered_append_requested_v1(const char *choice) {
     if (!g_strcmp0(choice,"server-wg") || !g_strcmp0(choice,"server-awg2-fast") ||
-        !g_strcmp0(choice,"server-awg2-strong") || !g_strcmp0(choice,"server-shadowsocks")) return "server";
+        !g_strcmp0(choice,"server-awg2-strong") || !g_strcmp0(choice,"server-shadowsocks") || !g_strcmp0(choice,"server-hysteria2")) return "server";
     if (!g_strcmp0(choice,"auto-wg") || !g_strcmp0(choice,"auto-awg2-fast") ||
-        !g_strcmp0(choice,"auto-awg2-strong") || !g_strcmp0(choice,"auto-shadowsocks")) return "auto";
+        !g_strcmp0(choice,"auto-awg2-strong") || !g_strcmp0(choice,"auto-shadowsocks") || !g_strcmp0(choice,"auto-hysteria2")) return "auto";
     return "local";
 }
 static const char *linux_ordered_append_mode_v1(const char *choice) {
     if (!g_strcmp0(choice,"server-wg") || !g_strcmp0(choice,"auto-wg")) return "wg";
     if (!g_strcmp0(choice,"server-awg2-fast") || !g_strcmp0(choice,"auto-awg2-fast")) return "awg2-fast";
     if (!g_strcmp0(choice,"server-awg2-strong") || !g_strcmp0(choice,"auto-awg2-strong")) return "awg2-strong";
+    if (!g_strcmp0(choice,"server-hysteria2") || !g_strcmp0(choice,"auto-hysteria2")) return "hysteria2";
     if (!g_strcmp0(choice,"server-shadowsocks") || !g_strcmp0(choice,"auto-shadowsocks") ||
         !g_strcmp0(choice,"external-shadowsocks")) return "shadowsocks";
     return choice;
 }
 static gboolean linux_ordered_execution_append_v1(const LinuxOrderedEditorV1 *editor, const char *next_mode) {
-    if (!linux_ordered_prefix_v1(next_mode) && g_strcmp0(next_mode,"shadowsocks")) return FALSE;
+    if (!linux_ordered_prefix_v1(next_mode) && g_strcmp0(next_mode,"shadowsocks") && g_strcmp0(next_mode,"hysteria2")) return FALSE;
     if (!editor->append_only || editor->external_exit || editor->ids->len < 1 || editor->ids->len > 95 || editor->ids->len != editor->modes->len) return FALSE;
     JsonObject *catalog=json_node_get_object(editor->catalog);
-    gboolean retained_ss=FALSE;
+    gboolean hysteria_tail=FALSE;
     for (guint i=0;i<editor->ids->len;i++) {
         JsonObject *profile=external_source_profile_v24(catalog,g_ptr_array_index(editor->ids,i));
         const char *mode=g_ptr_array_index(editor->modes,i);
         if (!linux_ordered_router_v1(profile) || !linux_ordered_paired_off_v1(profile)) return FALSE;
         if (linux_ordered_prefix_v1(mode)) {
-            if (retained_ss) return FALSE;
+            if (hysteria_tail) return FALSE;
         } else {
-            if (i==0 || g_strcmp0(next_mode,"shadowsocks") || strcmp(mode,"shadowsocks") || !linux_ordered_paired_proxy_member_v1(profile,mode)) return FALSE;
-            retained_ss=TRUE;
+            if (i==0 || (strcmp(mode,"shadowsocks") && strcmp(mode,"hysteria2")) || !linux_ordered_paired_proxy_member_v1(profile,mode)) return FALSE;
+            if (!strcmp(mode,"hysteria2")) hysteria_tail=TRUE;
         }
     }
-    return TRUE;
+    return !hysteria_tail || !g_strcmp0(next_mode,"shadowsocks") || !g_strcmp0(next_mode,"hysteria2");
 }
 
 static const char *linux_ordered_editor_final_mode_v1(LinuxOrderedEditorV1 *editor) {
@@ -1246,7 +1247,7 @@ static void linux_ordered_render_v1(LinuxOrderedEditorV1 *editor, int selected) 
     const char *next_modes[]={"wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"};
     for(guint i=0;i<G_N_ELEMENTS(next_modes);i++)gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor->append_mode),next_modes[i],linux_ordered_mode_name_v1(next_modes[i]));
     if(!linux_ordered_editor_proxy_entry_v1(editor))gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor->append_mode),"external-shadowsocks","Imported Shadowsocks");
-    const char *remote_modes[]={"wg","awg2-fast","awg2-strong","shadowsocks"};
+    const char *remote_modes[]={"wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"};
     for(guint i=0;i<G_N_ELEMENTS(remote_modes);i++) {
         const char *mode=remote_modes[i];
         g_autofree char *server=g_strconcat("server-",mode,NULL), *compare=g_strconcat("auto-",mode,NULL);

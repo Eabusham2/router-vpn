@@ -944,7 +944,7 @@ function ShowUnifiedOrderedNodes {
                 $previousNext=[string]$appendMode.SelectedValue
                 $nextItems=@('wg','awg2-fast','awg2-strong','shadowsocks','hysteria2'|ForEach-Object{[pscustomobject]@{id=$_;display=(Get-RouterVPNOrderedModeTitle $_)}})
                 if(-not$proxyEntry){$nextItems+=@([pscustomobject]@{id='external-shadowsocks';display='Imported Shadowsocks'})}
-                foreach($mode in @('wg','awg2-fast','awg2-strong','shadowsocks')){
+                foreach($mode in @('wg','awg2-fast','awg2-strong','shadowsocks','hysteria2')){
                     $server='server-'+$mode;$compare='auto-'+$mode
                     if((Test-RouterVPNOrderedAppendExecutionNodes @($rows.ToArray()) $store.profiles $mode)-or$previousNext-cin@($server,$compare)){
                         $title=Get-RouterVPNOrderedModeTitle $mode

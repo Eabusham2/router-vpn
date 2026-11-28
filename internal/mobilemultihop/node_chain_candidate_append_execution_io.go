@@ -108,10 +108,13 @@ func (l *nodeChainAppendExecutionLease) initialize(ctx context.Context) (failure
 		}
 	}
 	prefixCount := 0
-	if descriptor.Schema == 2 {
+	if descriptor.Schema == 2 || descriptor.Schema == 4 || descriptor.Schema == 5 {
 		prefixCount = len(p.localMembers)
 	}
 	q := multihoprelay.NodeChainPrefixRequest{Schema: descriptor.Schema, Purpose: multihoprelay.NodeChainPrefixPurpose, SessionID: session, EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, LocalSourceSHA256: p.OriginalSourceSHA256(), InventorySHA256: p.inventorySHA, Epoch: discovery.Challenge.Epoch, Peer: discovery.Challenge.Peer, AcquireExpiresAt: discovery.Challenge.ExpiresAt, LocalPacketPublicKeys: keys, PrefixCount: prefixCount, Port: port, FrontSeed: seed}
+	if err := r.bindPrefixSelection(&q, descriptor); err != nil {
+		return err
+	}
 	if q.Validate(descriptor) != nil {
 		return errNodeChainAppendExecution
 	}
@@ -351,6 +354,31 @@ func (op *nodeChainAppendExecutionRemoteCandidate) initialize(ctx context.Contex
 		}
 		op.request.Schema = 2
 		op.request.CandidateMode, op.request.CandidateClientPublicKey = mode, op.source.ClientKey
+	}
+	if mode == "hysteria2" {
+		if l.descriptor.HysteriaCandidateMode() != mode || op.source.Hysteria2Options == "" || op.source.PacketOptions != "" ||
+			op.source.ClientKey != "" || op.source.ServerKey != "" {
+			return errNodeChainAppendExecution
+		}
+		matched := false
+		for i, candidate := range l.descriptor.Candidates {
+			if candidate.ProfileID != op.source.Target.ID || candidate.SourceSHA256 != op.source.Target.SourceSHA256 || candidate.NodeID != op.source.NodeID {
+				continue
+			}
+			if matched || i >= len(l.descriptor.HysteriaCandidatePairs) {
+				return errNodeChainAppendExecution
+			}
+			pair := l.descriptor.HysteriaCandidatePairs[i]
+			digest, pairErr := pair.Digest()
+			if pairErr != nil || pair.Position != op.request.AppendPosition || pair.LocalSourceSHA256 != candidate.SourceSHA256 {
+				return errNodeChainAppendExecution
+			}
+			op.request.Schema, op.request.CandidateMode, op.request.CandidateHysteriaSHA256 = 3, mode, digest
+			matched = true
+		}
+		if !matched {
+			return errNodeChainAppendExecution
+		}
 	}
 	if op.request.Validate() != nil {
 		return errNodeChainAppendExecution

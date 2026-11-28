@@ -351,6 +351,12 @@ func (s *Session) RunUI(selfTest bool) error {
 	if s.ctx.Err() != nil {
 		return context.Cause(s.ctx)
 	}
+	reportConnectionStage := func(stage string) {
+		if selfTest && os.Getenv("ROUTERVPN_CONNECTION_SELF_TEST") == "1" && os.Getenv("ROUTERVPN_CAPTURE_SELF_TEST_LAYOUT") == "1" {
+			fmt.Fprintln(os.Stderr, "Router VPN native connection stage:", stage)
+		}
+	}
+	reportConnectionStage("entry")
 	if selfTest && os.Getenv("ROUTERVPN_CONNECTION_SELF_TEST") == "1" {
 		// Independent of the WPF dispatcher: cancellation unwinds RunUI and
 		// enters the normal authenticated Close/join path in the launcher.
@@ -360,6 +366,7 @@ func (s *Session) RunUI(selfTest bool) error {
 		defer watchdog.Stop()
 	}
 	if selfTest {
+		reportConnectionStage("catalog")
 		response, err := s.client.Request(s.ctx, http.MethodGet, "/api/logical-modes", nil, 1<<20)
 		var modes []struct {
 			ID string `json:"id"`
@@ -375,10 +382,12 @@ func (s *Session) RunUI(selfTest bool) error {
 			seen[mode.ID] = true
 		}
 	}
+	reportConnectionStage("app-launch")
 	app, err := s.launchUI(false, selfTest, 0, 0)
 	if err != nil {
 		return err
 	}
+	reportConnectionStage("app-owner")
 	appOwner, err := app.child.RetainProcess()
 	if err != nil {
 		return err
@@ -388,6 +397,7 @@ func (s *Session) RunUI(selfTest bool) error {
 	if err != nil {
 		return err
 	}
+	reportConnectionStage("tray-launch")
 	tray, err := s.launchUI(true, selfTest, app.child.PID(), created)
 	if err != nil {
 		return err
@@ -405,6 +415,7 @@ func (s *Session) RunUI(selfTest bool) error {
 	if selfTest {
 		trayDone = nil
 	}
+	reportConnectionStage("ui-wait")
 	select {
 	case outcome = <-appDone:
 	case err = <-app.done:
@@ -457,6 +468,7 @@ func (s *Session) RunUI(selfTest bool) error {
 		return errors.New("the App exited without its authenticated native handoff")
 	}
 	if selfTest {
+		reportConnectionStage("tray-wait")
 		code, err := tray.child.Wait(s.ctx)
 		if err != nil || code != 0 {
 			return errors.Join(err, fmt.Errorf("the native Tray self-test exited with code %d", code))
@@ -467,6 +479,7 @@ func (s *Session) RunUI(selfTest bool) error {
 			return errors.New("the Tray exited without its authenticated native handoff")
 		}
 	}
+	reportConnectionStage("complete")
 	return nil
 }
 

@@ -5,7 +5,7 @@ import Libbox
 /// never creates a complete NodeChain or grants a selected-final connection.
 struct IOSNodeCandidateAppendSource {
     static let nextModes = IOSMultihopNodeSelection.nativePrefixModes + ["shadowsocks", "hysteria2"]
-    static let executionNextModes = ["shadowsocks", "wg", "awg2-fast", "awg2-strong"]
+    static let executionNextModes = ["shadowsocks", "wg", "awg2-fast", "awg2-strong", "hysteria2"]
     static func supportsNextMode(_ mode: String) -> Bool { nextModes.contains(mode) }
     struct NextChoice: Hashable {
         let kind: String, mode: String, execution: String
@@ -30,14 +30,15 @@ struct IOSNodeCandidateAppendSource {
     static func executionSourceSchema(_ modes: [String], nextMode: String) -> Int? {
         guard executionNextModes.contains(nextMode), (1..<IOSMultihopNodeSelection.physicalTraversalDepth).contains(modes.count),
               let first = modes.first, IOSMultihopNodeSelection.supportsNativePrefix(first) else { return nil }
-        var shadowsocksTail = false
+        var hasProxy = false, hasHysteria = false
         for mode in modes {
-            if mode == "shadowsocks" {
-                guard nextMode == "shadowsocks" else { return nil }
-                shadowsocksTail = true
-            } else if !IOSMultihopNodeSelection.supportsNativePrefix(mode) || shadowsocksTail { return nil }
+            if proxyEntryMode(mode) {
+                hasProxy = true
+                hasHysteria = hasHysteria || mode == "hysteria2"
+            } else if hasHysteria || !IOSMultihopNodeSelection.supportsNativePrefix(mode) { return nil }
         }
-        return shadowsocksTail ? 2 : 1
+        guard !hasHysteria || proxyEntryMode(nextMode) else { return nil }
+        return hasProxy ? 2 : 1
     }
     static func permitsExecution(nodes: [IOSMultihopNodeSelection], profiles: [RouterProfile], choice: NextChoice) -> Bool {
         guard supportsNext(kind: choice.kind, mode: choice.mode, proxyEntry: proxyEntry(nodes)) else { return false }
@@ -71,7 +72,7 @@ struct IOSNodeCandidateAppendSource {
               }) else { throw Self.executionIssue() }
     }
     static func executionIssue() -> NSError { NSError(domain: "RouterVPN.CandidateAppendExecution", code: 1,
-        userInfo: [NSLocalizedDescriptionKey: "Server and Compare require paired literal nodes with Start Layer Off. A WireGuard or AmneziaWG next node requires only WireGuard or AmneziaWG prefix nodes. A Shadowsocks 2022 next node also allows Shadowsocks nodes after that packet prefix. Choose Local explicitly for other prefixes."]) }
+        userInfo: [NSLocalizedDescriptionKey: "Server and Compare require paired literal nodes with Start Layer Off and a WireGuard or AmneziaWG first node. After Hysteria2, only Shadowsocks 2022 or Hysteria2 can follow. Choose Local explicitly for other prefixes."]) }
 
     static func measurement(kind: String) -> String {
         kind == "external" ? "routed-public-candidate-response" : kind == "router-vpn" ? "routed-candidate-response" : ""

@@ -733,6 +733,17 @@ jobs:
           chmod +x client/macos/build-native-app.sh deploy/package-macos-native.sh
           ./deploy/package-macos-native.sh
           (cd dist/macos-native && shasum -a 256 -c SHA256SUMS)
+      - name: Preserve native macOS build diagnostics
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-macOS-build-diagnostic-${{ github.sha }}
+          path: |
+            dist/macos-native/RouterVPN-darwin-amd64.tar.gz
+            dist/macos-native/RouterVPN-darwin-arm64.tar.gz
+            dist/macos-native/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
       - name: Connect the installed native macOS app through its real utun
         timeout-minutes: 15
         run: |

@@ -7,7 +7,13 @@ param(
 
 $ErrorActionPreference='Stop'
 $SelfTestReportDirectory=[IO.Directory]::GetCurrentDirectory()
+function Write-RouterVPNConnectionSelfTestStage([string]$Stage){
+    if(-not$SelfTest-or$env:ROUTERVPN_CONNECTION_SELF_TEST-cne'1'-or$env:ROUTERVPN_CAPTURE_SELF_TEST_LAYOUT-cne'1'){return}
+    if($Stage-cnotin @('controller-module','controller-handoff','controller-status','wpf-assemblies','load-mtu','load-dns','load-profile-settings','load-session-mutation','load-unified-shell','load-telemetry','load-speed-lab','load-tor-bridge','product-composition','self-test-contract','product-layout')){return}
+    try{[Console]::Error.WriteLine('Router VPN Windows app stage: '+$Stage)}catch{} # Diagnostic output cannot replace the original operation or error.
+}
 $SelfTestStage='controller-module'
+Write-RouterVPNConnectionSelfTestStage 'controller-module'
 function Write-RouterVPNSelfTestFailure {
     param($Failure,[string]$Stage)
     # Only the original-user native self-test can request this fixed receipt.
@@ -55,9 +61,11 @@ if($null-eq${function:New-RouterVPNControllerClient}){
 $Handoff=@{}
 foreach($Name in @('ControllerPipe','ControllerParentHandle')){if($PSBoundParameters.ContainsKey($Name)){$Handoff[$Name]=$PSBoundParameters[$Name]}}
 $SelfTestStage='controller-handoff'
+Write-RouterVPNConnectionSelfTestStage 'controller-handoff'
 $CapturedBase=Initialize-RouterVPNControllerTransport @Handoff
 try{
 $SelfTestStage='controller-status'
+Write-RouterVPNConnectionSelfTestStage 'controller-status'
 if(-not$PSBoundParameters.ContainsKey('BaseUrl')){$BaseUrl=$CapturedBase}
 $BaseUrl=$BaseUrl.TrimEnd('/')
 if($BaseUrl-cne$CapturedBase){throw 'Router VPN requires the fixed local controller captured by this UI owner.'}
@@ -71,6 +79,7 @@ if($SelfTest-and$CapturedBase-ceq'https://127.0.0.1:8788'){
 }
 
 $SelfTestStage='wpf-assemblies'
+Write-RouterVPNConnectionSelfTestStage 'wpf-assemblies'
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
@@ -82,42 +91,50 @@ Add-Type -AssemblyName WindowsBase
 # Bind the first filesystem cmdlet to its system module, as the transport does
 # for its first Add-Type. Cold unqualified discovery must not delay the app.
 $SelfTestStage='load-mtu'
+Write-RouterVPNConnectionSelfTestStage 'load-mtu'
 $MTUHelpers=Microsoft.PowerShell.Management\Join-Path $PSScriptRoot 'RouterVPN-Windows-MTU.ps1'
 if(-not(Test-Path -LiteralPath $MTUHelpers)){throw "Router VPN MTU helpers are missing: $MTUHelpers"}
 $MTUSource=Get-Content -LiteralPath $MTUHelpers -Raw -Encoding UTF8
 . ([ScriptBlock]::Create($MTUSource))
 $SelfTestStage='load-dns'
+Write-RouterVPNConnectionSelfTestStage 'load-dns'
 $DNSMeasurementHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-DNSMeasurement.ps1'
 if(-not(Test-Path -LiteralPath $DNSMeasurementHelpers)){throw "Router VPN DNS measurement helpers are missing: $DNSMeasurementHelpers"}
 $DNSMeasurementSource=Get-Content -LiteralPath $DNSMeasurementHelpers -Raw -Encoding UTF8
 . ([ScriptBlock]::Create($DNSMeasurementSource))
 $SelfTestStage='load-profile-settings'
+Write-RouterVPNConnectionSelfTestStage 'load-profile-settings'
 $ProfileSettingsHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-ProfileSettings.ps1'
 if(-not(Test-Path -LiteralPath $ProfileSettingsHelpers)){throw "Router VPN profile settings helpers are missing: $ProfileSettingsHelpers"}
 $ProfileSettingsSource=Get-Content -LiteralPath $ProfileSettingsHelpers -Raw -Encoding UTF8
 . ([ScriptBlock]::Create($ProfileSettingsSource))
 $SelfTestStage='load-session-mutation'
+Write-RouterVPNConnectionSelfTestStage 'load-session-mutation'
 $SessionMutationHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-SessionMutation.ps1'
 if(-not(Test-Path -LiteralPath $SessionMutationHelpers)){throw "Router VPN Windows session-mutation helpers are missing: $SessionMutationHelpers"}
 $SessionMutationSource=Get-Content -LiteralPath $SessionMutationHelpers -Raw -Encoding UTF8
 . ([ScriptBlock]::Create($SessionMutationSource))
 $SelfTestStage='load-unified-shell'
+Write-RouterVPNConnectionSelfTestStage 'load-unified-shell'
 $UnifiedShellHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-UnifiedShell.ps1'
 if(-not(Test-Path -LiteralPath $UnifiedShellHelpers)){throw "Router VPN unified shell helpers are missing: $UnifiedShellHelpers"}
 $UnifiedShellSource=Get-Content -LiteralPath $UnifiedShellHelpers -Raw -Encoding UTF8
 $UnifiedShellSource=Convert-RouterVPNWindowsUnifiedSessionMutation -Source $UnifiedShellSource
 . ([ScriptBlock]::Create($UnifiedShellSource))
 $SelfTestStage='load-telemetry'
+Write-RouterVPNConnectionSelfTestStage 'load-telemetry'
 $TelemetryHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-Telemetry.ps1'
 if(-not(Test-Path -LiteralPath $TelemetryHelpers)){throw "Router VPN telemetry helpers are missing: $TelemetryHelpers"}
 $TelemetrySource=Get-Content -LiteralPath $TelemetryHelpers -Raw -Encoding UTF8
 . ([ScriptBlock]::Create($TelemetrySource))
 $SelfTestStage='load-speed-lab'
+Write-RouterVPNConnectionSelfTestStage 'load-speed-lab'
 $SpeedLabHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-SpeedLab.ps1'
 if(-not(Test-Path -LiteralPath $SpeedLabHelpers)){throw "Router VPN Speed Lab helpers are missing: $SpeedLabHelpers"}
 $SpeedLabSource=Get-Content -LiteralPath $SpeedLabHelpers -Raw -Encoding UTF8
 . ([ScriptBlock]::Create($SpeedLabSource))
 $SelfTestStage='load-tor-bridge'
+Write-RouterVPNConnectionSelfTestStage 'load-tor-bridge'
 $TorBridgeHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-TorBridge.ps1'
 if(-not(Test-Path -LiteralPath $TorBridgeHelpers)){throw "Router VPN Tor bridge UI helpers are missing: $TorBridgeHelpers"}
 $TorBridgeSource=Get-Content -LiteralPath $TorBridgeHelpers -Raw -Encoding UTF8
@@ -198,6 +215,7 @@ function Set-RouterVPNProductHelpBinding {
 }
 
 $SelfTestStage='product-composition'
+Write-RouterVPNConnectionSelfTestStage 'product-composition'
 $Product=Join-Path $PSScriptRoot 'RouterVPN-Windows-Product-v2.ps1'
 if(-not(Test-Path -LiteralPath $Product)){throw "Router VPN native Windows product shell is missing: $Product"}
 $ProductSource=Get-Content -LiteralPath $Product -Raw -Encoding UTF8
@@ -227,6 +245,7 @@ $PreviousProductSource=$env:ROUTER_VPN_PRODUCT_SOURCE;$env:ROUTER_VPN_PRODUCT_SO
 try{
     if($SelfTest){
         $SelfTestStage='self-test-contract'
+        Write-RouterVPNConnectionSelfTestStage 'self-test-contract'
         $self=Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw -Encoding UTF8
         foreach($marker in @('RouterVPN-Windows-SessionMutation.ps1','Convert-RouterVPNWindowsProductSessionMutation','Convert-RouterVPNWindowsUnifiedSessionMutation','RouterVPN-Windows-Telemetry.ps1','RouterVPN-Windows-SpeedLab.ps1','RouterVPN-Windows-TorBridge.ps1','Add-RouterVPNUnifiedWindowsShell','Add-RouterVPNTelemetryWindowsShell','Add-RouterVPNSpeedLabWindowsShell','Add-RouterVPNTorBridgeWindowsShell','windows-onboarding-v3.json','Show-RouterVPNProductOnboarding -Force','SMART AUTO is the default mode','IPv6 On default','Auto measured/fixed MTU','DAITA-like traffic padding','AUTO encryption/obfuscation filters','Tor censorship bridges')){if(-not$self.Contains($marker)){throw "Windows unified launcher self-test missing $marker"}}
         foreach($marker in $UnifiedControllerContract){if(-not$UnifiedShellSource.Contains($marker)-and-not$TelemetrySource.Contains($marker)-and-not$SpeedLabSource.Contains($marker)-and-not$TorBridgeSource.Contains($marker)-and-not$ProductSource.Contains($marker)-and-not$MTUSource.Contains($marker)-and-not$DNSMeasurementSource.Contains($marker)-and-not$ProfileSettingsSource.Contains($marker)){throw "Windows composed controller contract missing $marker"}}
@@ -235,6 +254,7 @@ try{
         # self-tests. This list intentionally guards Product-v2 UI seams only.
         foreach($marker in @('UnifiedShell','UnifiedMapCanvas','UnifiedConnectButton','UnifiedFastestNode','UnifiedLiveLatency','UnifiedForwardButton','UnifiedKillSwitch','UnifiedMultihop','UnifiedMultihopLatency','UnifiedPerformanceButton','UnifiedModeCombo','UnifiedDnsCombo','UnifiedTorButton','Tor bridges','ShowUnifiedTorBridgeBuilder','SMART AUTO','New CUSTOM preset','Snowflake','WebTunnel','Auto / Custom','System.Collections.Generic.HashSet','real stored coordinates')){if(-not$ProductSource.Contains($marker)){throw "Windows unified product self-test missing $marker"}}
         $SelfTestStage='product-layout'
+        Write-RouterVPNConnectionSelfTestStage 'product-layout'
         & $ProductScript -BaseUrl $BaseUrl -SelfTest
     }else{Show-RouterVPNProductOnboarding;& $ProductScript -BaseUrl $BaseUrl}
     if(-not$?){throw 'Router VPN native Windows product shell failed.'}

@@ -15,7 +15,7 @@ import java.util.List;
 final class AndroidNodeCandidateAppendSource {
     static final List<String> NEXT_MODES=List.of("wg","awg2-fast","awg2-strong","shadowsocks","hysteria2");
     static boolean supportsNextMode(String mode){return mode!=null&&NEXT_MODES.contains(mode);}
-    static final List<String> EXECUTION_NEXT_MODES=List.of("shadowsocks","wg","awg2-fast","awg2-strong");
+    static final List<String> EXECUTION_NEXT_MODES=List.of("shadowsocks","wg","awg2-fast","awg2-strong","hysteria2");
     static final class NextChoice {
         final String kind,mode,execution;
         NextChoice(String kind,String mode){this(kind,mode,"local");}
@@ -39,21 +39,17 @@ final class AndroidNodeCandidateAppendSource {
         if(!List.of("server","auto").contains(execution)||!"router-vpn".equals(kind)||mode==null||!EXECUTION_NEXT_MODES.contains(mode)
                 ||members.isEmpty()||members.size()>95||members.size()!=modes.size())return false;
         try {
-            boolean shadowsocksTail=false;
+            boolean hasHysteria=false;
             for(int i=0;i<members.size();i++) {
                 AndroidNodeStore.ChainSource member=members.get(i);String retainedMode=modes.get(i);
                 boolean packet=List.of("wg","awg2-fast","awg2-strong").contains(retainedMode);
-                if(packet) {
-                    if(shadowsocksTail)return false;
-                } else {
-                    if(i==0||!"shadowsocks".equals(retainedMode)||!"shadowsocks".equals(mode))return false;
-                    shadowsocksTail=true;
-                }
+                if(packet&&hasHysteria||!packet&&(i==0||!proxyEntryMode(retainedMode)))return false;
+                hasHysteria|="hysteria2".equals(retainedMode);
                 if(member.imported||!List.of("","off").contains(member.profile().optString("start_layer","off")))return false;
                 member.requirePairedIdentity();AndroidNumericAddress.parse(member.profile().getString("endpoint"));
                 if(!permitsPrefixMember(member,retainedMode,i,false))return false;
             }
-            return true;
+            return !hasHysteria||proxyEntryMode(mode);
         } catch(Exception unavailable){return false;}
     }
     static boolean supportsNext(String kind,String mode){return "router-vpn".equals(kind)&&supportsNextMode(mode)||"external".equals(kind)&&"shadowsocks".equals(mode);}

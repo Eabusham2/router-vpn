@@ -233,6 +233,9 @@ func (s *nodeChainExecutionIO) exchangeCaptured(ctx context.Context, method, pat
 		}
 		data, readErr := io.ReadAll(io.LimitReader(response.Body, int64(limit)+1))
 		closeErr := response.Body.Close()
+		if path == nodeChainAppendPrefixSelectionPath && method == "GET" && response.StatusCode == http.StatusNotFound && (readErr != nil || closeErr != nil || len(data) > limit || response.Header.Get("Content-Encoding") != "" && response.Header.Get("Content-Encoding") != "identity") {
+			return nil, errors.Join(errors.New("ordered selection capability response has invalid framing"), readErr, closeErr)
+		}
 		if response.StatusCode != http.StatusOK {
 			return nil, controlError{response.StatusCode}
 		}

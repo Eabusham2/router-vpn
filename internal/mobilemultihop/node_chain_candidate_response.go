@@ -432,6 +432,7 @@ type NodeChainCandidatePacketRequest struct {
 	engine         *nodeChainCandidateEngine
 	prepared       *NodeChainCandidatePreparationRuntime
 	preparedReader NodeChainPreparedPacketEngine
+	appendHysteria *nodeChainAppendExecutionHysteria
 	selected       *nodeChainExecutionEntryCandidateEngine
 	response       candidateResponseSource
 }

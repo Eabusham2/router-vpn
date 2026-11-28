@@ -195,8 +195,13 @@ function Read-DesktopConnectPayload([string]$URL){
   try{return ([BitConverter]::ToString($Digest.ComputeHash($Body.ToArray())).Replace('-','').ToLowerInvariant())}finally{$Digest.Dispose()}
  }finally{if($Stream){$Stream.Dispose()};if($Response){$Response.Dispose()};$Body.Dispose();$Request.Abort()}
 }
+function Write-RouterVPNDesktopConnectStage([string]$Stage){
+    if(-not$SelfTest-or$env:ROUTERVPN_CONNECTION_SELF_TEST-cne'1'-or$env:ROUTERVPN_CAPTURE_SELF_TEST_LAYOUT-cne'1'){return}
+    if($Stage-cnotin @('bootstrap','manifest','initial-refresh','import','selection-refresh','connect','traffic','peer-stop','loss','disconnect')){return}
+    try{[Console]::Error.WriteLine('Router VPN Windows connect stage: '+$Stage)}catch{} # Diagnostic output cannot replace the original operation or error.
+}
 function Invoke-DesktopConnectSelfTest{
- $Clock=[Diagnostics.Stopwatch]::StartNew();$Stage='manifest';$Run='';$Started=$false;$Failure=$null
+ $Clock=[Diagnostics.Stopwatch]::StartNew();$Stage='manifest';Write-RouterVPNDesktopConnectStage 'manifest';$Run='';$Started=$false;$Failure=$null
  $Result=@{schema=1;run_id='';phase='complete';status='failed';connect=$false;traffic=$false;loss=$false;disconnect=$false;failure_stage=$Stage}
  try{
   $Fixture=Read-DesktopConnectJSON 'desktop-connect-fixture.json' (1MB)
@@ -211,15 +216,15 @@ function Invoke-DesktopConnectSelfTest{
   $RefreshTimerWasEnabled=$Timer.IsEnabled
   $Timer.Stop()
   try{
-   $Stage='initial-refresh'
+   $Stage='initial-refresh';Write-RouterVPNDesktopConnectStage 'initial-refresh'
    Wait-DesktopConnect {-not(UnifiedRefreshBusy)} $Clock $Run
    if($StateText.Text-ceq'Controller unavailable'){throw ('The original initial refresh failed: '+$LastErrorText.Text)}
-   $Stage='import'
+   $Stage='import';Write-RouterVPNDesktopConnectStage 'import'
    $Imported=ApiRaw '/api/profile/import' ([Text.Encoding]::UTF8.GetBytes(($Fixture.profile_bundle|ConvertTo-Json -Depth 12 -Compress))) 25
    $ID=[string]$Imported.profile.id
    if(-not$Imported.ok-or-not$ID){throw 'Desktop connection did not import a real profile.'}
    [void](Api '/api/profile/select' 'POST' @{id=$ID} 10)
-   $Stage='selection-refresh'
+   $Stage='selection-refresh';Write-RouterVPNDesktopConnectStage 'selection-refresh'
    RefreshProduct
    if(-not(UnifiedRefreshBusy)){throw ('The original selected-profile refresh did not start: '+$LastErrorText.Text)}
    Wait-DesktopConnect {-not(UnifiedRefreshBusy)} $Clock $Run
@@ -231,7 +236,7 @@ function Invoke-DesktopConnectSelfTest{
    $ModeRows=@($ModeCombo.Items|Where-Object{[string]$_.id-ceq'base-raw'-and[bool]$_.available})
    if($null-eq$Button-or-not$Button.IsEnabled-or$ModeRows.Count-ne1-or$ModeCombo.SelectedValue-cne'base-raw'-or(BaseChoice)-cne'wg'-or$null-eq$Selected-or[string]$Selected.id-cne$ID-or$RouterCombo.SelectedValue-cne$ID){throw 'Desktop connection could not select its real profile and WG mode.'}
   }finally{if($RefreshTimerWasEnabled){$Timer.Start()}}
-  $Window.UpdateLayout();$Stage='connect';$Started=$true
+  $Window.UpdateLayout();$Stage='connect';Write-RouterVPNDesktopConnectStage 'connect';$Started=$true
   $Button.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
   Wait-DesktopConnect {
    $Current=Api '/api/status' -Timeout 3
@@ -241,20 +246,20 @@ function Invoke-DesktopConnectSelfTest{
     return (-not(UnifiedAsyncBusy))
    };return $false
   } $Clock $Run
-  $Result.connect=$true;$Stage='traffic'
+  $Result.connect=$true;$Stage='traffic';Write-RouterVPNDesktopConnectStage 'traffic'
   $Addresses=@([Net.Dns]::GetHostAddresses([string]$Fixture.dns_host)|ForEach-Object{$_.ToString()})
   if($Addresses.Count-ne1-or$Addresses[0]-cne[string]$Fixture.private_address){throw 'Desktop connection OS DNS did not use the private peer.'}
   if((Read-DesktopConnectPayload ([string]$Fixture.payload_url))-cne[string]$Fixture.payload_sha256){throw 'Desktop connection payload did not match its fresh nonce.'}
   $Result.traffic=$true
   Write-DesktopConnectPhase 'desktop-connect-connected.json' @{schema=1;run_id=$Run;phase='connected';profile_id=$ID;runtime_mode='wg';private_address=[string]$Fixture.private_address;payload_sha256=[string]$Fixture.payload_sha256}
-  $Stage='peer-stop'
+  $Stage='peer-stop';Write-RouterVPNDesktopConnectStage 'peer-stop'
   Wait-DesktopConnect {Test-DesktopConnectMarker 'desktop-connect-peer-stopped.json' 'peer-stopped' $Run} $Clock $Run
-  $Stage='loss';$Denied=$false
+  $Stage='loss';Write-RouterVPNDesktopConnectStage 'loss';$Denied=$false
   try{[void](Read-DesktopConnectPayload ([string]$Fixture.literal_payload_url))}catch [Net.WebException]{
    if($null-eq$_.Exception.Response-and$_.Exception.Status-cin@([Net.WebExceptionStatus]::ConnectFailure,[Net.WebExceptionStatus]::Timeout,[Net.WebExceptionStatus]::ConnectionClosed,[Net.WebExceptionStatus]::ReceiveFailure,[Net.WebExceptionStatus]::SendFailure)){$Denied=$true}else{throw}
   }
   if(-not$Denied){throw 'Desktop connection bypassed the stopped private peer.'}
-  $Result.loss=$true;$Stage='disconnect'
+  $Result.loss=$true;$Stage='disconnect';Write-RouterVPNDesktopConnectStage 'disconnect'
   $Button.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
   Wait-DesktopConnect {$Current=Api '/api/status' -Timeout 3;return (-not[bool]$Current.connected-and[string]$Current.phase-ceq'off'-and[string]$Current.mode-ceq'off'-and-not(UnifiedAsyncBusy))} $Clock $Run -Cleanup
   $Result.disconnect=$true;$Result.status='passed';$Result.failure_stage=''
@@ -282,6 +287,7 @@ $Timer=New-Object Windows.Threading.DispatcherTimer
 $Timer.Interval=[TimeSpan]::FromSeconds(2)
 $Timer.Add_Tick({RefreshProduct})
 $Window.Add_Closed({$Timer.Stop()})
+Write-RouterVPNDesktopConnectStage 'bootstrap'
 RefreshDnsPolicy
 RefreshProduct
 $Timer.Start()

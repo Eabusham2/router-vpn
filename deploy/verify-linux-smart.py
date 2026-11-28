@@ -1567,7 +1567,7 @@ def ordered_namespaces(work):
                 run('ip','netns','exec',final,'nft','-f','-',input=(
                     'table ip '+table+' { chain output { type nat hook output priority -100; policy accept; '+
                     'ip daddr 1.1.1.1 tcp dport 443 counter dnat to '+host_ip+':'+str(relay.port)+
-                    ' comment "'+owner+'"; } }\n').encode())
+                    ' comment "'+owner+'";\n }\n}\n').encode())
                 run('ip','-n',final,'route','add','1.1.1.1/32','via',host_ip,'dev','ordered-uplink')
                 records['public_route']=ordered_json(['ip','-n',final,'-j','route','show','1.1.1.1/32'])
                 route=records['public_route']

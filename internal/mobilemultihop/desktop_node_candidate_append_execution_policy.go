@@ -40,8 +40,9 @@ func NewDesktopNodeCandidateAppendExecutionPolicy(original *NodeChainCandidateAp
 	old := original.policy
 	policy := &NodeChainCandidateAppendExecutionPolicy{record: old.record, original: local.preparation, capturedOriginal: local.preparation,
 		localMembers: append([]multihoprelay.NodeChainPrefixMember(nil), old.localMembers...), candidates: append([]multihoprelay.NodeChainPrefixCandidate(nil), old.candidates...), inputs: append([]string(nil), old.inputs...),
-		packetCandidates: append([]nodeChainAppendExecutionPacketIdentity(nil), old.packetCandidates...),
-		source:           old.source, sourceSHA: old.sourceSHA, inventorySHA: old.inventorySHA, projection: local, originalPolicy: old}
+		packetCandidates:   append([]nodeChainAppendExecutionPacketIdentity(nil), old.packetCandidates...),
+		hysteriaCandidates: append([]nodeChainAppendExecutionHysteriaIdentity(nil), old.hysteriaCandidates...),
+		source:             old.source, sourceSHA: old.sourceSHA, inventorySHA: old.inventorySHA, projection: local, originalPolicy: old}
 	policy.self = policy
 	policy.seal = policy.digest()
 	policy.metadata = policy.buildMetadata()

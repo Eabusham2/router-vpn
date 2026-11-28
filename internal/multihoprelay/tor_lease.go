@@ -434,6 +434,10 @@ func (m *Manager) CreateTor(ctx context.Context, peer netip.Addr, q TorRequest) 
 		return TorLease{}, ctx.Err()
 	}
 	key := PeerKey(peer)
+	if m.prefixSelectionBusyLocked(key) {
+		m.mu.Unlock()
+		return TorLease{}, ErrBusy
+	}
 	if active := m.leases[key]; active != nil {
 		if active.tor == nil || active.tor.capture.Request != q || active.retired {
 			m.mu.Unlock()

@@ -14,10 +14,11 @@ import Libbox
 
     static func make(request: String, prefixPosition: Int, proofs: [IOSNodeCandidatePrefix],
                      chainSource: String, chainConfig: String, selectedResponse: Bool = false, originalLaunch: Data? = nil, preparedResponse: Bool = false,
-                     selectedPacket: IOSNodeChainExecutionCapture? = nil, selectedWinner: String? = nil) throws -> Self {
+                     selectedPacket: IOSNodeChainExecutionCapture? = nil, selectedWinner: String? = nil,
+                     appendExecution: String = "local") throws -> Self {
         let snapshot = try IOSNodeBundleStore.shared.candidateSnapshot()
         let compiled = try compile(records: snapshot.records, stamp: snapshot.stamp,
-                                   prefixPosition: prefixPosition, proofs: proofs, selectedResponse: selectedResponse, originalLaunch: originalLaunch, preparedResponse: preparedResponse, selectedPacket: selectedPacket, selectedWinner: selectedWinner)
+                                   prefixPosition: prefixPosition, proofs: proofs, selectedResponse: selectedResponse, originalLaunch: originalLaunch, preparedResponse: preparedResponse, selectedPacket: selectedPacket, selectedWinner: selectedWinner, appendExecution: appendExecution)
         guard IOSCandidateCatalogPublication.isDigest(chainSource), IOSCandidateCatalogPublication.isDigest(chainConfig) else { throw issue() }
         let published = try IOSCandidateCatalogPublication.shared.capture(request: request, inventory: compiled.inventory, expected: snapshot.stamp)
         let result = Self(source: published, records: snapshot.records, rows: compiled.rows,
@@ -32,7 +33,8 @@ import Libbox
     }
     static func compile(records: [String: Data], stamp: IOSCandidateCatalogPublication.Stamp,
                         prefixPosition: Int, proofs: [IOSNodeCandidatePrefix], selectedResponse: Bool = false, originalLaunch: Data? = nil, preparedResponse: Bool = false,
-                        selectedPacket: IOSNodeChainExecutionCapture? = nil, selectedWinner: String? = nil) throws -> (inventory: Data, rows: [Row]) {
+                        selectedPacket: IOSNodeChainExecutionCapture? = nil, selectedWinner: String? = nil,
+                        appendExecution: String = "local") throws -> (inventory: Data, rows: [Row]) {
         let appendResponse = proofs.indices.contains(prefixPosition) && proofs[prefixPosition].appendResponse(in: proofs)
         let appendSource: IOSNodeCandidateAppendSource?
         if appendResponse {
@@ -40,9 +42,10 @@ import Libbox
             let captured = try IOSNodeCandidateAppendSource(input: String(decoding: originalLaunch, as: UTF8.self))
             guard captured.prefixes == proofs else { throw issue() }
             try captured.requireDeviceCurrent()
+            if appendExecution != "local" { try captured.requireExecution(appendExecution) }
             appendSource = captured
         } else {
-            guard proofs.allSatisfy({ $0.purpose == nil && $0.candidate_kind == nil }) else { throw issue() }
+            guard appendExecution == "local", proofs.allSatisfy({ $0.purpose == nil && $0.candidate_kind == nil }) else { throw issue() }
             appendSource = nil
         }
         guard stamp.ready, stamp.sources_sha256 == (try IOSCandidateCatalogPublication.sourcesDigest(records)),
@@ -53,6 +56,7 @@ import Libbox
         let pairedFinalResponse = proofs[prefixPosition].pairedFinalResponse
         guard !selectedResponse || (!preparedResponse && (!pairedFinalResponse || selectedPacket != nil)) else { throw issue() }
         let candidateMode = proofs[prefixPosition].candidate_mode ?? "shadowsocks"
+        let companionInventory = appendResponse && candidateMode == "hysteria2" && ["server", "auto"].contains(appendExecution)
         let packetResponse = proofs[prefixPosition].packetSuccessorResponse(in: proofs)
         if let selectedPacket, let selectedWinner {
             guard selectedResponse, !preparedResponse, !appendResponse, packetResponse,
@@ -69,7 +73,7 @@ import Libbox
         let excluded = Set(excludedMembers.map(\.profile_id))
         let paired = Set(excludedMembers.map(\.node_id).filter { !$0.isEmpty })
         var originals = completeSource ? Dictionary(uniqueKeysWithValues: proofs.map { ($0.profile_id, $0) }) : [:]
-        var rows: [Row] = [], seen = Set<String>(), inputs: [String] = []
+        var rows: [Row] = [], seen = Set<String>(), inputs: [String] = [], identitySources: [String] = []
         for key in records.keys.sorted() {
             guard let data = records[key], data.count <= 32 * 1024 * 1024,
                   let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -108,6 +112,9 @@ import Libbox
                 var input = "", reason = "This saved transport or Start Layer cannot supply this measurement"
                 do {
                     if let appendSource { guard profile["node_kind"] as? String == appendSource.nextKind else { throw issue() } }
+                    if companionInventory {
+                        guard IOSImportedShadowsocksSource.literal(profile["endpoint"] as? String ?? "") else { throw issue() }
+                    }
                     input = try member(profile: profile, files: files, mode: candidateMode)
                     if let appendSource {
                         guard try appendSource.fits(input) else { throw issue() }
@@ -126,6 +133,12 @@ import Libbox
                     if !appendResponse && !pairedFinalResponse && (publicResponse || proofs[prefixPosition].metric == "routed-candidate-response") {
                         guard LibboxRouterNodeChainCandidateInputSupportedForMeasurement(input, proofs[prefixPosition].metric) else { throw issue() }
                     }
+                    if companionInventory {
+                        guard let identity = files["wg"], !identity.isEmpty else { throw issue() }
+                        let original = try JSONSerialization.data(withJSONObject: identity, options: [.sortedKeys])
+                        guard original.count <= 16 * 1024 * 1024 else { throw issue() }
+                        identitySources.append(String(decoding: original, as: UTF8.self))
+                    }
                     reason = ""; inputs.append(input)
                 } catch { input = "" }
                 rows.append(Row(id: id, name: name, input: input, reason: reason))
@@ -134,6 +147,7 @@ import Libbox
         guard originals.isEmpty, !inputs.isEmpty else { throw issue() }
         var offered: [String: Any] = ["schema": 1, "revision": stamp.revision, "inputs": inputs]
         if pairedFinalResponse || appendResponse { offered["response_mode"] = candidateMode }
+        if companionInventory { offered["identity_sources"] = identitySources }
         let inventory = try JSONSerialization.data(withJSONObject: offered, options: [.sortedKeys])
         guard inventory.count <= IOSCandidateCatalogPublication.maximumInventoryBytes else { throw issue() }
         // Append inventories are admitted as a whole by their original native

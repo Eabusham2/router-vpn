@@ -104,11 +104,13 @@ func decodeFrame(raw []byte) (frame, error) {
 }
 
 type protocol struct {
-	channel   transport
-	selection Selection
-	nonce     string
-	peer      uint32 // Obtained from actual creation/inheritance, never decoded.
-	current   func(context.Context) error
+	channel             transport
+	selection           Selection
+	nonce               string
+	peer                uint32 // Obtained from actual creation/inheritance, never decoded.
+	current             func(context.Context) error
+	stoppedAcknowledged bool // Set only after the fully validated original seq5 receipt.
+	finishAuthorized    bool // Set only after the original final-send currentness check.
 }
 
 func (p *protocol) send(ctx context.Context, stage string, sequence uint64) error {
@@ -118,6 +120,11 @@ func (p *protocol) send(ctx context.Context, stage string, sequence uint64) erro
 	raw, err := json.Marshal(frame{p.selection, p.selection.Family.protocolSchema(), sequence, stage, p.nonce})
 	if err != nil {
 		return err
+	}
+	if stage == "finish" && sequence == 6 && p.stoppedAcknowledged {
+		// Retain the native cleanup proof before the original terminal send.
+		// Cancellation of that send still fails the original stop exchange.
+		p.finishAuthorized = true
 	}
 	if err = p.channel.Send(ctx, raw); err != nil {
 		return err
@@ -199,6 +206,7 @@ func (p *protocol) stop(ctx context.Context) error {
 	if err := p.receive(ctx, "stopped", 5, false); err != nil {
 		return err
 	}
+	p.stoppedAcknowledged = true
 	// The child stays alive through the final native peer/main-image check.
 	// Only the original exec.Cmd waiter can subsequently prove its exit.
 	return p.send(ctx, "finish", 6)

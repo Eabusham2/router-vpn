@@ -22,6 +22,9 @@ type NodeChainServerPrefixSession struct {
 	capture                  multihoprelay.NodeChainPrefixCapture
 	captureSHA, config, seal string
 	carrier                  *NodeChainServerCarrier
+	udpCarrier               *NodeChainServerCarrier
+	mixedCloseGate           chan struct{}
+	mixedCloseErr            error
 	closed                   atomic.Bool
 }
 
@@ -33,6 +36,9 @@ func (s *NodeChainServerPrefixSession) digest() string {
 	if s.carrier != nil {
 		carrier = s.carrier.seal
 	}
+	if s.udpCarrier != nil {
+		return desktopExternalObjectDigest([]any{"routervpn-server-prefix-mixed-session-v1", s.policy.seal, s.capture, s.captureSHA, s.config, carrier, s.udpCarrier.seal})
+	}
 	return desktopExternalObjectDigest([]any{"routervpn-server-prefix-session-v1", s.policy.seal, s.capture, s.captureSHA, s.config, carrier})
 }
 func (s *NodeChainServerPrefixSession) validate() error {
@@ -43,11 +49,23 @@ func (s *NodeChainServerPrefixSession) validate() error {
 	if err != nil || digest != s.captureSHA || len(s.policy.nodes) == 0 && (s.carrier != nil || s.config != "") || len(s.policy.nodes) > 0 && (s.carrier == nil || s.config == "") {
 		return errNodeChainAppendExecution
 	}
+	if s.mixedStreamRoot() {
+		if !s.mixedStreamCarriersMatch() {
+			return nodeChainServerCarrierError
+		}
+	} else if s.udpCarrier != nil {
+		return nodeChainServerCarrierError
+	}
 	return nil
 }
 func (s *NodeChainServerPrefixSession) CurrentContext(ctx context.Context) error {
 	if ctx == nil || ctx.Err() != nil || s.validate() != nil {
 		return errors.Join(errNodeChainAppendExecution, contextError(ctx))
+	}
+	if s.udpCarrier != nil {
+		tcpErr := s.carrier.CurrentContext(ctx)
+		udpErr := s.udpCarrier.CurrentContext(ctx)
+		return errors.Join(tcpErr, udpErr)
 	}
 	if s.carrier != nil {
 		return s.carrier.CurrentContext(ctx)
@@ -71,6 +89,23 @@ func (s *NodeChainServerPrefixSession) CloseContext(ctx context.Context) error {
 		return nil
 	}
 	s.closed.Store(true)
+	if s.udpCarrier != nil {
+		if ctx == nil || s.mixedCloseGate == nil {
+			return errNodeChainAppendExecution
+		}
+		select {
+		case s.mixedCloseGate <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		defer func() { <-s.mixedCloseGate }()
+		tcpErr := s.carrier.CloseContext(ctx)
+		udpErr := s.udpCarrier.CloseContext(ctx)
+		if s.mixedCloseErr == nil {
+			s.mixedCloseErr = errors.Join(tcpErr, udpErr)
+		}
+		return s.mixedCloseErr
+	}
 	if s.carrier != nil {
 		return s.carrier.CloseContext(ctx)
 	}
@@ -83,11 +118,21 @@ func (s *NodeChainServerPrefixSession) bindConfig() error {
 	if s.policy.validate() != nil || len(s.policy.nodes) == 0 || s.carrier == nil || !s.carrier.sealed() {
 		return errNodeChainAppendExecution
 	}
-	if s.policy.record.Schema == 2 && s.policy.nodes[0].mode == "shadowsocks" {
+	if (s.policy.record.Schema == 2 || s.policy.record.Schema == 4 || s.policy.record.Schema == 5) && s.policy.nodes[0].mode == "shadowsocks" {
 		// A real SS root is a TCP carrier, not a packet ancestor. The original
 		// typed append graph remains unchanged; no endpoint MTU is fabricated.
 		target, err := nodeChainPrefixStreamPhysical(s.policy.nodes[0], s.policy.record.Schema)
 		if err != nil || target != s.carrier.target || s.policy.prefix.record.Schema != 3 {
+			return nodeChainServerCarrierError
+		}
+	} else if s.policy.record.Schema == 5 && s.policy.nodes[0].mode == "hysteria2" {
+		// HY2 retains its actual UDP carrier and exact QUIC options. It is not
+		// a packet ancestor and supplies no synthetic endpoint MTU allowance.
+		closure, err := nodeMultihopPredecessor(s.policy.nodes[0])
+		physical, physicalErr := s.policy.nodes[0].PhysicalEgress()
+		if err != nil || !nodeChainCapturedHysteriaClosure(s.policy.nodes[0], closure) || physicalErr != nil ||
+			len(physical) != 1 || physical[0].Network != "udp" || physical[0] != s.carrier.target ||
+			s.policy.prefix == nil || s.policy.prefix.record.Schema != 3 {
 			return nodeChainServerCarrierError
 		}
 	} else {
@@ -105,6 +150,11 @@ func (s *NodeChainServerPrefixSession) bindConfig() error {
 		actual, err := mtuNumber(closure.final["mtu"])
 		if err != nil || actual != requested {
 			return nodeChainServerCarrierError
+		}
+	}
+	if s.mixedStreamRoot() {
+		if err := s.validateMixedStreamPacketBounds(); err != nil {
+			return err
 		}
 	}
 	// No retained endpoint is silently resized to fit a physical route. The

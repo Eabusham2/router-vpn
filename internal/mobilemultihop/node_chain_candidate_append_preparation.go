@@ -40,7 +40,8 @@ func (s *NodeChainCandidateAppendSource) newCandidatePlan(inventory string) (*No
 	}
 	var record NodeChainCandidateInventory
 	if exactJSON([]byte(inventory), &record, NodeChainInputLimit) != nil || record.Schema != 1 ||
-		!nodeChainIdentityText(record.Revision) || len(record.Inputs) == 0 || record.ResponseMode != s.record.NextMode {
+		!nodeChainIdentityText(record.Revision) || len(record.Inputs) == 0 || record.ResponseMode != s.record.NextMode ||
+		record.IdentitySources != nil && (s.record.NextKind != "" || s.record.NextMode != "hysteria2" || len(record.IdentitySources) != len(record.Inputs)) {
 		return nil, nodeChainCandidateAppendError
 	}
 	if s.record.NextKind == "external" {
@@ -126,6 +127,9 @@ func (s *NodeChainCandidateAppendSource) newCandidatePlan(inventory string) (*No
 		ids[response.Target.ID], proofs[response.NodeID] = true, true
 		p.targets = append(p.targets, response.Target)
 		p.responses = append(p.responses, response)
+	}
+	if err := validateNodeChainAppendHysteriaInventory(s, record, keys); err != nil {
+		return nil, err
 	}
 	raw, err := json.Marshal([]any{nodeChainCandidateAppendPurpose, s.seal, s.sourceSHA, s.configSHA, p.prefix, inventory})
 	if err != nil {

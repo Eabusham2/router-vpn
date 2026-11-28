@@ -66,6 +66,12 @@ func (t *NodeChainServerPrefixCandidateTarget) NewPacketRequest(ctx context.Cont
 		session.policy.plan.appendSource != session.policy.prefix {
 		return nil, errNodeChainAppendExecution
 	}
+	if session.mixedStreamRoot() {
+		source.PacketOptions, err = session.mixedStreamPacketOptions(capture, source)
+		if err != nil {
+			return nil, err
+		}
+	}
 	q := &NodeChainServerPrefixCandidatePacketRequest{reader: reader, target: t, session: session,
 		capture: capture.Clone(), source: source, tag: tag, privateAddress: privateAddress,
 		optionsSHA: externalDigest([]byte(source.PacketOptions)), pairingSHA: pairing}

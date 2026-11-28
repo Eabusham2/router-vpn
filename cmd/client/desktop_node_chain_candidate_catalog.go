@@ -169,7 +169,7 @@ func captureDesktopCandidateSourceProfiles(ctx context.Context, a *app, launch *
 	} else if scope == orderedCandidateSelectedDraftScope {
 		candidateMode = desktopSelectedPacketCandidateMode(launch, position)
 	}
-	result, err := captureDesktopCandidateSourceInventory(ctx, a, launch, profiles, revision, candidateMode, nil)
+	result, err := captureDesktopCandidateSourceInventory(ctx, a, launch, profiles, revision, candidateMode, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -185,13 +185,18 @@ func captureDesktopCandidateSourceProfiles(ctx context.Context, a *app, launch *
 
 // This shared parser grants no runtime or source purpose; callers seal the
 // resulting inventory against their exact complete-route or append owner.
-func captureDesktopCandidateSourceInventory(ctx context.Context, a *app, launch *desktopNodeLaunch, profiles []common.RouterProfile, revision, mode string, appendSource *mobilemultihop.NodeChainCandidateAppendSource) (*desktopNodeChainCandidateCatalog, error) {
+func captureDesktopCandidateSourceInventory(ctx context.Context, a *app, launch *desktopNodeLaunch, profiles []common.RouterProfile, revision, mode string, appendSource *mobilemultihop.NodeChainCandidateAppendSource, appendRequest *orderedCandidateAppendRequest) (*desktopNodeChainCandidateCatalog, error) {
 	if ctx == nil || ctx.Err() != nil || a == nil || launch == nil || len(profiles) == 0 || revision == "" {
 		return nil, errors.New("candidate source inventory lost its original caller")
 	}
 	if appendSource != nil && appendSource.CandidateMode() != mode || mode == "shadowsocks" && appendSource == nil {
 		return nil, errors.New("explicit SS response inventory requires its original append source")
 	}
+	if (appendSource == nil) != (appendRequest == nil) || appendRequest != nil &&
+		(appendRequest.validate() != nil || appendRequest.NextMode != mode || appendRequest.candidateKind() != appendSource.CandidateKind()) {
+		return nil, errors.New("append inventory lost its original captured request")
+	}
+	companionInventory := appendRequest != nil && appendRequest.Purpose == orderedCandidateAppendExecutionScope && mode == "hysteria2"
 	publicAppend := appendSource != nil && appendSource.CandidateKind() == "external"
 	if publicAppend && (mode != "shadowsocks" || appendSource.CandidateMeasurement() != hopmeasure.CandidatePublicResponseMeasurement) {
 		return nil, errors.New("imported response inventory lost its original public append purpose")
@@ -209,6 +214,11 @@ func captureDesktopCandidateSourceInventory(ctx context.Context, a *app, launch 
 	// inodes and modification times. Replacing then restoring a source cannot
 	// revive a previously measured catalog through an unchanged content hash.
 	for _, p := range profiles {
+		if companionInventory {
+			if _, err := netip.ParseAddr(p.Endpoint); err != nil {
+				return nil, errors.New("Hysteria2 Server and Compare candidates require original literal endpoints")
+			}
+		}
 		if publicAppend {
 			if p.NodeKind != "external" || p.External == nil || !desktopNodeChainImported(p, "shadowsocks") || p.StartLayer != "" && p.StartLayer != "off" {
 				return nil, errors.New("imported append response requires its original Shadowsocks source with Start Layer off")
@@ -262,11 +272,11 @@ func captureDesktopCandidateSourceInventory(ctx context.Context, a *app, launch 
 	inventory := mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: revision, ResponseMode: result.candidateMode}
 	total := 0
 	for _, p := range profiles {
-		var input string
+		var input, identitySource string
 		var parsed *mobilemultihop.NodeChainCandidateInput
 		var err error
 		if result.candidateMode != "" {
-			input, _, _, err = capture.compileMember(ctx, desktopNodeChainMember{Profile: p, Mode: result.candidateMode}, &total, nil)
+			input, _, identitySource, err = capture.compileMember(ctx, desktopNodeChainMember{Profile: p, Mode: result.candidateMode}, &total, nil)
 			if err == nil && appendSource != nil && result.candidateMode == "shadowsocks" {
 				if !appendSource.CandidateInputFitsSource(input) {
 					return nil, errors.New("SS candidate changed its exact append prefix, identity or prospective closure")
@@ -294,6 +304,12 @@ func captureDesktopCandidateSourceInventory(ctx context.Context, a *app, launch 
 		}
 		if err != nil {
 			return nil, err
+		}
+		if companionInventory {
+			if identitySource == "" {
+				return nil, errors.New("Hysteria2 append candidate lost its original paired companion assets")
+			}
+			inventory.IdentitySources = append(inventory.IdentitySources, identitySource)
 		}
 		inventory.Inputs = append(inventory.Inputs, input)
 		result.parsedInputs = append(result.parsedInputs, parsed)
@@ -421,6 +437,8 @@ func combineDesktopCandidateViewSources(ctx context.Context, parts []*desktopNod
 	first := parts[0]
 	result := &desktopNodeChainCandidateCatalog{serverResponse: first.serverResponse, app: first.app, launch: first.launch, revision: first.revision, candidateMode: first.candidateMode, appendCapture: first.appendCapture, profiles: map[string]string{}}
 	inventory := mobilemultihop.NodeChainCandidateInventory{Schema: 1, Revision: first.revision, ResponseMode: first.candidateMode}
+	companionInventory := first.appendCapture != nil && first.appendCapture.request != nil &&
+		first.appendCapture.request.Purpose == orderedCandidateAppendExecutionScope && first.candidateMode == "hysteria2"
 	total := 0
 	for _, part := range parts {
 		if ctx.Err() != nil || part == nil || part.app != first.app || part.launch != first.launch || part.serverResponse != first.serverResponse || part.revision != first.revision || part.candidateMode != first.candidateMode || part.appendCapture != first.appendCapture {
@@ -434,6 +452,13 @@ func combineDesktopCandidateViewSources(ctx context.Context, parts []*desktopNod
 		if json.Unmarshal([]byte(part.inventory), &source) != nil || source.Schema != 1 || source.Revision != first.revision || source.ResponseMode != first.candidateMode || len(source.Inputs) != 1 {
 			return nil, errors.New("candidate view changed a captured source")
 		}
+		if companionInventory {
+			if len(source.IdentitySources) != 1 || source.IdentitySources[0] == "" {
+				return nil, errors.New("candidate view lost its original Hysteria2 companion")
+			}
+		} else if source.IdentitySources != nil {
+			return nil, errors.New("candidate view mixed unrelated companion sources")
+		}
 		for id, token := range part.profiles {
 			if _, exists := result.profiles[id]; exists {
 				return nil, errors.New("candidate view repeats a saved identity")
@@ -445,6 +470,7 @@ func combineDesktopCandidateViewSources(ctx context.Context, parts []*desktopNod
 			return nil, errors.New("candidate source capture exceeds its bound")
 		}
 		inventory.Inputs = append(inventory.Inputs, source.Inputs...)
+		inventory.IdentitySources = append(inventory.IdentitySources, source.IdentitySources...)
 		result.parsedInputs = append(result.parsedInputs, part.parsedInputs...)
 		result.assets = append(result.assets, part.assets...)
 		result.files = append(result.files, part.files...)

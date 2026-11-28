@@ -839,6 +839,160 @@ PREFIX_PURPOSE = 'draft-prefix-append-execution'
 PREFIX_SOURCE_FIELDS = {'kind', 'schema', 'local_prefix', 'entry_peer_addresses', 'nodes', 'identity_sources', 'candidates', 'candidate_identity_sources'}
 
 
+def node_chain_prefix_source_fields(source):
+    """Only the native compiler can validate the selected source family."""
+    if (not isinstance(source, dict) or type(source.get('schema')) is not int or
+            source['schema'] not in (1, 2, 3, 4, 5)):
+        raise ValueError('private prefix source failed shared policy compilation')
+    fields = set(PREFIX_SOURCE_FIELDS)
+    if source['schema'] == 3 or source['schema'] == 4 and 'packet_candidate_pairs' in source:
+        fields.add('packet_candidate_pairs')
+    if source['schema'] == 5 and 'hysteria_candidate_pairs' in source:
+        fields.add('hysteria_candidate_pairs')
+    return fields
+
+
+def compiled_extended_node_chain_prefix_source(canonical, reference, node, original):
+    """Bind new-family output from the same strict native source compiler.
+
+    This adapter reads back the exact canonical source, public shape and pair
+    commitments. The native policy still owns transport, trust, alias, MTU and
+    genuine private-companion validation; staged native checking is unchanged.
+    """
+    bad = ValueError('private prefix source failed shared policy compilation')
+    if not isinstance(canonical, str):
+        raise bad
+    body = canonical.encode('utf-8')
+    if not body or len(body) > MAX_NODE_CHAIN_SOURCE_BYTES:
+        raise bad
+    source = decode(body)
+    if (not isinstance(source, dict) or type(source.get('schema')) is not int or
+            source['schema'] not in (3, 4, 5) or source.get('kind') != 'routervpn-server-node-chain-prefix-source' or
+            original is not None and source != original or type(reference.get('schema')) is not int or
+            reference['schema'] != source['schema'] or reference.get('purpose') != PREFIX_PURPOSE or
+            reference.get('entry_node_id') != node):
+        raise bad
+    schema = source['schema']
+    candidates, members, local = reference.get('candidates'), reference.get('members'), source.get('local_prefix')
+    if (not isinstance(candidates, list) or not 1 <= len(candidates) <= 50 or
+            not isinstance(local, list) or not 1 <= len(local) <= 95 or
+            not isinstance(members, list) or len(members) != len(local) - 1 or
+            not all(isinstance(row, dict) for row in candidates)):
+        raise bad
+    packet_modes = ('wg', 'awg2-fast', 'awg2-strong')
+    mode = candidates[0].get('mode')
+    pair_name = ('packet_candidate_pairs' if schema in (3, 4) and mode in packet_modes else
+                 'hysteria_candidate_pairs' if schema == 5 and mode == 'hysteria2' else None)
+    extra = {pair_name} if pair_name else set()
+    descriptor_fields = {'schema', 'purpose', 'source_sha256', 'entry_node_id', 'entry_peer_addresses', 'local_prefix', 'members', 'candidates'}
+    if set(source) != PREFIX_SOURCE_FIELDS | extra or set(reference) != descriptor_fields | extra:
+        raise bad
+    domain = ('routervpn-server-node-chain-prefix-source-v' + str(schema) + '\x00').encode('ascii')
+    if reference.get('source_sha256') != hashlib.sha256(domain + body).hexdigest():
+        raise bad
+    for name in ('local_prefix', 'entry_peer_addresses'):
+        if not isinstance(source[name], list) or source[name] != reference[name]:
+            raise bad
+    if not 1 <= len(source['entry_peer_addresses']) <= 64:
+        raise bad
+    for name, count in (('nodes', len(members)), ('identity_sources', len(members)),
+                        ('candidates', len(candidates)), ('candidate_identity_sources', len(candidates))):
+        if not isinstance(source[name], list) or len(source[name]) != count or any(not isinstance(v, str) or not v for v in source[name]):
+            raise bad
+    member_fields = {'position', 'profile_id', 'node_id', 'mode', 'start_layer', 'source_sha256', 'client_public_key', 'server_public_key'}
+    stream_fields = member_fields | {'transport_sha256', 'companion_sha256', 'companion_client_public_key', 'companion_server_public_key'}
+
+    def digest(value):
+        return isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) is not None
+
+    def public(value):
+        if not isinstance(value, str):
+            return False
+        try:
+            raw = base64.b64decode(value, validate=True)
+            return len(raw) == 32 and base64.b64encode(raw).decode('ascii') == value and any(raw)
+        except (ValueError, UnicodeError):
+            return False
+
+    for rows, start in ((local, 0), (members, 1)):
+        for position, member in enumerate(rows, start):
+            if (not isinstance(member, dict) or type(member.get('position')) is not int or member['position'] != position or
+                    not isinstance(member.get('profile_id'), str) or not member['profile_id'] or
+                    not digest(member.get('node_id')) or not digest(member.get('source_sha256')) or member.get('start_layer') != 'off'):
+                raise bad
+            if member.get('mode') in packet_modes:
+                if (set(member) != member_fields or not public(member['client_public_key']) or
+                        not public(member['server_public_key']) or member['client_public_key'] == member['server_public_key']):
+                    raise bad
+            elif (position == 0 or member.get('mode') not in ('shadowsocks', 'hysteria2') or
+                    member['mode'] == 'hysteria2' and schema != 5 or set(member) != stream_fields or
+                    member['client_public_key'] != '' or member['server_public_key'] != '' or
+                    not all(digest(member[key]) for key in ('transport_sha256', 'companion_sha256')) or
+                    not all(public(member[key]) for key in ('companion_client_public_key', 'companion_server_public_key')) or
+                    member['companion_client_public_key'] == member['companion_server_public_key']):
+                raise bad
+    if local[0]['node_id'] != node or local[0]['mode'] not in packet_modes:
+        raise bad
+    modes = [member['mode'] for member in local]
+    if schema == 3:
+        if mode not in packet_modes or any(value not in packet_modes for value in modes):
+            raise bad
+    elif schema == 4:
+        if 'shadowsocks' not in modes or 'hysteria2' in modes or mode not in (*packet_modes, 'shadowsocks'):
+            raise bad
+        if mode == 'shadowsocks' and not any(value in packet_modes for value in modes[modes.index('shadowsocks') + 1:]):
+            raise bad
+    else:
+        if mode not in ('shadowsocks', 'hysteria2') or mode == 'shadowsocks' and 'hysteria2' not in modes:
+            raise bad
+        if 'hysteria2' in modes and any(value in packet_modes for value in modes[modes.index('hysteria2') + 1:]):
+            raise bad
+    for position, member in enumerate(members, 1):
+        paired = local[position]
+        if any(member[key] != paired[key] for key in ('profile_id', 'node_id', 'mode')):
+            raise bad
+        if member['mode'] in ('shadowsocks', 'hysteria2'):
+            if (member['transport_sha256'] != paired['transport_sha256'] or
+                    member['companion_server_public_key'] != paired['companion_server_public_key'] or
+                    member['companion_client_public_key'] == paired['companion_client_public_key'] or
+                    member['companion_sha256'] == paired['companion_sha256']):
+                raise bad
+        elif (member['server_public_key'] != paired['server_public_key'] or
+                member['client_public_key'] == paired['client_public_key'] or member['source_sha256'] == paired['source_sha256']):
+            raise bad
+    for candidate in candidates:
+        if (set(candidate) != {'profile_id', 'node_id', 'mode', 'start_layer', 'source_sha256'} or candidate['mode'] != mode or
+                candidate['start_layer'] != 'off' or not isinstance(candidate['profile_id'], str) or not candidate['profile_id'] or
+                not digest(candidate['node_id']) or not digest(candidate['source_sha256'])):
+            raise bad
+    if pair_name:
+        pairs = source[pair_name]
+        if not isinstance(pairs, list) or len(pairs) != len(candidates) or reference[pair_name] != pairs:
+            raise bad
+        common = {'position', 'profile_id', 'node_id', 'mode', 'local_source_sha256', 'server_source_sha256', 'transport_sha256'}
+        if pair_name == 'packet_candidate_pairs':
+            pair_fields = common | {'local_client_public_key', 'server_client_public_key', 'peer_public_key'}
+            digest_fields = ('local_source_sha256', 'server_source_sha256', 'transport_sha256')
+            key_fields = ('local_client_public_key', 'server_client_public_key', 'peer_public_key')
+        else:
+            pair_fields = common | {'local_companion_sha256', 'server_companion_sha256',
+                                    'local_companion_client_public_key', 'server_companion_client_public_key', 'companion_server_public_key'}
+            digest_fields = ('local_source_sha256', 'server_source_sha256', 'transport_sha256', 'local_companion_sha256', 'server_companion_sha256')
+            key_fields = ('local_companion_client_public_key', 'server_companion_client_public_key', 'companion_server_public_key')
+        for pair, candidate in zip(pairs, candidates):
+            if (not isinstance(pair, dict) or set(pair) != pair_fields or type(pair['position']) is not int or pair['position'] != len(local) or
+                    any(pair[key] != candidate[key] for key in ('profile_id', 'node_id', 'mode')) or
+                    pair['local_source_sha256'] != candidate['source_sha256'] or not all(digest(pair[key]) for key in digest_fields) or
+                    not all(public(pair[key]) for key in key_fields) or len({pair[key] for key in key_fields}) != 3):
+                raise bad
+            if pair_name == 'packet_candidate_pairs':
+                if pair['local_source_sha256'] == pair['server_source_sha256']:
+                    raise bad
+            elif pair['local_companion_sha256'] == pair['server_companion_sha256']:
+                raise bad
+    return reference, body
+
+
 def compiled_node_chain_prefix_source(raw, node, original=None):
     """Keep the typed compiler's exact private source and public commitments."""
     bad = ValueError('private prefix source failed shared policy compilation')
@@ -848,6 +1002,8 @@ def compiled_node_chain_prefix_source(raw, node, original=None):
     if not isinstance(compiled, dict) or set(compiled) != {'source_json', 'reference'}:
         raise bad
     canonical, reference = compiled['source_json'], compiled['reference']
+    if isinstance(reference, dict) and reference.get('schema') in (3, 4, 5):
+        return compiled_extended_node_chain_prefix_source(canonical, reference, node, original)
     descriptor_fields = {'schema', 'purpose', 'source_sha256', 'entry_node_id', 'entry_peer_addresses', 'local_prefix', 'members', 'candidates'}
     if not isinstance(canonical, str) or not isinstance(reference, dict) or set(reference) != descriptor_fields:
         raise bad
@@ -931,7 +1087,7 @@ def compile_node_chain_prefix_source(raw, node):
         if not raw or len(raw) > MAX_NODE_CHAIN_SOURCE_BYTES:
             raise bad
         source = decode(raw)
-        if not isinstance(source, dict) or set(source) != PREFIX_SOURCE_FIELDS:
+        if not isinstance(source, dict) or set(source) != node_chain_prefix_source_fields(source):
             raise bad
         payload = json.dumps(dict(entry_node_id=node, source=source), ensure_ascii=False,
                              allow_nan=False, separators=(',', ':')).encode('utf-8')
@@ -950,7 +1106,7 @@ def compile_node_chain_prefix_plan(path, node):
         original = private_snapshot(path, 64 << 10)
         plan = decode(original[1])
         if (not isinstance(plan, dict) or set(plan) != {'schema', 'purpose', 'entry_node_id', 'entry', 'members', 'candidates'} or
-                type(plan['schema']) is not int or plan['schema'] not in (1, 2) or plan['purpose'] != PREFIX_PURPOSE or plan['entry_node_id'] != node or
+                type(plan['schema']) is not int or plan['schema'] not in (1, 2, 3, 4, 5) or plan['purpose'] != PREFIX_PURPOSE or plan['entry_node_id'] != node or
                 not isinstance(plan['members'], list) or len(plan['members']) > 94 or
                 not isinstance(plan['candidates'], list) or not 1 <= len(plan['candidates']) <= 50):
             raise bad
@@ -990,7 +1146,15 @@ def compile_node_chain_prefix_plan(path, node):
             if not isinstance(member, dict) or set(member) != {'paired', 'server_peer'}:
                 raise bad
             resolved['members'].append(dict(paired=selection(member['paired']), server_peer=selection(member['server_peer'], True)))
-        resolved['candidates'] = [selection(value) for value in plan['candidates']]
+        paired_candidates = plan['schema'] == 3 or (plan['schema'] in (4, 5) and
+                            isinstance(plan['candidates'][0], dict) and set(plan['candidates'][0]) == {'paired', 'server_peer'})
+        if paired_candidates:
+            for value in plan['candidates']:
+                if not isinstance(value, dict) or set(value) != {'paired', 'server_peer'}:
+                    raise bad
+                resolved['candidates'].append(dict(paired=selection(value['paired']), server_peer=selection(value['server_peer'], True)))
+        else:
+            resolved['candidates'] = [selection(value) for value in plan['candidates']]
         payload = json.dumps(resolved, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode('utf-8')
         if not payload or len(payload) > MAX_NODE_CHAIN_SOURCE_BYTES:
             raise bad
@@ -1239,6 +1403,128 @@ def registry_unchanged(path, snapshot):
     except (OSError, ValueError, RuntimeError):
         return False
 
+
+PREFIX_CATALOG_KIND = 'routervpn-node-chain-prefix-selection-catalog'
+PREFIX_CATALOG_FIELDS = {'schema', 'kind', 'entry', 'pairs'}
+
+
+def require_prefix_catalog_reference(reference, node):
+    if (not isinstance(reference, dict) or set(reference) != {'schema', 'entry_node_id', 'source_sha256'} or
+            type(reference['schema']) is not int or reference['schema'] != 1 or
+            not isinstance(reference['entry_node_id'], str) or not re.fullmatch(r'[0-9a-f]{64}', reference['entry_node_id']) or
+            reference['entry_node_id'] != node or not isinstance(reference['source_sha256'], str) or
+            not re.fullmatch(r'[0-9a-f]{64}', reference['source_sha256'])):
+        raise ValueError('private prefix catalog has an invalid captured reference')
+
+
+def compiled_node_chain_prefix_catalog(raw, node, original=None):
+    """Verify the actual compiler's canonical private catalog and typed reference."""
+    bad = ValueError('private prefix catalog failed shared policy compilation')
+    if not raw or len(raw) > 2 * MAX_NODE_CHAIN_SOURCE_BYTES + 4096:
+        raise bad
+    compiled = decode(raw)
+    if not isinstance(compiled, dict) or set(compiled) != {'source_json', 'reference'}:
+        raise bad
+    canonical, reference = compiled['source_json'], compiled['reference']
+    if (not isinstance(canonical, str) or not isinstance(reference, dict) or
+            set(reference) != {'schema', 'entry_node_id', 'source_sha256'}):
+        raise bad
+    require_prefix_catalog_reference(reference, node)
+    body = canonical.encode('utf-8')
+    if not body or len(body) > MAX_NODE_CHAIN_SOURCE_BYTES:
+        raise bad
+    source = decode(body)
+    if (not isinstance(source, dict) or set(source) != PREFIX_CATALOG_FIELDS or
+            type(source['schema']) is not int or source['schema'] != 1 or source['kind'] != PREFIX_CATALOG_KIND or
+            not isinstance(source['entry'], dict) or not isinstance(source['pairs'], list) or
+            not 1 <= len(source['pairs']) <= 144 or original is not None and source != original or
+            type(reference['schema']) is not int or reference['schema'] != 1 or reference['entry_node_id'] != node):
+        raise bad
+    for pair in source['pairs']:
+        if (not isinstance(pair, dict) or set(pair) != {'paired', 'server_peer'} or
+                not isinstance(pair['paired'], dict) or not isinstance(pair['server_peer'], dict) or
+                set(pair['server_peer']) != {'bundle', 'profile_id'}):
+            raise bad
+    digest = hashlib.sha256(b'routervpn-node-chain-prefix-selection-catalog-v1\x00' + body).hexdigest()
+    if reference['source_sha256'] != digest:
+        raise bad
+    return reference, body
+
+
+def compile_node_chain_prefix_catalog_source(raw, node):
+    bad = ValueError('private prefix catalog failed shared policy compilation')
+    try:
+        if not raw or len(raw) > MAX_NODE_CHAIN_SOURCE_BYTES:
+            raise bad
+        source = decode(raw)
+        if not isinstance(source, dict) or set(source) != PREFIX_CATALOG_FIELDS:
+            raise bad
+        result = subprocess.run(['/usr/local/bin/router-vpn-agent', 'compile-server-node-chain-prefix-catalog'],
+                                input=raw, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                check=True, timeout=20)
+        return compiled_node_chain_prefix_catalog(result.stdout, node, source)
+    except (OSError, RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired,
+            ValueError, TypeError, KeyError, UnicodeError):
+        raise bad from None
+
+
+def compile_node_chain_prefix_catalog_plan(path, node):
+    bad = ValueError('private prefix catalog bundle plan failed shared policy compilation')
+    try:
+        original = private_snapshot(path, 64 << 10)
+        plan = decode(original[1])
+        if (not isinstance(plan, dict) or set(plan) != PREFIX_CATALOG_FIELDS or
+                type(plan['schema']) is not int or plan['schema'] != 1 or plan['kind'] != PREFIX_CATALOG_KIND or
+                not isinstance(plan['pairs'], list) or not 1 <= len(plan['pairs']) <= 144):
+            raise bad
+        snapshots = {original[0]: original}
+        captured_bytes = len(original[1])
+
+        def capture(name, limit):
+            nonlocal captured_bytes
+            if not isinstance(name, str) or not name or len(name) > 4096 or '\x00' in name or '://' in name:
+                raise bad
+            selected = Path(os.path.abspath(original[0].parent / name))
+            if selected not in snapshots:
+                snapshot = private_snapshot(selected, limit)
+                captured_bytes += len(snapshot[1])
+                if captured_bytes > MAX_NODE_CHAIN_SOURCE_BYTES:
+                    raise bad
+                snapshots[selected] = snapshot
+            snapshot = snapshots[selected]
+            if not snapshot[1] or len(snapshot[1]) > limit:
+                raise bad
+            return snapshot[1]
+
+        def selection(value, peer=False):
+            required = {'bundle_file', 'profile_id'} if peer else {'bundle_file', 'profile_id', 'mode'}
+            optional = set() if peer else {'dns_bootstrap_file'}
+            if not isinstance(value, dict) or not required <= set(value) or set(value) - required - optional:
+                raise bad
+            result = {'bundle': decode(capture(value['bundle_file'], 32 << 20)), 'profile_id': value['profile_id']}
+            if not peer:
+                result['mode'] = value['mode']
+                if 'dns_bootstrap_file' in value:
+                    result['dns_bootstrap'] = capture(value['dns_bootstrap_file'], 16384).decode('utf-8')
+            return result
+
+        resolved = dict(schema=1, kind=PREFIX_CATALOG_KIND, entry=selection(plan['entry']), pairs=[])
+        for pair in plan['pairs']:
+            if not isinstance(pair, dict) or set(pair) != {'paired', 'server_peer'}:
+                raise bad
+            resolved['pairs'].append(dict(paired=selection(pair['paired']), server_peer=selection(pair['server_peer'], True)))
+        payload = json.dumps(resolved, ensure_ascii=False, allow_nan=False, separators=(',', ':')).encode('utf-8')
+        if not payload or len(payload) > MAX_NODE_CHAIN_SOURCE_BYTES:
+            raise bad
+        result = subprocess.run(['/usr/local/bin/router-vpn-agent', 'compile-server-node-chain-prefix-catalog'],
+                                input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                check=True, timeout=20)
+        return compiled_node_chain_prefix_catalog(result.stdout, node), list(snapshots.values())
+    except (OSError, RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired,
+            ValueError, TypeError, KeyError, UnicodeError):
+        raise bad from None
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -1247,7 +1533,9 @@ def main():
     source.add_argument('--node-chain-source', type=Path, help='private complete ordered server source; preserve its original descriptor and selected DNS')
     source.add_argument('--node-chain-plan', type=Path, help='private ordered plan naming complete client and independent server bundle files')
     source.add_argument('--node-chain-prefix-source', type=Path, help='private actual unfinished-prefix source with separately registered candidate sources')
-    source.add_argument('--node-chain-prefix-plan', type=Path, help='private packet-prefix plan with actual independent server peers and paired SS candidates')
+    source.add_argument('--node-chain-prefix-plan', type=Path, help='private unfinished-prefix plan with genuine independent server peers and paired SS, WG/AWG or HY2 candidates')
+    source.add_argument('--node-chain-prefix-catalog-plan', type=Path, help='private captured entry and genuine Local/Server bundle pairs for authenticated unfinished-prefix selection')
+    source.add_argument('--node-chain-prefix-catalog-source', type=Path, help='private compiled prefix-selection catalog with genuine captured source pairs')
     parser.add_argument('--exit-id', help='required ID for ordinary and Tor exits; ordered sources retain their own descriptor identity')
     parser.add_argument('--bundle-profile')
     parser.add_argument('--server-peer-profile', type=Path, help='separate private WG/AWG/OpenVPN server peer JSON; never a client bundle')
@@ -1260,7 +1548,8 @@ def main():
     parser.add_argument('--listen-ip', required=True, help='entry tunnel IP used by clients for the Router API')
     args = parser.parse_args()
     prefix_ordered = args.node_chain_prefix_source is not None or args.node_chain_prefix_plan is not None
-    ordered = args.node_chain_source is not None or args.node_chain_plan is not None or prefix_ordered
+    catalog_ordered = args.node_chain_prefix_catalog_source is not None or args.node_chain_prefix_catalog_plan is not None
+    ordered = args.node_chain_source is not None or args.node_chain_plan is not None or prefix_ordered or catalog_ordered
     if not ordered and args.exit_id is None:
         parser.error('--exit-id is required for ordinary and Tor pairing')
     if ordered and args.exit_id is not None:
@@ -1271,14 +1560,15 @@ def main():
     sources = Path(os.path.abspath(args.tor_sources or args.registry.parent / 'tor-sources'))
     chain_sources = Path(os.path.abspath(args.node_chain_sources or args.registry.parent / 'node-chain-sources'))
     prefix_sources = Path(os.path.abspath(args.node_chain_prefix_sources or args.registry.parent / 'node-chain-prefix-sources'))
+    catalog_sources = args.registry.parent / 'node-chain-prefix-catalogs'
     if args.tor_source is not None and (args.bundle_profile is not None or args.server_peer_profile is not None):
         raise ValueError('Tor source pairing does not accept a bundle profile or provider peer')
     if ordered and (args.bundle_profile is not None or args.server_peer_profile is not None):
         raise ValueError('ordered source pairing does not accept a bundle profile or provider peer')
     if args.dry_run is not None:
         args.dry_run = Path(os.path.abspath(args.dry_run))
-        protected = [args.registry, args.agent_config, args.bundle, args.tor_source, args.node_chain_source, args.node_chain_plan, args.node_chain_prefix_source, args.node_chain_prefix_plan, args.server_peer_profile]
-        if args.dry_run in [Path(os.path.abspath(path)) for path in protected if path is not None] or any(args.dry_run == directory or directory in args.dry_run.parents for directory in (sources, chain_sources, prefix_sources)):
+        protected = [args.registry, args.agent_config, args.bundle, args.tor_source, args.node_chain_source, args.node_chain_plan, args.node_chain_prefix_source, args.node_chain_prefix_plan, args.node_chain_prefix_catalog_source, args.node_chain_prefix_catalog_plan, args.server_peer_profile]
+        if args.dry_run in [Path(os.path.abspath(path)) for path in protected if path is not None] or any(args.dry_run == directory or directory in args.dry_run.parents for directory in (sources, chain_sources, prefix_sources, catalog_sources)):
             raise ValueError('dry-run output must be separate from live and input files')
         parent(args.dry_run)
     agent_snapshot = private_snapshot(args.agent_config, 1 << 20)
@@ -1289,7 +1579,9 @@ def main():
     chain_addition = compile_node_chain_source(chain_input[1], agent.get('node_id')) if chain_input is not None else None
     prefix_input = private_snapshot(args.node_chain_prefix_source, MAX_NODE_CHAIN_SOURCE_BYTES) if args.node_chain_prefix_source is not None else None
     prefix_addition = compile_node_chain_prefix_source(prefix_input[1], agent.get('node_id')) if prefix_input is not None else None
-    input_snapshots = [snapshot for snapshot in (input_snapshot, chain_input, prefix_input) if snapshot is not None]
+    catalog_input = private_snapshot(args.node_chain_prefix_catalog_source, MAX_NODE_CHAIN_SOURCE_BYTES) if args.node_chain_prefix_catalog_source is not None else None
+    catalog_addition = compile_node_chain_prefix_catalog_source(catalog_input[1], agent.get('node_id')) if catalog_input is not None else None
+    input_snapshots = [snapshot for snapshot in (input_snapshot, chain_input, prefix_input, catalog_input) if snapshot is not None]
     if args.node_chain_plan is not None:
         chain_addition, plan_snapshots = compile_node_chain_plan(args.node_chain_plan, agent.get('node_id'))
         input_snapshots.extend(plan_snapshots)
@@ -1300,8 +1592,13 @@ def main():
         input_snapshots.extend(plan_snapshots)
         if args.dry_run is not None and args.dry_run in [snapshot[0] for snapshot in plan_snapshots]:
             raise ValueError('dry-run output must be separate from every private plan input')
+    if args.node_chain_prefix_catalog_plan is not None:
+        catalog_addition, plan_snapshots = compile_node_chain_prefix_catalog_plan(args.node_chain_prefix_catalog_plan, agent.get('node_id'))
+        input_snapshots.extend(plan_snapshots)
+        if args.dry_run is not None and args.dry_run in [snapshot[0] for snapshot in plan_snapshots]:
+            raise ValueError('dry-run output must be separate from every private plan input')
     server_peer = decode(read(args.server_peer_profile, 512 << 10)) if args.server_peer_profile is not None else None
-    entries = [] if addition is not None or chain_addition is not None or prefix_addition is not None else pair(decode(read(args.bundle, 32 << 20)), args.exit_id, args.bundle_profile, server_peer)
+    entries = [] if addition is not None or chain_addition is not None or prefix_addition is not None or catalog_addition is not None else pair(decode(read(args.bundle, 32 << 20)), args.exit_id, args.bundle_profile, server_peer)
     listen = ipaddress.ip_address(literal(args.listen_ip))
     if not listen.is_private or not any(listen in ipaddress.ip_network(n) for n in agent.get('tunnel_cidrs', [])):
         raise ValueError('listen IP must belong to the entry tunnel ranges')
@@ -1326,7 +1623,12 @@ def main():
         prefixes = [] if prefixes is None else prefixes
         if not all(isinstance(value, list) for value in (ordinary, tor, chains, prefixes)):
             raise ValueError('registry exits must be bounded lists')
-        if prefix_addition is not None:
+        catalog_reference = registry.get('node_chain_prefix_catalog')
+        if catalog_reference is not None:
+            require_prefix_catalog_reference(catalog_reference, agent.get('node_id'))
+        if catalog_addition is not None:
+            registry['node_chain_prefix_catalog'] = catalog_addition[0]
+        elif prefix_addition is not None:
             same = [item for item in prefixes if isinstance(item, dict) and item.get('source_sha256') == prefix_addition[0]['source_sha256']]
             if len(same) > 1 or same and same[0] != prefix_addition[0]:
                 raise ValueError('existing prefix descriptor differs from its immutable source identity')
@@ -1352,22 +1654,29 @@ def main():
             directory_identity = source_directory_snapshot(sources) if registry.get('tor_exits') else None
             chain_directory_identity = source_directory_snapshot(chain_sources, label='ordered') if registry.get('node_chains') else None
             prefix_directory_identity = source_directory_snapshot(prefix_sources, label='prefix') if registry.get('node_chain_prefixes') else None
+            catalog_reference = registry.get('node_chain_prefix_catalog')
+            catalog_directory_identity = source_directory_snapshot(catalog_sources, label='prefix catalog') if catalog_reference is not None else None
             source_bodies, source_snapshots = stage_tor_sources(registry, sources, Path(tmp)/'tor-sources', addition)
             chain_bodies, chain_snapshots = stage_node_chain_sources(registry, chain_sources, Path(tmp)/'node-chain-sources', chain_addition)
             prefix_bodies, prefix_snapshots = stage_private_sources(registry.get('node_chain_prefixes', []), prefix_sources, Path(tmp)/'node-chain-prefix-sources', prefix_addition, MAX_NODE_CHAIN_SOURCE_BYTES, 'prefix')
             source_snapshots.extend(chain_snapshots)
             source_snapshots.extend(prefix_snapshots)
+            catalog_bodies, catalog_snapshots = ({}, []) if catalog_reference is None else stage_private_sources([catalog_reference], catalog_sources, Path(tmp)/'node-chain-prefix-catalogs', catalog_addition, MAX_NODE_CHAIN_SOURCE_BYTES, 'prefix catalog')
+            source_snapshots.extend(catalog_snapshots)
             command = ['/usr/local/bin/router-vpn-agent', 'check-multihop-registry', str(stage), str(args.agent_config)]
-            if source_bodies or chain_bodies or prefix_bodies:
+            if source_bodies or chain_bodies or prefix_bodies or catalog_bodies:
                 # The optional ordered directory is argv[5]; argv[4] remains
                 # the Tor directory, including an empty private placeholder.
                 (Path(tmp)/'tor-sources').mkdir(mode=0o700, exist_ok=True)
                 command.append(str(Path(tmp)/'tor-sources'))
-            if chain_bodies or prefix_bodies:
+            if chain_bodies or prefix_bodies or catalog_bodies:
                 (Path(tmp)/'node-chain-sources').mkdir(mode=0o700, exist_ok=True)
                 command.append(str(Path(tmp)/'node-chain-sources'))
-            if prefix_bodies:
+            if prefix_bodies or catalog_bodies:
+                (Path(tmp)/'node-chain-prefix-sources').mkdir(mode=0o700, exist_ok=True)
                 command.append(str(Path(tmp)/'node-chain-prefix-sources'))
+            if catalog_bodies:
+                command.append(str(Path(tmp)/'node-chain-prefix-catalogs'))
             subprocess.run(command, check=True, timeout=60, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             for snapshot in [agent_snapshot, *source_snapshots, *input_snapshots]:
                 require_snapshot(snapshot)
@@ -1377,6 +1686,8 @@ def main():
                 require_source_directory(chain_sources, chain_directory_identity, label='ordered')
             if prefix_bodies:
                 require_source_directory(prefix_sources, prefix_directory_identity, label='prefix')
+            if catalog_bodies:
+                require_source_directory(catalog_sources, catalog_directory_identity, label='prefix catalog')
             if not registry_unchanged(args.registry, registry_snapshot):
                 raise ValueError('registry changed during native validation; no replacement was written')
             if args.dry_run is not None:
@@ -1386,13 +1697,15 @@ def main():
                     plan['node_chain_sources'] = {digest: raw.decode('utf-8') for digest, raw in chain_bodies.items()}
                 if prefix_bodies:
                     plan['node_chain_prefix_sources'] = {digest: raw.decode('utf-8') for digest, raw in prefix_bodies.items()}
+                if catalog_bodies:
+                    plan['node_chain_prefix_catalog_sources'] = {digest: raw.decode('utf-8') for digest, raw in catalog_bodies.items()}
                 write(args.dry_run, registry_bytes(plan))
             else:
                 created = None
-                selected = prefix_addition if prefix_addition is not None else chain_addition if chain_addition is not None else addition
-                selected_sources = prefix_sources if prefix_addition is not None else chain_sources if chain_addition is not None else sources
-                selected_limit = MAX_NODE_CHAIN_SOURCE_BYTES if chain_addition is not None or prefix_addition is not None else MAX_TOR_SOURCE_BYTES
-                publish = (lambda path, body: publish_private_source(path, body, 'prefix', '.node-chain-prefix-source-')) if prefix_addition is not None else publish_node_chain_source if chain_addition is not None else publish_tor_source
+                selected = catalog_addition if catalog_addition is not None else prefix_addition if prefix_addition is not None else chain_addition if chain_addition is not None else addition
+                selected_sources = catalog_sources if catalog_addition is not None else prefix_sources if prefix_addition is not None else chain_sources if chain_addition is not None else sources
+                selected_limit = MAX_NODE_CHAIN_SOURCE_BYTES if chain_addition is not None or prefix_addition is not None or catalog_addition is not None else MAX_TOR_SOURCE_BYTES
+                publish = (lambda path, body: publish_private_source(path, body, 'prefix catalog', '.node-chain-prefix-catalog-')) if catalog_addition is not None else (lambda path, body: publish_private_source(path, body, 'prefix', '.node-chain-prefix-source-')) if prefix_addition is not None else publish_node_chain_source if chain_addition is not None else publish_tor_source
                 target = selected_sources / (selected[0]['source_sha256'] + '.json') if selected is not None else None
                 try:
                     if source_bodies:
@@ -1401,6 +1714,8 @@ def main():
                         require_source_directory(chain_sources, chain_directory_identity, label='ordered')
                     if prefix_bodies:
                         require_source_directory(prefix_sources, prefix_directory_identity, label='prefix')
+                    if catalog_bodies:
+                        require_source_directory(catalog_sources, catalog_directory_identity, label='prefix catalog')
                     if target is not None and all(snapshot[0] != target for snapshot in source_snapshots):
                         created = publish(target, selected[1])
                         snapshot = private_snapshot(target, selected_limit)
@@ -1421,7 +1736,10 @@ def main():
     if args.dry_run is not None:
         print('Validated private pairing plan written. Registry and source files were not changed.')
     else:
-        print('Paired',1 if addition is not None or chain_addition is not None else len(entries),'validated transport configurations. No tunnel or service was started.')
+        if catalog_addition is not None:
+            print('Provisioned 1 validated private prefix catalog. No tunnel or service was started.')
+        else:
+            print('Paired',1 if addition is not None or chain_addition is not None or prefix_addition is not None else len(entries),'validated transport configurations. No tunnel or service was started.')
 
 if __name__ == '__main__':
     try:

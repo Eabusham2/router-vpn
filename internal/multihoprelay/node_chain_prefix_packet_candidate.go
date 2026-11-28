@@ -93,7 +93,7 @@ func (s NodeChainPrefixDescriptor) validatePacketCandidates() error {
 // PacketCandidateMode is descriptive readback of the validated public
 // commitment. The original policy, request and native owners remain mandatory.
 func (s NodeChainPrefixDescriptor) PacketCandidateMode() string {
-	if s.Schema != 3 || s.Validate() != nil {
+	if s.Schema != 3 && s.Schema != 4 || s.Validate() != nil || !nodeChainPacketMode(s.Candidates[0].Mode) {
 		return ""
 	}
 	return s.Candidates[0].Mode
@@ -105,7 +105,7 @@ func (q NodeChainPrefixCandidateRequest) IsPacket() bool {
 }
 
 func (c NodeChainPrefixCandidateCapture) packetPair() (NodeChainPrefixPacketCandidatePair, error) {
-	if !c.Request.IsPacket() || c.Lease.Source.Schema != 3 ||
+	if !c.Request.IsPacket() || c.Lease.Source.Schema != 3 && c.Lease.Source.Schema != 4 ||
 		len(c.Lease.Source.PacketCandidatePairs) != len(c.Lease.Source.Candidates) {
 		return NodeChainPrefixPacketCandidatePair{}, errNodeChainPrefix
 	}
@@ -127,6 +127,13 @@ func (c NodeChainPrefixCandidateCapture) packetPair() (NodeChainPrefixPacketCand
 }
 
 func (c NodeChainPrefixCandidateCapture) validCandidate() bool {
+	if c.Request.IsHysteria() {
+		if !c.Candidate.validHysteria() {
+			return false
+		}
+		_, err := c.hysteriaPair()
+		return err == nil
+	}
 	if !c.Request.IsPacket() {
 		return c.Candidate.valid()
 	}

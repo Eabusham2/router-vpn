@@ -229,7 +229,7 @@ static JsonArray *linux_oc_append_source(JsonObject *view, JsonObject *draft, in
           strcmp(linux_ec_string(view,"candidate_mode"),"hysteria2")) ||
         strcmp(linux_ec_string(view,"candidate_mode"),linux_ec_string(draft,"next_mode"))) return NULL;
     if (execution_append) {
-        if (kind || external || (!linux_oc_packet_mode(linux_ec_string(draft,"next_mode")) && strcmp(linux_ec_string(draft,"next_mode"),"shadowsocks")) ||
+        if (kind || external || (!linux_oc_packet_mode(linux_ec_string(draft,"next_mode")) && strcmp(linux_ec_string(draft,"next_mode"),"shadowsocks") && strcmp(linux_ec_string(draft,"next_mode"),"hysteria2")) ||
             !linux_ec_token(linux_ec_string(view,"execution_source_sha256"),64)) return NULL;
     } else {
         const char *execution_fields[]={"execution_source_sha256","execution_capture_sha256","winning_execution","selection"};
@@ -257,7 +257,7 @@ static JsonArray *linux_oc_append_source(JsonObject *view, JsonObject *draft, in
         (!strcmp(linux_ec_string(first,"mode"),"shadowsocks") || !strcmp(linux_ec_string(first,"mode"),"hysteria2"));
     if(proxy_entry && external)return NULL;
     g_autoptr(GHashTable) ids=g_hash_table_new(g_str_hash,g_str_equal);
-    gboolean retained_ss=FALSE;
+    gboolean hysteria_tail=FALSE;
     for (guint i=0;i<count;i++) {
         JsonObject *node=linux_oc_root(json_array_get_element(nodes,i)), *row=linux_oc_root(json_array_get_element(original,i));
         const char *kind=linux_ec_string(node,"kind"), *mode=linux_ec_string(node,"mode");
@@ -269,14 +269,12 @@ static JsonArray *linux_oc_append_source(JsonObject *view, JsonObject *draft, in
             !g_hash_table_add(ids,(gpointer)linux_ec_string(node,"id")) || (!packet && !stream && !hy2) || (proxy_entry && strcmp(kind,"router-vpn")) ||
             strcmp(linux_ec_string(row,"id"),linux_ec_string(node,"id")) || strcmp(linux_ec_string(row,"mode"),linux_ec_string(node,"mode"))) return NULL;
         if (execution_append) {
-            if (packet) {
-                if (retained_ss) return NULL;
-            } else {
-                if (i==0 || strcmp(linux_ec_string(draft,"next_mode"),"shadowsocks") || strcmp(kind,"router-vpn") || strcmp(mode,"shadowsocks")) return NULL;
-                retained_ss=TRUE;
-            }
+            if ((i==0 && !packet) || strcmp(kind,"router-vpn") || (hysteria_tail && packet)) return NULL;
+            if (hy2) hysteria_tail=TRUE;
         }
     }
+    if (execution_append && hysteria_tail && strcmp(linux_ec_string(draft,"next_mode"),"shadowsocks") &&
+        strcmp(linux_ec_string(draft,"next_mode"),"hysteria2")) return NULL;
     return nodes;
 }
 static gboolean linux_oc_append_path(JsonObject *view, JsonObject *draft, JsonObject *choice, JsonArray *path, int position) {

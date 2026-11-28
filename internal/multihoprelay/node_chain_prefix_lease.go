@@ -347,7 +347,7 @@ func (m *Manager) validatePrefixRequest(peer netip.Addr, q NodeChainPrefixReques
 func (m *Manager) PrefixAvailable(peer netip.Addr) (ExternalPacketChallenge, []NodeChainPrefixDescriptor, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, capable := m.runner.(NodeChainPrefixRunner); !capable || m.closed || len(m.cfg.NodeChainPrefixes) == 0 {
+	if _, capable := m.runner.(NodeChainPrefixRunner); !capable || m.closed || len(m.cfg.NodeChainPrefixes) == 0 && !m.prefixSelectionVisibleLocked(PeerKey(peer)) {
 		return ExternalPacketChallenge{}, nil, ErrUnavailable
 	}
 	challenge := ExternalPacketChallenge{Epoch: m.packetEpoch, Peer: PeerKey(peer), ExpiresAt: m.now().Add(packetAcquireLifetime).Unix()}
@@ -361,6 +361,9 @@ func (m *Manager) PrefixAvailable(peer netip.Addr) (ExternalPacketChallenge, []N
 		}
 		sources = append(sources, source.Clone())
 	}
+	if m.prefixSelectionVisibleLocked(challenge.Peer) {
+		sources = append(sources, m.prefixSelections[challenge.Peer].descriptor.Clone())
+	}
 	if len(sources) == 0 {
 		return ExternalPacketChallenge{}, nil, ErrUnavailable
 	}
@@ -372,7 +375,7 @@ func (m *Manager) PrefixAvailable(peer netip.Addr) (ExternalPacketChallenge, []N
 func (m *Manager) PrefixPortRange(peer netip.Addr) (int, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, capable := m.runner.(NodeChainPrefixRunner); !capable || m.closed || len(m.cfg.NodeChainPrefixes) == 0 {
+	if _, capable := m.runner.(NodeChainPrefixRunner); !capable || m.closed || len(m.cfg.NodeChainPrefixes) == 0 && !m.prefixSelectionVisibleLocked(PeerKey(peer)) {
 		return 0, 0, ErrUnavailable
 	}
 	if peer.Zone() != "" || !nodeChainPrivateAddress(PeerKey(peer)) {
@@ -382,6 +385,9 @@ func (m *Manager) PrefixPortRange(peer netip.Addr) (int, int, error) {
 }
 
 func (m *Manager) prefixSourceLocked(q NodeChainPrefixRequest) (NodeChainPrefixDescriptor, error) {
+	if q.SelectionSHA256 != "" {
+		return m.selectedPrefixSourceLocked(q)
+	}
 	for _, source := range m.cfg.NodeChainPrefixes {
 		if source.SourceSHA256 == q.SourceSHA256 {
 			if q.Validate(source) != nil {
@@ -471,6 +477,10 @@ func (m *Manager) CreatePrefix(ctx context.Context, peer netip.Addr, request Nod
 		return NodeChainPrefixLease{}, ctx.Err()
 	}
 	key := PeerKey(peer)
+	if m.prefixSelectionBusyLocked(key) {
+		m.mu.Unlock()
+		return NodeChainPrefixLease{}, ErrBusy
+	}
 	if active := m.leases[key]; active != nil {
 		if active.prefix == nil || !sameNodeChainPrefixRequest(active.prefix.capture.Request, q) || active.retired {
 			m.mu.Unlock()
@@ -514,6 +524,11 @@ func (m *Manager) CreatePrefix(ctx context.Context, peer netip.Addr, request Nod
 	if capture.Validate() != nil {
 		m.mu.Unlock()
 		return NodeChainPrefixLease{}, ErrOwnership
+	}
+	runner, err = m.prefixRunnerLocked(q, runner)
+	if err != nil {
+		m.mu.Unlock()
+		return NodeChainPrefixLease{}, err
 	}
 	if err := m.rememberPrefixAttemptLocked(peer, q, false); err != nil {
 		m.mu.Unlock()

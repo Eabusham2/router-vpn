@@ -1546,7 +1546,7 @@ class AndroidConnectionQualification:
                 'allowlist': '' if raw['always_on_vpn_lockdown_whitelist'] == 'null' else raw['always_on_vpn_lockdown_whitelist']}
 
     def snapshot(self, phase):
-        links = self.adb('shell', 'ip', '-o', 'link', 'show', inspection=(phase, 'links'))
+        links = self.adb('shell', 'ip', '-o', 'link', inspection=(phase, 'links'))
         addresses = self.adb('shell', 'ip', '-o', 'addr', 'show', inspection=(phase, 'addresses'))
         routes4 = self.adb('shell', 'ip', '-4', 'route', 'show', 'table', 'all', inspection=(phase, 'routes4'))
         routes6 = self.adb('shell', 'ip', '-6', 'route', 'show', 'table', 'all', inspection=(phase, 'routes6'))
@@ -1879,8 +1879,10 @@ class AndroidConnectionQualification:
             if running and args is not None:
                 try:self.adb(*args,timeout=10)
                 except BaseException as failure:failures.append(role+'-stop-'+type(failure).__name__)
+            # This original owner's leader and group share one initial join budget.
+            owner.setdefault('join_deadline_monotonic',time.monotonic()+10)
             try:
-                child.wait(10);owner['joined']=True
+                child.wait(max(0.0,owner['join_deadline_monotonic']-time.monotonic()));owner['joined']=True
             except BaseException as failure:
                 failures.append(role+'-join-'+type(failure).__name__)
                 try:child.terminate()
@@ -1902,11 +1904,19 @@ class AndroidConnectionQualification:
                 try:
                     poll=select.poll();poll.register(fd,select.POLLIN);terminal=bool(poll.poll(0))
                 except BaseException as failure:failures.append(owner['role']+'-pidfd-'+type(failure).__name__)
-            group_empty=False
-            try:os.killpg(owner['pgid'],0)
-            except ProcessLookupError:group_empty=True
-            except BaseException as failure:failures.append(owner['role']+'-group-'+type(failure).__name__)
             joined=owner.get('joined') is True
+            group_empty=False
+            try:
+                while True:
+                    try:os.killpg(owner['pgid'],0)
+                    except ProcessLookupError:
+                        group_empty=True
+                        break
+                    if not joined or not terminal:break
+                    remaining=owner.get('join_deadline_monotonic',0.0)-time.monotonic()
+                    if remaining<=0:break
+                    time.sleep(min(0.05,remaining))
+            except BaseException as failure:failures.append(owner['role']+'-group-'+type(failure).__name__)
             receipts.append({'role':owner['role'],'pid':child.pid,'joined':joined,'exit_code':child.returncode,
                              'pidfd_terminal':terminal,'original_group_empty':group_empty})
             if not group_empty and owner['role'] == 'android-emulator':
@@ -2015,7 +2025,7 @@ def desktop_connect(package, family, evidence, android_apk=None):
             raise ValueError('Unknown fixed desktop network inspection')
         if android_inspection is not None:
             fixed_android = {
-                'links': ['shell', 'ip', '-o', 'link', 'show'],
+                'links': ['shell', 'ip', '-o', 'link'],
                 'addresses': ['shell', 'ip', '-o', 'addr', 'show'],
                 'routes4': ['shell', 'ip', '-4', 'route', 'show', 'table', 'all'],
                 'routes6': ['shell', 'ip', '-6', 'route', 'show', 'table', 'all'],

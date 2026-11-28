@@ -1601,7 +1601,7 @@ private enum RouterVPNOrderedCandidateDisplay {
               let requested=appendRequested(draft), let scope=draft["purpose"] as? String, draft["execution"] as? String == "local",
                purpose(value,scope:scope), value["purpose"] as? String == scope,
                value["origin"] as? String == "editor-draft", value["requested_execution"] as? String == requested,
-               !executionAppend || !external && draft["next_kind"] == nil && ["wg","awg2-fast","awg2-strong","shadowsocks"].contains(draft["next_mode"] as? String ?? "") && appendDigest(value["execution_source_sha256"]),
+               !executionAppend || !external && draft["next_kind"] == nil && ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"].contains(draft["next_mode"] as? String ?? "") && appendDigest(value["execution_source_sha256"]),
                executionAppend || ["execution_source_sha256","execution_capture_sha256","winning_execution","selection"].allSatisfy({value[$0] == nil}),
               number(value,"schema") == 1, number(value,"prefix_position") == Double(position),
               value["measurement"] as? String == metric,
@@ -1621,8 +1621,12 @@ private enum RouterVPNOrderedCandidateDisplay {
         let proxyEntry=nodes[0]["kind"] == "router-vpn" && ["shadowsocks","hysteria2"].contains(nodes[0]["mode"] ?? "")
         guard !proxyEntry || !external else { return nil }
         if executionAppend {
-            let packets=nodes.prefix(while:{$0["kind"] == "router-vpn" && ["wg","awg2-fast","awg2-strong"].contains($0["mode"] ?? "")}).count
-            guard packets > 0, mode == "shadowsocks" || packets == nodes.count, nodes.dropFirst(packets).allSatisfy({$0["kind"] == "router-vpn" && $0["mode"] == "shadowsocks"}) else { return nil }
+            guard nodes[0]["kind"] == "router-vpn", ["wg","awg2-fast","awg2-strong"].contains(nodes[0]["mode"] ?? ""),
+                  nodes.allSatisfy({$0["kind"] == "router-vpn" && ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"].contains($0["mode"] ?? "")}) else { return nil }
+            if let firstHysteria=nodes.firstIndex(where:{$0["mode"] == "hysteria2"}) {
+                guard ["shadowsocks","hysteria2"].contains(mode),
+                      nodes.dropFirst(firstHysteria).allSatisfy({!["wg","awg2-fast","awg2-strong"].contains($0["mode"] ?? "")}) else { return nil }
+            }
         }
         var ids=Set<String>()
         guard nodes.enumerated().allSatisfy({ i,node in

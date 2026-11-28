@@ -16,15 +16,16 @@ const nodeChainServerPrefixSourceKind = "routervpn-server-node-chain-prefix-sour
 // Nodes contains only the independently provisioned server suffix. The entry's
 // client source is represented by public commitments, never a copied private peer.
 type NodeChainServerPrefixSource struct {
-	Kind                     string                                             `json:"kind"`
-	Schema                   int                                                `json:"schema"`
-	LocalPrefix              []multihoprelay.NodeChainPrefixMember              `json:"local_prefix"`
-	EntryPeerAddresses       []string                                           `json:"entry_peer_addresses"`
-	Nodes                    []string                                           `json:"nodes"`
-	IdentitySources          []string                                           `json:"identity_sources"`
-	Candidates               []string                                           `json:"candidates"`
-	CandidateIdentitySources []string                                           `json:"candidate_identity_sources"`
-	PacketCandidatePairs     []multihoprelay.NodeChainPrefixPacketCandidatePair `json:"packet_candidate_pairs,omitempty"`
+	Kind                     string                                               `json:"kind"`
+	Schema                   int                                                  `json:"schema"`
+	LocalPrefix              []multihoprelay.NodeChainPrefixMember                `json:"local_prefix"`
+	EntryPeerAddresses       []string                                             `json:"entry_peer_addresses"`
+	Nodes                    []string                                             `json:"nodes"`
+	IdentitySources          []string                                             `json:"identity_sources"`
+	Candidates               []string                                             `json:"candidates"`
+	CandidateIdentitySources []string                                             `json:"candidate_identity_sources"`
+	PacketCandidatePairs     []multihoprelay.NodeChainPrefixPacketCandidatePair   `json:"packet_candidate_pairs,omitempty"`
+	HysteriaCandidatePairs   []multihoprelay.NodeChainPrefixHysteriaCandidatePair `json:"hysteria_candidate_pairs,omitempty"`
 }
 type NodeChainServerPrefixPolicy struct {
 	self                                       *NodeChainServerPrefixPolicy
@@ -52,12 +53,21 @@ func nodeChainPrefixPacketMember(node *NodeProfile, position int) (multihoprelay
 }
 func NewNodeChainServerPrefixPolicy(input string) (*NodeChainServerPrefixPolicy, error) {
 	var source NodeChainServerPrefixSource
-	if exactJSON([]byte(input), &source, NodeChainInputLimit) != nil || source.Kind != nodeChainServerPrefixSourceKind || (source.Schema != 1 && source.Schema != 2 && source.Schema != 3) ||
+	if exactJSON([]byte(input), &source, NodeChainInputLimit) != nil || source.Kind != nodeChainServerPrefixSourceKind || (source.Schema != 1 && source.Schema != 2 && source.Schema != 3 && source.Schema != 4 && source.Schema != 5) ||
 		source.Nodes == nil || source.IdentitySources == nil || len(source.LocalPrefix) < 1 || len(source.LocalPrefix) > multihoprelay.NodeChainPrefixMaximumMembers ||
 		len(source.Nodes) != len(source.LocalPrefix)-1 || len(source.IdentitySources) != len(source.Nodes) || len(source.Candidates) < 1 || len(source.Candidates) > multihoprelay.NodeChainPrefixMaximumCandidates || len(source.Candidates) != len(source.CandidateIdentitySources) {
 		return nil, errNodeChainAppendExecution
 	}
-	if source.Schema == 3 {
+	packetCandidates := nodeChainPrefixHasPacketCandidates(source)
+	hysteriaCandidates := nodeChainPrefixHasHysteriaCandidates(source)
+	if hysteriaCandidates {
+		if len(source.HysteriaCandidatePairs) != len(source.Candidates) {
+			return nil, errNodeChainAppendExecution
+		}
+	} else if source.HysteriaCandidatePairs != nil {
+		return nil, errNodeChainAppendExecution
+	}
+	if packetCandidates {
 		if len(source.PacketCandidatePairs) != len(source.Candidates) {
 			return nil, errNodeChainAppendExecution
 		}
@@ -75,6 +85,10 @@ func NewNodeChainServerPrefixPolicy(input string) (*NodeChainServerPrefixPolicy,
 		domain = "routervpn-server-node-chain-prefix-source-v2"
 	} else if source.Schema == 3 {
 		domain = "routervpn-server-node-chain-prefix-source-v3"
+	} else if source.Schema == 4 {
+		domain = "routervpn-server-node-chain-prefix-source-v4"
+	} else if source.Schema == 5 {
+		domain = "routervpn-server-node-chain-prefix-source-v5"
 	}
 	p.sourceSHA, err = nodeChainAppendExecutionDigest(domain, source)
 	if err != nil {
@@ -84,7 +98,12 @@ func NewNodeChainServerPrefixPolicy(input string) (*NodeChainServerPrefixPolicy,
 	memberSchema := source.Schema
 	if source.Schema == 3 {
 		memberSchema = 1
+	}
+	if packetCandidates {
 		p.descriptor.PacketCandidatePairs = append([]multihoprelay.NodeChainPrefixPacketCandidatePair(nil), source.PacketCandidatePairs...)
+	}
+	if hysteriaCandidates {
+		p.descriptor.HysteriaCandidatePairs = append([]multihoprelay.NodeChainPrefixHysteriaCandidatePair(nil), source.HysteriaCandidatePairs...)
 	}
 	for i, input := range source.Nodes {
 		node, err := ParseNodeLaunchInput(input)
@@ -105,12 +124,19 @@ func NewNodeChainServerPrefixPolicy(input string) (*NodeChainServerPrefixPolicy,
 		}
 		var response candidateResponseSource
 		descriptorSource := node.source
-		if source.Schema == 3 {
+		if packetCandidates {
 			pair := source.PacketCandidatePairs[i]
 			if !nodeChainPrefixPacketServerMatches(pair, node) || pair.Position != len(source.LocalPrefix) {
 				return nil, errNodeChainAppendExecution
 			}
 			response, err = parseCandidateNativeResponseSource(input, pair.Mode)
+			descriptorSource = pair.LocalSourceSHA256
+		} else if hysteriaCandidates {
+			pair := source.HysteriaCandidatePairs[i]
+			if !nodeChainPrefixHysteriaServerMatches(pair, node, source.CandidateIdentitySources[i]) || pair.Position != len(source.LocalPrefix) {
+				return nil, errNodeChainAppendExecution
+			}
+			response, err = parseCandidateNativeResponseSource(input, "hysteria2")
 			descriptorSource = pair.LocalSourceSHA256
 		} else {
 			if node.mode != "shadowsocks" {
@@ -140,7 +166,7 @@ func NewNodeChainServerPrefixPolicy(input string) (*NodeChainServerPrefixPolicy,
 	keySet, addressSet := map[string]bool{}, map[string]bool{}
 	for _, member := range source.LocalPrefix {
 		client, server := member.ClientPublicKey, member.ServerPublicKey
-		if member.Mode == "shadowsocks" {
+		if member.Mode == "shadowsocks" || source.Schema == 5 && member.Mode == "hysteria2" {
 			client, server = member.CompanionClientPublicKey, member.CompanionServerPublicKey
 		}
 		keySet[client], keySet[server] = true, true
@@ -155,9 +181,30 @@ func NewNodeChainServerPrefixPolicy(input string) (*NodeChainServerPrefixPolicy,
 		}
 	}
 	for _, response := range p.responses {
-		if source.Schema == 3 {
+		if packetCandidates {
 			if response.PacketOptions == "" || response.Method != "" || response.Password != "" || addressSet[response.Target.Address] {
 				return nil, errNodeChainAppendExecution
+			}
+			addressSet[response.Target.Address] = true
+			continue
+		}
+		if hysteriaCandidates {
+			var options map[string]any
+			if response.Hysteria2Options == "" || response.PacketOptions != "" || response.ClientKey != "" || response.ServerKey != "" ||
+				response.Method != "" || response.Password != "" || addressSet[response.Target.Address] || json.Unmarshal([]byte(response.Hysteria2Options), &options) != nil {
+				return nil, errNodeChainAppendExecution
+			}
+			keys, e := nodeChainAppendHysteriaKeys(options)
+			if e != nil {
+				return nil, e
+			}
+			for key := range keys {
+				if keySet[key] {
+					return nil, errNodeChainAppendExecution
+				}
+			}
+			for key := range keys {
+				keySet[key] = true
 			}
 			addressSet[response.Target.Address] = true
 			continue
@@ -172,14 +219,28 @@ func NewNodeChainServerPrefixPolicy(input string) (*NodeChainServerPrefixPolicy,
 	// supplies closure/alias/MTU validation; its application TUN is never started.
 	if len(p.nodes) > 0 {
 		suffixSchema := 1
-		if source.Schema == 2 {
+		if source.Schema == 2 || source.Schema == 4 {
 			suffixSchema = 2
 			if p.nodes[0].mode == "shadowsocks" {
 				suffixSchema = 3
 			}
 		}
+		if source.Schema == 5 {
+			for _, node := range p.nodes {
+				if !NodeChainPrefixMode(node.mode) {
+					suffixSchema = 2
+					break
+				}
+			}
+			if p.nodes[0].mode == "shadowsocks" || p.nodes[0].mode == "hysteria2" {
+				suffixSchema = 3
+			}
+		}
 		nextMode := "shadowsocks"
-		if source.Schema == 3 {
+		if hysteriaCandidates {
+			nextMode = "hysteria2"
+		}
+		if packetCandidates {
 			nextMode = p.descriptor.PacketCandidateMode()
 			if !nodeChainAppendExecutionPacketMode(nextMode) {
 				return nil, errNodeChainAppendExecution
@@ -195,7 +256,11 @@ func NewNodeChainServerPrefixPolicy(input string) (*NodeChainServerPrefixPolicy,
 			return nil, err
 		}
 		p.capturedPrefix = p.prefix
-		inventory, err := json.Marshal(NodeChainCandidateInventory{Schema: 1, Revision: p.sourceSHA, Inputs: source.Candidates, ResponseMode: nextMode})
+		inventorySource := NodeChainCandidateInventory{Schema: 1, Revision: p.sourceSHA, Inputs: source.Candidates, ResponseMode: nextMode}
+		if hysteriaCandidates {
+			inventorySource.IdentitySources = append([]string(nil), source.CandidateIdentitySources...)
+		}
+		inventory, err := json.Marshal(inventorySource)
 		if err != nil {
 			return nil, err
 		}
@@ -203,7 +268,7 @@ func NewNodeChainServerPrefixPolicy(input string) (*NodeChainServerPrefixPolicy,
 		if err != nil || p.plan == nil {
 			return nil, errNodeChainAppendExecution
 		}
-		if source.Schema == 3 {
+		if packetCandidates {
 			if len(p.plan.responses) != len(p.responses) {
 				return nil, errNodeChainAppendExecution
 			}
@@ -325,11 +390,18 @@ func (p *NodeChainServerPrefixPolicy) validate() error {
 		if node != p.originalCandidates[i] {
 			return errNodeChainAppendExecution
 		}
-		if p.record.Schema == 3 {
+		if nodeChainPrefixHasPacketCandidates(p.record) {
 			if i >= len(p.record.PacketCandidatePairs) || i >= len(p.descriptor.PacketCandidatePairs) ||
 				p.record.PacketCandidatePairs[i] != p.descriptor.PacketCandidatePairs[i] ||
 				p.record.PacketCandidatePairs[i].LocalSourceSHA256 != p.descriptor.Candidates[i].SourceSHA256 ||
 				!nodeChainPrefixPacketServerMatches(p.record.PacketCandidatePairs[i], node) {
+				return errNodeChainAppendExecution
+			}
+		} else if nodeChainPrefixHasHysteriaCandidates(p.record) {
+			if i >= len(p.record.HysteriaCandidatePairs) || i >= len(p.descriptor.HysteriaCandidatePairs) ||
+				p.record.HysteriaCandidatePairs[i] != p.descriptor.HysteriaCandidatePairs[i] ||
+				p.record.HysteriaCandidatePairs[i].LocalSourceSHA256 != p.descriptor.Candidates[i].SourceSHA256 ||
+				!nodeChainPrefixHysteriaServerMatches(p.record.HysteriaCandidatePairs[i], node, p.record.CandidateIdentitySources[i]) {
 				return errNodeChainAppendExecution
 			}
 		} else if node.source != p.descriptor.Candidates[i].SourceSHA256 {
@@ -415,7 +487,7 @@ func (p *NodeChainServerPrefixPolicy) candidatePhysical(c multihoprelay.NodeChai
 		return PhysicalEgress{}, errNodeChainAppendExecution
 	}
 	network := "tcp"
-	if c.Request.IsPacket() {
+	if c.Request.IsPacket() || c.Request.IsHysteria() {
 		network = "udp"
 	}
 	return PhysicalEgress{Network: network, Host: host, Port: numeric}, nil
@@ -425,7 +497,7 @@ func (p *NodeChainServerPrefixPolicy) candidatePhysical(c multihoprelay.NodeChai
 // independent server peer, then publishes only commitments and private suffixes.
 func NewNodeChainServerPrefixPlan(input string) (*NodeChainServerPrefixPolicy, error) {
 	var plan map[string]any
-	if exactJSON([]byte(input), &plan, NodeChainInputLimit) != nil || !nodeChainPlanKeys(plan, []string{"schema", "purpose", "entry_node_id", "entry", "members", "candidates"}, nil) || (plan["schema"] != float64(1) && plan["schema"] != float64(2) && plan["schema"] != float64(3)) || plan["purpose"] != multihoprelay.NodeChainPrefixPurpose {
+	if exactJSON([]byte(input), &plan, NodeChainInputLimit) != nil || !nodeChainPlanKeys(plan, []string{"schema", "purpose", "entry_node_id", "entry", "members", "candidates"}, nil) || (plan["schema"] != float64(1) && plan["schema"] != float64(2) && plan["schema"] != float64(3) && plan["schema"] != float64(4) && plan["schema"] != float64(5)) || plan["purpose"] != multihoprelay.NodeChainPrefixPurpose {
 		return nil, errNodeChainAppendExecution
 	}
 	schema := int(plan["schema"].(float64))
@@ -471,7 +543,7 @@ func NewNodeChainServerPrefixPlan(input string) (*NodeChainServerPrefixPolicy, e
 			return nil, errNodeChainAppendExecution
 		}
 		paired, err := nodeChainPlanCapture(pairedRaw)
-		if err != nil || (!NodeChainPrefixMode(paired.mode) && (schema != 2 || paired.mode != "shadowsocks")) || !packetPairLayerOff(paired.node) {
+		if err != nil || (!NodeChainPrefixMode(paired.mode) && !(paired.mode == "shadowsocks" && (schema == 2 || schema == 4 || schema == 5) || paired.mode == "hysteria2" && schema == 5)) || !packetPairLayerOff(paired.node) {
 			return nil, errNodeChainAppendExecution
 		}
 		bundle, profile, err := nodeChainPlanSelectedBundle(peerRaw["bundle"], peerRaw["profile_id"])
@@ -511,12 +583,50 @@ func NewNodeChainServerPrefixPlan(input string) (*NodeChainServerPrefixPolicy, e
 			return nil, errNodeChainAppendExecution
 		}
 	}
+	packetCandidates := schema == 3
+	if schema == 4 {
+		first, ok := candidates[0].(map[string]any)
+		if !ok {
+			return nil, errNodeChainAppendExecution
+		}
+		packetCandidates = nodeChainPlanKeys(first, []string{"paired", "server_peer"}, nil)
+	}
+	hysteriaCandidates := false
+	if schema == 5 {
+		first, ok := candidates[0].(map[string]any)
+		if !ok {
+			return nil, errNodeChainAppendExecution
+		}
+		hysteriaCandidates = nodeChainPlanKeys(first, []string{"paired", "server_peer"}, nil)
+	}
 	for _, value := range candidates {
 		row, ok := value.(map[string]any)
 		if !ok {
 			return nil, errNodeChainAppendExecution
 		}
-		if schema == 3 {
+		if hysteriaCandidates {
+			paired, server, pair, err := nodeChainPrefixHysteriaPlanPair(row, len(source.LocalPrefix))
+			if err != nil {
+				return nil, err
+			}
+			localInput, err := paired.node.LaunchInput()
+			if err != nil {
+				return nil, err
+			}
+			serverInput, err := server.node.LaunchInput()
+			if err != nil {
+				return nil, err
+			}
+			candidateMode = "hysteria2"
+			source.HysteriaCandidatePairs = append(source.HysteriaCandidatePairs, pair)
+			source.Candidates = append(source.Candidates, serverInput)
+			source.CandidateIdentitySources = append(source.CandidateIdentitySources, server.identity)
+			localCandidates = append(localCandidates, localInput)
+			allLocal = append(allLocal, paired.node)
+			localIdentities = append(localIdentities, paired.identity)
+			continue
+		}
+		if packetCandidates {
 			if !nodeChainPlanKeys(row, []string{"paired", "server_peer"}, nil) {
 				return nil, errNodeChainAppendExecution
 			}
@@ -586,6 +696,18 @@ func NewNodeChainServerPrefixPlan(input string) (*NodeChainServerPrefixPolicy, e
 	localSchema := schema
 	if schema == 3 {
 		localSchema = 1
+	} else if schema == 4 {
+		actualLocal, actualRemote, err := nodeChainPrefixExecutionSchemas(allLocal[:len(localNodes)], candidateMode)
+		if err != nil || actualLocal != 2 || actualRemote != 4 {
+			return nil, errNodeChainAppendExecution
+		}
+		localSchema = actualLocal
+	} else if schema == 5 {
+		actualLocal, actualRemote, err := nodeChainPrefixExecutionSchemas(allLocal[:len(localNodes)], candidateMode)
+		if err != nil || actualRemote != 5 {
+			return nil, errNodeChainAppendExecution
+		}
+		localSchema = actualLocal
 	}
 	local := nodeChainCandidateAppendSourceRecord{Kind: nodeChainCandidateAppendSourceKind, Schema: localSchema, Execution: "local", DraftRevision: "operator-original-local-prefix", DeviceRevision: "operator-original-entry-device", DeviceSource: entryInput, NextMode: candidateMode, AppendPosition: len(localNodes), Nodes: localNodes, IdentitySources: localIdentities[:len(localNodes)]}
 	raw, err := json.Marshal(local)
@@ -596,7 +718,11 @@ func NewNodeChainServerPrefixPlan(input string) (*NodeChainServerPrefixPolicy, e
 	if err != nil {
 		return nil, err
 	}
-	inventory, err := json.Marshal(NodeChainCandidateInventory{Schema: 1, Revision: "operator-original-private-candidates", Inputs: localCandidates, ResponseMode: candidateMode})
+	inventorySource := NodeChainCandidateInventory{Schema: 1, Revision: "operator-original-private-candidates", Inputs: localCandidates, ResponseMode: candidateMode}
+	if hysteriaCandidates {
+		inventorySource.IdentitySources = append([]string(nil), localIdentities[len(localNodes):]...)
+	}
+	inventory, err := json.Marshal(inventorySource)
 	if err != nil {
 		return nil, err
 	}
@@ -619,7 +745,7 @@ func (p *NodeChainServerPrefixPolicy) PacketRuntimeKeys() ([]string, error) {
 	keys := make([]string, 0, 2*len(p.nodes))
 	seen := map[string]bool{}
 	for _, node := range p.nodes {
-		if p.record.Schema == 2 && node.mode == "shadowsocks" {
+		if (p.record.Schema == 2 || p.record.Schema == 4 || p.record.Schema == 5) && node.mode == "shadowsocks" || p.record.Schema == 5 && node.mode == "hysteria2" {
 			continue
 		}
 		client, server, err := nodeChainPacketKeys(node)
