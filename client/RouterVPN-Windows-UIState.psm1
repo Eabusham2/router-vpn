@@ -36,15 +36,21 @@ function Get-RouterVPNUIStateEntry([string]$Path,[bool]$Directory,[bool]$Missing
 function Assert-RouterVPNUIStateDirectory([string]$Path,[bool]$MissingLeaf=$false){
     if([string]::IsNullOrWhiteSpace($Path)-or-not[IO.Path]::IsPathRooted($Path)){throw 'The Windows UI state directory must be absolute.'}
     $Full=[IO.Path]::GetFullPath($Path)
-    if([IO.Path]::DirectorySeparatorChar-eq'\'-and$Full-notmatch'^(?:[A-Za-z]:\\|\\\\\?\\(?:[A-Za-z]:\\|Volume\{[0-9A-Fa-f-]{36}\}\\))'){
-        throw 'The Windows UI state directory must be on a local captured volume.'
+    $RootMatch=$null
+    if([IO.Path]::DirectorySeparatorChar-eq'\'){
+        $RootMatch=[regex]::Match($Full,'^(?:[A-Za-z]:\\|\\\\\?\\(?:[A-Za-z]:\\|Volume\{[0-9A-Fa-f-]{36}\}\\))',[Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if(-not$RootMatch.Success){throw 'The Windows UI state directory must be on a local captured volume.'}
     }
-    $Root=[IO.Path]::GetPathRoot($Full);$Cursor=$Full;$First=$true
+    $Root=[IO.Path]::GetPathRoot($Full)
+    # Preserve the separator in the captured device root under legacy .NET path handling.
+    if($null-ne$RootMatch){$Root=$RootMatch.Value}
+    $Cursor=$Full;$First=$true
     while($Cursor){
         [void](Get-RouterVPNUIStateEntry $Cursor $true ($First-and$MissingLeaf))
         if($Cursor.TrimEnd('\','/')-ceq$Root.TrimEnd('\','/')){break}
         $Parent=[IO.Path]::GetDirectoryName($Cursor.TrimEnd('\','/'))
         if([string]::IsNullOrEmpty($Parent)-or$Parent-ceq$Cursor){throw 'The Windows UI state ancestry could not be validated.'}
+        if($Parent.TrimEnd('\','/')-ceq$Root.TrimEnd('\','/')){$Parent=$Root}
         $Cursor=$Parent;$First=$false
     }
     return $Full

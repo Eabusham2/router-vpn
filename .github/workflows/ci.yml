@@ -25,13 +25,8 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
-      - name: Test profile, route, MTU and measurement behavior
-        run: go test -timeout 5m ./internal/common ./internal/routechoice ./internal/mobilemtu ./internal/hopmeasure ./internal/mtuprobe
-      - name: Test kill switch and router controls
-        run: |
-          go test -timeout 5m ./cmd/client -run 'KillSwitch|EnvWithValue' -count=1
-          go test -timeout 5m ./cmd/router-agent -run 'Admin|Peer|Listener|Forwarding|ProtectedDMZ|ServerControl' -count=1
-          go test -timeout 3m ./cmd/update-controller -count=1
+      - name: Test profiles, routing, MTU, measurements and protection
+        run: go test -timeout 5m ./...
 
   behavior:
     name: VPN policy and Setup Center

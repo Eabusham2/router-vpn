@@ -17,6 +17,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/routervpnamnezia"
 	ssclient "github.com/sagernet/sing-shadowsocks2"
 	"github.com/sagernet/sing/common/auth"
 	B "github.com/sagernet/sing/common/bufio"
@@ -34,6 +35,11 @@ type routerVPNServerPrefixCandidate struct {
 	ctx                                            context.Context
 	cancel                                         context.CancelFunc
 	target                                         *mobilemultihop.NodeChainServerPrefixCandidateTarget
+	packetRequest                                  *mobilemultihop.NodeChainServerPrefixCandidatePacketRequest
+	packetEndpoint                                 mobilemultihop.NodeChainCandidateEndpoint
+	packetClose                                    *routerVPNServerChainClose
+	pairingSHA                                     string
+	prepareDone                                    chan struct{}
 	quota                                          *multihoprelay.NodeChainPrefixCandidateAdmission
 	tag, address, method, password, privateAddress string
 	outbound                                       adapter.Outbound
@@ -136,6 +142,10 @@ func (op *routerVPNServerPrefixCandidate) current(ctx context.Context) bool {
 	}
 	op.mu.Lock()
 	valid := op.prepared && !op.retired && !op.drained && op.quota != nil && !op.quota.Snapshot().Retired
+	if op.capture.Request.IsPacket() {
+		valid = valid && op.packetRequest != nil && op.packetEndpoint != nil && op.packetClose != nil &&
+			op.packetClose.original == op.packetEndpoint && op.packetRequest.PairingSHA256() == op.pairingSHA && op.pairingSHA != ""
+	}
 	target := op.target
 	op.mu.Unlock()
 	if !valid || target == nil || !op.owner.preparedCurrent(ctx) || target.CurrentContext(ctx) != nil {
@@ -240,7 +250,9 @@ func (op *routerVPNServerPrefixCandidate) NewConnectionEx(ctx context.Context, c
 		return
 	}
 	var raw net.Conn
-	if op.tag != "" {
+	if op.capture.Request.IsPacket() {
+		raw, err = op.packetRequest.DialProbe(bounded, op.packetEndpoint, destination.String())
+	} else if op.tag != "" {
 		raw, err = op.owner.dialOriginal(bounded, op.tag, op.address)
 	} else if op.direct != nil {
 		original, e := op.direct.DialContext(bounded, "tcp", M.ParseSocksaddr(op.address))
@@ -263,8 +275,12 @@ func (op *routerVPNServerPrefixCandidate) NewConnectionEx(ctx context.Context, c
 		return cipher.DialConn(original, M.ParseSocksaddr(address))
 	}
 	if op.capture.Request.ChildPurpose == multihoprelay.NodeChainPrefixComparePair {
-		remote, e := wrap(bounded, raw, op.method, op.password, destination.String())
-		if remote != nil {
+		remote := raw
+		var e error
+		if !op.capture.Request.IsPacket() {
+			remote, e = wrap(bounded, raw, op.method, op.password, destination.String())
+		}
+		if remote != nil && !op.capture.Request.IsPacket() {
 			op.retain(remote)
 		}
 		if e != nil || remote == nil || !op.current(bounded) {
@@ -304,7 +320,12 @@ func (op *routerVPNServerPrefixCandidate) NewConnectionEx(ctx context.Context, c
 	if replayed || !hopmeasure.ValidCandidateNonce(nonce) || !op.current(bounded) {
 		return
 	}
-	reply, err := op.target.Reply(bounded, raw, nonce, string(frame[32:]), wrap)
+	var reply string
+	if op.capture.Request.IsPacket() {
+		reply, err = op.packetRequest.ReplyPacket(bounded, raw, nonce, string(frame[32:]))
+	} else {
+		reply, err = op.target.Reply(bounded, raw, nonce, string(frame[32:]), wrap)
+	}
 	if err != nil || len(reply) != 64 || !op.current(bounded) {
 		return
 	}
@@ -322,7 +343,15 @@ func (op *routerVPNServerPrefixCandidate) Prepare(ctx context.Context) error {
 		return errServerChainFront
 	}
 	op.attempted = true
+	var prepareDone chan struct{}
+	if op.capture.Request.IsPacket() {
+		prepareDone = make(chan struct{})
+		op.prepareDone = prepareDone
+	}
 	op.mu.Unlock()
+	if prepareDone != nil {
+		defer close(prepareDone)
+	}
 	if ctx == nil || ctx.Err() != nil || !op.owner.preparedCurrent(ctx) {
 		return errServerChainFront
 	}
@@ -350,6 +379,38 @@ func (op *routerVPNServerPrefixCandidate) Prepare(ctx context.Context) error {
 		op.direct, err = dialer.New(op.owner.transport, options, false)
 		if err != nil || op.direct == nil {
 			return errServerChainFront
+		}
+	}
+	if op.capture.Request.IsPacket() {
+		request, e := op.target.NewPacketRequest(ctx, op.owner.session, op.capture, op)
+		op.mu.Lock()
+		op.packetRequest = request
+		op.mu.Unlock()
+		if e != nil || request == nil || request.PairingSHA256() != op.pairingSHA {
+			return errors.Join(e, errServerChainFront)
+		}
+		// Setup cancellation retires this original operation. A successful
+		// endpoint retains only the original candidate operation deadline.
+		stop := context.AfterFunc(ctx, op.cancel)
+		endpoint, e := request.OpenServerPrefixNativeEndpoint(op.ctx, op, op.owner.session, op.capture,
+			func(call context.Context, options mobilemultihop.AmneziaEndpointConfig, carrier N.Dialer) (mobilemultihop.NativeCandidateDevice, error) {
+				device, openErr := routervpnamnezia.NewCandidateEndpoint(call, routervpnamnezia.Options(options), carrier)
+				if device == nil {
+					return nil, openErr
+				}
+				return device, openErr
+			})
+		stopped := stop()
+		if endpoint != nil {
+			op.mu.Lock()
+			op.packetEndpoint = endpoint
+			op.packetClose = &routerVPNServerChainClose{original: endpoint, failed: op.cancel}
+			op.mu.Unlock()
+		}
+		if !stopped || e != nil || endpoint == nil || ctx.Err() != nil ||
+			op.ServerPrefixCandidateCurrentContext(ctx, request) != nil {
+			op.cancel()
+			return errors.Join(e, ctx.Err(), errServerChainFront)
 		}
 	}
 	op.quota, err = multihoprelay.NewNodeChainPrefixCandidateAdmission(op.ctx, op.capture, op.privateAddress)
@@ -425,7 +486,7 @@ func (op *routerVPNServerPrefixCandidate) receipt(nonce string) multihoprelay.No
 		accepted = op.quota.Snapshot().Accepted
 	}
 	q := op.capture.Request
-	return multihoprelay.NodeChainPrefixCandidateReceipt{Schema: 1, Purpose: multihoprelay.NodeChainPrefixPurpose, CaptureSHA256: op.digest, OwnerID: op.capture.OwnerID, LeaseOwnerID: op.capture.Lease.OwnerID, TrialID: q.TrialID, OperationID: q.OperationID, CandidateID: q.CandidateID, CandidateSourceSHA256: q.CandidateSourceSHA256, AppendPosition: q.AppendPosition, ChildPurpose: q.ChildPurpose, ExternalTarget: q.ExternalTarget, Prepared: op.prepared && !op.retired, Drained: op.drained, Connections: accepted, Nonce: nonce, ObservedAt: time.Now().UTC()}
+	return multihoprelay.NodeChainPrefixCandidateReceipt{Schema: 1, Purpose: multihoprelay.NodeChainPrefixPurpose, PairingSHA256: op.pairingSHA, CaptureSHA256: op.digest, OwnerID: op.capture.OwnerID, LeaseOwnerID: op.capture.Lease.OwnerID, TrialID: q.TrialID, OperationID: q.OperationID, CandidateID: q.CandidateID, CandidateSourceSHA256: q.CandidateSourceSHA256, AppendPosition: q.AppendPosition, ChildPurpose: q.ChildPurpose, ExternalTarget: q.ExternalTarget, Prepared: op.prepared && !op.retired, Drained: op.drained, Connections: accepted, Nonce: nonce, ObservedAt: time.Now().UTC()}
 }
 func (op *routerVPNServerPrefixCandidate) Close(ctx context.Context) error {
 	if ctx == nil {
@@ -445,8 +506,15 @@ func (op *routerVPNServerPrefixCandidate) Close(ctx context.Context) error {
 	op.retired = true
 	op.prepared = false
 	op.cancel()
-	done := op.workDone
+	done, prepareDone := op.workDone, op.prepareDone
 	op.mu.Unlock()
+	if prepareDone != nil {
+		select {
+		case <-prepareDone:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	if err := op.closeResources(ctx); err != nil {
 		return err
 	}
@@ -468,6 +536,9 @@ func (op *routerVPNServerPrefixCandidate) Close(ctx context.Context) error {
 		if usage := op.quota.Snapshot(); !usage.Drained || usage.InFlight {
 			return errServerChainFront
 		}
+	}
+	if err := op.closePacketEndpoint(ctx); err != nil {
+		return err
 	}
 	if op.target != nil {
 		if err := op.target.CloseContext(ctx); err != nil {
@@ -509,8 +580,16 @@ func (n *routerVPNServerPrefix) CandidateCommand(ctx context.Context, q multihop
 				return nil, errServerChainFront
 			}
 		}
+		pairing := ""
+		if capture.Request.IsPacket() {
+			_, pairing, err = n.policy.PacketCandidateRuntimeKeys(capture)
+			if err != nil || pairing == "" {
+				n.mu.Unlock()
+				return nil, errors.Join(err, errServerChainFront)
+			}
+		}
 		lifetime, cancel := context.WithDeadline(n.ctx, capture.Deadline)
-		op = &routerVPNServerPrefixCandidate{owner: n, capture: capture, digest: digest, ctx: lifetime, cancel: cancel, users: make(map[string]auth.User), nonces: make(map[string]bool), resources: make(map[net.Conn]*routerVPNServerChainClose), closeGate: make(chan struct{}, 1)}
+		op = &routerVPNServerPrefixCandidate{owner: n, capture: capture, digest: digest, pairingSHA: pairing, ctx: lifetime, cancel: cancel, users: make(map[string]auth.User), nonces: make(map[string]bool), resources: make(map[net.Conn]*routerVPNServerChainClose), closeGate: make(chan struct{}, 1)}
 		op.self = op
 		n.attempts[capture.Request.OperationID] = op
 		n.candidate = op
@@ -543,3 +622,91 @@ func (n *routerVPNServerPrefix) CandidateCommand(ctx context.Context, q multihop
 	r := op.receipt(nonce)
 	return &r, nil
 }
+
+// The factory callback has a separate setup predicate: it requires the actual
+// attempted operation and captured target, but does not publish prepared front
+// authority before the original endpoint has been acquired.
+func (op *routerVPNServerPrefixCandidate) ServerPrefixCandidateCurrentContext(ctx context.Context, request *mobilemultihop.NodeChainServerPrefixCandidatePacketRequest) error {
+	if op == nil || op.self != op || request == nil || ctx == nil || ctx.Err() != nil ||
+		op.ctx.Err() != nil || !time.Now().Before(op.capture.Deadline) || !op.capture.Request.IsPacket() {
+		return errServerChainFront
+	}
+	op.mu.Lock()
+	valid := op.attempted && !op.retired && !op.drained && op.packetRequest == request &&
+		op.pairingSHA != "" && request.PairingSHA256() == op.pairingSHA
+	target, tag, outbound, direct := op.target, op.tag, op.outbound, op.direct
+	op.mu.Unlock()
+	if !valid || target == nil || !op.owner.preparedCurrent(ctx) || target.CurrentContext(ctx) != nil {
+		return errServerChainFront
+	}
+	op.owner.mu.Lock()
+	same := op.owner.candidate == op
+	if tag != "" {
+		same = same && outbound != nil && op.owner.outputs[tag] == outbound && direct == nil
+	} else {
+		same = same && outbound == nil && direct != nil
+	}
+	op.owner.mu.Unlock()
+	if !same {
+		return errServerChainFront
+	}
+	return ctx.Err()
+}
+
+func (op *routerVPNServerPrefixCandidate) DialServerPrefixCandidatePacketContext(ctx context.Context, request *mobilemultihop.NodeChainServerPrefixCandidatePacketRequest) (net.Conn, error) {
+	if op == nil || request == nil || request != op.packetRequest {
+		return nil, errServerChainFront
+	}
+	tag, address, err := request.ReadServerPrefix(ctx, op, op.owner.session, op.capture)
+	if err != nil || tag != op.tag || address != op.address {
+		return nil, errors.Join(err, errServerChainFront)
+	}
+	destination := M.ParseSocksaddr(address)
+	if !destination.IsIP() || destination.Port == 0 {
+		return nil, errServerChainFront
+	}
+	call := adapter.WithContext(ctx, &adapter.InboundContext{Inbound: "routervpn-server-prefix-packet-candidate", InboundType: "socks", Network: "udp", Destination: destination})
+	var original net.Conn
+	if tag == "" {
+		if op.direct == nil || op.outbound != nil {
+			return nil, errServerChainFront
+		}
+		original, err = op.direct.DialContext(call, "udp", destination)
+	} else {
+		if op.outbound == nil || op.owner.outputs[tag] != op.outbound || op.direct != nil {
+			return nil, errServerChainFront
+		}
+		original, err = op.outbound.DialContext(call, "udp", destination)
+	}
+	conn := op.owner.trackConnection(original)
+	if conn == nil {
+		return nil, errors.Join(err, errServerChainFront)
+	}
+	_, _, after := request.ReadServerPrefix(ctx, op, op.owner.session, op.capture)
+	// The same sealed native dialer retains every late nonnil UDP result.
+	return conn, errors.Join(err, after, ctx.Err())
+}
+
+func (op *routerVPNServerPrefixCandidate) closePacketEndpoint(ctx context.Context) error {
+	op.mu.Lock()
+	endpoint, owner := op.packetEndpoint, op.packetClose
+	op.mu.Unlock()
+	if endpoint == nil && owner == nil {
+		return nil
+	}
+	if endpoint == nil || owner == nil || owner.original != endpoint {
+		return errServerChainFront
+	}
+	if err := owner.CloseContext(ctx); err != nil {
+		return err
+	}
+	op.mu.Lock()
+	defer op.mu.Unlock()
+	if op.packetEndpoint != endpoint || op.packetClose != owner {
+		return errServerChainFront
+	}
+	op.packetEndpoint, op.packetClose = nil, nil
+	return nil
+}
+
+var _ mobilemultihop.NodeChainServerPrefixPacketEngine = (*routerVPNServerPrefixCandidate)(nil)

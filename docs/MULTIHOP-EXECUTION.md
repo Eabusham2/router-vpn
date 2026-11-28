@@ -39,6 +39,54 @@ system VPN. Mobile Disconnect and network changes cancel the comparison and
 invalidate its results. Progress carries measurements and rejection reasons,
 never relay passwords or node tokens.
 
+## Measuring the next node in an unfinished route
+
+An unsaved ordered draft can retain its original selected prefix while measuring
+eligible next nodes. Local, Server and Compare keep distinct execution owners.
+A successful measurement can be adopted only after its original operation has
+finished cleanup and the draft, device, inventory and registration are freshly
+captured. The next measurement uses that enlarged prefix; saving a complete
+profile is not a prerequisite for this interaction.
+
+The private prefix plan has six root fields: `schema`, `purpose`, `entry_node_id`,
+`entry`, `members`, and `candidates`. Its current forms are:
+
+| Schema | Retained prefix | Next candidates |
+| --- | --- | --- |
+| 1 | Paired WG/AWG packet nodes | Literal Shadowsocks 2022 |
+| 2 | Paired packet nodes followed by literal Shadowsocks 2022 nodes | Literal Shadowsocks 2022 |
+| 3 | Paired WG/AWG packet nodes | WG, AWG2 Fast, or AWG2 Strong in one captured raw mode |
+
+These Server/Compare forms require Start Layer Off and the original literal
+transport addresses. Each schema 3 candidate is a `paired` Local capture plus a
+`server_peer` object containing its private `bundle` and `profile_id`. Local and
+Server use independently captured client keys and a common peer; the transport,
+MTU, mode and full source identities remain bound together. An AWG candidate uses
+its actual AWG keys, not the separate WG companion profile's keys.
+
+Compile an operator plan with the existing private command:
+
+```sh
+router-vpn-agent compile-server-node-chain-prefix-plan < private-plan.json > private-prefix.json
+```
+
+The output contains private `source_json` and its public `reference`. Store the
+source in the existing privileged prefix registry under its source digest; only
+the reference belongs in client discovery. A stale or changed registration
+invalidates the measurement.
+
+Each candidate retains the existing fifty fresh authenticated private responses.
+Compare also uses fresh private and approved HTTPS observations through the same
+original candidate endpoint. Missing proof cannot become a score. Packet keys,
+streams and UDP work remain owned until actual cleanup finishes, including late
+factory results and cancellation.
+
+Packet NEXT after a retained Shadowsocks hop, HY2 NEXT, proxy-first prefixes and
+independent candidate layers remain further implementation work. The current
+source forms do not cancel those requirements. Application and native runtime
+acceptance must be established for the exact release source; source eligibility
+alone is not runtime evidence.
+
 ## Provisioning a server-owned exit
 
 Server execution requires an operator-paired exit registry on the entry node.

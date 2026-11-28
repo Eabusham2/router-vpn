@@ -229,7 +229,7 @@ static JsonArray *linux_oc_append_source(JsonObject *view, JsonObject *draft, in
           strcmp(linux_ec_string(view,"candidate_mode"),"hysteria2")) ||
         strcmp(linux_ec_string(view,"candidate_mode"),linux_ec_string(draft,"next_mode"))) return NULL;
     if (execution_append) {
-        if (kind || external || strcmp(linux_ec_string(draft,"next_mode"),"shadowsocks") ||
+        if (kind || external || (!linux_oc_packet_mode(linux_ec_string(draft,"next_mode")) && strcmp(linux_ec_string(draft,"next_mode"),"shadowsocks")) ||
             !linux_ec_token(linux_ec_string(view,"execution_source_sha256"),64)) return NULL;
     } else {
         const char *execution_fields[]={"execution_source_sha256","execution_capture_sha256","winning_execution","selection"};
@@ -272,7 +272,7 @@ static JsonArray *linux_oc_append_source(JsonObject *view, JsonObject *draft, in
             if (packet) {
                 if (retained_ss) return NULL;
             } else {
-                if (i==0 || strcmp(kind,"router-vpn") || strcmp(mode,"shadowsocks")) return NULL;
+                if (i==0 || strcmp(linux_ec_string(draft,"next_mode"),"shadowsocks") || strcmp(kind,"router-vpn") || strcmp(mode,"shadowsocks")) return NULL;
                 retained_ss=TRUE;
             }
         }

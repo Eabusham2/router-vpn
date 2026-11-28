@@ -19,29 +19,43 @@ const NodeChainPrefixPrivateResponse = "private-agent-response"
 const NodeChainPrefixComparePair = "compare-pair"
 
 type NodeChainPrefixCandidateRequest struct {
-	Schema                int                    `json:"schema"`
-	Purpose               string                 `json:"purpose"`
-	Lease                 NodeChainPrefixRequest `json:"lease"`
-	LeaseOwnerID          string                 `json:"lease_owner_id"`
-	TrialID               string                 `json:"trial_id"`
-	OperationID           string                 `json:"operation_id"`
-	CandidateID           string                 `json:"candidate_id"`
-	CandidateSourceSHA256 string                 `json:"candidate_source_sha256"`
-	AppendPosition        int                    `json:"append_position"`
-	InventorySHA256       string                 `json:"inventory_sha256"`
-	ChildPurpose          string                 `json:"child_purpose"`
-	ExternalTarget        string                 `json:"external_target"`
-	ExpiresAt             int64                  `json:"expires_at"`
+	Schema                   int                    `json:"schema"`
+	Purpose                  string                 `json:"purpose"`
+	Lease                    NodeChainPrefixRequest `json:"lease"`
+	LeaseOwnerID             string                 `json:"lease_owner_id"`
+	TrialID                  string                 `json:"trial_id"`
+	OperationID              string                 `json:"operation_id"`
+	CandidateID              string                 `json:"candidate_id"`
+	CandidateSourceSHA256    string                 `json:"candidate_source_sha256"`
+	AppendPosition           int                    `json:"append_position"`
+	InventorySHA256          string                 `json:"inventory_sha256"`
+	ChildPurpose             string                 `json:"child_purpose"`
+	ExternalTarget           string                 `json:"external_target"`
+	ExpiresAt                int64                  `json:"expires_at"`
+	CandidateMode            string                 `json:"candidate_mode,omitempty"`
+	CandidateClientPublicKey string                 `json:"candidate_client_public_key,omitempty"`
 }
 
 func prefixCompareTarget(target string) bool {
 	return target == "https://1.1.1.1/cdn-cgi/trace" || target == "https://1.0.0.1/cdn-cgi/trace"
 }
 func (q NodeChainPrefixCandidateRequest) Validate() error {
-	if q.Schema != 1 || q.Purpose != NodeChainPrefixPurpose || q.Lease.validateShape() != nil || !proofID.MatchString(q.LeaseOwnerID) ||
+	if q.Schema != 1 && q.Schema != 2 || q.Purpose != NodeChainPrefixPurpose || q.Lease.validateShape() != nil || !proofID.MatchString(q.LeaseOwnerID) ||
 		!nonce.MatchString(q.TrialID) || !nonce.MatchString(q.OperationID) || q.TrialID == q.OperationID || !prefixProfileID(q.CandidateID) ||
 		!proofID.MatchString(q.CandidateSourceSHA256) || q.AppendPosition != q.Lease.ActualPrefixCount() ||
 		q.InventorySHA256 != q.Lease.InventorySHA256 || q.ExpiresAt <= 0 {
+		return errNodeChainPrefix
+	}
+	if q.IsPacket() {
+		if q.Lease.Schema != 3 || !nodeChainPacketMode(q.CandidateMode) || !nodeChainPacketPublic(q.CandidateClientPublicKey) {
+			return errNodeChainPrefix
+		}
+		for _, key := range q.Lease.LocalPacketPublicKeys {
+			if key == q.CandidateClientPublicKey {
+				return errNodeChainPrefix
+			}
+		}
+	} else if q.Lease.Schema == 3 || q.CandidateMode != "" || q.CandidateClientPublicKey != "" {
 		return errNodeChainPrefix
 	}
 	if q.ChildPurpose == NodeChainPrefixPrivateResponse {
@@ -60,6 +74,9 @@ func (q NodeChainPrefixCandidateRequest) Clone() NodeChainPrefixCandidateRequest
 func (q NodeChainPrefixCandidateRequest) Digest() (string, error) {
 	if err := q.Validate(); err != nil {
 		return "", err
+	}
+	if q.IsPacket() {
+		return nodeChainDigest("routervpn-node-chain-prefix-candidate-request-v2", q)
 	}
 	return nodeChainDigest("routervpn-node-chain-prefix-candidate-request-v1", q)
 }
@@ -84,7 +101,7 @@ func (c NodeChainPrefixCandidateCapture) Validate() error {
 	_, offset := c.Deadline.Zone()
 	if err != nil || c.Schema != 1 || c.Lease.Validate() != nil || !sameNodeChainPrefixRequest(c.Request.Lease, c.Lease.Request) ||
 		c.Request.LeaseOwnerID != c.Lease.OwnerID || !proofID.MatchString(c.OwnerID) || c.OwnerID == c.Lease.OwnerID || c.RequestSHA256 != digest ||
-		!c.Candidate.valid() || c.Candidate.ProfileID != c.Request.CandidateID || c.Candidate.SourceSHA256 != c.Request.CandidateSourceSHA256 ||
+		!c.validCandidate() || c.Candidate.ProfileID != c.Request.CandidateID || c.Candidate.SourceSHA256 != c.Request.CandidateSourceSHA256 ||
 		c.Request.AppendPosition != len(c.Lease.Source.LocalPrefix) || c.Deadline.IsZero() || offset != 0 || c.Deadline.UnixMilli() != c.Request.ExpiresAt {
 		return errNodeChainPrefix
 	}
@@ -152,17 +169,29 @@ type NodeChainPrefixCandidateReceipt struct {
 	Connections           int       `json:"connections"`
 	Nonce                 string    `json:"nonce"`
 	ObservedAt            time.Time `json:"observed_at"`
+	PairingSHA256         string    `json:"pairing_sha256,omitempty"`
 }
 
 func (r NodeChainPrefixCandidateReceipt) Validate(c NodeChainPrefixCandidateCapture, challenge string, started, now time.Time) error {
 	digest, err := c.Digest()
 	q := c.Request
+	pairing := ""
+	if q.IsPacket() {
+		pair, pairErr := c.packetPair()
+		if pairErr != nil {
+			return errNodeChainPrefix
+		}
+		pairing, pairErr = pair.Digest()
+		if pairErr != nil {
+			return errNodeChainPrefix
+		}
+	}
 	limit := NodeChainCandidateMaximumConnects
 	if q.ChildPurpose == NodeChainPrefixComparePair {
 		limit = 2
 	}
 	_, offset := r.ObservedAt.Zone()
-	if err != nil || r.Schema != 1 || r.Purpose != NodeChainPrefixPurpose || r.CaptureSHA256 != digest || r.OwnerID != c.OwnerID || r.LeaseOwnerID != c.Lease.OwnerID ||
+	if err != nil || r.PairingSHA256 != pairing || r.Schema != 1 || r.Purpose != NodeChainPrefixPurpose || r.CaptureSHA256 != digest || r.OwnerID != c.OwnerID || r.LeaseOwnerID != c.Lease.OwnerID ||
 		r.TrialID != q.TrialID || r.OperationID != q.OperationID || r.CandidateID != q.CandidateID || r.CandidateSourceSHA256 != q.CandidateSourceSHA256 ||
 		r.AppendPosition != q.AppendPosition || r.ChildPurpose != q.ChildPurpose || r.ExternalTarget != q.ExternalTarget || r.Connections < 0 || r.Connections > limit ||
 		challenge != "" && !proofID.MatchString(challenge) || r.Nonce != challenge || offset != 0 || r.ObservedAt.Before(started) || r.ObservedAt.After(now) || r.Drained && r.Prepared {

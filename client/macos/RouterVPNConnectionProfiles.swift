@@ -576,9 +576,15 @@ struct RouterVPNOrderedNodeDraft {
                 (mode != "shadowsocks" || RouterVPNOrderedNodes.pairedLiteralOff(profile))
         }
     }
+    func acceptsExecutionAppend(mode: String) -> Bool {
+        guard executionAppendEligible else { return false }
+        if mode == "shadowsocks" { return true }
+        return RouterVPNOrderedNodes.prefixModes.contains(mode) &&
+            prefixNodes.allSatisfy { RouterVPNOrderedNodes.prefixModes.contains($0["mode"] ?? "") }
+    }
     func appendBody(mode: String, kind: String = "router-vpn", requestedExecution: String = "local", revision: UUID, current: [String:Any]) throws -> [String:Any] {
         guard ["local","server","auto"].contains(requestedExecution),
-              requestedExecution == "local" || mode == "shadowsocks" && kind == "router-vpn" && executionAppendEligible,
+              requestedExecution == "local" || kind == "router-vpn" && acceptsExecutionAppend(mode: mode),
               prefixOnly, execution == "local", externalExit == nil, ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"].contains(mode),
               kind == "router-vpn" || !pairedProxyEntryPrefix && kind == "external" && mode == "shadowsocks",
               validAppendPrefix(prefixNodes,maximum:95), current["selected_id"] as? String == control,
@@ -672,7 +678,7 @@ struct RouterVPNOrderedNodeDraft {
         let executionAppend=purpose == "draft-prefix-append-execution"
         let requested=executionAppend ? body["requested_execution"] as? String : (body["requested_execution"] == nil ? "local":nil)
         guard purpose == "draft-prefix-append" && requested == "local" || executionAppend && ["server","auto"].contains(requested ?? "") &&
-                !external && body["next_kind"] == nil && body["next_mode"] as? String == "shadowsocks" && executionAppendEligible else { throw RouterVPNOrderedNodes.issue("Keep the original explicit append execution and paired packet head with its optional Shadowsocks tail.") }
+                !external && body["next_kind"] == nil && acceptsExecutionAppend(mode: body["next_mode"] as? String ?? "") else { throw RouterVPNOrderedNodes.issue("Keep the original explicit append execution and eligible paired prefix for its next transport.") }
         if executionAppend {
             guard let digest=response["execution_source_sha256"] as? String, digest.range(of:#"\A[0-9a-f]{64}\z"#,options:.regularExpression) != nil else { throw RouterVPNOrderedNodes.issue("The original append execution source changed.") }
         }
@@ -1781,9 +1787,13 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         appendMode.removeAllItems()
         for mode in ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"] { appendMode.addItem(withTitle:RouterVPNOrderedNodes.modeName(mode));appendMode.lastItem?.representedObject=mode }
         if !draft.pairedProxyEntryPrefix { appendMode.addItem(withTitle:"Imported Shadowsocks");appendMode.lastItem?.representedObject="external-shadowsocks" }
-        if draft.executionAppendEligible || ["server-shadowsocks","auto-shadowsocks"].contains(originalNext ?? "") {
-            for (value,title) in [("server-shadowsocks","Shadowsocks · Server"),("auto-shadowsocks","Shadowsocks · Compare")] {
-                appendMode.addItem(withTitle:title);appendMode.lastItem?.representedObject=value
+        for mode in ["wg","awg2-fast","awg2-strong","shadowsocks"] {
+            let server="server-"+mode, compare="auto-"+mode
+            if draft.acceptsExecutionAppend(mode: mode) || [server,compare].contains(originalNext ?? "") {
+                let name=RouterVPNOrderedNodes.modeName(mode)
+                for (value,title) in [(server,name+" · Server"),(compare,name+" · Compare")] {
+                    appendMode.addItem(withTitle:title);appendMode.lastItem?.representedObject=value
+                }
             }
         }
         appendMode.selectItem(at:appendMode.itemArray.firstIndex(where:{$0.representedObject as? String == originalNext}) ?? -1)
@@ -1908,10 +1918,11 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
     private func measureAppend() {
         do {
             guard let owner=productOwner, let choice=appendMode.selectedItem?.representedObject as? String else { throw RouterVPNOrderedNodes.issue("Choose the next transport.") }
-            let mode=["external-shadowsocks","server-shadowsocks","auto-shadowsocks"].contains(choice) ? "shadowsocks":choice
+            let remoteModes=["wg","awg2-fast","awg2-strong","shadowsocks"]
+            let mode=remoteModes.first(where:{choice == "server-"+$0 || choice == "auto-"+$0}) ?? (choice == "external-shadowsocks" ? "shadowsocks":choice)
             let kind=choice == "external-shadowsocks" ? "external":"router-vpn"
-            let requested=choice == "server-shadowsocks" ? "server":choice == "auto-shadowsocks" ? "auto":"local"
-            guard requested == "local" || draft.executionAppendEligible else { throw RouterVPNOrderedNodes.issue("Server and Compare require paired nodes with Start Layer Off: WireGuard or AmneziaWG first, then an optional literal Shadowsocks tail.") }
+            let requested=remoteModes.contains(where:{choice == "server-"+$0}) ? "server":remoteModes.contains(where:{choice == "auto-"+$0}) ? "auto":"local"
+            guard requested == "local" || draft.acceptsExecutionAppend(mode: mode) else { throw RouterVPNOrderedNodes.issue("Server and Compare require paired nodes with Start Layer Off. WireGuard and AmneziaWG next nodes require a packet-only prefix; Shadowsocks may follow a packet head with a literal Shadowsocks tail.") }
             let current=try owner.api.json("/api/profiles",timeout:5) as? [String:Any] ?? [:]
             let original=revision, position=draft.prefixes.count-1
             let body=try draft.appendBody(mode:mode,kind:kind,requestedExecution:requested,revision:original,current:current)

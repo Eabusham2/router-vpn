@@ -344,6 +344,14 @@ func (op *nodeChainAppendExecutionRemoteCandidate) initialize(ctx context.Contex
 		deadline = lease.ExpiresAt
 	}
 	op.request = multihoprelay.NodeChainPrefixCandidateRequest{Schema: 1, Purpose: multihoprelay.NodeChainPrefixPurpose, Lease: l.request.Clone(), LeaseOwnerID: capture.OwnerID, TrialID: trial, OperationID: operation, CandidateID: op.source.Target.ID, CandidateSourceSHA256: op.source.Target.SourceSHA256, AppendPosition: l.runtime.preparation.AppendPosition(), InventorySHA256: l.request.InventorySHA256, ChildPurpose: purpose, ExternalTarget: externalTarget, ExpiresAt: deadline.UnixMilli()}
+	mode := l.runtime.preparation.CandidateMode()
+	if nodeChainAppendExecutionPacketMode(mode) {
+		if l.descriptor.PacketCandidateMode() != mode || op.source.PacketOptions == "" || !nodeChainCanonicalPeer(op.source.ClientKey) {
+			return errNodeChainAppendExecution
+		}
+		op.request.Schema = 2
+		op.request.CandidateMode, op.request.CandidateClientPublicKey = mode, op.source.ClientKey
+	}
 	if op.request.Validate() != nil {
 		return errNodeChainAppendExecution
 	}

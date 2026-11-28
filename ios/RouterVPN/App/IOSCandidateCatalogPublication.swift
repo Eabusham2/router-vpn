@@ -329,7 +329,7 @@ struct IOSCandidateMetadataPages {
             let fields: Set<String> = ["schema","purpose","capture_sha256","source_sha256","config_sha256","prefix_position","prefix_id","append_position","targets","measurement","candidate_mode","draft_revision","device_revision","device_source_sha256","device_mtu_revision","original_source_sha256","prefix_count","prefixes_sha256","mtu_sha256","append_source_metadata_sha256","application_open","dns_open","ready","stage","mtu_measurement","execution_source_sha256","requested_execution","execution_capture_sha256","original_preparation_source_sha256","original_preparation_capture_sha256"]
             guard !paged, Set(body.keys) == fields, Self.integer(body["schema"]) == 1,
                   body["purpose"] as? String == "draft-prefix-append-execution", body["measurement"] as? String == "routed-candidate-response",
-                  body["candidate_mode"] as? String == "shadowsocks", ["server", "auto"].contains(body["requested_execution"] as? String ?? ""),
+                  IOSNodeCandidateAppendSource.executionNextModes.contains(body["candidate_mode"] as? String ?? ""), ["server", "auto"].contains(body["requested_execution"] as? String ?? ""),
                   body["capture_sha256"] as? String == "", body["execution_capture_sha256"] as? String == "",
                   body["source_sha256"] as? String == body["execution_source_sha256"] as? String,
                   body["source_sha256"] as? String != body["original_source_sha256"] as? String,

@@ -113,12 +113,13 @@ func readNodeChainRegistration(path string, previous os.FileInfo) ([]byte, os.Fi
 // The original runner owns every live worker and candidate reservation. A failed
 // native close cannot free peer identities for another worker or operation.
 type relayNodeChainPacketKeyReservation struct {
-	self      *relayNodeChainPacketKeyReservation
-	ledger    *relayNodeChainPacketKeyLedger
-	process   *relayNodeChainProcess
-	prefix    *relayNodeChainPrefixProcess
-	operation *relayNodeChainCandidateOperation
-	keys      []string
+	self            *relayNodeChainPacketKeyReservation
+	ledger          *relayNodeChainPacketKeyLedger
+	process         *relayNodeChainProcess
+	prefix          *relayNodeChainPrefixProcess
+	operation       *relayNodeChainCandidateOperation
+	prefixOperation *relayNodeChainPrefixCandidateOperation
+	keys            []string
 }
 type relayNodeChainPacketKeyLedger struct {
 	mu     sync.Mutex
@@ -148,7 +149,7 @@ func (r *relayNodeChainPacketKeyLedger) reserve(p *relayNodeChainProcess, op *re
 		if original.process == p && original.operation == op {
 			return nil, multihoprelay.ErrBusy
 		}
-		if original.operation == nil && op == nil {
+		if original.operation == nil && original.prefixOperation == nil && op == nil {
 			continue
 		} // Existing full-worker sharing is unchanged.
 		for _, key := range original.keys {
@@ -163,7 +164,7 @@ func (r *relayNodeChainPacketKeyLedger) reserve(p *relayNodeChainProcess, op *re
 	return owner, nil
 }
 func (r *relayNodeChainPacketKeyLedger) release(owner *relayNodeChainPacketKeyReservation, p *relayNodeChainProcess, op *relayNodeChainCandidateOperation) error {
-	if r == nil || owner == nil || owner.self != owner || owner.ledger != r || owner.process != p || owner.operation != op {
+	if r == nil || owner == nil || owner.self != owner || owner.ledger != r || owner.process != p || owner.operation != op || owner.prefix != nil || owner.prefixOperation != nil {
 		return multihoprelay.ErrOwnership
 	}
 	r.mu.Lock()

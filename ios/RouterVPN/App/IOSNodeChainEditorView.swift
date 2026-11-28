@@ -236,7 +236,7 @@ struct IOSNodeChainEditorView: View {
                         }
                     }
                     if appendExecution != "local" {
-                        Text("This choice measures the next Shadowsocks node using Server or Compare. The unfinished draft remains Local.")
+                        Text("This choice measures the next node using Server or Compare. The unfinished draft remains Local.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Button("Measure next node") {

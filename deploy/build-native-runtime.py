@@ -1487,7 +1487,7 @@ class AndroidConnectionQualification:
         for port in (5038, 5556, 5557):
             with socket.socket() as reservation:
                 reservation.bind(('127.0.0.1', port))
-        self.adb_server = self.spawn('android-adb-server', [self.adb_path, '-L', 'tcp:127.0.0.1:5038', 'nodaemon', 'server'])
+        self.adb_server = self.spawn('android-adb-server', [self.adb_path, '-L', 'tcp:localhost:5038', 'nodaemon', 'server'])
         end = time.monotonic()+10
         while True:
             if self.adb_server.poll() is not None:

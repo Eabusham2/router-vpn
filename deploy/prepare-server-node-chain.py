@@ -17,13 +17,15 @@ OWNER = 'routervpn-server-node-chain-source.json'
 PREFIXES = ('cmd/sing-box/routervpn_server_chain_', 'routervpn_server_chain_')
 _connect_spec=importlib.util.spec_from_file_location("server_owned_connect",ROOT/"deploy/prepare-mobile-connect.py")
 SOCKS_TEMPLATES={'socks_owner.go.tmpl': 'protocol/routervpnnodesocks/socks_owner.go', 'socks_scope.go.tmpl': 'protocol/routervpnnodesocks/socks_scope.go', 'socks_server_owner.go.tmpl': 'protocol/routervpnnodesocks/socks_server_owner.go'}
+PACKET_TEMPLATE = 'candidate_response_cipher.go.tmpl'
+PACKET_TARGET = 'experimental/libbox/routervpn/mobilemultihop/routervpn_candidate_response_cipher.go'
 CONNECT=importlib.util.module_from_spec(_connect_spec)
 _connect_spec.loader.exec_module(CONNECT)
 
 
 
 def inputs():
-    return sorted([Path(__file__).resolve(), *sorted((ROOT / 'mobile/server_chain_component').glob('*.tmpl')), *sorted((ROOT / 'mobile/server_chain').glob('*.tmpl')), *CONNECT.server_inputs(), *(ROOT / 'mobile/chain' / name for name in SOCKS_TEMPLATES), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_socks_server*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_openvpn*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_server*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_candidate_append_execution*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_connect_server*.go')), *sorted((ROOT / 'internal/multihoprelay').glob('node_chain_*.go'))])
+    return sorted([Path(__file__).resolve(), *sorted((ROOT / 'mobile/server_chain_component').glob('*.tmpl')), *sorted((ROOT / 'mobile/server_chain').glob('*.tmpl')), *CONNECT.server_inputs(), *(ROOT / 'mobile/chain' / name for name in SOCKS_TEMPLATES), ROOT / 'mobile/chain' / PACKET_TEMPLATE, *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_socks_server*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_openvpn*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_server*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_candidate_append_execution*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_append_execution*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_connect_server*.go')), *sorted((ROOT / 'internal/multihoprelay').glob('node_chain_*.go'))])
 
 
 def digest():
@@ -58,12 +60,18 @@ def copies():
         if path.is_symlink() or not path.is_file() or not path.read_bytes().startswith(b'package routervpnnodesocks\n'):
             raise ValueError('Changed ordered SOCKS Server package boundary')
         content[target]=path.read_bytes()
+    # Reuse the same packet factory as the mobile/desktop generator. The
+    # standalone relay does not run the mobile node-chain preparer.
+    packet = ROOT/'mobile/chain'/PACKET_TEMPLATE
+    if packet.is_symlink() or not packet.is_file() or not packet.read_bytes().startswith(b'package mobilemultihop\n'):
+        raise ValueError('Changed ordered Server packet factory boundary')
+    content[PACKET_TARGET] = packet.read_bytes()
     return content
 
 
 def destination(vendor, name):
     relative = Path(name)
-    if relative.is_absolute() or '..' in relative.parts or not (name.startswith(PREFIXES) or name in CONNECT.SERVER_TEMPLATES.values() or name in SOCKS_TEMPLATES.values()):
+    if relative.is_absolute() or '..' in relative.parts or not (name.startswith(PREFIXES) or name in CONNECT.SERVER_TEMPLATES.values() or name in SOCKS_TEMPLATES.values() or name == PACKET_TARGET):
         raise ValueError('Foreign ordered Server ownership path')
     path = vendor/relative
     current = vendor

@@ -46,14 +46,15 @@ type NodeChainPrefixCandidate struct {
 // independently provisioned suffix; an entry-only prefix has an empty slice.
 // Neither it nor Prepared represents a complete path or application/DNS ingress.
 type NodeChainPrefixDescriptor struct {
-	Schema             int                        `json:"schema"`
-	Purpose            string                     `json:"purpose"`
-	SourceSHA256       string                     `json:"source_sha256"`
-	EntryNodeID        string                     `json:"entry_node_id"`
-	EntryPeerAddresses []string                   `json:"entry_peer_addresses"`
-	LocalPrefix        []NodeChainPrefixMember    `json:"local_prefix"`
-	Members            []NodeChainPrefixMember    `json:"members"`
-	Candidates         []NodeChainPrefixCandidate `json:"candidates"`
+	Schema               int                                  `json:"schema"`
+	Purpose              string                               `json:"purpose"`
+	SourceSHA256         string                               `json:"source_sha256"`
+	EntryNodeID          string                               `json:"entry_node_id"`
+	EntryPeerAddresses   []string                             `json:"entry_peer_addresses"`
+	LocalPrefix          []NodeChainPrefixMember              `json:"local_prefix"`
+	Members              []NodeChainPrefixMember              `json:"members"`
+	Candidates           []NodeChainPrefixCandidate           `json:"candidates"`
+	PacketCandidatePairs []NodeChainPrefixPacketCandidatePair `json:"packet_candidate_pairs,omitempty"`
 }
 
 func prefixProfileID(v string) bool {
@@ -86,6 +87,12 @@ func (m NodeChainPrefixCandidate) valid() bool {
 }
 
 func (s NodeChainPrefixDescriptor) Validate() error {
+	if s.Schema == 3 {
+		return s.validatePacketCandidates()
+	}
+	if s.PacketCandidatePairs != nil {
+		return errNodeChainPrefix
+	}
 	if s.Schema == 2 {
 		return s.validateRetainedSS()
 	}
@@ -218,6 +225,7 @@ func (s NodeChainPrefixDescriptor) validateRetainedSS() error {
 func (s NodeChainPrefixDescriptor) Clone() NodeChainPrefixDescriptor {
 	s.EntryPeerAddresses = slices.Clone(s.EntryPeerAddresses)
 	s.LocalPrefix, s.Members, s.Candidates = slices.Clone(s.LocalPrefix), slices.Clone(s.Members), slices.Clone(s.Candidates)
+	s.PacketCandidatePairs = slices.Clone(s.PacketCandidatePairs)
 	return s
 }
 func (s NodeChainPrefixDescriptor) Digest() (string, error) {
@@ -227,6 +235,8 @@ func (s NodeChainPrefixDescriptor) Digest() (string, error) {
 	domain := "routervpn-node-chain-prefix-descriptor-v1"
 	if s.Schema == 2 {
 		domain = "routervpn-node-chain-prefix-descriptor-v2"
+	} else if s.Schema == 3 {
+		domain = "routervpn-node-chain-prefix-descriptor-v3"
 	}
 	return nodeChainDigest(domain, s)
 }
@@ -252,14 +262,14 @@ type NodeChainPrefixRequest struct {
 }
 
 func (q NodeChainPrefixRequest) validateShape() error {
-	if q.Schema != 1 && q.Schema != 2 || q.Purpose != NodeChainPrefixPurpose || !nonce.MatchString(q.SessionID) || !proofID.MatchString(q.EntryNodeID) ||
+	if q.Schema != 1 && q.Schema != 2 && q.Schema != 3 || q.Purpose != NodeChainPrefixPurpose || !nonce.MatchString(q.SessionID) || !proofID.MatchString(q.EntryNodeID) ||
 		!proofID.MatchString(q.SourceSHA256) || !proofID.MatchString(q.DescriptorSHA256) || !proofID.MatchString(q.LocalSourceSHA256) ||
 		!proofID.MatchString(q.InventorySHA256) || !proofID.MatchString(q.Epoch) || !proofID.MatchString(q.FrontSeed) ||
 		!nodeChainPrivateAddress(q.Peer) || q.AcquireExpiresAt <= 0 || q.Port < 1024 || q.Port > 65535 ||
 		len(q.LocalPacketPublicKeys) < 1 || len(q.LocalPacketPublicKeys) > NodeChainPrefixMaximumMembers {
 		return errNodeChainPrefix
 	}
-	if q.Schema == 1 && q.PrefixCount != 0 || q.Schema == 2 && (q.PrefixCount < 2 || q.PrefixCount > NodeChainPrefixMaximumMembers || q.PrefixCount <= len(q.LocalPacketPublicKeys)) {
+	if (q.Schema == 1 || q.Schema == 3) && q.PrefixCount != 0 || q.Schema == 2 && (q.PrefixCount < 2 || q.PrefixCount > NodeChainPrefixMaximumMembers || q.PrefixCount <= len(q.LocalPacketPublicKeys)) {
 		return errNodeChainPrefix
 	}
 	seen := map[string]bool{}
@@ -299,7 +309,7 @@ func (q NodeChainPrefixRequest) ActualPrefixCount() int {
 	if q.validateShape() != nil {
 		return 0
 	}
-	if q.Schema == 1 {
+	if q.Schema == 1 || q.Schema == 3 {
 		return len(q.LocalPacketPublicKeys)
 	}
 	return q.PrefixCount
@@ -315,6 +325,8 @@ func (q NodeChainPrefixRequest) Digest() (string, error) {
 	domain := "routervpn-node-chain-prefix-request-v1"
 	if q.Schema == 2 {
 		domain = "routervpn-node-chain-prefix-request-v2"
+	} else if q.Schema == 3 {
+		domain = "routervpn-node-chain-prefix-request-v3"
 	}
 	return nodeChainDigest(domain, q)
 }

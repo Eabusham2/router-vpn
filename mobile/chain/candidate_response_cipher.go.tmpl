@@ -226,6 +226,13 @@ func (r *NodeChainServerCandidatePacketRequest) OpenServerNativeEndpoint(ctx con
 	return openNativePacketEndpoint(ctx, r, awg)
 }
 
+func (r *NodeChainServerPrefixCandidatePacketRequest) OpenServerPrefixNativeEndpoint(ctx context.Context, reader NodeChainServerPrefixPacketEngine, original *NodeChainServerPrefixSession, capture multihoprelay.NodeChainPrefixCandidateCapture, awg func(context.Context, AmneziaEndpointConfig, N.Dialer) (NativeCandidateDevice, error)) (NodeChainCandidateEndpoint, error) {
+	if _, _, err := r.ReadServerPrefix(ctx, reader, original, capture); err != nil {
+		return nil, err
+	}
+	return openNativePacketEndpoint(ctx, r, awg)
+}
+
 func openNativePacketEndpoint(ctx context.Context, r nativePacketRequest, awg func(context.Context, AmneziaEndpointConfig, N.Dialer) (NativeCandidateDevice, error)) (NodeChainCandidateEndpoint, error) {
 	if ctx == nil || r == nil {
 		return nil, errors.New("packet candidate has no original request")
@@ -313,6 +320,48 @@ func (e *nativePacketCandidate) DialPrivate(ctx context.Context, address string)
 		return nil, errors.Join(err, observed, ctx.Err())
 	}
 	return conn, nil
+}
+
+func (e *nativePacketCandidate) appendExecutionPacketRequest() any {
+	if e == nil {
+		return nil
+	}
+	return e.request
+}
+
+// Append callers retain late nonnil streams on their original I/O owner.
+// Ordinary DialPrivate retains its existing behavior and signature.
+func (e *nativePacketCandidate) dialAppendExecutionPrivate(ctx context.Context, request any, address string) (net.Conn, error) {
+	if e == nil || e.request == nil || e.device == nil || request != e.request || ctx == nil || ctx.Err() != nil {
+		return nil, errNodeChainAppendExecution
+	}
+	if err := e.request.nativePacketCurrent(ctx); err != nil {
+		return nil, err
+	}
+	api, err := privateAPI(e.request.nativePacketSource().API)
+	destination := M.ParseSocksaddr(address)
+	if err != nil || !destination.IsIP() || api.Host != address || destination.Port == 0 {
+		return nil, errNodeChainAppendExecution
+	}
+	conn, err := e.device.DialContext(ctx, "tcp", destination)
+	return conn, errors.Join(err, e.request.nativePacketCurrent(ctx), ctx.Err())
+}
+
+func (e *nativePacketCandidate) dialAppendExecutionPublic(ctx context.Context, grant *nodeChainAppendExecutionPacketGrant, address string) (net.Conn, error) {
+	if e == nil || e.request == nil || e.device == nil || grant.validate(ctx, e.request, address) != nil {
+		return nil, errNodeChainAppendExecution
+	}
+	if err := e.request.nativePacketCurrent(ctx); err != nil {
+		return nil, err
+	}
+	destination := M.ParseSocksaddr(address)
+	if !destination.IsIP() || destination.Port != 443 {
+		return nil, errNodeChainAppendExecution
+	}
+	conn, err := e.device.DialContext(ctx, "tcp", destination)
+	// The original trial/front owner retains this exact late result before
+	// reporting any failure. Device retirement still joins its UDP carrier.
+	return conn, errors.Join(err, e.request.nativePacketCurrent(ctx), grant.validate(ctx, e.request, address), ctx.Err())
 }
 
 func (e *nativePacketCandidate) Close() error {

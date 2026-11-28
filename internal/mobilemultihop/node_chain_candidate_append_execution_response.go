@@ -36,6 +36,8 @@ type nodeChainAppendExecutionRun struct {
 	lease               *nodeChainAppendExecutionLease
 	remote              *nodeChainAppendExecutionRemoteCandidate
 	localIO             *nodeChainExecutionIO
+	packet              *nodeChainAppendExecutionPacket
+	packetDeadline      time.Time
 	ordinal             int
 }
 
@@ -53,7 +55,16 @@ func (r *NodeChainCandidateAppendExecutionRuntime) openResponseRun(ctx context.C
 			source, found = actual, true
 		}
 	}
-	if !found || source.Method == "" || source.Password == "" || wrapCandidateSS2022 == nil {
+	packetMode := nodeChainAppendExecutionPacketMode(r.preparation.CandidateMode())
+	var packetDeadline time.Time
+	if packetMode {
+		var bounded bool
+		packetDeadline, bounded = ctx.Deadline()
+		if !found || !bounded || source.PacketOptions == "" || source.Hysteria2Options != "" ||
+			source.Method != "" || source.Password != "" || !nodeChainCanonicalPeer(source.ClientKey) || !nodeChainCanonicalPeer(source.ServerKey) {
+			return nil, errNodeChainAppendExecution
+		}
+	} else if !found || source.Method == "" || source.Password == "" || wrapCandidateSS2022 == nil {
 		return nil, errNodeChainAppendExecution
 	}
 	r.mu.Lock()
@@ -74,7 +85,7 @@ func (r *NodeChainCandidateAppendExecutionRuntime) openResponseRun(ctx context.C
 		return nil, errNodeChainAppendExecution
 	}
 	lifetime, cancel := context.WithCancel(r.lifetime)
-	run := &nodeChainAppendExecutionRun{runtime: r, source: source, request: state.Request, ctx: lifetime, cancel: cancel, ready: make(chan struct{}), gate: make(chan struct{}, 1)}
+	run := &nodeChainAppendExecutionRun{runtime: r, source: source, request: state.Request, ctx: lifetime, cancel: cancel, ready: make(chan struct{}), gate: make(chan struct{}, 1), packetDeadline: packetDeadline}
 	run.self = run
 	r.active = run
 	r.resultRequest, r.winning, r.selection = state.Request, "", ""
@@ -155,7 +166,21 @@ func (s *nodeChainAppendExecutionRun) initialize(ctx context.Context) error {
 		}
 	} else {
 		tag := s.runtime.preparation.original.proofs[s.runtime.preparation.original.position].Tag
-		owned, err := newNodeChainExecutionIO(tag, s.source.API, s.source.Token, s.runtime.local.Dial, s.current)
+		dial := s.runtime.local.Dial
+		if s.source.PacketOptions != "" {
+			packet, err := s.reserveLocalPacket(ctx, s.ctx, "", s.current)
+			s.mu.Lock()
+			s.packet = packet
+			s.mu.Unlock()
+			if err != nil || packet == nil {
+				return errors.Join(err, errNodeChainAppendExecution)
+			}
+			if err = packet.open(ctx); err != nil {
+				return err
+			}
+			dial = packet.dial
+		}
+		owned, err := newNodeChainExecutionIO(tag, s.source.API, s.source.Token, dial, s.current)
 		s.mu.Lock()
 		s.localIO = owned
 		s.mu.Unlock()
@@ -221,13 +246,13 @@ func (s *nodeChainAppendExecutionRun) Respond(ctx context.Context, complete func
 		return errNodeChainAppendExecution
 	}
 	s.mu.Lock()
-	initialized, winning, remote, local, ordinal := s.initialized, s.winning, s.remote, s.localIO, s.ordinal
+	initialized, winning, remote, local, packet, ordinal := s.initialized, s.winning, s.remote, s.localIO, s.packet, s.ordinal
 	s.mu.Unlock()
 	if !initialized || ordinal < 0 || ordinal >= hopmeasure.LatencyBenchmarkSamples {
 		return errNodeChainAppendExecution
 	}
 	if winning == routechoice.Local {
-		if local == nil || remote != nil {
+		if local == nil || remote != nil || (s.source.PacketOptions != "") != (packet != nil) {
 			return errNodeChainAppendExecution
 		}
 		tag := s.runtime.preparation.original.proofs[s.runtime.preparation.original.position].Tag
@@ -235,6 +260,17 @@ func (s *nodeChainAppendExecutionRun) Respond(ctx context.Context, complete func
 			nonce, err := randomHex(16)
 			if err != nil {
 				return nil, err
+			}
+			if packet != nil {
+				return nil, s.source.exchangeChallenge(call, func(parent context.Context, actual, address string) (net.Conn, error) {
+					original, e := packet.dial(parent, actual, address)
+					var owned net.Conn
+					var keepErr error
+					if original != nil {
+						owned, keepErr = operation.keep(original)
+					}
+					return owned, errors.Join(e, keepErr)
+				}, tag, nonce, func(string) error { return complete() })
 			}
 			dial := func(parent context.Context, actual, address string) (net.Conn, error) {
 				original, e := s.runtime.local.Dial(parent, actual, address)
@@ -347,7 +383,7 @@ func (s *nodeChainAppendExecutionRun) closeContext(ctx context.Context) error {
 		return ctx.Err()
 	}
 	s.mu.Lock()
-	closed, trial, remote, lease, local := s.closed, s.trial, s.remote, s.lease, s.localIO
+	closed, trial, remote, lease, local, packet := s.closed, s.trial, s.remote, s.lease, s.localIO, s.packet
 	s.mu.Unlock()
 	if closed {
 		return nil
@@ -364,6 +400,10 @@ func (s *nodeChainAppendExecutionRun) closeContext(ctx context.Context) error {
 	}
 	if local != nil {
 		failure = errors.Join(failure, local.close(ctx))
+	}
+	// No key can be released while an original stream or trial is unjoined.
+	if failure == nil && ctx.Err() == nil && packet != nil {
+		failure = packet.close()
 	}
 	if failure != nil || ctx.Err() != nil {
 		return errors.Join(failure, ctx.Err())
@@ -401,6 +441,7 @@ type nodeChainAppendExecutionTrial struct {
 	lease               *nodeChainAppendExecutionLease
 	remote              *nodeChainAppendExecutionRemoteCandidate
 	proofIO             *nodeChainExecutionIO
+	packet              *nodeChainAppendExecutionPacket
 }
 
 func (s *nodeChainAppendExecutionRun) Open(context.Context, routechoice.Candidate) (routechoice.Session, error) {
@@ -443,6 +484,17 @@ func (t *nodeChainAppendExecutionTrial) initialize(ctx context.Context) error {
 		t.mu.Unlock()
 		if e != nil || remote == nil {
 			return errors.Join(e, errNodeChainAppendExecution)
+		}
+	} else if t.candidate.Execution == routechoice.Local && t.run.source.PacketOptions != "" {
+		packet, e := t.run.reserveLocalPacket(ctx, t.ctx, t.target, t.current)
+		t.mu.Lock()
+		t.packet = packet
+		t.mu.Unlock()
+		if e != nil || packet == nil {
+			return errors.Join(e, errNodeChainAppendExecution)
+		}
+		if e = packet.open(ctx); e != nil {
+			return e
 		}
 	}
 	tag := t.run.runtime.preparation.original.proofs[t.run.runtime.preparation.original.position].Tag
@@ -543,7 +595,7 @@ func (t *nodeChainAppendExecutionTrial) dial(ctx context.Context, tag, address s
 		return nil, errNodeChainAppendExecution
 	}
 	t.mu.Lock()
-	remote := t.remote
+	remote, packet := t.remote, t.packet
 	t.mu.Unlock()
 	if t.candidate.Execution == routechoice.Server {
 		if remote == nil {
@@ -555,6 +607,15 @@ func (t *nodeChainAppendExecutionTrial) dial(ctx context.Context, tag, address s
 		return nil, errNodeChainAppendExecution
 	}
 	source := t.run.source
+	if source.PacketOptions != "" {
+		if packet == nil {
+			return nil, errNodeChainAppendExecution
+		}
+		return packet.dial(ctx, actualTag, address)
+	}
+	if packet != nil {
+		return nil, errNodeChainAppendExecution
+	}
 	return dialCandidateStream(ctx, t.run.runtime.local.Dial, wrapCandidateSS2022, actualTag, source.Target.Address, source.Method, source.Password, address)
 }
 func (t *nodeChainAppendExecutionTrial) probe(ctx context.Context, target, token string, accept func([]byte) error) (time.Duration, error) {
@@ -649,7 +710,7 @@ func (t *nodeChainAppendExecutionTrial) Close(ctx context.Context) error {
 	}
 	defer func() { <-t.gate }()
 	t.mu.Lock()
-	closed, proof, remote, lease := t.closed, t.proofIO, t.remote, t.lease
+	closed, proof, remote, lease, packet := t.closed, t.proofIO, t.remote, t.lease, t.packet
 	t.mu.Unlock()
 	if closed {
 		return nil
@@ -663,6 +724,9 @@ func (t *nodeChainAppendExecutionTrial) Close(ctx context.Context) error {
 	}
 	if lease != nil {
 		failure = errors.Join(failure, lease.close(ctx))
+	}
+	if failure == nil && ctx.Err() == nil && packet != nil {
+		failure = packet.close()
 	}
 	if failure != nil || ctx.Err() != nil {
 		return errors.Join(failure, ctx.Err())

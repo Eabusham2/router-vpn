@@ -1491,6 +1491,7 @@ def ordered_namespaces(work):
     relay_receipt=None
     identities={}
     host_identity=None
+    owner_capture={}
     table=None
     route=None
     rule_seal=None
@@ -1518,9 +1519,14 @@ def ordered_namespaces(work):
                 host_attempted=True
                 run('ip','link','add','name',host_link,'type','veth','peer','name',moved_link)
                 host_identity,created_pair=ordered_uplink_pair(host_link,moved_link,host_namespace)
+                owner_capture.update(expected_alias=owner,namespace_device=host_namespace.st_dev,
+                                     namespace_inode=host_namespace.st_ino,created_host=host_identity,
+                                     created_pair=created_pair)
                 # Linux applies IFLA_IFALIAS when updating the retained link, not when creating it.
                 run('ip','link','set','dev',host_link,'alias',owner)
                 tagged,tagged_pair=ordered_uplink_pair(host_link,moved_link,host_namespace)
+                owner_capture.update(tagged_host=tagged,tagged_pair=tagged_pair,
+                                     pair_equal=tagged_pair==created_pair,alias_equal=tagged.get('ifalias')==owner)
                 if tagged_pair!=created_pair or tagged.get('ifalias')!=owner:
                     raise RuntimeError('Original host uplink owner was not captured')
                 host_identity=tagged
@@ -1601,6 +1607,7 @@ def ordered_namespaces(work):
                 if host_attempted:
                     try:
                         current=ordered_json(['ip','-j','link','show','dev',host_link])[0]
+                        owner_capture['retirement_host']=current
                         if (host_identity is None or current.get('ifalias')!=owner or
                                 current['ifindex']!=host_identity['ifindex'] or
                                 current.get('address')!=host_identity.get('address') or
@@ -1641,6 +1648,7 @@ def ordered_namespaces(work):
                  'relay':relay_receipt,'host_restored':not cleanup_errors,
                  'namespace_descriptors_closed':not any(e.startswith('namespace:') for e in cleanup_errors),
                  'physical_interfaces':records.get('physical_interfaces'),
+                 'uplink_owner_capture':owner_capture,
                  'captured_carrier_mtu':records.get('captured_carrier_mtu'),
                  'final_tun_mtu':records.get('final_tun_mtu'),'cleanup_errors':cleanup_errors}
         try:

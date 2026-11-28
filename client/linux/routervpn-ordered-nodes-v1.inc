@@ -1036,11 +1036,22 @@ static gboolean linux_ordered_editor_proxy_entry_v1(const LinuxOrderedEditorV1 *
 }
 
 static const char *linux_ordered_append_requested_v1(const char *choice) {
-    if (!g_strcmp0(choice,"server-shadowsocks")) return "server";
-    if (!g_strcmp0(choice,"auto-shadowsocks")) return "auto";
+    if (!g_strcmp0(choice,"server-wg") || !g_strcmp0(choice,"server-awg2-fast") ||
+        !g_strcmp0(choice,"server-awg2-strong") || !g_strcmp0(choice,"server-shadowsocks")) return "server";
+    if (!g_strcmp0(choice,"auto-wg") || !g_strcmp0(choice,"auto-awg2-fast") ||
+        !g_strcmp0(choice,"auto-awg2-strong") || !g_strcmp0(choice,"auto-shadowsocks")) return "auto";
     return "local";
 }
-static gboolean linux_ordered_execution_append_v1(const LinuxOrderedEditorV1 *editor) {
+static const char *linux_ordered_append_mode_v1(const char *choice) {
+    if (!g_strcmp0(choice,"server-wg") || !g_strcmp0(choice,"auto-wg")) return "wg";
+    if (!g_strcmp0(choice,"server-awg2-fast") || !g_strcmp0(choice,"auto-awg2-fast")) return "awg2-fast";
+    if (!g_strcmp0(choice,"server-awg2-strong") || !g_strcmp0(choice,"auto-awg2-strong")) return "awg2-strong";
+    if (!g_strcmp0(choice,"server-shadowsocks") || !g_strcmp0(choice,"auto-shadowsocks") ||
+        !g_strcmp0(choice,"external-shadowsocks")) return "shadowsocks";
+    return choice;
+}
+static gboolean linux_ordered_execution_append_v1(const LinuxOrderedEditorV1 *editor, const char *next_mode) {
+    if (!linux_ordered_prefix_v1(next_mode) && g_strcmp0(next_mode,"shadowsocks")) return FALSE;
     if (!editor->append_only || editor->external_exit || editor->ids->len < 1 || editor->ids->len > 95 || editor->ids->len != editor->modes->len) return FALSE;
     JsonObject *catalog=json_node_get_object(editor->catalog);
     gboolean retained_ss=FALSE;
@@ -1051,7 +1062,7 @@ static gboolean linux_ordered_execution_append_v1(const LinuxOrderedEditorV1 *ed
         if (linux_ordered_prefix_v1(mode)) {
             if (retained_ss) return FALSE;
         } else {
-            if (i==0 || strcmp(mode,"shadowsocks") || !linux_ordered_paired_proxy_member_v1(profile,mode)) return FALSE;
+            if (i==0 || g_strcmp0(next_mode,"shadowsocks") || strcmp(mode,"shadowsocks") || !linux_ordered_paired_proxy_member_v1(profile,mode)) return FALSE;
             retained_ss=TRUE;
         }
     }
@@ -1235,9 +1246,16 @@ static void linux_ordered_render_v1(LinuxOrderedEditorV1 *editor, int selected) 
     const char *next_modes[]={"wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"};
     for(guint i=0;i<G_N_ELEMENTS(next_modes);i++)gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor->append_mode),next_modes[i],linux_ordered_mode_name_v1(next_modes[i]));
     if(!linux_ordered_editor_proxy_entry_v1(editor))gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor->append_mode),"external-shadowsocks","Imported Shadowsocks");
-    if(linux_ordered_execution_append_v1(editor) || strcmp(linux_ordered_append_requested_v1(original_next),"local")) {
-        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor->append_mode),"server-shadowsocks","Shadowsocks · Server");
-        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor->append_mode),"auto-shadowsocks","Shadowsocks · Compare");
+    const char *remote_modes[]={"wg","awg2-fast","awg2-strong","shadowsocks"};
+    for(guint i=0;i<G_N_ELEMENTS(remote_modes);i++) {
+        const char *mode=remote_modes[i];
+        g_autofree char *server=g_strconcat("server-",mode,NULL), *compare=g_strconcat("auto-",mode,NULL);
+        if(linux_ordered_execution_append_v1(editor,mode) || !g_strcmp0(original_next,server) || !g_strcmp0(original_next,compare)) {
+            g_autofree char *server_title=g_strconcat(linux_ordered_mode_name_v1(mode)," · Server",NULL);
+            g_autofree char *compare_title=g_strconcat(linux_ordered_mode_name_v1(mode)," · Compare",NULL);
+            gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor->append_mode),server,server_title);
+            gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor->append_mode),compare,compare_title);
+        }
     }
     if(!original_next || !gtk_combo_box_set_active_id(GTK_COMBO_BOX(editor->append_mode),original_next))gtk_combo_box_set_active(GTK_COMBO_BOX(editor->append_mode),-1);
     gtk_widget_set_visible(editor->complete_prefix,editor->append_only);
@@ -1424,8 +1442,8 @@ static char *linux_ordered_append_body_v1(LinuxOrderedEditorV1 *editor) {
     gboolean external=!g_strcmp0(choice,"external-shadowsocks");
     const char *requested=linux_ordered_append_requested_v1(choice);
     gboolean execution_append=strcmp(requested,"local")!=0;
-    if((external && linux_ordered_editor_proxy_entry_v1(editor)) || (execution_append && !linux_ordered_execution_append_v1(editor)))return NULL;
-    const char *next_mode=(external || execution_append)?"shadowsocks":choice;
+    const char *next_mode=linux_ordered_append_mode_v1(choice);
+    if((external && linux_ordered_editor_proxy_entry_v1(editor)) || (execution_append && !linux_ordered_execution_append_v1(editor,next_mode)))return NULL;
     if(!linux_ordered_prefix_v1(next_mode) && g_strcmp0(next_mode,"shadowsocks") && g_strcmp0(next_mode,"hysteria2"))return NULL;
     JsonObject *catalog=json_node_get_object(editor->catalog);
     g_autoptr(JsonArray) nodes=json_array_new();g_autoptr(JsonObject) tokens=json_object_new();
@@ -1608,7 +1626,7 @@ static gboolean linux_ordered_adopt_append_v1(LinuxOrderedEditorV1 *editor, cons
        strcmp(linux_ordered_string_v1(response,"device_revision"),linux_ordered_string_v1(external_source_profile_v24(json_node_get_object(editor->catalog),editor->control),"profile_token")) ||
        !linux_ordered_flag_v1(response,"chosen") || !linux_ordered_flag_v1(response,"native_down"))return FALSE;
     gboolean external=!g_strcmp0(choice,"external-shadowsocks");
-    const char *mode=(external || execution_append)?"shadowsocks":choice, *id=linux_ordered_string_v1(response,"candidate_id");
+    const char *mode=linux_ordered_append_mode_v1(choice), *id=linux_ordered_string_v1(response,"candidate_id");
     if(strcmp(linux_ordered_string_v1(response,"measurement"),external?"routed-public-candidate-response":"routed-candidate-response") ||
        (external?strcmp(linux_ordered_string_v1(response,"candidate_kind"),"external"):json_object_has_member(response,"candidate_kind")))return FALSE;
     JsonArray *nodes=linux_ordered_array_v1(response,"proposed_path");JsonObject *tokens=linux_ordered_object_v1(response,"expected_profile_tokens");
@@ -1628,7 +1646,7 @@ static gboolean linux_ordered_adopt_append_v1(LinuxOrderedEditorV1 *editor, cons
        !linux_ordered_append_current_v1(editor,nodes,tokens,json_node_get_object(current)) ||
        !(external?linux_ordered_append_import_off_v1(external_source_profile_v24(json_node_get_object(current),id)):
            linux_ordered_paired_off_v1(external_source_profile_v24(json_node_get_object(current),id))) ||
-       (execution_append && !linux_ordered_paired_proxy_member_v1(external_source_profile_v24(json_node_get_object(current),id),"shadowsocks")) || !linux_ordered_editable_v1(editor))return FALSE;
+       (execution_append && !linux_ordered_paired_proxy_member_v1(external_source_profile_v24(json_node_get_object(current),id),mode)) || !linux_ordered_editable_v1(editor))return FALSE;
     g_ptr_array_add(editor->ids,g_strdup(id));g_ptr_array_add(editor->modes,g_strdup(mode));
     g_autofree char *uuid=g_uuid_string_random();guint n=0;for(char *c=uuid;*c;c++)if(*c!='-')editor->append_revision[n++]=*c;editor->append_revision[n]=0;
     linux_ordered_render_v1(editor,(int)editor->ids->len-1);

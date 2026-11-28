@@ -983,7 +983,7 @@ function TestOrderedCandidateAppendEnvelope($S,$Value){
  }
  if($executionAppend){
   $executionSource=ExternalComparisonValue $Value 'execution_source_sha256'
-  if($external-or(ExternalComparisonValue $draft 'next_mode')-cne'shadowsocks'-or$executionSource-isnot[string]-or$executionSource-cnotmatch'\A[0-9a-f]{64}\z'){return $false}
+  if($external-or(ExternalComparisonValue $draft 'next_mode')-cnotin@('wg','awg2-fast','awg2-strong','shadowsocks')-or$executionSource-isnot[string]-or$executionSource-cnotmatch'\A[0-9a-f]{64}\z'){return $false}
  }else{foreach($name in @('execution_source_sha256','execution_capture_sha256','winning_execution','selection')){if($name-cin$fields){return $false}}}
  $mode=ExternalComparisonValue $Value 'candidate_mode';$nodes=$null
  if($Value-is[Collections.IDictionary]){$nodes=$Value['response_source_nodes']}else{$property=$Value.PSObject.Properties['response_source_nodes'];if($null-ne$property){$nodes=$property.Value}}
@@ -1017,7 +1017,7 @@ function TestOrderedCandidateAppendEnvelope($S,$Value){
      $original.id-cne$node.id-or$original.mode-cne$node.mode){return $false}
   if($executionAppend){
    if($packet){if($retainedSS){return $false}}
-   elseif($i-gt0-and$node.kind-ceq'router-vpn'-and$node.mode-ceq'shadowsocks'){$retainedSS=$true}
+   elseif($mode-ceq'shadowsocks'-and$i-gt0-and$node.kind-ceq'router-vpn'-and$node.mode-ceq'shadowsocks'){$retainedSS=$true}
    else{return $false}
   }
  }

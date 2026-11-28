@@ -62,9 +62,11 @@ final class AndroidOrderedPathSelection {
         List<AndroidNodeCandidateAppendSource.NextChoice> choices=new ArrayList<>(AndroidNodeCandidateAppendSource.nextChoices(proxyEntryPrefix()));
         List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();List<String> modes=new ArrayList<>();
         for(Member member:members){sources.add(member.source);modes.add(member.mode);}
-        if(AndroidNodeCandidateAppendSource.permitsExecution(sources,modes,"router-vpn","shadowsocks","server")) {
-            choices.add(new AndroidNodeCandidateAppendSource.NextChoice("router-vpn","shadowsocks","server"));
-            choices.add(new AndroidNodeCandidateAppendSource.NextChoice("router-vpn","shadowsocks","auto"));
+        for(String mode:AndroidNodeCandidateAppendSource.EXECUTION_NEXT_MODES) {
+            if(AndroidNodeCandidateAppendSource.permitsExecution(sources,modes,"router-vpn",mode,"server")) {
+                choices.add(new AndroidNodeCandidateAppendSource.NextChoice("router-vpn",mode,"server"));
+                choices.add(new AndroidNodeCandidateAppendSource.NextChoice("router-vpn",mode,"auto"));
+            }
         }
         return Collections.unmodifiableList(choices);
     }

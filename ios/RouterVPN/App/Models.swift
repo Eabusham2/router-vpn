@@ -1367,7 +1367,7 @@ enum IOSImportedShadowsocksSource {
         }
         return false
     }
-    fileprivate static func literal(_ host: String) -> Bool {
+    static func literal(_ host: String) -> Bool {
         guard !host.utf8.contains(0), !host.contains("%"), !host.contains("["), !host.contains("]") else { return false }
         // Darwin accepts zero-prefixed IPv4 octets that the shared Go parser
         // rejects. Check decimal spelling before libc, including IPv4 tails in

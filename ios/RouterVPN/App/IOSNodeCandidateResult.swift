@@ -34,7 +34,8 @@ struct IOSNodeCandidateMetadata: Decodable {
     var original_preparation_capture_sha256: String? = nil
     func validateAppendExecution(prefix: IOSNodeCandidatePrefixCapture, ids: Set<String>) throws {
         guard prefix.isAppendExecution, prefix.native.isExecution, schema == 1,
-              purpose == "draft-prefix-append-execution", metric == "routed-candidate-response", candidate_mode == "shadowsocks", candidate_kind == nil,
+              purpose == "draft-prefix-append-execution", metric == "routed-candidate-response", candidate_mode == prefix.responseMode,
+              IOSNodeCandidateAppendSource.executionNextModes.contains(candidate_mode ?? ""), candidate_kind == nil,
               requested_execution == prefix.requestedExecution, ["server", "auto"].contains(requested_execution ?? ""),
               capture_sha256.isEmpty, execution_capture_sha256 == "", execution_source_sha256 == prefix.sourceSHA256,
               source_sha256 == prefix.sourceSHA256, config_sha256 == prefix.configSHA256, original_source_sha256 == prefix.originalSourceSHA256,

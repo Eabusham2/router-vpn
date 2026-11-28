@@ -108,7 +108,7 @@ final class AndroidNodeCandidatePrefixCapture implements AutoCloseable {
                     ||!append.metadata.equals(appendSourceMetadata())||!append.metadata.equals(executionSource.appendSourceMetadata())
                     ||!metadata().equals(executionSource.metadata())
                     ||!append.original.appendExecution.equals(requestedExecution())||!requestedExecution().equals(executionSource.execution())
-                    ||!"shadowsocks".equals(candidateMode())||!candidateMode().equals(executionSource.candidateMode())
+                    ||!append.original.appendMode.equals(candidateMode())||!candidateMode().equals(executionSource.candidateMode())
                     ||!"router-vpn".equals(candidateKind())||!candidateKind().equals(executionSource.candidateKind())
                     ||!"routed-candidate-response".equals(candidateMeasurement())||!candidateMeasurement().equals(executionSource.candidateMeasurement())
                     ||appendPosition()!=append.memberInputs.size()||appendPosition()!=executionSource.appendPosition())throw invalid();

@@ -190,9 +190,11 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
             }
             return nodes
         }
-        func appendExecutionPath(_ nodes: [[String: String]]) -> Bool {
+        func appendExecutionPath(_ nodes: [[String: String]], nextMode: String) -> Bool {
+            guard ["wg", "awg2-fast", "awg2-strong", "shadowsocks"].contains(nextMode) else { return false }
             let packets = nodes.prefix(while: { ["wg", "awg2-fast", "awg2-strong"].contains($0["mode"] ?? "") }).count
-            return packets > 0 && nodes.dropFirst(packets).allSatisfy({ $0["mode"] == "shadowsocks" })
+            return packets > 0 && (nextMode == "shadowsocks" || packets == nodes.count) &&
+                nodes.dropFirst(packets).allSatisfy({ $0["mode"] == "shadowsocks" })
         }
         let performanceValid: Bool
         switch url.path {
@@ -290,12 +292,12 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                 guard let body, Set(body.keys) == (executionAppend ? fields.union(["requested_execution"]):external ? fields.union(["next_kind"]):fields), number("schema", equals: 1),
                       body["next_kind"] == nil || external && body["next_mode"] as? String == "shadowsocks",
                       body["purpose"] as? String == (executionAppend ? "draft-prefix-append-execution":"draft-prefix-append"), body["execution"] as? String == "local",
-                       !executionAppend || !external && body["next_kind"] == nil && ["server","auto"].contains(body["requested_execution"] as? String ?? "") && body["next_mode"] as? String == "shadowsocks",
+                       !executionAppend || !external && body["next_kind"] == nil && ["server","auto"].contains(body["requested_execution"] as? String ?? "") && ["wg","awg2-fast","awg2-strong","shadowsocks"].contains(body["next_mode"] as? String ?? ""),
                       let revision = body["draft_revision"] as? String,
                       revision.range(of: #"\A[0-9a-f]{32}\z"#, options: .regularExpression) != nil,
                       let nodes = appendPath(body["nodes"], minimum: 1, maximum: 95),
                       !external || !["shadowsocks", "hysteria2"].contains(nodes[0]["mode"] ?? ""),
-                       !executionAppend || appendExecutionPath(nodes),
+                       !executionAppend || appendExecutionPath(nodes, nextMode: body["next_mode"] as? String ?? ""),
                       number("append_position", equals: Double(nodes.count)), selectedPosition == nodes.count - 1,
                       let mode = body["next_mode"] as? String, ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"].contains(mode),
                       let device = body["expected_selected_node_id"] as? String,
@@ -366,10 +368,10 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
                         ids.allSatisfy({ $0.range(of: #"\A[A-Za-z0-9_-]{1,64}\z"#, options: .regularExpression) != nil })
                 } else if url.path == draftBase + "/choose" {
                     let proposed = appendPath(body?["proposed_path"], minimum: 2, maximum: 96)
-                    let executionPrefix = proposed.map { appendExecutionPath(Array($0.dropLast())) } ?? false
+                    let executionPrefix = proposed.map { appendExecutionPath(Array($0.dropLast()), nextMode: $0.last?["mode"] ?? "") } ?? false
                     performanceValid = original && token("view_token",64) && keys == Set(["request_id","view_token","candidate_id","proposed_path"]) &&
                         bounded(25) && proposed != nil && proposed?.last?["id"] == identifier("candidate_id") &&
-                        (!executionAppend || proposed?.last?["mode"] == "shadowsocks" && executionPrefix)
+                        (!executionAppend || executionPrefix)
                 } else { performanceValid = false }
             } else if url.path == candidateBase + "/cancel" {
                 let bound = candidateBase == savedBase || isDraft || keys.contains("view_token")

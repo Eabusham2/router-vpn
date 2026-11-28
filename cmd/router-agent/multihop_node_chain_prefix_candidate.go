@@ -14,6 +14,8 @@ type relayNodeChainPrefixCandidateOperation struct {
 	process                                                   *relayNodeChainPrefixProcess
 	capture                                                   multihoprelay.NodeChainPrefixCandidateCapture
 	digest                                                    string
+	packetKeys                                                *relayNodeChainPacketKeyReservation
+	pairing                                                   string
 	mu                                                        sync.Mutex
 	attempted, prepared, drained, retired, publicationStarted bool
 }
@@ -38,6 +40,33 @@ func (p *relayNodeChainPrefixProcess) NewPrefixCandidateOperation(ctx context.Co
 	op := &relayNodeChainPrefixCandidateOperation{process: p, capture: c.Clone(), digest: digest}
 	op.self = op
 	p.candidate = op
+	if c.Request.IsPacket() {
+		// Attach the original operation before every fallible reservation step.
+		// No candidate Prepare/IPC or native endpoint acquisition has occurred.
+		if p.packetCandidateKeys == nil || p.packetKeys == nil {
+			return op, multihoprelay.ErrOwnership
+		}
+		pair, pairErr := c.PacketPair()
+		if pairErr != nil {
+			return op, pairErr
+		}
+		expected, pairErr := pair.Digest()
+		if pairErr != nil {
+			return op, pairErr
+		}
+		keys, pairing, keyErr := p.packetCandidateKeys(c.Clone())
+		if keyErr != nil || pairing != expected || !p.current() {
+			return op, errors.Join(keyErr, multihoprelay.ErrOwnership)
+		}
+		op.packetKeys, keyErr = p.packetKeys.reservePrefixCandidate(p, op, keys)
+		if keyErr != nil {
+			return op, keyErr
+		}
+		op.pairing = pairing
+		if !p.current() {
+			return op, multihoprelay.ErrOwnership
+		}
+	}
 	if ctx.Err() != nil {
 		return op, ctx.Err()
 	}
@@ -80,7 +109,7 @@ func (p *relayNodeChainPrefixProcess) beginCandidatePreparePublication(c *multih
 	}
 	op.mu.Lock()
 	defer op.mu.Unlock()
-	if !op.attempted || op.retired || op.drained || op.publicationStarted {
+	if !op.attempted || op.retired || op.drained || op.publicationStarted || !op.packetCurrent() {
 		return multihoprelay.ErrOwnership
 	}
 	op.publicationStarted = true
@@ -109,7 +138,7 @@ func (op *relayNodeChainPrefixCandidateOperation) exchangeLocked(ctx context.Con
 	op.mu.Lock()
 	retired := op.retired || op.drained
 	op.mu.Unlock()
-	if operation != "candidate-close" && (retired || !p.Alive() || p.current == nil || !p.current() || !time.Now().Before(op.capture.Deadline)) {
+	if operation != "candidate-close" && (retired || !p.Alive() || p.current == nil || !p.current() || !time.Now().Before(op.capture.Deadline) || !op.packetCurrent()) {
 		return multihoprelay.NodeChainPrefixCandidateReceipt{}, bad
 	}
 	nonce := challenge
@@ -127,7 +156,7 @@ func (op *relayNodeChainPrefixCandidateOperation) exchangeLocked(ctx context.Con
 	if operation == "candidate-prepare" {
 		expected = ""
 	}
-	if err != nil || reply.CandidateReceipt == nil || reply.CandidateReceipt.Validate(op.capture, expected, began, time.Now()) != nil || ctx.Err() != nil || !op.original() {
+	if err != nil || reply.CandidateReceipt == nil || reply.CandidateReceipt.Validate(op.capture, expected, began, time.Now()) != nil || ctx.Err() != nil || !op.original() || !op.packetReceiptCurrent(reply.CandidateReceipt) {
 		return multihoprelay.NodeChainPrefixCandidateReceipt{}, errors.Join(err, bad)
 	}
 	if operation != "candidate-close" && (p.current == nil || !p.current() || !p.Alive()) {
@@ -220,6 +249,12 @@ func (op *relayNodeChainPrefixCandidateOperation) Close(ctx context.Context) err
 	defer p.candidateMu.Unlock()
 	if p.candidate != op {
 		return multihoprelay.ErrOwnership
+	}
+	if op.packetKeys != nil {
+		if p.packetKeys == nil || p.packetKeys.releasePrefixCandidate(op.packetKeys, p, op) != nil {
+			return multihoprelay.ErrOwnership
+		}
+		op.packetKeys = nil
 	}
 	op.mu.Lock()
 	op.drained = true

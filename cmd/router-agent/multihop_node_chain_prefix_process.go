@@ -92,6 +92,9 @@ func (r *relayNodeChainExecRunner) StartPrefix(ctx context.Context, capture mult
 	}
 	p.original = original
 	p.packetKeys = &r.packetKeys
+	if capture.Source.Schema == 3 {
+		p.packetCandidateKeys = policy.PacketCandidateRuntimeKeys
+	}
 	keys, err := policy.PacketRuntimeKeys()
 	if err != nil {
 		return p, bad
@@ -148,31 +151,32 @@ func (r *relayNodeChainExecRunner) StartPrefix(ctx context.Context, capture mult
 }
 
 type relayNodeChainPrefixProcess struct {
-	self             *relayNodeChainPrefixProcess
-	packetKeys       *relayNodeChainPacketKeyLedger
-	packetBase       *relayNodeChainPacketKeyReservation
-	capture          multihoprelay.NodeChainPrefixCapture
-	digest           string
-	started          time.Time
-	command          *exec.Cmd
-	done             chan struct{}
-	waitError        error
-	input            io.WriteCloser
-	responses        chan multihoprelay.NodeChainPrefixIPCResponse
-	readerDone       chan struct{}
-	gate             chan struct{}
-	closed, bad      atomic.Bool
-	responseMu       sync.Mutex
-	pendingNonce     string
-	responded        bool
-	sequence         uint64
-	dir              string
-	original         os.FileInfo
-	root             *os.Root
-	removed, cleaned bool
-	current          func() bool
-	candidateMu      sync.Mutex
-	candidate        *relayNodeChainPrefixCandidateOperation
+	self                *relayNodeChainPrefixProcess
+	packetKeys          *relayNodeChainPacketKeyLedger
+	packetBase          *relayNodeChainPacketKeyReservation
+	packetCandidateKeys func(multihoprelay.NodeChainPrefixCandidateCapture) ([]string, string, error)
+	capture             multihoprelay.NodeChainPrefixCapture
+	digest              string
+	started             time.Time
+	command             *exec.Cmd
+	done                chan struct{}
+	waitError           error
+	input               io.WriteCloser
+	responses           chan multihoprelay.NodeChainPrefixIPCResponse
+	readerDone          chan struct{}
+	gate                chan struct{}
+	closed, bad         atomic.Bool
+	responseMu          sync.Mutex
+	pendingNonce        string
+	responded           bool
+	sequence            uint64
+	dir                 string
+	original            os.FileInfo
+	root                *os.Root
+	removed, cleaned    bool
+	current             func() bool
+	candidateMu         sync.Mutex
+	candidate           *relayNodeChainPrefixCandidateOperation
 }
 
 func newRelayNodeChainPrefixProcess(c multihoprelay.NodeChainPrefixCapture, dir string) *relayNodeChainPrefixProcess {

@@ -25,7 +25,7 @@ func (r *relayNodeChainPacketKeyLedger) reservePrefix(p *relayNodeChainPrefixPro
 		if original.prefix == p {
 			return nil, multihoprelay.ErrBusy
 		}
-		if original.operation == nil {
+		if original.operation == nil && original.prefixOperation == nil {
 			continue
 		}
 		for _, key := range original.keys {
@@ -40,7 +40,7 @@ func (r *relayNodeChainPacketKeyLedger) reservePrefix(p *relayNodeChainPrefixPro
 	return owner, nil
 }
 func (r *relayNodeChainPacketKeyLedger) releasePrefix(owner *relayNodeChainPacketKeyReservation, p *relayNodeChainPrefixProcess) error {
-	if r == nil || p == nil || p.self != p || owner == nil || owner.self != owner || owner.ledger != r || owner.prefix != p || owner.process != nil || owner.operation != nil {
+	if r == nil || p == nil || p.self != p || owner == nil || owner.self != owner || owner.ledger != r || owner.prefix != p || owner.process != nil || owner.operation != nil || owner.prefixOperation != nil {
 		return multihoprelay.ErrOwnership
 	}
 	r.mu.Lock()

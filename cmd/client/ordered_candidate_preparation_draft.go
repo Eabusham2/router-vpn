@@ -342,7 +342,7 @@ func (q *orderedCandidateAppendRequest) validate() error {
 		return bad
 	}
 	if q.Purpose == orderedCandidateAppendExecutionScope {
-		if (q.RequestedExecution != "server" && q.RequestedExecution != "auto") || q.NextMode != "shadowsocks" || q.NextKind != "" {
+		if (q.RequestedExecution != "server" && q.RequestedExecution != "auto") || (q.NextMode != "shadowsocks" && !mobilemultihop.NodeChainPrefixMode(q.NextMode)) || q.NextKind != "" {
 			return bad
 		}
 		// This checks only public row order. The original captured source
@@ -355,7 +355,7 @@ func (q *orderedCandidateAppendRequest) validate() error {
 				}
 				continue
 			}
-			if position == 0 || node.Mode != "shadowsocks" {
+			if position == 0 || node.Mode != "shadowsocks" || mobilemultihop.NodeChainPrefixMode(q.NextMode) {
 				return bad
 			}
 			streamTail = true

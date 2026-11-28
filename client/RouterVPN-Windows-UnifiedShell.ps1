@@ -944,10 +944,15 @@ function ShowUnifiedOrderedNodes {
                 $previousNext=[string]$appendMode.SelectedValue
                 $nextItems=@('wg','awg2-fast','awg2-strong','shadowsocks','hysteria2'|ForEach-Object{[pscustomobject]@{id=$_;display=(Get-RouterVPNOrderedModeTitle $_)}})
                 if(-not$proxyEntry){$nextItems+=@([pscustomobject]@{id='external-shadowsocks';display='Imported Shadowsocks'})}
-                $canRemote=Test-RouterVPNOrderedAppendExecutionNodes @($rows.ToArray()) $store.profiles
-                if($canRemote-or$previousNext-cin@('server-shadowsocks','auto-shadowsocks')){$nextItems+=@([pscustomobject]@{id='server-shadowsocks';display='Shadowsocks · Server'},[pscustomobject]@{id='auto-shadowsocks';display='Shadowsocks · Compare'})}
+                foreach($mode in @('wg','awg2-fast','awg2-strong','shadowsocks')){
+                    $server='server-'+$mode;$compare='auto-'+$mode
+                    if((Test-RouterVPNOrderedAppendExecutionNodes @($rows.ToArray()) $store.profiles $mode)-or$previousNext-cin@($server,$compare)){
+                        $title=Get-RouterVPNOrderedModeTitle $mode
+                        $nextItems+=@([pscustomobject]@{id=$server;display=($title+' · Server')},[pscustomobject]@{id=$compare;display=($title+' · Compare')})
+                    }
+                }
                 $appendMode.ItemsSource=$nextItems;$appendMode.SelectedIndex=[Array]::IndexOf(@($nextItems|ForEach-Object{$_.id}),$previousNext)
-                $dialog.FindName('MeasureNext').IsEnabled=$appendMode.SelectedIndex-ge0-and(Test-RouterVPNOrderedAppendNodes @($rows.ToArray()) $store.profiles 95)-and([string]$appendMode.SelectedValue-cnotin@('server-shadowsocks','auto-shadowsocks')-or(Test-RouterVPNOrderedAppendExecutionNodes @($rows.ToArray()) $store.profiles))
+                $dialog.FindName('MeasureNext').IsEnabled=$appendMode.SelectedIndex-ge0-and(Test-RouterVPNOrderedAppendNodes @($rows.ToArray()) $store.profiles 95)-and((Get-RouterVPNOrderedAppendChoiceExecution ([string]$appendMode.SelectedValue))-ceq'local'-or(Test-RouterVPNOrderedAppendExecutionNodes @($rows.ToArray()) $store.profiles (Get-RouterVPNOrderedAppendChoiceMode ([string]$appendMode.SelectedValue))))
                 $index=$list.SelectedIndex;$labels=@()
                 for($i=0;$i-lt$rows.Count;$i++){$node=$rows[$i];$match=@($store.profiles|Where-Object{[string]$_.id-ceq$node.id});$labels+=[pscustomobject]@{id=$node.id;display=('{0}. {1} · {2}'-f($i+1),[string]$match[0].name,(Get-RouterVPNOrderedModeTitle $node.mode))}}
                 $list.ItemsSource=$labels;$list.SelectedIndex=[Math]::Min($index,$rows.Count-1)
@@ -1030,7 +1035,7 @@ function ShowUnifiedOrderedNodes {
             $dialog.FindName('ChangeMode').IsEnabled=$list.SelectedIndex -ge 0 -and (-not $externalExit -or $list.SelectedIndex -eq 0)
         }
         $appendMode.Add_SelectionChanged({
-            if($dialog.Tag.Append){$dialog.FindName('MeasureNext').IsEnabled=$appendMode.SelectedIndex-ge0-and(Test-RouterVPNOrderedAppendNodes @($rows.ToArray()) $store.profiles 95)-and([string]$appendMode.SelectedValue-cnotin@('server-shadowsocks','auto-shadowsocks')-or(Test-RouterVPNOrderedAppendExecutionNodes @($rows.ToArray()) $store.profiles))}
+            if($dialog.Tag.Append){$dialog.FindName('MeasureNext').IsEnabled=$appendMode.SelectedIndex-ge0-and(Test-RouterVPNOrderedAppendNodes @($rows.ToArray()) $store.profiles 95)-and((Get-RouterVPNOrderedAppendChoiceExecution ([string]$appendMode.SelectedValue))-ceq'local'-or(Test-RouterVPNOrderedAppendExecutionNodes @($rows.ToArray()) $store.profiles (Get-RouterVPNOrderedAppendChoiceMode ([string]$appendMode.SelectedValue))))}
         })
         $dialog.FindName('PrefixOnly').Add_Click({try{
             if(-not$dialog.Tag.Append){
@@ -1105,10 +1110,10 @@ if($dialog.FindName('Final').Tag -and ($list.SelectedIndex -ne 0 -or -not (Test-
                 $nodes=@($rows.ToArray());$tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
                 $ids=@($nodes|ForEach-Object{[string]$_.id});if($id-cnotin$ids){$ids+=@($id)}
                 foreach($key in $ids){$origin=@($store.profiles|Where-Object{[string]$_.id-ceq$key});if($origin.Count-ne1){throw 'The original prefix or device catalog changed.'};$tokens.Add($key,$origin[0].profile_token)}
-                $choice=[string]$appendMode.SelectedValue;$nextMode=if($choice-cin@('external-shadowsocks','server-shadowsocks','auto-shadowsocks')){'shadowsocks'}else{$choice}
+                $choice=[string]$appendMode.SelectedValue;$nextMode=Get-RouterVPNOrderedAppendChoiceMode $choice;$requested=Get-RouterVPNOrderedAppendChoiceExecution $choice
                 $capture=[ordered]@{purpose='draft-prefix-append';control_id=$id;nodes=$nodes;profile_tokens=$tokens;execution='local';draft_revision=[string]$dialog.Tag.Revision;next_mode=$nextMode}
                 if($choice-ceq'external-shadowsocks'){$capture['next_kind']='external'}
-                if($choice-cin@('server-shadowsocks','auto-shadowsocks')){$capture['purpose']='draft-prefix-append-execution';$capture['requested_execution']=if($choice-ceq'server-shadowsocks'){'server'}else{'auto'}}
+                if($requested-cin@('server','auto')){$capture['purpose']='draft-prefix-append-execution';$capture['requested_execution']=$requested}
                 return [pscustomobject]$capture
             }
             $exitID=if($dialog.FindName('Final').Tag){[string]$dialog.FindName('Final').Tag}else{$id}

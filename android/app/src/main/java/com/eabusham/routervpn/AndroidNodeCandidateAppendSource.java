@@ -15,6 +15,7 @@ import java.util.List;
 final class AndroidNodeCandidateAppendSource {
     static final List<String> NEXT_MODES=List.of("wg","awg2-fast","awg2-strong","shadowsocks","hysteria2");
     static boolean supportsNextMode(String mode){return mode!=null&&NEXT_MODES.contains(mode);}
+    static final List<String> EXECUTION_NEXT_MODES=List.of("shadowsocks","wg","awg2-fast","awg2-strong");
     static final class NextChoice {
         final String kind,mode,execution;
         NextChoice(String kind,String mode){this(kind,mode,"local");}
@@ -35,7 +36,7 @@ final class AndroidNodeCandidateAppendSource {
     // independently validates the original Local source and whole inventory.
     static boolean permitsExecution(List<AndroidNodeStore.ChainSource> members,List<String> modes,String kind,String mode,String execution) {
         if("local".equals(execution))return supportsNext(kind,mode,proxyEntry(modes));
-        if(!List.of("server","auto").contains(execution)||!"router-vpn".equals(kind)||!"shadowsocks".equals(mode)
+        if(!List.of("server","auto").contains(execution)||!"router-vpn".equals(kind)||mode==null||!EXECUTION_NEXT_MODES.contains(mode)
                 ||members.isEmpty()||members.size()>95||members.size()!=modes.size())return false;
         try {
             boolean shadowsocksTail=false;
@@ -45,7 +46,7 @@ final class AndroidNodeCandidateAppendSource {
                 if(packet) {
                     if(shadowsocksTail)return false;
                 } else {
-                    if(i==0||!"shadowsocks".equals(retainedMode))return false;
+                    if(i==0||!"shadowsocks".equals(retainedMode)||!"shadowsocks".equals(mode))return false;
                     shadowsocksTail=true;
                 }
                 if(member.imported||!List.of("","off").contains(member.profile().optString("start_layer","off")))return false;

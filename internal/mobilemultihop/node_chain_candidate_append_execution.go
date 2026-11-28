@@ -33,6 +33,7 @@ type NodeChainCandidateAppendExecutionPolicy struct {
 	localMembers                          []multihoprelay.NodeChainPrefixMember
 	candidates                            []multihoprelay.NodeChainPrefixCandidate
 	inputs                                []string
+	packetCandidates                      []nodeChainAppendExecutionPacketIdentity
 	source, sourceSHA, inventorySHA, seal string
 	metadata                              string
 	projection                            *DesktopNodeCandidatePreparationPolicy
@@ -62,14 +63,15 @@ func NewNodeChainCandidateAppendExecutionPolicy(input string) (*NodeChainCandida
 	}
 	source := original.appendSource
 	schema, schemaErr := nodeChainPrefixLocalSchema(source.nodes)
-	if schemaErr != nil || source.record.Schema != schema || source.record.Execution != "local" || source.record.NextKind != "" || source.record.NextMode != "shadowsocks" ||
+	packetNext := nodeChainAppendExecutionPacketMode(source.record.NextMode)
+	if schemaErr != nil || source.record.Schema != schema || source.record.Execution != "local" || source.record.NextKind != "" || source.record.NextMode != "shadowsocks" && !packetNext || packetNext && schema != 1 ||
 		source.source != record.LocalSource || len(source.nodes) < 1 || len(source.nodes) > multihoprelay.NodeChainPrefixMaximumMembers ||
 		len(original.candidates.responses) < 1 || len(original.candidates.responses) > multihoprelay.NodeChainPrefixMaximumCandidates ||
-		original.candidates.measurement != hopmeasure.CandidatePrivateResponseMeasurement || original.candidates.preparedNativeResponse {
+		original.candidates.measurement != hopmeasure.CandidatePrivateResponseMeasurement || original.candidates.preparedNativeResponse != packetNext {
 		return nil, errNodeChainAppendExecution
 	}
 	var inventory NodeChainCandidateInventory
-	if exactJSON([]byte(record.Inventory), &inventory, NodeChainInputLimit) != nil || inventory.Schema != 1 || inventory.ResponseMode != "shadowsocks" || len(inventory.Inputs) != len(original.candidates.responses) {
+	if exactJSON([]byte(record.Inventory), &inventory, NodeChainInputLimit) != nil || inventory.Schema != 1 || inventory.ResponseMode != source.record.NextMode || len(inventory.Inputs) != len(original.candidates.responses) {
 		return nil, errNodeChainAppendExecution
 	}
 	p := &NodeChainCandidateAppendExecutionPolicy{record: record, original: original, capturedOriginal: original, inputs: append([]string(nil), inventory.Inputs...)}
@@ -87,12 +89,21 @@ func NewNodeChainCandidateAppendExecutionPolicy(input string) (*NodeChainCandida
 	}
 	for i, response := range original.candidates.responses {
 		candidate, err := ParseNodeLaunchInput(inventory.Inputs[i])
-		if err != nil || candidate == nil || candidate.mode != "shadowsocks" || candidate.source != response.Target.SourceSHA256 ||
-			predecessorText(candidate.profile, "node_proof_id") != response.NodeID || response.Method != NativeStartLayerMethod ||
+		if err != nil || candidate == nil || candidate.mode != source.record.NextMode || candidate.source != response.Target.SourceSHA256 ||
+			predecessorText(candidate.profile, "node_proof_id") != response.NodeID || !packetNext && response.Method != NativeStartLayerMethod ||
 			source.CandidateInputFitsSource(inventory.Inputs[i]) == false {
 			return nil, errNodeChainAppendExecution
 		}
-		p.candidates = append(p.candidates, multihoprelay.NodeChainPrefixCandidate{ProfileID: response.Target.ID, NodeID: response.NodeID, Mode: "shadowsocks", StartLayer: "off", SourceSHA256: response.Target.SourceSHA256})
+		if packetNext {
+			identity, err := nodeChainAppendExecutionPacketIdentityFromNode(len(source.nodes), candidate)
+			if err != nil || identity.ProfileID != response.Target.ID || identity.NodeID != response.NodeID ||
+				identity.SourceSHA256 != response.Target.SourceSHA256 || identity.ClientPublicKey != response.ClientKey ||
+				identity.PeerPublicKey != response.ServerKey || response.PacketOptions == "" || response.Method != "" || response.Password != "" {
+				return nil, errNodeChainAppendExecution
+			}
+			p.packetCandidates = append(p.packetCandidates, identity)
+		}
+		p.candidates = append(p.candidates, multihoprelay.NodeChainPrefixCandidate{ProfileID: response.Target.ID, NodeID: response.NodeID, Mode: source.record.NextMode, StartLayer: "off", SourceSHA256: response.Target.SourceSHA256})
 	}
 	raw, err := json.Marshal(record)
 	if err != nil || len(raw) > NodeChainInputLimit {
@@ -129,7 +140,13 @@ func (p *NodeChainCandidateAppendExecutionPolicy) digest() string {
 	if p.originalPolicy != nil {
 		original = p.originalPolicy.seal
 	}
-	value, err := nodeChainAppendExecutionDigest("routervpn-append-execution-policy-seal-v1", []any{p.record, p.original.seal, p.localMembers, p.candidates, p.inputs, p.source, p.sourceSHA, p.inventorySHA, p.metadata, projection, original})
+	values := []any{p.record, p.original.seal, p.localMembers, p.candidates, p.inputs, p.source, p.sourceSHA, p.inventorySHA, p.metadata, projection, original}
+	domain := "routervpn-append-execution-policy-seal-v1"
+	if len(p.packetCandidates) != 0 {
+		domain = "routervpn-append-execution-packet-policy-seal-v1"
+		values = append(values, p.packetCandidates)
+	}
+	value, err := nodeChainAppendExecutionDigest(domain, values)
 	if err != nil {
 		return ""
 	}
@@ -142,11 +159,26 @@ func (p *NodeChainCandidateAppendExecutionPolicy) validate() error {
 		return errNodeChainAppendExecution
 	}
 	if p.projection != nil {
-		if p.originalPolicy == nil || p.originalPolicy == p || p.originalPolicy.validate() != nil || p.projection.Validate() != nil || p.projection.original != p.originalPolicy.original || p.projection.preparation != p.original || p.source != p.originalPolicy.source || p.sourceSHA != p.originalPolicy.sourceSHA || !reflect.DeepEqual(p.record, p.originalPolicy.record) || !reflect.DeepEqual(p.localMembers, p.originalPolicy.localMembers) || !reflect.DeepEqual(p.candidates, p.originalPolicy.candidates) {
+		if p.originalPolicy == nil || p.originalPolicy == p || p.originalPolicy.validate() != nil || p.projection.Validate() != nil || p.projection.original != p.originalPolicy.original || p.projection.preparation != p.original || p.source != p.originalPolicy.source || p.sourceSHA != p.originalPolicy.sourceSHA || !reflect.DeepEqual(p.record, p.originalPolicy.record) || !reflect.DeepEqual(p.localMembers, p.originalPolicy.localMembers) || !reflect.DeepEqual(p.candidates, p.originalPolicy.candidates) || !reflect.DeepEqual(p.packetCandidates, p.originalPolicy.packetCandidates) {
 			return errNodeChainAppendExecution
 		}
 	} else if p.originalPolicy != nil {
 		return errNodeChainAppendExecution
+	}
+	packetNext := nodeChainAppendExecutionPacketMode(p.original.candidates.responseMode)
+	if packetNext != p.original.candidates.preparedNativeResponse ||
+		packetNext && (p.original.appendSource.record.Schema != 1 || len(p.packetCandidates) != len(p.candidates)) ||
+		!packetNext && (p.original.candidates.responseMode != "shadowsocks" || p.packetCandidates != nil) {
+		return errNodeChainAppendExecution
+	}
+	for i, identity := range p.packetCandidates {
+		response, candidate := p.original.candidates.responses[i], p.candidates[i]
+		if identity.Position != len(p.localMembers) || identity.ProfileID != candidate.ProfileID || identity.NodeID != candidate.NodeID ||
+			identity.Mode != candidate.Mode || identity.Mode != p.original.candidates.responseMode ||
+			identity.SourceSHA256 != candidate.SourceSHA256 || identity.ClientPublicKey != response.ClientKey || identity.PeerPublicKey != response.ServerKey ||
+			!proofID.MatchString(identity.TransportSHA256) || response.PacketOptions == "" {
+			return errNodeChainAppendExecution
+		}
 	}
 	for i, member := range p.localMembers {
 		proof := p.original.proofs[i]
@@ -227,7 +259,7 @@ func (p *NodeChainCandidateAppendExecutionPolicy) CandidateMode() string {
 	if p.validate() != nil {
 		return ""
 	}
-	return "shadowsocks"
+	return p.original.candidates.responseMode
 }
 func (p *NodeChainCandidateAppendExecutionPolicy) CandidateKind() string {
 	if p.validate() != nil {
@@ -270,10 +302,17 @@ func (p *NodeChainCandidateAppendExecutionPolicy) matchesDescriptor(s multihopre
 	if p.validate() != nil || s.Validate() != nil || !reflect.DeepEqual(s.LocalPrefix, p.localMembers) {
 		return false
 	}
-	for _, candidate := range p.candidates {
+	packetNext := len(p.packetCandidates) != 0
+	if packetNext && s.PacketCandidateMode() != p.original.candidates.responseMode || !packetNext && s.Schema == 3 {
+		return false
+	}
+	for index, candidate := range p.candidates {
 		count := 0
-		for _, registered := range s.Candidates {
+		for i, registered := range s.Candidates {
 			if candidate == registered {
+				if packetNext && (i >= len(s.PacketCandidatePairs) || !p.packetCandidates[index].matches(s.PacketCandidatePairs[i])) {
+					return false
+				}
 				count++
 			}
 		}

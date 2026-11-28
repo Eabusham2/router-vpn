@@ -659,7 +659,7 @@ final class AndroidNodeStore {
             originals.add(original);refs.put(new JSONObject().put("id",original.profileId).put("mode",mode));
         }
         if(!AndroidNodeCandidateAppendSource.permitsExecution(originals,modes,nextKind,nextMode,requestedExecution))
-            throw new IllegalStateException("Server and Compare next-node measurements require paired literal WireGuard or AmneziaWG nodes, optionally followed by paired literal Shadowsocks 2022 nodes, all with Start Layer Off and a paired Shadowsocks next node.");
+            throw new IllegalStateException("Server and Compare require paired literal nodes with Start Layer Off. A WireGuard or AmneziaWG next node requires only WireGuard or AmneziaWG prefix nodes. A Shadowsocks 2022 next node also allows Shadowsocks nodes after that packet prefix. Choose Local explicitly for other prefixes.");
         ChainCapture captured=new ChainCapture(this,device,originals,modes,"local",catalog,sources.size()-1,current,refs.toString(),nextKind,nextMode,revision,requestedExecution);
         captured.requireCurrent();return captured;
     } }

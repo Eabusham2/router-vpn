@@ -1572,15 +1572,29 @@ function Get-RouterVPNOrderedAppendExecution($Draft){
  if($purpose-ceq'draft-prefix-append-execution'-and$requested-is[string]-and$requested-cin@('server','auto')){return $requested}
  return ''
 }
-function Test-RouterVPNOrderedAppendExecutionNodes($Nodes,$Profiles){
- if(-not(Test-RouterVPNOrderedAppendNodes $Nodes $Profiles 95)){return $false}
+function Get-RouterVPNOrderedAppendChoiceExecution([string]$Choice){
+ foreach($mode in @('wg','awg2-fast','awg2-strong','shadowsocks')){
+  if($Choice-ceq('server-'+$mode)){return 'server'}
+  if($Choice-ceq('auto-'+$mode)){return 'auto'}
+ }
+ return 'local'
+}
+function Get-RouterVPNOrderedAppendChoiceMode([string]$Choice){
+ if($Choice-ceq'external-shadowsocks'){return 'shadowsocks'}
+ foreach($mode in @('wg','awg2-fast','awg2-strong','shadowsocks')){
+  if($Choice-ceq('server-'+$mode)-or$Choice-ceq('auto-'+$mode)){return $mode}
+ }
+ return $Choice
+}
+function Test-RouterVPNOrderedAppendExecutionNodes($Nodes,$Profiles,[string]$NextMode='shadowsocks'){
+ if($NextMode-cnotin@('wg','awg2-fast','awg2-strong','shadowsocks')-or-not(Test-RouterVPNOrderedAppendNodes $Nodes $Profiles 95)){return $false}
  $index=Get-RouterVPNOrderedProfileIndex $Profiles;$rows=@($Nodes);$retainedSS=$false
  if([string]$rows[0].mode-cnotin@('wg','awg2-fast','awg2-strong')){return $false}
  foreach($node in $rows){
   $profile=$index[[string]$node.id]
   if(-not(Test-RouterVPNOrderedPairedOff $profile)){return $false}
   if([string]$node.mode-cin@('wg','awg2-fast','awg2-strong')){if($retainedSS){return $false}}
-  elseif([string]$node.mode-ceq'shadowsocks'-and(Test-RouterVPNOrderedPairedLiteralOff $profile)){$retainedSS=$true}
+  elseif($NextMode-ceq'shadowsocks'-and[string]$node.mode-ceq'shadowsocks'-and(Test-RouterVPNOrderedPairedLiteralOff $profile)){$retainedSS=$true}
   else{return $false}
  }
  return $true
@@ -1594,7 +1608,7 @@ function New-RouterVPNOrderedAppendPayload($Draft,$Store){
     $Draft.draft_revision-cnotmatch'\A[0-9a-f]{32}\z'-or
     [string]$Draft.next_mode-cnotin@('wg','awg2-fast','awg2-strong','shadowsocks','hysteria2')-or
     [string]$Store.selected_id-cne$id-or-not(Test-RouterVPNOrderedAppendNodes $nodes $Store.profiles 95)){throw 'Recapture the original Local prefix and device selection.'}
- if($remote-and($null-ne$nextKind-or$Draft.next_mode-cne'shadowsocks'-or-not(Test-RouterVPNOrderedAppendExecutionNodes $nodes $Store.profiles))){throw 'Server and Compare require a paired packet head, an optional literal Shadowsocks tail, and a paired Shadowsocks next node, all with Start Layer Off.'}
+ if($remote-and($null-ne$nextKind-or-not(Test-RouterVPNOrderedAppendExecutionNodes $nodes $Store.profiles ([string]$Draft.next_mode)))){throw 'Server and Compare require paired nodes with Start Layer Off. WireGuard and AmneziaWG next nodes require a packet-only prefix; Shadowsocks may follow a packet head with a literal Shadowsocks tail.'}
  if($null-ne$nextKind-and$nodes[0].mode-cin@('shadowsocks','hysteria2')){throw 'A paired Shadowsocks or Hysteria2 entry requires a paired next node.'}
  $index=Get-RouterVPNOrderedProfileIndex $Store.profiles
  if(-not(Test-RouterVPNOrderedPairedLayer $index[$id] -AllowAuthenticated)){throw 'The selected device control must remain a paired node.'}

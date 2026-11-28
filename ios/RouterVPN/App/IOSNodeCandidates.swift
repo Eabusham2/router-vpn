@@ -88,10 +88,11 @@ private final class IOSCandidateReply: @unchecked Sendable {
                 ((responseMode == nil && responseSourceNodes == nil) || completeSource && (packetResponse || preparedFinal)) else { throw IOSNodeCandidateResult.issue() }
         if let appendExecution {
             guard appendSource, appendExecution.isAppendExecution, appendExecution.native.isExecution,
-                  ["server", "auto"].contains(appendExecution.requestedExecution ?? ""), appendCandidateKind == nil, responseMode == "shadowsocks",
+                  ["server", "auto"].contains(appendExecution.requestedExecution ?? ""), appendCandidateKind == nil, responseMode == appendExecution.responseMode,
+                  IOSNodeCandidateAppendSource.executionSourceSchema(responseNodes.map(\.mode), nextMode: responseMode ?? "") != nil,
                   appendExecution.responseSourceNodes == responseSourceNodes, appendExecution.appendSourceMetadataSHA256 == appendSourceMetadataSHA256,
                   IOSCandidateCatalogPublication.isDigest(appendExecution.sourceSHA256),
-                  responseNodes.allSatisfy({ $0.kind == "router-vpn" && IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) else { throw IOSNodeCandidateResult.issue() }
+                  responseNodes.allSatisfy({ $0.kind == "router-vpn" }) else { throw IOSNodeCandidateResult.issue() }
         }
         self.appendExecution = appendExecution
         self.epoch = epoch; self.owner = owner; self.send = send; self.recovered = recovered; self.pause = pause

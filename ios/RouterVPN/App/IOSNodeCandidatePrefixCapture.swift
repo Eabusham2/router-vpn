@@ -68,8 +68,8 @@ struct IOSNodeCandidatePrefixCapture {
                   source.originalSourceSHA256() == original.sourceSHA256, execution.config() == source.config(),
                   execution.configSHA256() == source.configSHA256(), IOSCandidateCatalogPublication.digest(Data(execution.config().utf8)) == execution.configSHA256(),
                   execution.metadata() == source.metadata(), execution.appendSourceMetadata() == original.metadata,
-                  source.appendSourceMetadata() == original.metadata, execution.candidateKind() == "router-vpn", source.candidateKind() == "router-vpn",
-                  execution.candidateMode() == "shadowsocks", source.candidateMode() == "shadowsocks",
+                  source.appendMetadata() == original.metadata, execution.candidateKind() == "router-vpn", source.candidateKind() == "router-vpn",
+                  execution.candidateMode() == original.nextMode, source.candidateMode() == original.nextMode,
                   execution.candidateMeasurement() == "routed-candidate-response", source.candidateMeasurement() == "routed-candidate-response",
                   Int(execution.appendPosition()) == original.members.count, source.appendPosition() == execution.appendPosition() else { throw IOSNodeCandidatePrefixCapture.issue() }
         }
