@@ -1055,6 +1055,15 @@ static gboolean linux_ordered_execution_append_v1(const LinuxOrderedEditorV1 *ed
     if (!linux_ordered_prefix_v1(next_mode) && g_strcmp0(next_mode,"shadowsocks") && g_strcmp0(next_mode,"hysteria2")) return FALSE;
     if (!editor->append_only || editor->external_exit || editor->ids->len < 1 || editor->ids->len > 95 || editor->ids->len != editor->modes->len) return FALSE;
     JsonObject *catalog=json_node_get_object(editor->catalog);
+    if (!g_strcmp0(g_ptr_array_index(editor->modes,0),"shadowsocks")) {
+        if (g_strcmp0(next_mode,"shadowsocks")) return FALSE;
+        for (guint i=0;i<editor->ids->len;i++) {
+            JsonObject *profile=external_source_profile_v24(catalog,g_ptr_array_index(editor->ids,i));
+            const char *mode=g_ptr_array_index(editor->modes,i);
+            if (g_strcmp0(mode,"shadowsocks") || !linux_ordered_router_v1(profile) || !linux_ordered_paired_proxy_member_v1(profile,mode)) return FALSE;
+        }
+        return TRUE;
+    }
     for (guint i=0;i<editor->ids->len;i++) {
         JsonObject *profile=external_source_profile_v24(catalog,g_ptr_array_index(editor->ids,i));
         const char *mode=g_ptr_array_index(editor->modes,i);

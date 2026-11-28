@@ -47,12 +47,19 @@ func (p *NodeChainCandidateAppendExecutionPolicy) selectionRequest(c multihoprel
 	if p.validate() != nil || c.Validate() != nil || c.Reference.EntryNodeID != p.localMembers[0].NodeID || c.Challenge.ExpiresAt <= time.Now().Unix() {
 		return multihoprelay.NodeChainPrefixSelectionRequest{}, errNodeChainAppendExecution
 	}
+	schema := 1
+	if p.localMembers[0].Mode == "shadowsocks" {
+		if !p.proxyEntryPeerMatches([]string{c.Challenge.Peer}) {
+			return multihoprelay.NodeChainPrefixSelectionRequest{}, errNodeChainAppendExecution
+		}
+		schema = 2
+	}
 	nonce, err := randomHex(32)
 	if err != nil {
 		return multihoprelay.NodeChainPrefixSelectionRequest{}, err
 	}
 	q := multihoprelay.NodeChainPrefixSelectionRequest{
-		Schema: 1, Purpose: multihoprelay.NodeChainPrefixSelectionPurpose,
+		Schema: schema, Purpose: multihoprelay.NodeChainPrefixSelectionPurpose,
 		EntryNodeID: c.Reference.EntryNodeID, CatalogSHA256: c.Reference.SourceSHA256, CatalogGenerationSHA256: c.GenerationSHA256,
 		Peer: c.Challenge.Peer, Epoch: c.Challenge.Epoch, AcquireExpiresAt: c.Challenge.ExpiresAt, Nonce: nonce,
 		ExecutionSourceSHA256: p.SourceSHA256(), OriginalSourceSHA256: p.OriginalSourceSHA256(), InventorySHA256: p.inventorySHA,

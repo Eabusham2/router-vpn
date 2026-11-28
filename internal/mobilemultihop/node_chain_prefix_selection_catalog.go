@@ -40,7 +40,7 @@ func NewNodeChainServerPrefixCatalog(input string) (*NodeChainServerPrefixCatalo
 	var root map[string]any
 	if exactJSON([]byte(input), &root, NodeChainInputLimit) != nil ||
 		!nodeChainPlanKeys(root, []string{"schema", "kind", "entry", "pairs"}, nil) ||
-		root["schema"] != float64(1) || root["kind"] != nodeChainPrefixSelectionCatalogKind {
+		(root["schema"] != float64(1) && root["schema"] != float64(2)) || root["kind"] != nodeChainPrefixSelectionCatalogKind {
 		return nil, errNodeChainAppendExecution
 	}
 	entryRaw, entryOK := root["entry"].(map[string]any)
@@ -49,15 +49,12 @@ func NewNodeChainServerPrefixCatalog(input string) (*NodeChainServerPrefixCatalo
 		len(pairsRaw) > multihoprelay.NodeChainPrefixMaximumMembers-1+multihoprelay.NodeChainPrefixMaximumCandidates {
 		return nil, errNodeChainAppendExecution
 	}
+	proxyEntry := root["schema"] == float64(2)
 	entry, err := nodeChainPlanCapture(entryRaw)
-	if err != nil || entry.node == nil || !NodeChainPrefixMode(entry.mode) || !packetPairLayerOff(entry.node) {
+	if err != nil {
 		return nil, errNodeChainAppendExecution
 	}
-	member, err := nodeChainPrefixPacketMember(entry.node, 0)
-	if err != nil {
-		return nil, err
-	}
-	peers, err := externalFinalPacketPeerAddresses(entry.node)
+	member, peers, err := nodeChainPrefixPlanEntry(entry, proxyEntry)
 	if err != nil || len(peers) == 0 {
 		return nil, errNodeChainAppendExecution
 	}
@@ -67,7 +64,7 @@ func NewNodeChainServerPrefixCatalog(input string) (*NodeChainServerPrefixCatalo
 	}
 	catalog := &NodeChainServerPrefixCatalog{entry: entry.node, entryMember: member, peers: slices.Clone(peers)}
 	catalog.self = catalog
-	catalog.record = nodeChainPrefixSelectionCatalogRecord{Schema: 1, Kind: nodeChainPrefixSelectionCatalogKind, Entry: entryJSON, Pairs: make([]json.RawMessage, 0, len(pairsRaw))}
+	catalog.record = nodeChainPrefixSelectionCatalogRecord{Schema: int(root["schema"].(float64)), Kind: nodeChainPrefixSelectionCatalogKind, Entry: entryJSON, Pairs: make([]json.RawMessage, 0, len(pairsRaw))}
 	for _, value := range pairsRaw {
 		row, ok := value.(map[string]any)
 		if !ok || !nodeChainPlanKeys(row, []string{"paired", "server_peer"}, nil) {
@@ -79,7 +76,7 @@ func NewNodeChainServerPrefixCatalog(input string) (*NodeChainServerPrefixCatalo
 			return nil, errNodeChainAppendExecution
 		}
 		paired, err := nodeChainPlanCapture(pairedRaw)
-		if err != nil || paired.node == nil || !packetPairLayerOff(paired.node) ||
+		if err != nil || paired.node == nil || !packetPairLayerOff(paired.node) || proxyEntry && paired.mode != "shadowsocks" ||
 			!NodeChainPrefixMode(paired.mode) && paired.mode != "shadowsocks" && paired.mode != "hysteria2" {
 			return nil, errNodeChainAppendExecution
 		}
@@ -149,14 +146,14 @@ func NewNodeChainServerPrefixCatalog(input string) (*NodeChainServerPrefixCatalo
 		return nil, errNodeChainAppendExecution
 	}
 	catalog.source = string(raw)
-	catalog.sourceSHA, err = nodeChainAppendExecutionDigest("routervpn-node-chain-prefix-selection-catalog-v1", catalog.record)
+	catalog.sourceSHA, err = nodeChainAppendExecutionDigest(nodeChainPrefixCatalogDomain(catalog.record.Schema), catalog.record)
 	if err != nil {
 		return nil, err
 	}
 	return catalog, nil
 }
 func (c *NodeChainServerPrefixCatalog) valid() bool {
-	if c == nil || c.self != c || c.entry == nil || c.source == "" || c.sourceSHA == "" ||
+	if c == nil || c.self != c || c.entry == nil || c.source == "" || c.sourceSHA == "" || c.record.Schema != 1 && c.record.Schema != 2 ||
 		len(c.pairs) != len(c.record.Pairs) || len(c.pairs) == 0 {
 		return false
 	}
@@ -164,7 +161,13 @@ func (c *NodeChainServerPrefixCatalog) valid() bool {
 	if err != nil || string(raw) != c.source {
 		return false
 	}
-	digest, err := nodeChainAppendExecutionDigest("routervpn-node-chain-prefix-selection-catalog-v1", c.record)
+	if c.record.Schema == 2 {
+		peers, err := nodeChainPrefixProxyEntryPeers(c.entry)
+		if err != nil || len(c.peers) != 1 || c.peers[0] != peers[0] || c.entryMember.Mode != "shadowsocks" {
+			return false
+		}
+	}
+	digest, err := nodeChainAppendExecutionDigest(nodeChainPrefixCatalogDomain(c.record.Schema), c.record)
 	return err == nil && digest == c.sourceSHA
 }
 func (c *NodeChainServerPrefixCatalog) Source() string {
@@ -200,7 +203,7 @@ func (c *NodeChainServerPrefixCatalog) EntryPeerAddresses() []string {
 
 func (c *NodeChainServerPrefixCatalog) Select(q multihoprelay.NodeChainPrefixSelectionRequest) (*NodeChainServerPrefixPolicy, error) {
 	q = q.Clone()
-	if !c.valid() || q.Validate() != nil || q.CatalogSHA256 != c.sourceSHA ||
+	if !c.valid() || q.Validate() != nil || q.Schema != c.record.Schema || q.CatalogSHA256 != c.sourceSHA ||
 		q.EntryNodeID != c.entryMember.NodeID || q.LocalPrefix[0] != c.entryMember ||
 		!slices.Contains(c.peers, q.Peer) {
 		return nil, errNodeChainAppendExecution

@@ -29,6 +29,15 @@ func nodeChainPrefixLocalSchema(nodes []*NodeProfile) (int, error) {
 }
 
 func nodeChainPrefixCapturedMember(node *NodeProfile, identity string, position, schema int) (multihoprelay.NodeChainPrefixMember, error) {
+	if schema == 7 {
+		if position == 0 {
+			return nodeChainPrefixProxyEntryMember(node, identity)
+		}
+		if node == nil || node.mode != "shadowsocks" {
+			return multihoprelay.NodeChainPrefixMember{}, errNodeChainAppendExecution
+		}
+		return nodeChainPrefixCapturedMember(node, identity, position, 2)
+	}
 	if node == nil || validateNodeChainIdentity(identity, node) != nil {
 		return multihoprelay.NodeChainPrefixMember{}, errNodeChainAppendExecution
 	}
@@ -64,7 +73,7 @@ func nodeChainPrefixCapturedMember(node *NodeProfile, identity string, position,
 // The source retains the real SS TCP and UDP tuple. This helper returns its
 // TCP tuple; schema4 separately captures the same original source's UDP tuple.
 func nodeChainPrefixStreamPhysical(node *NodeProfile, schema int) (PhysicalEgress, error) {
-	if schema != 2 && schema != 4 && schema != 5 && schema != 6 || node == nil || node.mode != "shadowsocks" || !packetPairLayerOff(node) || node.validateNodeDesktopCapture() != nil {
+	if schema != 2 && schema != 4 && schema != 5 && schema != 6 && schema != 7 || node == nil || node.mode != "shadowsocks" || !packetPairLayerOff(node) || node.validateNodeDesktopCapture() != nil {
 		return PhysicalEgress{}, errNodeChainAppendExecution
 	}
 	closure, err := nodeMultihopPredecessor(node)

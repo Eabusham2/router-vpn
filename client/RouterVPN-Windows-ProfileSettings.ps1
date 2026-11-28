@@ -1589,6 +1589,13 @@ function Get-RouterVPNOrderedAppendChoiceMode([string]$Choice){
 function Test-RouterVPNOrderedAppendExecutionNodes($Nodes,$Profiles,[string]$NextMode='shadowsocks'){
  if($NextMode-cnotin@('wg','awg2-fast','awg2-strong','shadowsocks','hysteria2')-or-not(Test-RouterVPNOrderedAppendNodes $Nodes $Profiles 95)){return $false}
  $index=Get-RouterVPNOrderedProfileIndex $Profiles;$rows=@($Nodes)
+ if([string]$rows[0].mode-ceq'shadowsocks'){
+  if($NextMode-cne'shadowsocks'){return $false}
+  foreach($node in $rows){
+   if([string]$node.mode-cne'shadowsocks'-or-not(Test-RouterVPNOrderedPairedLiteralOff $index[[string]$node.id])){return $false}
+  }
+  return $true
+ }
  if([string]$rows[0].mode-cnotin@('wg','awg2-fast','awg2-strong')){return $false}
  foreach($node in $rows){
   $profile=$index[[string]$node.id]
@@ -1607,7 +1614,7 @@ function New-RouterVPNOrderedAppendPayload($Draft,$Store){
     $Draft.draft_revision-cnotmatch'\A[0-9a-f]{32}\z'-or
     [string]$Draft.next_mode-cnotin@('wg','awg2-fast','awg2-strong','shadowsocks','hysteria2')-or
     [string]$Store.selected_id-cne$id-or-not(Test-RouterVPNOrderedAppendNodes $nodes $Store.profiles 95)){throw 'Recapture the original Local prefix and device selection.'}
- if($remote-and($null-ne$nextKind-or-not(Test-RouterVPNOrderedAppendExecutionNodes $nodes $Store.profiles ([string]$Draft.next_mode)))){throw 'Server and Compare require a WireGuard or AmneziaWG first hop, paired nodes with literal addresses, and Start Layer Off.'}
+ if($remote-and($null-ne$nextKind-or-not(Test-RouterVPNOrderedAppendExecutionNodes $nodes $Store.profiles ([string]$Draft.next_mode)))){throw 'Server and Compare require a paired WireGuard or AmneziaWG first hop, or an all-Shadowsocks path, with literal addresses and Start Layer Off. A Shadowsocks entry also requires matching authenticated private API discovery.'}
  if($null-ne$nextKind-and$nodes[0].mode-cin@('shadowsocks','hysteria2')){throw 'A paired Shadowsocks or Hysteria2 entry requires a paired next node.'}
  $index=Get-RouterVPNOrderedProfileIndex $Store.profiles
  if(-not(Test-RouterVPNOrderedPairedLayer $index[$id] -AllowAuthenticated)){throw 'The selected device control must remain a paired node.'}

@@ -1621,8 +1621,12 @@ private enum RouterVPNOrderedCandidateDisplay {
         let proxyEntry=nodes[0]["kind"] == "router-vpn" && ["shadowsocks","hysteria2"].contains(nodes[0]["mode"] ?? "")
         guard !proxyEntry || !external else { return nil }
         if executionAppend {
-            guard nodes[0]["kind"] == "router-vpn", ["wg","awg2-fast","awg2-strong"].contains(nodes[0]["mode"] ?? ""),
-                  nodes.allSatisfy({$0["kind"] == "router-vpn" && ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"].contains($0["mode"] ?? "")}) else { return nil }
+            if nodes[0]["mode"] == "shadowsocks" {
+                guard mode == "shadowsocks", nodes.allSatisfy({$0["kind"] == "router-vpn" && $0["mode"] == "shadowsocks"}) else { return nil }
+            } else {
+                guard nodes[0]["kind"] == "router-vpn", ["wg","awg2-fast","awg2-strong"].contains(nodes[0]["mode"] ?? ""),
+                      nodes.allSatisfy({$0["kind"] == "router-vpn" && ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"].contains($0["mode"] ?? "")}) else { return nil }
+            }
         }
         var ids=Set<String>()
         guard nodes.enumerated().allSatisfy({ i,node in

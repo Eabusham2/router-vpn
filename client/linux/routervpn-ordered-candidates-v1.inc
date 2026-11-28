@@ -256,6 +256,8 @@ static JsonArray *linux_oc_append_source(JsonObject *view, JsonObject *draft, in
     gboolean proxy_entry=!strcmp(linux_ec_string(first,"kind"),"router-vpn") &&
         (!strcmp(linux_ec_string(first,"mode"),"shadowsocks") || !strcmp(linux_ec_string(first,"mode"),"hysteria2"));
     if(proxy_entry && external)return NULL;
+    gboolean server_proxy_entry=execution_append && !strcmp(linux_ec_string(first,"kind"),"router-vpn") &&
+        !strcmp(linux_ec_string(first,"mode"),"shadowsocks") && !strcmp(linux_ec_string(view,"candidate_mode"),"shadowsocks");
     g_autoptr(GHashTable) ids=g_hash_table_new(g_str_hash,g_str_equal);
     for (guint i=0;i<count;i++) {
         JsonObject *node=linux_oc_root(json_array_get_element(nodes,i)), *row=linux_oc_root(json_array_get_element(original,i));
@@ -268,7 +270,7 @@ static JsonArray *linux_oc_append_source(JsonObject *view, JsonObject *draft, in
             !g_hash_table_add(ids,(gpointer)linux_ec_string(node,"id")) || (!packet && !stream && !hy2) || (proxy_entry && strcmp(kind,"router-vpn")) ||
             strcmp(linux_ec_string(row,"id"),linux_ec_string(node,"id")) || strcmp(linux_ec_string(row,"mode"),linux_ec_string(node,"mode"))) return NULL;
         if (execution_append) {
-            if ((i==0 && !packet) || strcmp(kind,"router-vpn")) return NULL;
+            if (strcmp(kind,"router-vpn") || (server_proxy_entry && strcmp(mode,"shadowsocks")) || (!server_proxy_entry && i==0 && !packet)) return NULL;
         }
     }
     return nodes;

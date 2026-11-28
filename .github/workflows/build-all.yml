@@ -240,6 +240,21 @@ jobs:
           path: dist/native-artifact/native-${{ matrix.slug }}.tar.gz
           if-no-files-found: error
           retention-days: 3
+      - name: Compile independent VPN peers for current-source qualification
+        id: independent_peers
+        if: matrix.target == 'linux/amd64'
+        continue-on-error: true
+        timeout-minutes: 18
+        run: python3 -B deploy/build-independent-vpn-peers.py --output "${RUNNER_TEMP}/routervpn-independent-vpn-peers-${GITHUB_SHA}"
+      - name: Preserve independent VPN peer compilation evidence
+        if: ${{ always() && matrix.target == 'linux/amd64' && steps.independent_peers.outcome != 'skipped' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-independent-vpn-peers-linux-amd64-${{ github.sha }}
+          path: ${{ runner.temp }}/routervpn-independent-vpn-peers-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 3
 
   generic-builds:
     needs: native-runtimes

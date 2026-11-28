@@ -108,7 +108,7 @@ func (l *nodeChainAppendExecutionLease) initialize(ctx context.Context) (failure
 		}
 	}
 	prefixCount := 0
-	if descriptor.Schema == 2 || descriptor.Schema == 4 || descriptor.Schema == 5 || descriptor.Schema == 6 {
+	if descriptor.Schema == 2 || descriptor.Schema == 4 || descriptor.Schema == 5 || descriptor.Schema == 6 || descriptor.Schema == 7 {
 		prefixCount = len(p.localMembers)
 	}
 	q := multihoprelay.NodeChainPrefixRequest{Schema: descriptor.Schema, Purpose: multihoprelay.NodeChainPrefixPurpose, SessionID: session, EntryNodeID: descriptor.EntryNodeID, SourceSHA256: descriptor.SourceSHA256, DescriptorSHA256: digest, LocalSourceSHA256: p.OriginalSourceSHA256(), InventorySHA256: p.inventorySHA, Epoch: discovery.Challenge.Epoch, Peer: discovery.Challenge.Peer, AcquireExpiresAt: discovery.Challenge.ExpiresAt, LocalPacketPublicKeys: keys, PrefixCount: prefixCount, Port: port, FrontSeed: seed}

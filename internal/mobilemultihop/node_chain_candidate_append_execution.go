@@ -13,7 +13,7 @@ import (
 
 const nodeChainAppendExecutionKind = "routervpn-node-chain-append-execution-source"
 
-var errNodeChainAppendExecution = errors.New("append execution requires its original packet-head prefix with an optional paired SS tail, independent registered suffix and current native owner")
+var errNodeChainAppendExecution = errors.New("append execution requires its original supported paired prefix, independent registered suffix and current native owner")
 
 type nodeChainAppendExecutionSource struct {
 	Kind        string `json:"kind"`
@@ -81,7 +81,7 @@ func NewNodeChainCandidateAppendExecutionPolicy(input string) (*NodeChainCandida
 	p := &NodeChainCandidateAppendExecutionPolicy{record: record, original: original, capturedOriginal: original, inputs: append([]string(nil), inventory.Inputs...)}
 	p.self = p
 	memberSchema := schema
-	if remoteSchema == 5 || remoteSchema == 6 {
+	if remoteSchema == 5 || remoteSchema == 6 || remoteSchema == 7 {
 		memberSchema = remoteSchema
 	}
 	for position, node := range source.nodes {
@@ -340,6 +340,9 @@ func (p *NodeChainCandidateAppendExecutionPolicy) matchesDescriptor(s multihopre
 		return false
 	}
 	_, expectedSchema, schemaErr := nodeChainPrefixExecutionSchemas(p.original.appendSource.nodes, p.original.candidates.responseMode)
+	if expectedSchema == 7 && !p.proxyEntryPeerMatches(s.EntryPeerAddresses) {
+		return false
+	}
 	packetNext := len(p.packetCandidates) != 0
 	hysteriaNext := len(p.hysteriaCandidates) != 0
 	if schemaErr != nil || s.Schema != expectedSchema || packetNext && s.PacketCandidateMode() != p.original.candidates.responseMode || !packetNext && s.PacketCandidateMode() != "" ||

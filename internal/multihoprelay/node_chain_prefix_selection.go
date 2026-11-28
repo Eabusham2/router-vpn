@@ -184,6 +184,9 @@ func (c NodeChainPrefixSelectionCandidate) valid(mode string) bool {
 	return false
 }
 func (q NodeChainPrefixSelectionRequest) Validate() error {
+	if q.Schema == 2 {
+		return q.validateProxyEntrySS()
+	}
 	challenge := ExternalPacketChallenge{Epoch: q.Epoch, Peer: q.Peer, ExpiresAt: q.AcquireExpiresAt}
 	if q.Schema != 1 || q.Purpose != NodeChainPrefixSelectionPurpose || !proofID.MatchString(q.EntryNodeID) ||
 		!proofID.MatchString(q.CatalogSHA256) || !proofID.MatchString(q.CatalogGenerationSHA256) ||
@@ -249,6 +252,9 @@ func (q NodeChainPrefixSelectionRequest) Clone() NodeChainPrefixSelectionRequest
 func (q NodeChainPrefixSelectionRequest) Digest() (string, error) {
 	if q.Validate() != nil {
 		return "", errNodeChainPrefix
+	}
+	if q.Schema == 2 {
+		return nodeChainDigest("routervpn-node-chain-prefix-selection-request-v2", q)
 	}
 	return nodeChainDigest("routervpn-node-chain-prefix-selection-request-v1", q)
 }

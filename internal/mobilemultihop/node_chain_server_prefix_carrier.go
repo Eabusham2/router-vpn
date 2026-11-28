@@ -118,7 +118,7 @@ func (s *NodeChainServerPrefixSession) bindConfig() error {
 	if s.policy.validate() != nil || len(s.policy.nodes) == 0 || s.carrier == nil || !s.carrier.sealed() {
 		return errNodeChainAppendExecution
 	}
-	if (s.policy.record.Schema == 2 || s.policy.record.Schema == 4 || s.policy.record.Schema == 5 || s.policy.record.Schema == 6) && s.policy.nodes[0].mode == "shadowsocks" {
+	if (s.policy.record.Schema == 2 || s.policy.record.Schema == 4 || s.policy.record.Schema == 5 || s.policy.record.Schema == 6 || s.policy.record.Schema == 7) && s.policy.nodes[0].mode == "shadowsocks" {
 		// A real SS root is a TCP carrier, not a packet ancestor. The original
 		// typed append graph remains unchanged; no endpoint MTU is fabricated.
 		target, err := nodeChainPrefixStreamPhysical(s.policy.nodes[0], s.policy.record.Schema)

@@ -5,6 +5,9 @@ import "router-vpn/internal/multihoprelay"
 // Select the remote version from the actual original captured prefix. The
 // legacy packet-head/SS-tail helper remains exact for its existing callers.
 func nodeChainPrefixExecutionSchemas(nodes []*NodeProfile, nextMode string) (int, int, error) {
+	if len(nodes) > 0 && nodes[0] != nil && nodes[0].mode == "shadowsocks" {
+		return nodeChainPrefixProxyEntrySchemas(nodes, nextMode)
+	}
 	if nextMode == "hysteria2" {
 		return nodeChainPrefixHysteriaExecutionSchemas(nodes, nextMode)
 	}
