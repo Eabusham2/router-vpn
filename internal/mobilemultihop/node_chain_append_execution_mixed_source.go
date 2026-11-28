@@ -6,11 +6,11 @@ import "router-vpn/internal/multihoprelay"
 // legacy packet-head/SS-tail helper remains exact for its existing callers.
 func nodeChainPrefixExecutionSchemas(nodes []*NodeProfile, nextMode string) (int, int, error) {
 	if nextMode == "hysteria2" {
-		return nodeChainPrefixHysteriaSchemas(nodes, nextMode)
+		return nodeChainPrefixHysteriaExecutionSchemas(nodes, nextMode)
 	}
 	for _, node := range nodes {
 		if node != nil && node.mode == "hysteria2" {
-			return nodeChainPrefixHysteriaSchemas(nodes, nextMode)
+			return nodeChainPrefixHysteriaExecutionSchemas(nodes, nextMode)
 		}
 	}
 	packetNext := nodeChainAppendExecutionPacketMode(nextMode)
@@ -53,7 +53,7 @@ func nodeChainPrefixExecutionSchemas(nodes []*NodeProfile, nextMode string) (int
 }
 
 // The original full descriptor validation remains mandatory. This helper only
-// selects the already captured packet candidate representation for schemas3/4.
+// selects the already captured packet candidate representation for schemas3/4/6.
 func nodeChainPrefixHasPacketCandidates(source NodeChainServerPrefixSource) bool {
-	return source.Schema == 3 || source.Schema == 4 && source.PacketCandidatePairs != nil
+	return source.Schema == 3 || (source.Schema == 4 || source.Schema == 6) && source.PacketCandidatePairs != nil
 }

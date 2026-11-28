@@ -30,14 +30,12 @@ struct IOSNodeCandidateAppendSource {
     static func executionSourceSchema(_ modes: [String], nextMode: String) -> Int? {
         guard executionNextModes.contains(nextMode), (1..<IOSMultihopNodeSelection.physicalTraversalDepth).contains(modes.count),
               let first = modes.first, IOSMultihopNodeSelection.supportsNativePrefix(first) else { return nil }
-        var hasProxy = false, hasHysteria = false
+        var hasProxy = false
         for mode in modes {
             if proxyEntryMode(mode) {
                 hasProxy = true
-                hasHysteria = hasHysteria || mode == "hysteria2"
-            } else if hasHysteria || !IOSMultihopNodeSelection.supportsNativePrefix(mode) { return nil }
+            } else if !IOSMultihopNodeSelection.supportsNativePrefix(mode) { return nil }
         }
-        guard !hasHysteria || proxyEntryMode(nextMode) else { return nil }
         return hasProxy ? 2 : 1
     }
     static func permitsExecution(nodes: [IOSMultihopNodeSelection], profiles: [RouterProfile], choice: NextChoice) -> Bool {
@@ -72,7 +70,7 @@ struct IOSNodeCandidateAppendSource {
               }) else { throw Self.executionIssue() }
     }
     static func executionIssue() -> NSError { NSError(domain: "RouterVPN.CandidateAppendExecution", code: 1,
-        userInfo: [NSLocalizedDescriptionKey: "Server and Compare require paired literal nodes with Start Layer Off and a WireGuard or AmneziaWG first node. After Hysteria2, only Shadowsocks 2022 or Hysteria2 can follow. Choose Local explicitly for other prefixes."]) }
+        userInfo: [NSLocalizedDescriptionKey: "Server and Compare require paired literal nodes with Start Layer Off and a WireGuard or AmneziaWG first node. Choose Local explicitly for other prefixes."]) }
 
     static func measurement(kind: String) -> String {
         kind == "external" ? "routed-public-candidate-response" : kind == "router-vpn" ? "routed-candidate-response" : ""

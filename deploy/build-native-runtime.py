@@ -1523,7 +1523,9 @@ class AndroidConnectionQualification:
         if self.original_settings != {'package': '', 'lockdown': False, 'allowlist': ''}:
             raise ValueError('The fresh original emulator already has a VPN policy owner')
         self.before = self.snapshot('before')
-        if any('tun' in row['name'] for row in self.before['interfaces']):
+        if any(row['link_type'] in {'none', '[65534]'} or
+               ('tun' in row['name'] and row['link_type'] != 'ipip')
+               for row in self.before['interfaces']):
             raise ValueError('The original emulator already has a TUN')
         self.adb('install', '--no-streaming', '-r', self.apk, timeout=90)
         self.installed = True
@@ -1553,9 +1555,11 @@ class AndroidConnectionQualification:
         interfaces = []
         for line in links.splitlines():
             match = re.match(r'([0-9]+): ([^:@ ]+)(?:@[^: ]+)?:.*\bmtu ([0-9]+)', line)
-            if not match:
+            link_types = re.findall(r'\blink/(\S+)', line)
+            if not match or len(link_types) != 1:
                 raise ValueError('Actual Android interface output is not recognized')
-            interfaces.append({'index': int(match[1]), 'name': match[2], 'mtu': int(match[3])})
+            interfaces.append({'index': int(match[1]), 'name': match[2], 'mtu': int(match[3]),
+                               'link_type': link_types[0]})
         prefixes = []
         for line in (routes4+'\n'+routes6).splitlines():
             words = line.split()
@@ -1965,6 +1969,7 @@ def desktop_connect(package, family, evidence, android_apk=None):
     result = {'schema': 1, 'kind': 'routervpn-android-connect' if android else 'routervpn-desktop-connect', 'run_id': run_id,
               'family': family, 'status': 'failed', 'processes': [], 'cleanup_proved': False}
     app = peer = None
+    peer_log_capture = None
     android_session = None
     workers, servers, logs = [], [], []
     command_children = []
@@ -2456,6 +2461,11 @@ $v | ConvertTo-Json -Depth 6 -Compress
         publish(work/'peer.json', config)
         log = (work/'peer.log').open('xb')
         logs.append(log)
+        if windows:
+            try:
+                peer_log_capture = (log, os.fstat(log.fileno()))
+            except (OSError, ValueError):
+                pass  # Failure evidence must not change original peer admission.
         peer = subprocess.Popen([str(binary), 'run', '-c', str(work/'peer.json')],
                                 cwd=work, stdout=log, stderr=subprocess.STDOUT)
         result['processes'].append({'role': 'peer', 'pid': peer.pid})
@@ -2715,6 +2725,37 @@ $v | ConvertTo-Json -Depth 6 -Compress
                                    result['restoration_proved'])
         if not result['cleanup_proved']:
             result['status'] = 'failed'
+        if windows and result['status'] == 'failed':
+            try:
+                if peer is None or result.get('peer_exit_code') is None or peer_log_capture is None:
+                    raise ValueError('The original peer join or log identity is unavailable')
+                original_log, original_info = peer_log_capture
+                if not original_log.closed:
+                    raise ValueError('The original peer log is still open')
+                peer_log_path = Path(original_log.name)
+                info = peer_log_path.lstat()
+                if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or
+                        (info.st_dev, info.st_ino) != (original_info.st_dev, original_info.st_ino) or
+                        info.st_size > 1 << 20):
+                    raise ValueError('The original peer log changed identity or exceeded its bound')
+                with peer_log_path.open('rb') as stream:
+                    opened = os.fstat(stream.fileno())
+                    if (opened.st_dev, opened.st_ino, opened.st_size) != (info.st_dev, info.st_ino, info.st_size):
+                        raise ValueError('The original peer log changed before readback')
+                    peer_log_bytes = stream.read((1 << 20)+1)
+                current = peer_log_path.lstat()
+                if (len(peer_log_bytes) != info.st_size or
+                        (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns) !=
+                        (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)):
+                    raise ValueError('The original peer log changed during readback')
+                peer_log_evidence = evidence/'desktop-connect-peer.log'
+                with peer_log_evidence.open('xb') as stream:
+                    stream.write(peer_log_bytes)
+                result['peer_log_diagnostic'] = {'available': True, 'path': peer_log_evidence.name,
+                    'size': len(peer_log_bytes), 'sha256': hashlib.sha256(peer_log_bytes).hexdigest(),
+                    'original_peer_pid': peer.pid, 'original_peer_exit_code': result['peer_exit_code']}
+            except BaseException as diagnostic_error:
+                result['peer_log_diagnostic'] = {'available': False, 'failure': type(diagnostic_error).__name__}
         try:
             publish(evidence/('android-connect-qualification.json' if android else 'desktop-connect-qualification.json'), result)
         except BaseException as publication_error:

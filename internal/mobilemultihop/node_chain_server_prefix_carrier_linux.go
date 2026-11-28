@@ -48,7 +48,7 @@ func NewNodeChainServerPrefixSessionContext(ctx, lifetime context.Context, polic
 	}
 	if len(policy.nodes) > 0 {
 		var target PhysicalEgress
-		if (policy.record.Schema == 2 || policy.record.Schema == 4 || policy.record.Schema == 5) && policy.nodes[0].mode == "shadowsocks" {
+		if (policy.record.Schema == 2 || policy.record.Schema == 4 || policy.record.Schema == 5 || policy.record.Schema == 6) && policy.nodes[0].mode == "shadowsocks" {
 			target, err = nodeChainPrefixStreamPhysical(policy.nodes[0], policy.record.Schema)
 			if err != nil {
 				return nil, err

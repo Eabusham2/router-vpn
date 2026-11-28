@@ -48,13 +48,13 @@ func (q NodeChainPrefixCandidateRequest) Validate() error {
 		return errNodeChainPrefix
 	}
 	if q.Schema == 3 {
-		if !q.IsHysteria() || q.Lease.Schema != 5 || q.CandidateClientPublicKey != "" || !proofID.MatchString(q.CandidateHysteriaSHA256) {
+		if !q.IsHysteria() || q.Lease.Schema != 5 && q.Lease.Schema != 6 || q.CandidateClientPublicKey != "" || !proofID.MatchString(q.CandidateHysteriaSHA256) {
 			return errNodeChainPrefix
 		}
 	} else if q.CandidateHysteriaSHA256 != "" {
 		return errNodeChainPrefix
 	} else if q.IsPacket() {
-		if q.Lease.Schema != 3 && q.Lease.Schema != 4 || !nodeChainPacketMode(q.CandidateMode) || !nodeChainPacketPublic(q.CandidateClientPublicKey) {
+		if q.Lease.Schema != 3 && q.Lease.Schema != 4 && q.Lease.Schema != 6 || !nodeChainPacketMode(q.CandidateMode) || !nodeChainPacketPublic(q.CandidateClientPublicKey) {
 			return errNodeChainPrefix
 		}
 		for _, key := range q.Lease.LocalPacketPublicKeys {

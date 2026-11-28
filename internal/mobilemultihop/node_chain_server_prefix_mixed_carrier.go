@@ -8,10 +8,10 @@ import (
 	"router-vpn/internal/multihoprelay"
 )
 
-// Families4/5 retain separate real UDP ownership for an actual SS-root
+// Families4/5/6 retain separate real UDP ownership for an actual SS-root
 // suffix. Ordinary schema2 keeps its original TCP-only contract.
 func (s *NodeChainServerPrefixSession) mixedStreamRoot() bool {
-	return s != nil && s.policy != nil && (s.policy.record.Schema == 4 || s.policy.record.Schema == 5) &&
+	return s != nil && s.policy != nil && (s.policy.record.Schema == 4 || s.policy.record.Schema == 5 || s.policy.record.Schema == 6) &&
 		len(s.policy.nodes) > 0 && s.policy.nodes[0] != nil && s.policy.nodes[0].mode == "shadowsocks"
 }
 
@@ -78,6 +78,20 @@ func (s *NodeChainServerPrefixSession) validateMixedStreamPacketBounds() error {
 	}
 	physicalPackets := 0
 	for _, packet := range packets {
+		if s.policy.record.Schema == 6 {
+			message, bounded, err := s.originalHysteriaPacketBoundary(packet, all)
+			if err != nil {
+				return err
+			}
+			if bounded {
+				requested, err := mtuNumber(packet["mtu"])
+				actual, boundErr := message.Capacity(requested, true)
+				if err != nil || boundErr != nil || actual != requested {
+					return nodeChainServerCarrierError
+				}
+				continue
+			}
+		}
 		requested, err := mtuNumber(packet["mtu"])
 		envelope, capacity, physical, other := nodeChainPrefixPacketEnvelope(packet, all, s.policy.prefix.proofs[0].Tag, bound)
 		if err != nil || other != nil {
@@ -91,7 +105,7 @@ func (s *NodeChainServerPrefixSession) validateMixedStreamPacketBounds() error {
 			physicalPackets++
 		}
 	}
-	if physicalPackets == 0 && !nodeChainPrefixHasPacketCandidates(s.policy.record) && s.policy.record.Schema != 5 {
+	if physicalPackets == 0 && !nodeChainPrefixHasPacketCandidates(s.policy.record) && s.policy.record.Schema != 5 && s.policy.record.Schema != 6 {
 		return nodeChainServerCarrierError
 	}
 	return nil
@@ -177,6 +191,31 @@ func (s *NodeChainServerPrefixSession) mixedStreamPacketOptions(capture multihop
 		if packet == nil || packet["type"] != nodeChainPrefixType(pair.Mode) ||
 			packet["detour"] != s.policy.prefix.proofs[len(s.policy.prefix.proofs)-1].Tag {
 			return "", errNodeChainAppendExecution
+		}
+		if s.policy.record.Schema == 6 {
+			message, bounded, err := s.originalHysteriaPacketBoundary(packet, all)
+			if err != nil {
+				return "", err
+			}
+			if bounded {
+				requested, err := mtuNumber(packet["mtu"])
+				fixed, fixedErr := fixedMTU(s.policy.candidates[i].profile)
+				var projected map[string]any
+				if err != nil || fixedErr != nil || fixed != 0 && requested != fixed ||
+					exactJSON([]byte(options), &projected, NodeChainInputLimit) != nil {
+					return "", nodeChainServerCarrierError
+				}
+				if actual, err := mtuNumber(projected["mtu"]); err != nil || actual != requested {
+					return "", nodeChainServerCarrierError
+				}
+				actual, err := message.Capacity(requested, true)
+				if err != nil || actual != requested {
+					return "", nodeChainServerCarrierError
+				}
+				// The original prospective compiler already applied this same
+				// finite HY2 payload bound. Retain its exact sealed options.
+				return options, nil
+			}
 		}
 		requested, err := mtuNumber(packet["mtu"])
 		fixed, fixedErr := fixedMTU(s.policy.candidates[i].profile)

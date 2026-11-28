@@ -81,8 +81,8 @@ func NewNodeChainCandidateAppendExecutionPolicy(input string) (*NodeChainCandida
 	p := &NodeChainCandidateAppendExecutionPolicy{record: record, original: original, capturedOriginal: original, inputs: append([]string(nil), inventory.Inputs...)}
 	p.self = p
 	memberSchema := schema
-	if remoteSchema == 5 {
-		memberSchema = 5
+	if remoteSchema == 5 || remoteSchema == 6 {
+		memberSchema = remoteSchema
 	}
 	for position, node := range source.nodes {
 		proof := source.proofs[position]

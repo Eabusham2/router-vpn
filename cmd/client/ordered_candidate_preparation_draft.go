@@ -347,21 +347,13 @@ func (q *orderedCandidateAppendRequest) validate() error {
 		}
 		// This checks only public row order. The original captured source
 		// still proves every member is paired, literal, Off and current.
-		hasHysteria := false
 		for position, node := range q.Nodes {
 			if mobilemultihop.NodeChainPrefixMode(node.Mode) {
-				if hasHysteria {
-					return bad
-				}
 				continue
 			}
 			if position == 0 || node.Mode != "shadowsocks" && node.Mode != "hysteria2" {
 				return bad
 			}
-			hasHysteria = hasHysteria || node.Mode == "hysteria2"
-		}
-		if hasHysteria && q.NextMode != "shadowsocks" && q.NextMode != "hysteria2" {
-			return bad
 		}
 	} else if q.RequestedExecution != "" {
 		return bad

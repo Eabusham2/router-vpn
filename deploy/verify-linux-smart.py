@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Qualify installed SMART's protected Linux owner against private reference peers."""
+import base64
 import concurrent.futures
 import errno
 import fcntl

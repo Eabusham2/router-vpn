@@ -55,7 +55,7 @@ func nodeChainPrefixHysteriaSchemas(nodes []*NodeProfile, nextMode string) (int,
 }
 
 func nodeChainPrefixHasHysteriaCandidates(source NodeChainServerPrefixSource) bool {
-	return source.Schema == 5 && source.HysteriaCandidatePairs != nil
+	return (source.Schema == 5 || source.Schema == 6) && source.HysteriaCandidatePairs != nil
 }
 
 func nodeChainPrefixHysteriaTransport(node *NodeProfile) (string, error) {
@@ -153,7 +153,7 @@ func nodeChainPrefixHysteriaServerMatches(pair multihoprelay.NodeChainPrefixHyst
 // HysteriaCandidateRuntimeIdentity is original captured identity only. It
 // cannot create a QUIC client or turn a companion into a packet reservation.
 func (p *NodeChainServerPrefixPolicy) HysteriaCandidateRuntimeIdentity(c multihoprelay.NodeChainPrefixCandidateCapture) (string, error) {
-	if p == nil || p.validate() != nil || p.record.Schema != 5 || p.BindCapture(c.Lease) != nil {
+	if p == nil || p.validate() != nil || p.record.Schema != 5 && p.record.Schema != 6 || p.BindCapture(c.Lease) != nil {
 		return "", errNodeChainAppendExecution
 	}
 	pair, err := c.HysteriaPair()

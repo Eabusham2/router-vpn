@@ -842,12 +842,12 @@ PREFIX_SOURCE_FIELDS = {'kind', 'schema', 'local_prefix', 'entry_peer_addresses'
 def node_chain_prefix_source_fields(source):
     """Only the native compiler can validate the selected source family."""
     if (not isinstance(source, dict) or type(source.get('schema')) is not int or
-            source['schema'] not in (1, 2, 3, 4, 5)):
+            source['schema'] not in (1, 2, 3, 4, 5, 6)):
         raise ValueError('private prefix source failed shared policy compilation')
     fields = set(PREFIX_SOURCE_FIELDS)
-    if source['schema'] == 3 or source['schema'] == 4 and 'packet_candidate_pairs' in source:
+    if source['schema'] == 3 or source['schema'] in (4, 6) and 'packet_candidate_pairs' in source:
         fields.add('packet_candidate_pairs')
-    if source['schema'] == 5 and 'hysteria_candidate_pairs' in source:
+    if source['schema'] in (5, 6) and 'hysteria_candidate_pairs' in source:
         fields.add('hysteria_candidate_pairs')
     return fields
 
@@ -867,7 +867,7 @@ def compiled_extended_node_chain_prefix_source(canonical, reference, node, origi
         raise bad
     source = decode(body)
     if (not isinstance(source, dict) or type(source.get('schema')) is not int or
-            source['schema'] not in (3, 4, 5) or source.get('kind') != 'routervpn-server-node-chain-prefix-source' or
+            source['schema'] not in (3, 4, 5, 6) or source.get('kind') != 'routervpn-server-node-chain-prefix-source' or
             original is not None and source != original or type(reference.get('schema')) is not int or
             reference['schema'] != source['schema'] or reference.get('purpose') != PREFIX_PURPOSE or
             reference.get('entry_node_id') != node):
@@ -881,8 +881,8 @@ def compiled_extended_node_chain_prefix_source(canonical, reference, node, origi
         raise bad
     packet_modes = ('wg', 'awg2-fast', 'awg2-strong')
     mode = candidates[0].get('mode')
-    pair_name = ('packet_candidate_pairs' if schema in (3, 4) and mode in packet_modes else
-                 'hysteria_candidate_pairs' if schema == 5 and mode == 'hysteria2' else None)
+    pair_name = ('packet_candidate_pairs' if schema in (3, 4, 6) and mode in packet_modes else
+                 'hysteria_candidate_pairs' if schema in (5, 6) and mode == 'hysteria2' else None)
     extra = {pair_name} if pair_name else set()
     descriptor_fields = {'schema', 'purpose', 'source_sha256', 'entry_node_id', 'entry_peer_addresses', 'local_prefix', 'members', 'candidates'}
     if set(source) != PREFIX_SOURCE_FIELDS | extra or set(reference) != descriptor_fields | extra:
@@ -925,7 +925,7 @@ def compiled_extended_node_chain_prefix_source(canonical, reference, node, origi
                         not public(member['server_public_key']) or member['client_public_key'] == member['server_public_key']):
                     raise bad
             elif (position == 0 or member.get('mode') not in ('shadowsocks', 'hysteria2') or
-                    member['mode'] == 'hysteria2' and schema != 5 or set(member) != stream_fields or
+                    member['mode'] == 'hysteria2' and schema not in (5, 6) or set(member) != stream_fields or
                     member['client_public_key'] != '' or member['server_public_key'] != '' or
                     not all(digest(member[key]) for key in ('transport_sha256', 'companion_sha256')) or
                     not all(public(member[key]) for key in ('companion_client_public_key', 'companion_server_public_key')) or
@@ -942,10 +942,15 @@ def compiled_extended_node_chain_prefix_source(canonical, reference, node, origi
             raise bad
         if mode == 'shadowsocks' and not any(value in packet_modes for value in modes[modes.index('shadowsocks') + 1:]):
             raise bad
-    else:
+    elif schema == 5:
         if mode not in ('shadowsocks', 'hysteria2') or mode == 'shadowsocks' and 'hysteria2' not in modes:
             raise bad
         if 'hysteria2' in modes and any(value in packet_modes for value in modes[modes.index('hysteria2') + 1:]):
+            raise bad
+    else:
+        if schema != 6 or 'hysteria2' not in modes or mode not in (*packet_modes, 'shadowsocks', 'hysteria2'):
+            raise bad
+        if mode not in packet_modes and not any(value in packet_modes for value in modes[modes.index('hysteria2') + 1:]):
             raise bad
     for position, member in enumerate(members, 1):
         paired = local[position]
@@ -1002,7 +1007,7 @@ def compiled_node_chain_prefix_source(raw, node, original=None):
     if not isinstance(compiled, dict) or set(compiled) != {'source_json', 'reference'}:
         raise bad
     canonical, reference = compiled['source_json'], compiled['reference']
-    if isinstance(reference, dict) and reference.get('schema') in (3, 4, 5):
+    if isinstance(reference, dict) and reference.get('schema') in (3, 4, 5, 6):
         return compiled_extended_node_chain_prefix_source(canonical, reference, node, original)
     descriptor_fields = {'schema', 'purpose', 'source_sha256', 'entry_node_id', 'entry_peer_addresses', 'local_prefix', 'members', 'candidates'}
     if not isinstance(canonical, str) or not isinstance(reference, dict) or set(reference) != descriptor_fields:
@@ -1106,7 +1111,7 @@ def compile_node_chain_prefix_plan(path, node):
         original = private_snapshot(path, 64 << 10)
         plan = decode(original[1])
         if (not isinstance(plan, dict) or set(plan) != {'schema', 'purpose', 'entry_node_id', 'entry', 'members', 'candidates'} or
-                type(plan['schema']) is not int or plan['schema'] not in (1, 2, 3, 4, 5) or plan['purpose'] != PREFIX_PURPOSE or plan['entry_node_id'] != node or
+                type(plan['schema']) is not int or plan['schema'] not in (1, 2, 3, 4, 5, 6) or plan['purpose'] != PREFIX_PURPOSE or plan['entry_node_id'] != node or
                 not isinstance(plan['members'], list) or len(plan['members']) > 94 or
                 not isinstance(plan['candidates'], list) or not 1 <= len(plan['candidates']) <= 50):
             raise bad
@@ -1146,7 +1151,7 @@ def compile_node_chain_prefix_plan(path, node):
             if not isinstance(member, dict) or set(member) != {'paired', 'server_peer'}:
                 raise bad
             resolved['members'].append(dict(paired=selection(member['paired']), server_peer=selection(member['server_peer'], True)))
-        paired_candidates = plan['schema'] == 3 or (plan['schema'] in (4, 5) and
+        paired_candidates = plan['schema'] == 3 or (plan['schema'] in (4, 5, 6) and
                             isinstance(plan['candidates'][0], dict) and set(plan['candidates'][0]) == {'paired', 'server_peer'})
         if paired_candidates:
             for value in plan['candidates']:

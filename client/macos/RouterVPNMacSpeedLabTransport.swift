@@ -193,13 +193,10 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
         func appendExecutionPath(_ nodes: [[String: String]], nextMode: String) -> Bool {
             guard ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"].contains(nextMode),
                   ["wg", "awg2-fast", "awg2-strong"].contains(nodes.first?["mode"] ?? "") else { return false }
-            var hysteriaTail=false
             for node in nodes {
                 guard let mode=node["mode"], ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"].contains(mode) else { return false }
-                if hysteriaTail && ["wg", "awg2-fast", "awg2-strong"].contains(mode) { return false }
-                if mode == "hysteria2" { hysteriaTail=true }
             }
-            return !hysteriaTail || ["shadowsocks", "hysteria2"].contains(nextMode)
+            return true
         }
         let performanceValid: Bool
         switch url.path {

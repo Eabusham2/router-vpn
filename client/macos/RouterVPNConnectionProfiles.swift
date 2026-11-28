@@ -569,8 +569,6 @@ struct RouterVPNOrderedNodeDraft {
         guard validAppendPrefix(nodes,maximum:95) else { return false }
         guard RouterVPNOrderedNodes.prefixModes.contains(nodes.first?["mode"] ?? ""),
               nodes.allSatisfy({RouterVPNOrderedNodes.prefixModes.contains($0["mode"] ?? "") || ["shadowsocks","hysteria2"].contains($0["mode"] ?? "")}) else { return false }
-        if let firstHysteria=nodes.firstIndex(where:{$0["mode"] == "hysteria2"}),
-           nodes.dropFirst(firstHysteria).contains(where:{RouterVPNOrderedNodes.prefixModes.contains($0["mode"] ?? "")}) { return false }
         return nodes.allSatisfy { row in
             guard let id=row["id"], let mode=row["mode"],
                   let profile=capturedCatalog.first(where:{$0["id"] as? String == id}) else { return false }
@@ -580,7 +578,6 @@ struct RouterVPNOrderedNodeDraft {
     }
     func acceptsExecutionAppend(mode: String) -> Bool {
         guard executionAppendEligible else { return false }
-        if modes.contains("hysteria2") { return ["shadowsocks","hysteria2"].contains(mode) }
         return ["shadowsocks","hysteria2"].contains(mode) || RouterVPNOrderedNodes.prefixModes.contains(mode)
     }
     func appendBody(mode: String, kind: String = "router-vpn", requestedExecution: String = "local", revision: UUID, current: [String:Any]) throws -> [String:Any] {
@@ -1923,7 +1920,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
             let mode=remoteModes.first(where:{choice == "server-"+$0 || choice == "auto-"+$0}) ?? (choice == "external-shadowsocks" ? "shadowsocks":choice)
             let kind=choice == "external-shadowsocks" ? "external":"router-vpn"
             let requested=remoteModes.contains(where:{choice == "server-"+$0}) ? "server":remoteModes.contains(where:{choice == "auto-"+$0}) ? "auto":"local"
-            guard requested == "local" || draft.acceptsExecutionAppend(mode: mode) else { throw RouterVPNOrderedNodes.issue("Server and Compare require a WireGuard or AmneziaWG first hop, paired nodes with literal addresses, and Start Layer Off. After Hysteria2, choose Shadowsocks or Hysteria2.") }
+            guard requested == "local" || draft.acceptsExecutionAppend(mode: mode) else { throw RouterVPNOrderedNodes.issue("Server and Compare require a WireGuard or AmneziaWG first hop, paired nodes with literal addresses, and Start Layer Off.") }
             let current=try owner.api.json("/api/profiles",timeout:5) as? [String:Any] ?? [:]
             let original=revision, position=draft.prefixes.count-1
             let body=try draft.appendBody(mode:mode,kind:kind,requestedExecution:requested,revision:original,current:current)

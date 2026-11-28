@@ -88,6 +88,9 @@ func (m NodeChainPrefixCandidate) valid() bool {
 }
 
 func (s NodeChainPrefixDescriptor) Validate() error {
+	if s.Schema == 6 {
+		return s.validateHysteriaPacketPrefix()
+	}
 	if s.Schema == 5 {
 		return s.validateHysteriaPrefix()
 	}
@@ -356,6 +359,8 @@ func (s NodeChainPrefixDescriptor) Digest() (string, error) {
 		domain = "routervpn-node-chain-prefix-descriptor-v4"
 	} else if s.Schema == 5 {
 		domain = "routervpn-node-chain-prefix-descriptor-v5"
+	} else if s.Schema == 6 {
+		domain = "routervpn-node-chain-prefix-descriptor-v6"
 	}
 	return nodeChainDigest(domain, s)
 }
@@ -385,14 +390,14 @@ func (q NodeChainPrefixRequest) validateShape() error {
 	if q.SelectionSHA256 != "" && !proofID.MatchString(q.SelectionSHA256) {
 		return errNodeChainPrefix
 	}
-	if q.Schema != 1 && q.Schema != 2 && q.Schema != 3 && q.Schema != 4 && q.Schema != 5 || q.Purpose != NodeChainPrefixPurpose || !nonce.MatchString(q.SessionID) || !proofID.MatchString(q.EntryNodeID) ||
+	if q.Schema != 1 && q.Schema != 2 && q.Schema != 3 && q.Schema != 4 && q.Schema != 5 && q.Schema != 6 || q.Purpose != NodeChainPrefixPurpose || !nonce.MatchString(q.SessionID) || !proofID.MatchString(q.EntryNodeID) ||
 		!proofID.MatchString(q.SourceSHA256) || !proofID.MatchString(q.DescriptorSHA256) || !proofID.MatchString(q.LocalSourceSHA256) ||
 		!proofID.MatchString(q.InventorySHA256) || !proofID.MatchString(q.Epoch) || !proofID.MatchString(q.FrontSeed) ||
 		!nodeChainPrivateAddress(q.Peer) || q.AcquireExpiresAt <= 0 || q.Port < 1024 || q.Port > 65535 ||
 		len(q.LocalPacketPublicKeys) < 1 || len(q.LocalPacketPublicKeys) > NodeChainPrefixMaximumMembers {
 		return errNodeChainPrefix
 	}
-	if (q.Schema == 1 || q.Schema == 3) && q.PrefixCount != 0 || (q.Schema == 2 || q.Schema == 4) && (q.PrefixCount < 2 || q.PrefixCount > NodeChainPrefixMaximumMembers || q.PrefixCount <= len(q.LocalPacketPublicKeys)) {
+	if (q.Schema == 1 || q.Schema == 3) && q.PrefixCount != 0 || (q.Schema == 2 || q.Schema == 4 || q.Schema == 6) && (q.PrefixCount < 2 || q.PrefixCount > NodeChainPrefixMaximumMembers || q.PrefixCount <= len(q.LocalPacketPublicKeys)) {
 		return errNodeChainPrefix
 	}
 	if q.Schema == 5 && (q.PrefixCount < 1 || q.PrefixCount > NodeChainPrefixMaximumMembers || q.PrefixCount < len(q.LocalPacketPublicKeys)) {
@@ -457,6 +462,8 @@ func (q NodeChainPrefixRequest) Digest() (string, error) {
 		domain = "routervpn-node-chain-prefix-request-v4"
 	} else if q.Schema == 5 {
 		domain = "routervpn-node-chain-prefix-request-v5"
+	} else if q.Schema == 6 {
+		domain = "routervpn-node-chain-prefix-request-v6"
 	}
 	return nodeChainDigest(domain, q)
 }

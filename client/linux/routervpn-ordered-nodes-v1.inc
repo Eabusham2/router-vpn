@@ -1055,19 +1055,15 @@ static gboolean linux_ordered_execution_append_v1(const LinuxOrderedEditorV1 *ed
     if (!linux_ordered_prefix_v1(next_mode) && g_strcmp0(next_mode,"shadowsocks") && g_strcmp0(next_mode,"hysteria2")) return FALSE;
     if (!editor->append_only || editor->external_exit || editor->ids->len < 1 || editor->ids->len > 95 || editor->ids->len != editor->modes->len) return FALSE;
     JsonObject *catalog=json_node_get_object(editor->catalog);
-    gboolean hysteria_tail=FALSE;
     for (guint i=0;i<editor->ids->len;i++) {
         JsonObject *profile=external_source_profile_v24(catalog,g_ptr_array_index(editor->ids,i));
         const char *mode=g_ptr_array_index(editor->modes,i);
         if (!linux_ordered_router_v1(profile) || !linux_ordered_paired_off_v1(profile)) return FALSE;
-        if (linux_ordered_prefix_v1(mode)) {
-            if (hysteria_tail) return FALSE;
-        } else {
+        if (!linux_ordered_prefix_v1(mode)) {
             if (i==0 || (strcmp(mode,"shadowsocks") && strcmp(mode,"hysteria2")) || !linux_ordered_paired_proxy_member_v1(profile,mode)) return FALSE;
-            if (!strcmp(mode,"hysteria2")) hysteria_tail=TRUE;
         }
     }
-    return !hysteria_tail || !g_strcmp0(next_mode,"shadowsocks") || !g_strcmp0(next_mode,"hysteria2");
+    return TRUE;
 }
 
 static const char *linux_ordered_editor_final_mode_v1(LinuxOrderedEditorV1 *editor) {

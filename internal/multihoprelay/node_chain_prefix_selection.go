@@ -197,17 +197,17 @@ func (q NodeChainPrefixSelectionRequest) Validate() error {
 	}
 	ids, nodes, sources, keys := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	companions, transports := map[string]bool{}, map[string]bool{}
-	hysteria := false
+	// The actual catalog compiler selects the canonical family, including a
+	// genuine packet continuation after HY2. This request grants no endpoint.
 	for i, member := range q.LocalPrefix {
 		if nodeChainPacketMode(member.Mode) {
-			if hysteria || !member.valid(i) {
+			if !member.valid(i) {
 				return errNodeChainPrefix
 			}
 		} else {
 			if !member.validHysteriaStream(i) || companions[member.CompanionSHA256] || transports[member.TransportSHA256] {
 				return errNodeChainPrefix
 			}
-			hysteria = hysteria || member.Mode == "hysteria2"
 			companions[member.CompanionSHA256], transports[member.TransportSHA256] = true, true
 		}
 		client, server := member.hysteriaIdentityKeys()
@@ -218,9 +218,6 @@ func (q NodeChainPrefixSelectionRequest) Validate() error {
 		keys[client], keys[server] = true, true
 	}
 	mode := q.Candidates[0].Mode
-	if hysteria && nodeChainPacketMode(mode) {
-		return errNodeChainPrefix
-	}
 	for _, candidate := range q.Candidates {
 		if !candidate.valid(mode) || ids[candidate.ProfileID] || nodes[candidate.NodeID] || sources[candidate.SourceSHA256] {
 			return errNodeChainPrefix

@@ -161,7 +161,7 @@ func (s NodeChainPrefixDescriptor) validateHysteriaPrefix() error {
 // HysteriaCandidateMode is descriptive; the original private policy and native
 // endpoint are still required before a candidate can be prepared or observed.
 func (s NodeChainPrefixDescriptor) HysteriaCandidateMode() string {
-	if s.Schema != 5 || s.Validate() != nil || s.Candidates[0].Mode != "hysteria2" {
+	if s.Schema != 5 && s.Schema != 6 || s.Validate() != nil || s.Candidates[0].Mode != "hysteria2" {
 		return ""
 	}
 	return s.Candidates[0].Mode
@@ -173,7 +173,7 @@ func (q NodeChainPrefixCandidateRequest) IsHysteria() bool {
 }
 
 func (c NodeChainPrefixCandidateCapture) hysteriaPair() (NodeChainPrefixHysteriaCandidatePair, error) {
-	if !c.Request.IsHysteria() || c.Lease.Source.Schema != 5 || c.Request.CandidateClientPublicKey != "" ||
+	if !c.Request.IsHysteria() || c.Lease.Source.Schema != 5 && c.Lease.Source.Schema != 6 || c.Request.CandidateClientPublicKey != "" ||
 		len(c.Lease.Source.HysteriaCandidatePairs) != len(c.Lease.Source.Candidates) {
 		return NodeChainPrefixHysteriaCandidatePair{}, errNodeChainPrefix
 	}

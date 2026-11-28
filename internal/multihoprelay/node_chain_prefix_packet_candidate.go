@@ -93,7 +93,7 @@ func (s NodeChainPrefixDescriptor) validatePacketCandidates() error {
 // PacketCandidateMode is descriptive readback of the validated public
 // commitment. The original policy, request and native owners remain mandatory.
 func (s NodeChainPrefixDescriptor) PacketCandidateMode() string {
-	if s.Schema != 3 && s.Schema != 4 || s.Validate() != nil || !nodeChainPacketMode(s.Candidates[0].Mode) {
+	if s.Schema != 3 && s.Schema != 4 && s.Schema != 6 || s.Validate() != nil || !nodeChainPacketMode(s.Candidates[0].Mode) {
 		return ""
 	}
 	return s.Candidates[0].Mode
@@ -105,7 +105,7 @@ func (q NodeChainPrefixCandidateRequest) IsPacket() bool {
 }
 
 func (c NodeChainPrefixCandidateCapture) packetPair() (NodeChainPrefixPacketCandidatePair, error) {
-	if !c.Request.IsPacket() || c.Lease.Source.Schema != 3 && c.Lease.Source.Schema != 4 ||
+	if !c.Request.IsPacket() || c.Lease.Source.Schema != 3 && c.Lease.Source.Schema != 4 && c.Lease.Source.Schema != 6 ||
 		len(c.Lease.Source.PacketCandidatePairs) != len(c.Lease.Source.Candidates) {
 		return NodeChainPrefixPacketCandidatePair{}, errNodeChainPrefix
 	}

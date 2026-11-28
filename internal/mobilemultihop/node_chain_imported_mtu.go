@@ -78,9 +78,26 @@ func applyNodeChainCapturedStreamPacketMTUOwned(members []nodeChainGraphMember, 
 				if !appendOwned && (completeScope == nil || !completeScope.admitsProxy(at, closure, "hysteria2")) {
 					return nodeChainError
 				}
-				// HY2 owns native UDP message fragmentation/reassembly. The
-				// normal ordered MTU pass already retained this proxy TUN and
-				// the packet cap; raw SS overhead cannot be extended across QUIC.
+				// HY2 fragments its complete UDP message, whose finite native
+				// bound includes this packet and every intervening SS wrapper.
+				// It is not the preceding proxy's TUN or a physical IP MTU.
+				envelope, err := awgpolicy.CapturedHysteriaPacketEnvelopeWithHostnameFamilies(packet, all, final["tag"].(string), hostnameIPv4Only)
+				if err != nil {
+					return err
+				}
+				requested, err := mtuNumber(packet["mtu"])
+				if err != nil {
+					return err
+				}
+				fixed, err := fixedMTU(members[position].profile)
+				if err != nil {
+					return err
+				}
+				capacity, err := envelope.Capacity(requested, fixed != 0)
+				if err != nil {
+					return err
+				}
+				closures[position].final["mtu"] = float64(capacity)
 				return nil
 			}
 			if members[at].mode != "shadowsocks" {

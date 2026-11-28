@@ -100,7 +100,7 @@ func (r *relayNodeChainExecRunner) startPrefixWithSource(ctx context.Context, ca
 	}
 	p.original = original
 	p.packetKeys = &r.packetKeys
-	if capture.Source.Schema == 3 || capture.Source.Schema == 4 && capture.Source.PacketCandidateMode() != "" {
+	if capture.Source.Schema == 3 || (capture.Source.Schema == 4 || capture.Source.Schema == 6) && capture.Source.PacketCandidateMode() != "" {
 		p.packetCandidateKeys = policy.PacketCandidateRuntimeKeys
 	}
 	if capture.Source.HysteriaCandidateMode() != "" {

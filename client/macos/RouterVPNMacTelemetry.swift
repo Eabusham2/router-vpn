@@ -1623,10 +1623,6 @@ private enum RouterVPNOrderedCandidateDisplay {
         if executionAppend {
             guard nodes[0]["kind"] == "router-vpn", ["wg","awg2-fast","awg2-strong"].contains(nodes[0]["mode"] ?? ""),
                   nodes.allSatisfy({$0["kind"] == "router-vpn" && ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"].contains($0["mode"] ?? "")}) else { return nil }
-            if let firstHysteria=nodes.firstIndex(where:{$0["mode"] == "hysteria2"}) {
-                guard ["shadowsocks","hysteria2"].contains(mode),
-                      nodes.dropFirst(firstHysteria).allSatisfy({!["wg","awg2-fast","awg2-strong"].contains($0["mode"] ?? "")}) else { return nil }
-            }
         }
         var ids=Set<String>()
         guard nodes.enumerated().allSatisfy({ i,node in

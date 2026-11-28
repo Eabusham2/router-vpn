@@ -39,17 +39,15 @@ final class AndroidNodeCandidateAppendSource {
         if(!List.of("server","auto").contains(execution)||!"router-vpn".equals(kind)||mode==null||!EXECUTION_NEXT_MODES.contains(mode)
                 ||members.isEmpty()||members.size()>95||members.size()!=modes.size())return false;
         try {
-            boolean hasHysteria=false;
             for(int i=0;i<members.size();i++) {
                 AndroidNodeStore.ChainSource member=members.get(i);String retainedMode=modes.get(i);
                 boolean packet=List.of("wg","awg2-fast","awg2-strong").contains(retainedMode);
-                if(packet&&hasHysteria||!packet&&(i==0||!proxyEntryMode(retainedMode)))return false;
-                hasHysteria|="hysteria2".equals(retainedMode);
+                if(!packet&&(i==0||!proxyEntryMode(retainedMode)))return false;
                 if(member.imported||!List.of("","off").contains(member.profile().optString("start_layer","off")))return false;
                 member.requirePairedIdentity();AndroidNumericAddress.parse(member.profile().getString("endpoint"));
                 if(!permitsPrefixMember(member,retainedMode,i,false))return false;
             }
-            return !hasHysteria||proxyEntryMode(mode);
+            return true;
         } catch(Exception unavailable){return false;}
     }
     static boolean supportsNext(String kind,String mode){return "router-vpn".equals(kind)&&supportsNextMode(mode)||"external".equals(kind)&&"shadowsocks".equals(mode);}

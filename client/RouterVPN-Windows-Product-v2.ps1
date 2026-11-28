@@ -200,8 +200,31 @@ function Write-RouterVPNDesktopConnectStage([string]$Stage){
     if($Stage-cnotin @('bootstrap','manifest','initial-refresh','import','selection-refresh','connect','traffic','peer-stop','loss','disconnect')){return}
     try{[Console]::Error.WriteLine('Router VPN Windows connect stage: '+$Stage)}catch{} # Diagnostic output cannot replace the original operation or error.
 }
+function Write-RouterVPNDesktopConnectFailure([string]$Stage){
+    if(-not$SelfTest-or$env:ROUTERVPN_CONNECTION_SELF_TEST-cne'1'-or$env:ROUTERVPN_CAPTURE_SELF_TEST_LAYOUT-cne'1'){return}
+    try{
+        $Tail=[string]$DiagnosticsBox.Text
+        if($Tail.Length-gt8192){$Tail=$Tail.Substring($Tail.Length-8192)}
+        $Status=@{}
+        if($null-ne$script:RouterVPNDesktopConnectLastStatus){
+            foreach($Name in @('phase','mode','runtime_mode','logical_mode','base','router_id','connected','socks','last_error')){
+                $Property=$script:RouterVPNDesktopConnectLastStatus.PSObject.Properties[$Name]
+                if($null-ne$Property){
+                    if($Property.Value-is[bool]){$Status[$Name]=$Property.Value}
+                    elseif($null-ne$Property.Value){$Value=[string]$Property.Value;$Limit=if($Name-ceq'last_error'){2048}else{256};$Status[$Name]=$Value.Substring(0,[Math]::Min($Limit,$Value.Length))}
+                }
+            }
+        }
+        $Task=$script:UnifiedAsyncTask
+        $Async=@{active=[bool]$script:UnifiedAsyncActive;completing=[bool]$script:UnifiedAsyncCompleting;closed=[bool]$script:UnifiedAsyncClosed;cancelled=[bool]$script:UnifiedAsyncCancelled;task_present=($null-ne$Task)}
+        if($null-ne$Task){$Async.task_status=[string]$Task.Status;$Async.task_completed=[bool]$Task.IsCompleted;$Async.task_faulted=[bool]$Task.IsFaulted;$Async.task_cancelled=[bool]$Task.IsCanceled}
+        $Diagnostic=@{schema=1;stage=$Stage;diagnostics_tail=$Tail;last_observed_status=$Status;async=$Async}
+        [Console]::Error.WriteLine('Router VPN Windows connect failure detail: '+($Diagnostic|ConvertTo-Json -Depth 5 -Compress))
+    }catch{} # Diagnostic output cannot replace the original operation or error.
+}
 function Invoke-DesktopConnectSelfTest{
  $Clock=[Diagnostics.Stopwatch]::StartNew();$Stage='manifest';Write-RouterVPNDesktopConnectStage 'manifest';$Run='';$Started=$false;$Failure=$null
+ $script:RouterVPNDesktopConnectLastStatus=$null
  $Result=@{schema=1;run_id='';phase='complete';status='failed';connect=$false;traffic=$false;loss=$false;disconnect=$false;failure_stage=$Stage}
  try{
   $Fixture=Read-DesktopConnectJSON 'desktop-connect-fixture.json' (1MB)
@@ -240,6 +263,7 @@ function Invoke-DesktopConnectSelfTest{
   $Button.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
   Wait-DesktopConnect {
    $Current=Api '/api/status' -Timeout 3
+   $script:RouterVPNDesktopConnectLastStatus=$Current
    if([string]$Current.phase-ceq'failed'){throw 'The normal Connect action failed.'}
    if([bool]$Current.connected){
     if([string]$Current.router_id-cne$ID-or[string]$Current.runtime_mode-cne'wg'-or[string]$Current.logical_mode-cne'base-raw'-or[string]$Current.base-cne'wg'-or[bool]$Current.socks){throw 'Desktop connection returned a different runtime or profile.'}
@@ -261,9 +285,9 @@ function Invoke-DesktopConnectSelfTest{
   if(-not$Denied){throw 'Desktop connection bypassed the stopped private peer.'}
   $Result.loss=$true;$Stage='disconnect';Write-RouterVPNDesktopConnectStage 'disconnect'
   $Button.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
-  Wait-DesktopConnect {$Current=Api '/api/status' -Timeout 3;return (-not[bool]$Current.connected-and[string]$Current.phase-ceq'off'-and[string]$Current.mode-ceq'off'-and-not(UnifiedAsyncBusy))} $Clock $Run -Cleanup
+  Wait-DesktopConnect {$Current=Api '/api/status' -Timeout 3;$script:RouterVPNDesktopConnectLastStatus=$Current;return (-not[bool]$Current.connected-and[string]$Current.phase-ceq'off'-and[string]$Current.mode-ceq'off'-and-not(UnifiedAsyncBusy))} $Clock $Run -Cleanup
   $Result.disconnect=$true;$Result.status='passed';$Result.failure_stage=''
- }catch{$Failure=$_;$Result.failure_stage=$Stage}
+ }catch{$Failure=$_;$Result.failure_stage=$Stage;Write-RouterVPNDesktopConnectFailure $Stage}
  finally{
   if($Started-and-not$Result.disconnect){
    try{[void](CancelUnifiedApiAsync $false);[void](Api '/api/disconnect' 'POST' @{} 20);$Current=Api '/api/status' -Timeout 3;$Result.disconnect=(-not[bool]$Current.connected-and[string]$Current.phase-ceq'off'-and[string]$Current.mode-ceq'off')}catch{$Result.disconnect=$false}

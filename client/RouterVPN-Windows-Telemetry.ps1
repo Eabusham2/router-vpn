@@ -1003,7 +1003,6 @@ function TestOrderedCandidateAppendEnvelope($S,$Value){
  $proxyEntry=$nodes[0].kind-ceq'router-vpn'-and$nodes[0].mode-cin@('shadowsocks','hysteria2')
  if($proxyEntry-and$external){return $false}
  $ids=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
- $hysteriaTail=$false
  for($i=0;$i-lt$nodes.Count;$i++){
   $node=$nodes[$i];$original=$draft.nodes[$i]
   $keys=if($node-is[Collections.IDictionary]){$node.Keys}else{$node.PSObject.Properties.Name}
@@ -1016,11 +1015,9 @@ function TestOrderedCandidateAppendEnvelope($S,$Value){
      -not$ids.Add($node.id)-or-not($packet-or$stream-or$hy2)-or($proxyEntry-and$node.kind-cne'router-vpn')-or
      $original.id-cne$node.id-or$original.mode-cne$node.mode){return $false}
   if($executionAppend){
-   if(($i-eq0-and-not$packet)-or$node.kind-cne'router-vpn'-or($hysteriaTail-and$packet)){return $false}
-   if($hy2){$hysteriaTail=$true}
+   if(($i-eq0-and-not$packet)-or$node.kind-cne'router-vpn'){return $false}
   }
  }
- if($executionAppend-and$hysteriaTail-and$mode-cnotin@('shadowsocks','hysteria2')){return $false}
  return $true
 }
 function TestOrderedCandidateAppendPath($S,$View,$Choice,$Path){

@@ -118,14 +118,14 @@ func (s *NodeChainServerPrefixSession) bindConfig() error {
 	if s.policy.validate() != nil || len(s.policy.nodes) == 0 || s.carrier == nil || !s.carrier.sealed() {
 		return errNodeChainAppendExecution
 	}
-	if (s.policy.record.Schema == 2 || s.policy.record.Schema == 4 || s.policy.record.Schema == 5) && s.policy.nodes[0].mode == "shadowsocks" {
+	if (s.policy.record.Schema == 2 || s.policy.record.Schema == 4 || s.policy.record.Schema == 5 || s.policy.record.Schema == 6) && s.policy.nodes[0].mode == "shadowsocks" {
 		// A real SS root is a TCP carrier, not a packet ancestor. The original
 		// typed append graph remains unchanged; no endpoint MTU is fabricated.
 		target, err := nodeChainPrefixStreamPhysical(s.policy.nodes[0], s.policy.record.Schema)
 		if err != nil || target != s.carrier.target || s.policy.prefix.record.Schema != 3 {
 			return nodeChainServerCarrierError
 		}
-	} else if s.policy.record.Schema == 5 && s.policy.nodes[0].mode == "hysteria2" {
+	} else if (s.policy.record.Schema == 5 || s.policy.record.Schema == 6) && s.policy.nodes[0].mode == "hysteria2" {
 		// HY2 retains its actual UDP carrier and exact QUIC options. It is not
 		// a packet ancestor and supplies no synthetic endpoint MTU allowance.
 		closure, err := nodeMultihopPredecessor(s.policy.nodes[0])
