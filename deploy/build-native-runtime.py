@@ -1422,7 +1422,10 @@ class AndroidConnectionQualification:
         self.adb_prefix = [self.adb_path, '-H', '127.0.0.1', '-P', '5038', '-s', self.serial]
         self.emulator = self.adb_server = None
 
-    def adb(self, *args, timeout=20, input_data=None):
+    def adb(self, *args, timeout=20, input_data=None, inspection=None):
+        if inspection is not None:
+            return self.command(self.adb_prefix+list(args), timeout, env=self.env, input_data=input_data,
+                                android_inspection=inspection)
         return self.command(self.adb_prefix+list(args), timeout, env=self.env, input_data=input_data)
 
     def spawn(self, role, argv):
@@ -1543,10 +1546,10 @@ class AndroidConnectionQualification:
                 'allowlist': '' if raw['always_on_vpn_lockdown_whitelist'] == 'null' else raw['always_on_vpn_lockdown_whitelist']}
 
     def snapshot(self, phase):
-        links = self.adb('shell', 'ip', '-o', 'link', 'show')
-        addresses = self.adb('shell', 'ip', '-o', 'addr', 'show')
-        routes4 = self.adb('shell', 'ip', '-4', 'route', 'show', 'table', 'all')
-        routes6 = self.adb('shell', 'ip', '-6', 'route', 'show', 'table', 'all')
+        links = self.adb('shell', 'ip', '-o', 'link', 'show', inspection=(phase, 'links'))
+        addresses = self.adb('shell', 'ip', '-o', 'addr', 'show', inspection=(phase, 'addresses'))
+        routes4 = self.adb('shell', 'ip', '-4', 'route', 'show', 'table', 'all', inspection=(phase, 'routes4'))
+        routes6 = self.adb('shell', 'ip', '-6', 'route', 'show', 'table', 'all', inspection=(phase, 'routes6'))
         interfaces = []
         for line in links.splitlines():
             match = re.match(r'([0-9]+): ([^:@ ]+)(?:@[^: ]+)?:.*\bmtu ([0-9]+)', line)
@@ -1796,6 +1799,47 @@ class AndroidConnectionQualification:
             raise ValueError('The original Android screenshot is not a PNG')
         self.result.setdefault('android_captures',[]).append({'phase':phase,'sha256':hashlib.sha256(raw).hexdigest(),'bytes':len(raw)})
 
+    def remaining_group_observation(self, owner):
+        # Failure evidence only. This never replaces the original killpg result,
+        # joins a different process, or turns containment into service cleanup.
+        observed = {'pgid': owner['pgid'], 'members': [], 'entries_examined': 0,
+                    'unreadable': 0, 'truncated': False}
+        with os.scandir('/proc') as entries:
+            for entry in entries:
+                if observed['entries_examined'] >= 4096:
+                    observed['truncated'] = True
+                    break
+                observed['entries_examined'] += 1
+                if not entry.name.isascii() or not entry.name.isdecimal():
+                    continue
+                try:
+                    with open(entry.path+'/stat', 'rb') as stream:
+                        raw = stream.read(8193)
+                    end = raw.rfind(b')')
+                    fields = raw[end+2:].split()
+                    if len(raw) > 8192 or end < 1 or len(fields) < 20:
+                        raise ValueError('Unrecognized bounded process stat')
+                    pid = int(entry.name)
+                    if int(raw.split(b' ', 1)[0]) != pid:
+                        raise ValueError('Process stat identity changed')
+                    if int(fields[2]) != owner['pgid']:
+                        continue
+                    state = fields[0].decode('ascii')
+                    if len(state) != 1 or state not in 'RSDZTWtXxKPI':
+                        raise ValueError('Unrecognized bounded process state')
+                    observed['members'].append({'pid': pid, 'ppid': int(fields[1]),
+                        'pgid': int(fields[2]), 'session_id': int(fields[3]),
+                        'state': state, 'starttime_ticks': int(fields[19])})
+                    if len(observed['members']) >= 32:
+                        observed['truncated'] = True
+                        break
+                except FileNotFoundError:
+                    continue  # exited during this passive observation
+                except (OSError, ValueError, UnicodeError, IndexError):
+                    observed['unreadable'] += 1
+        observed['members'].sort(key=lambda value: value['pid'])
+        return observed
+
     def close(self):
         import select
         failures=[]
@@ -1865,6 +1909,12 @@ class AndroidConnectionQualification:
             joined=owner.get('joined') is True
             receipts.append({'role':owner['role'],'pid':child.pid,'joined':joined,'exit_code':child.returncode,
                              'pidfd_terminal':terminal,'original_group_empty':group_empty})
+            if not group_empty and owner['role'] == 'android-emulator':
+                try:
+                    receipts[-1]['remaining_group_observation'] = self.remaining_group_observation(owner)
+                except BaseException as observation_error:
+                    receipts[-1]['remaining_group_observation'] = {'available': False,
+                        'failure': type(observation_error).__name__}
             if not joined or not terminal or not group_empty:failures.append(owner['role']+'-original-owner-retained')
             if fd is not None and terminal:
                 try:os.close(fd);owner['pidfd']=None
@@ -1958,11 +2008,25 @@ def desktop_connect(package, family, evidence, android_apk=None):
             raise ValueError('Desktop connection phase changed during readback')
         return value
 
-    def command(argv, timeout=20, inspection=None, env=None, input_data=None):
+    def command(argv, timeout=20, inspection=None, env=None, input_data=None, android_inspection=None):
         # Fixed OS inspection / package commands only. The original child is
         # retained before wait, and every timeout joins that child before error.
         if inspection not in (None, 'before', 'during', 'after', 'cleanup'):
             raise ValueError('Unknown fixed desktop network inspection')
+        if android_inspection is not None:
+            fixed_android = {
+                'links': ['shell', 'ip', '-o', 'link', 'show'],
+                'addresses': ['shell', 'ip', '-o', 'addr', 'show'],
+                'routes4': ['shell', 'ip', '-4', 'route', 'show', 'table', 'all'],
+                'routes6': ['shell', 'ip', '-6', 'route', 'show', 'table', 'all'],
+            }
+            if (not android or inspection is not None or android_session is None or
+                    not isinstance(android_inspection, tuple) or len(android_inspection) != 2):
+                raise ValueError('Unknown fixed Android network inspection')
+            phase, kind = android_inspection
+            if (phase not in ('before', 'during', 'after', 'cleanup') or kind not in fixed_android or
+                    [str(v) for v in argv] != [str(v) for v in android_session.adb_prefix+fixed_android[kind]]):
+                raise ValueError('Android inspection changed its original command owner')
         command_deadline = min(deadline_all, time.monotonic()+timeout)
         if inspection == 'before':
             command_deadline = min(command_deadline, deadline_all-280)
@@ -1978,11 +2042,13 @@ def desktop_connect(package, family, evidence, android_apk=None):
                                      stderr=diagnostics if inspection is not None else subprocess.STDOUT)
             command_children.append(child)  # original handles survive every failed wait through final readback
             primary = None
+            command_joined = False
             try:
                 remaining = command_deadline-time.monotonic()
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired([str(v) for v in argv], timeout)
                 code = child.wait(remaining)
+                command_joined = True
                 if code != 0:
                     raise ValueError('A fixed desktop inspection or installation command failed')
             except BaseException as failure:
@@ -1995,6 +2061,7 @@ def desktop_connect(package, family, evidence, android_apk=None):
                         signal_error = failure
                 try:
                     child.wait(5)
+                    command_joined = True
                 except BaseException as failure:
                     join_error = failure
                     result.setdefault('retained_command_pids', []).append(child.pid)
@@ -2022,6 +2089,29 @@ def desktop_connect(package, family, evidence, android_apk=None):
                         if primary is None:
                             raise
                         primary.add_note('Fixed network inspection evidence could not be retained: '+type(capture_error).__name__)
+                if android_inspection is not None and primary is not None:
+                    if not command_joined:
+                        primary.add_note('Android inspection output was not read before original child join')
+                    else:
+                        try:
+                            phase, kind = android_inspection
+                            size = output.seek(0, os.SEEK_END)
+                            output.seek(0)
+                            sample = output.read(1 << 16)
+                            stem = 'android-network-'+phase+'-'+kind+'-failure'
+                            target = evidence/(stem+'.log')
+                            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                            with os.fdopen(fd, 'wb') as retained:
+                                retained.write(sample)
+                            captured = {'schema': 1, 'phase': phase, 'command': kind,
+                                'pid': child.pid, 'exit_code': child.returncode, 'joined': True,
+                                'timeout_seconds': timeout, 'stream': 'combined-stdout-stderr',
+                                'bytes': size, 'retained_bytes': len(sample), 'truncated': size > len(sample),
+                                'sha256': hashlib.sha256(sample).hexdigest()}
+                            publish(evidence/(stem+'.json'), captured)
+                            result.setdefault('android_failed_network_inspections', []).append(captured)
+                        except BaseException as capture_error:
+                            primary.add_note('Fixed Android inspection evidence could not be retained: '+type(capture_error).__name__)
             output.seek(0)
             data = output.read((1 << 20)+1)
             diagnostic_size = diagnostics.seek(0, os.SEEK_END)

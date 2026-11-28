@@ -1476,6 +1476,8 @@ def ordered_uplink_pair(host_link, peer_link, namespace):
 def ordered_namespaces(work):
     before=ordered_host_snapshot()
     suffix=secrets.token_hex(5)
+    mac_suffix=':'.join(suffix[index:index+2] for index in range(0,len(suffix),2))
+    host_mac,peer_mac='02:'+mac_suffix,'06:'+mac_suffix
     final='rvordered-f-'+suffix
     host_link='rvo'+suffix
     moved_link='rvp'+suffix
@@ -1513,15 +1515,25 @@ def ordered_namespaces(work):
                 for namespace,link,address in ((peer,'ordered-final',peer_ip),(final,'ordered-peer',final_ip)):
                     run('ip','-n',namespace,'addr','add',address+'/30','dev',link)
                     run('ip','-n',namespace,'link','set',link,'mtu','9000','up')
-                if any(row['ifname'] in (host_link,moved_link) for row in ordered_json(['ip','-j','link','show'])):
-                    raise RuntimeError('An original ordered uplink name is already present')
+                if any(row['ifname'] in (host_link,moved_link) or row.get('address') in (host_mac,peer_mac)
+                       for row in ordered_json(['ip','-j','link','show'])):
+                    raise RuntimeError('An original ordered uplink name or address is already present')
                 host_namespace=os.stat('/proc/self/ns/net')
                 host_attempted=True
-                run('ip','link','add','name',host_link,'type','veth','peer','name',moved_link)
+                # Assign both addresses in the original creation request. Automatic link
+                # policies must see user-assigned addresses before either endpoint appears.
+                run('ip','link','add','name',host_link,'address',host_mac,'type','veth',
+                    'peer','name',moved_link,'address',peer_mac)
                 host_identity,created_pair=ordered_uplink_pair(host_link,moved_link,host_namespace)
+                assigned_types={name:Path('/sys/class/net',name,'addr_assign_type').read_text().strip()
+                                for name in (host_link,moved_link)}
                 owner_capture.update(expected_alias=owner,namespace_device=host_namespace.st_dev,
                                      namespace_inode=host_namespace.st_ino,created_host=host_identity,
-                                     created_pair=created_pair)
+                                     created_pair=created_pair,expected_addresses=[host_mac,peer_mac],
+                                     address_assignment_types=assigned_types)
+                ordered_require([entry[2] for entry in created_pair]==[host_mac,peer_mac] and
+                                all(value=='3' for value in assigned_types.values()),
+                                'Original uplink creation did not bind both user-assigned addresses')
                 # Linux applies IFLA_IFALIAS when updating the retained link, not when creating it.
                 run('ip','link','set','dev',host_link,'alias',owner)
                 tagged,tagged_pair=ordered_uplink_pair(host_link,moved_link,host_namespace)

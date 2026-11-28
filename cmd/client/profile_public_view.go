@@ -196,12 +196,22 @@ func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCap
 }
 
 func publicProfileFor(p common.RouterProfile) publicProfile {
-	return publicProfileForCapabilities(p, externalProfileProtocolCapabilities())
+	var caps []standardExitCapability
+	if strings.ToLower(strings.TrimSpace(p.NodeKind)) == "external" && p.External != nil {
+		caps = externalProfileProtocolCapabilities()
+	}
+	return publicProfileForCapabilities(p, caps)
 }
 
 func publicProfileStoreForOrder(store common.RouterProfileStore, order string) publicProfileStore {
 	store = sortPublicProfileStore(store, order)
-	caps := externalProfileProtocolCapabilities()
+	var caps []standardExitCapability
+	for _, p := range store.Profiles {
+		if strings.ToLower(strings.TrimSpace(p.NodeKind)) == "external" && p.External != nil {
+			caps = externalProfileProtocolCapabilities()
+			break
+		}
+	}
 	out := publicProfileStore{SchemaVersion: store.SchemaVersion, SelectedID: store.SelectedID, Profiles: make([]publicProfile, 0, len(store.Profiles))}
 	for _, p := range store.Profiles {
 		row := publicProfileForCapabilities(p, caps)
