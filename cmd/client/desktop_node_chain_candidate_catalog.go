@@ -72,6 +72,7 @@ type desktopNodeChainCandidateCatalog struct {
 	typedEntryPreview                 *mobilemultihop.DesktopTypedEntryCandidateDescription
 	selectedPlan                      *desktopSelectedCandidateDescriptor
 	prefixPreparation                 *mobilemultihop.NodeChainCandidatePreparation
+	appendExecutionPreparation        *mobilemultihop.NodeChainCandidateAppendExecutionPreparation
 	appendCapture                     *desktopNodeCandidateAppendCapture
 	profiles                          map[string]string
 	assets                            []viaEntryAsset
@@ -270,9 +271,12 @@ func captureDesktopCandidateSourceInventory(ctx context.Context, a *app, launch 
 				if !appendSource.CandidateInputFitsSource(input) {
 					return nil, errors.New("SS candidate changed its exact append prefix, identity or prospective closure")
 				}
-				// This descriptive TCP parse grants no response purpose. The
-				// exclusive append factory seals the complete inventory below.
-				parsed, err = mobilemultihop.ParseNodeChainCandidateInput(input)
+				// Public append has only its original source/whole-inventory seal.
+				// Keep the ordinary literal-only parser and its cache absent; it
+				// cannot describe an append-owned hostname resolver.
+				if !publicAppend {
+					parsed, err = mobilemultihop.ParseNodeChainCandidateInput(input)
+				}
 			} else if err == nil {
 				parsed, err = mobilemultihop.ParseNodeChainResponseCandidateInput(input, result.candidateMode)
 			}
@@ -317,12 +321,27 @@ func (result *desktopNodeChainCandidateCatalog) sealSourcePlan(ctx context.Conte
 	}
 	launch := result.launch
 	var err error
-	if scope == orderedCandidateAppendScope {
+	if orderedCandidateAppendPurpose(scope) {
 		c := result.appendCapture
-		if c == nil || c.validate(ctx, c.selection) != nil || position != c.request.AppendPosition-1 || result.serverResponse || launch.chain != nil || launch.candidatePrefix != nil || launch.command != nil || result.candidateMode != c.source.CandidateMode() {
+		if c == nil || c.validate(ctx, c.selection) != nil || position != c.request.AppendPosition-1 || scope != c.request.Purpose || result.serverResponse || launch.chain != nil || launch.candidatePrefix != nil || launch.command != nil || result.candidateMode != c.source.CandidateMode() {
 			return errors.New("append inventory lost its distinct original source")
 		}
-		result.prefixPreparation, err = mobilemultihop.NewNodeChainCandidateAppendPreparation(c.source.Source(), result.inventory)
+		if scope == orderedCandidateAppendExecutionScope {
+			raw, encodeErr := json.Marshal(map[string]any{"kind": "routervpn-node-chain-append-execution-source", "schema": 1, "execution": c.request.RequestedExecution, "local_source": c.source.Source(), "inventory": result.inventory})
+			if encodeErr != nil {
+				return encodeErr
+			}
+			result.appendExecutionPreparation, err = mobilemultihop.NewNodeChainCandidateAppendExecutionPreparation(string(raw))
+			clear(raw)
+			if err == nil {
+				if result.appendExecutionPreparation == nil || result.appendExecutionPreparation.Execution() != c.request.RequestedExecution || result.appendExecutionPreparation.OriginalSourceSHA256() != c.source.SourceSHA256() {
+					return errors.New("append execution changed its original Local source")
+				}
+				result.prefixPreparation = result.appendExecutionPreparation.OriginalPreparation()
+			}
+		} else {
+			result.prefixPreparation, err = mobilemultihop.NewNodeChainCandidateAppendPreparation(c.source.Source(), result.inventory)
+		}
 		if err == nil && (result.prefixPreparation == nil || result.prefixPreparation.CandidateKind() != c.source.CandidateKind() ||
 			result.prefixPreparation.CandidateMeasurement() != c.source.CandidateMeasurement()) {
 			return errors.New("append inventory changed its original candidate kind or measurement")

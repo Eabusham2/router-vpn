@@ -24,11 +24,19 @@ import (
 var routerVPNDarwinCandidatePrefixProcessOwner atomic.Pointer[routerVPNDarwinCandidatePrefixControl]
 
 func routerVPNRunDarwinNodeCandidatePrefixControlled(parent context.Context, directory, session, source, config string) (failure error) {
+	return routerVPNRunDarwinNodeCandidatePrefixControlledPurpose(parent, directory, session, source, config, false)
+}
+
+func routerVPNRunDarwinNodeCandidatePrefixControlledPurpose(parent context.Context, directory, session, source, config string, execution bool) (failure error) {
 	if parent == nil || parent.Err() != nil || !routerVPNExternalSession.MatchString(session) ||
 		!routerVPNExternalSource.MatchString(source) || !routerVPNExternalSource.MatchString(config) {
 		return routerVPNExternalFailure
 	}
-	scope := macosprocess.Scope{Session: session, Source: source, Config: config, Workspace: directory, Family: macosprocess.CandidatePrefixFamily}
+	family := macosprocess.CandidatePrefixFamily
+	if execution {
+		family = macosprocess.CandidateAppendExecutionFamily
+	}
+	scope := macosprocess.Scope{Session: session, Source: source, Config: config, Workspace: directory, Family: family}
 	bounded, stopBinding := context.WithTimeout(parent, 15*time.Second)
 	capture, err := macosprocess.InheritCapture(bounded, scope)
 	if err != nil {
@@ -46,14 +54,19 @@ func routerVPNRunDarwinNodeCandidatePrefixControlled(parent context.Context, dir
 		return errors.Join(routerVPNExternalFailure, capture.Close())
 	}
 	selection := capture.Selection()
-	transfer, err := macosprocess.CandidatePrefixTransferSHA256(selection)
+	var transfer string
+	if execution {
+		transfer, err = macosprocess.CandidateAppendExecutionTransferSHA256(selection)
+	} else {
+		transfer, err = macosprocess.CandidatePrefixTransferSHA256(selection)
+	}
 	stopBinding()
 	if err != nil {
 		_ = bootstrap.Close()
 		return errors.Join(routerVPNExternalFailure, capture.Close())
 	}
 	control := &routerVPNDarwinCandidatePrefixControl{capture: capture, bootstrap: bootstrap, scope: scope,
-		selection: selection, transfer: transfer}
+		selection: selection, transfer: transfer, appendExecution: execution}
 	if !routerVPNDarwinCandidatePrefixProcessOwner.CompareAndSwap(nil, control) {
 		_ = bootstrap.Close()
 		return errors.Join(routerVPNExternalFailure, capture.Close())
@@ -129,7 +142,7 @@ func routerVPNRunDarwinNodeCandidatePrefix(parent context.Context, control *rout
 	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-chain-ready.json",
 		"stopped.json", "node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json",
 		"node-chain-measure-request.json", "node-chain-measure-cancel.json", "node-chain-measure-result.json", "node-chain-candidate-request.json", "node-chain-candidate-source.json", "node-chain-candidate-live.json", "node-chain-candidate-cancel.json", "node-chain-candidate-result.json",
-		"node-candidate-prefix-ready.json", "node-candidate-prefix-request.json",
+		"node-candidate-prefix-ready.json", routerVPNAppendExecutionReadyFile, routerVPNAppendExecutionReadyPending, "node-candidate-prefix-request.json",
 		"node-candidate-prefix-live.json", "node-candidate-prefix-cancel.json", "node-candidate-prefix-result.json",
 		"node-protection-retired.json", "node-protection-transfer.json"} {
 		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
@@ -235,7 +248,23 @@ func routerVPNRunDarwinNodeCandidatePrefix(parent context.Context, control *rout
 		}
 		return control.current(call)
 	}
-	prefix, err := routerVPNNewNodeCandidatePrefixRuntime(graph, files, policy, control.transfer, instance)
+	var prefix *routerVPNNodeCandidatePrefixRuntime
+	if control.executionPolicy != nil {
+		prefix, err = routerVPNNewNodeCandidateAppendExecutionRuntime(graph, files, control.executionPolicy, control.transfer, instance, func(call context.Context) error {
+			if call == nil || call.Err() != nil || graph.Err() != nil || physical == nil {
+				return routerVPNExternalFailure
+			}
+			if err := physical.CandidatePrefixSourceCurrentContext(call, policy); err != nil {
+				return err
+			}
+			if err := physical.CurrentContext(call); err != nil {
+				return err
+			}
+			return control.executionStopCurrent(call)
+		})
+	} else {
+		prefix, err = routerVPNNewNodeCandidatePrefixRuntime(graph, files, policy, control.transfer, instance)
+	}
 	if prefix != nil {
 		native.proof = prefix
 	}

@@ -25,26 +25,41 @@ type routerVPNDarwinCandidatePrefixBootstrap interface {
 }
 
 type routerVPNDarwinCandidatePrefixControl struct {
-	capture   routerVPNDarwinCandidatePrefixCapture
-	bootstrap routerVPNDarwinCandidatePrefixBootstrap
-	scope     macosprocess.Scope
-	selection macosprocess.Selection
-	transfer  string
-	policy    *mobilemultihop.DesktopNodeCandidatePreparationPolicy
-	retiring  atomic.Bool
-	retired   atomic.Bool
-	native    *routerVPNDarwinNodeChainNative // assigned only by the one joined command loop
+	capture         routerVPNDarwinCandidatePrefixCapture
+	bootstrap       routerVPNDarwinCandidatePrefixBootstrap
+	scope           macosprocess.Scope
+	selection       macosprocess.Selection
+	transfer        string
+	policy          *mobilemultihop.DesktopNodeCandidatePreparationPolicy
+	appendExecution bool
+	executionPolicy *mobilemultihop.DesktopNodeCandidateAppendExecutionPolicy
+	retiring        atomic.Bool
+	retired         atomic.Bool
+	native          *routerVPNDarwinNodeChainNative // assigned only by the one joined command loop
+}
+
+func (owner *routerVPNDarwinCandidatePrefixControl) family() macosprocess.Family {
+	if owner != nil && owner.appendExecution {
+		return macosprocess.CandidateAppendExecutionFamily
+	}
+	return macosprocess.CandidatePrefixFamily
+}
+func (owner *routerVPNDarwinCandidatePrefixControl) transferSHA() (string, error) {
+	if owner != nil && owner.appendExecution {
+		return macosprocess.CandidateAppendExecutionTransferSHA256(owner.selection)
+	}
+	return macosprocess.CandidatePrefixTransferSHA256(owner.selection)
 }
 
 func (owner *routerVPNDarwinCandidatePrefixControl) original(ctx context.Context) error {
 	if owner == nil || ctx == nil || ctx.Err() != nil || owner.capture == nil || owner.bootstrap == nil ||
-		owner.scope.Family != macosprocess.CandidatePrefixFamily || owner.selection.Family != macosprocess.CandidatePrefixFamily ||
+		owner.scope.Family != owner.family() || owner.selection.Family != owner.family() ||
 		owner.selection.Session != owner.scope.Session || owner.selection.Source != owner.scope.Source ||
 		owner.selection.Config != owner.scope.Config || owner.capture.Current(ctx) != nil ||
 		owner.bootstrap.Current(ctx) != nil || owner.capture.Selection() != owner.selection {
 		return routerVPNExternalFailure
 	}
-	transfer, err := macosprocess.CandidatePrefixTransferSHA256(owner.selection)
+	transfer, err := owner.transferSHA()
 	if err != nil || transfer != owner.transfer {
 		return routerVPNExternalFailure
 	}
@@ -59,7 +74,16 @@ func (owner *routerVPNDarwinCandidatePrefixControl) compile(ctx context.Context,
 	if owner.workspace(files) != nil {
 		return nil, routerVPNExternalFailure
 	}
-	policy, err := routerVPNNodeCandidatePrefixCommandPhysicalCapture(files, owner.scope.Session, owner.scope.Config, owner.scope.Source, "darwin")
+	var policy *mobilemultihop.DesktopNodeCandidatePreparationPolicy
+	var err error
+	if owner.appendExecution {
+		owner.executionPolicy, err = routerVPNNodeCandidateAppendExecutionPhysicalCapture(files, owner.scope.Session, owner.scope.Config, owner.scope.Source, "darwin")
+		if owner.executionPolicy != nil {
+			policy = owner.executionPolicy.LocalPolicy()
+		}
+	} else {
+		policy, err = routerVPNNodeCandidatePrefixCommandPhysicalCapture(files, owner.scope.Session, owner.scope.Config, owner.scope.Source, "darwin")
+	}
 	if err != nil || policy == nil || owner.original(ctx) != nil || owner.retiring.Load() {
 		return nil, routerVPNExternalFailure
 	}
@@ -118,4 +142,17 @@ func (owner *routerVPNDarwinCandidatePrefixControl) retirementReceipt() error {
 		return routerVPNExternalFailure
 	}
 	return nil
+}
+
+// The original inherited capture and physical policy remain observable while
+// the exact execution stop-and-ack joins, before native.close revokes them.
+func (owner *routerVPNDarwinCandidatePrefixControl) executionStopCurrent(ctx context.Context) error {
+	if owner == nil || !owner.appendExecution || owner.retired.Load() || owner.executionPolicy == nil || owner.executionPolicy.Validate() != nil || owner.executionPolicy.LocalPolicy() != owner.policy || owner.original(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	_, meta, _, err := owner.policy.PhysicalReadValidated()
+	if err != nil || meta.TargetOS != "darwin" || meta.SessionID != owner.scope.Session || meta.Kind != "node-candidate-prefix" || meta.SourceSHA256 != owner.scope.Source || meta.ConfigSHA256 != owner.scope.Config {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
 }

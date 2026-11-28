@@ -37,6 +37,9 @@ struct IOSNodeChainCapture {
     var pairedHysteriaLocal: Bool {
         sourceSchema == 1 && selectionExecution == "local" && Int(plan.pairedHysteriaLocalNodeCount()) == members.count
     }
+    var pairedProxyEntryLocal: Bool {
+        sourceSchema == 1 && selectionExecution == "local" && Int(plan.pairedProxyEntryLocalNodeCount()) == members.count
+    }
     var config: String { plan.config() }
     var sourceSHA256: String { plan.sourceSHA256() }
     var configSHA256: String { plan.configSHA256() }
@@ -103,7 +106,26 @@ struct IOSNodeChainCapture {
             throw issue("An imported final requires the original paired packet entry and distinct literal Shadowsocks sources.")
         }
         let pairedHysteria = IOSMultihopNodeSelection.pairedHysteriaLocalModes(selectedNodes.map(\.mode), execution: selectionExecution)
-        if pairedHysteria {
+        var pairedProxy = false
+        if IOSMultihopNodeSelection.pairedProxyEntryLocalModes(selectedNodes.map(\.mode), execution: selectionExecution), let firstData = bundles.first {
+            let first = try object(firstData, maximum: 32 * 1024 * 1024)
+            if let selected = first["selectedRouterID"] as? String,
+               let profiles = first["routerProfiles"] as? [[String: Any]],
+               profiles.filter({ $0["id"] as? String == selected }).count == 1,
+               let profile = profiles.first(where: { $0["id"] as? String == selected }),
+               profile["node_kind"] as? String == "router-vpn", profile["external"] == nil {
+                let capturedProfiles = try bundles.map { data -> RouterProfile in
+                    let captured = try object(data, maximum: 32 * 1024 * 1024)
+                    guard let selected = captured["selectedRouterID"] as? String,
+                          let profiles = captured["routerProfiles"] as? [[String: Any]],
+                          profiles.filter({ $0["id"] as? String == selected }).count == 1,
+                          let profile = profiles.first(where: { $0["id"] as? String == selected }) else { throw issue("A complete node lost its original source.") }
+                    return try JSONDecoder().decode(RouterProfile.self, from: Data(json(profile, maximum: 256 * 1024).utf8))
+                }
+                pairedProxy = IOSMultihopNodeSelection.pairedProxyEntryLocalSource(selectedNodes, execution: selectionExecution, profiles: capturedProfiles)
+            }
+        }
+        if pairedHysteria || pairedProxy {
             for (position, data) in bundles.enumerated() {
                 let captured = try object(data, maximum: 32 * 1024 * 1024)
                 guard captured["selectedRouterID"] as? String == selectedNodes[position].id,
@@ -116,11 +138,11 @@ struct IOSNodeChainCapture {
                 }
             }
         }
-        let importedEntry = selectionExecution == "local" && IOSMultihopNodeSelection.usesLocalImportedEntry(selectedNodes)
+        let importedEntry = !pairedProxy && selectionExecution == "local" && IOSMultihopNodeSelection.usesLocalImportedEntry(selectedNodes)
         if multipleExecution && !IOSMultihopNodeSelection.supportsMultipleImportedExecution(selectedNodes) {
             throw issue("The selected execution requires its original paired packet entry and literal Shadowsocks interiors.")
         }
-        let importedNodes = !publicExit && !pairedHysteria && (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.requiresImportedNodesSource(selectedNodes)
+        let importedNodes = !publicExit && !pairedHysteria && !pairedProxy && (selectionExecution == "local" || multipleExecution) && IOSMultihopNodeSelection.requiresImportedNodesSource(selectedNodes)
         var hostnamePosition: Int?
         if importedNodes {
             guard selectedNodes.last?.mode == "shadowsocks", importedEntry || IOSMultihopNodeSelection.supportsNativePrefix(selectedNodes[0].mode),
@@ -320,8 +342,17 @@ struct IOSNodeChainCapture {
                 throw Self.issue("A packet final requires two to eight original paired Local WireGuard or AmneziaWG nodes with Start Layer off.")
             }
         }
+        let pairedProxyCount = Int(plan.pairedProxyEntryLocalNodeCount())
+        if pairedProxyCount != 0 || members.first.map({ IOSNodeCandidateAppendSource.proxyEntryMode($0.mode) && $0.profile["node_kind"] as? String == "router-vpn" }) == true {
+            let completeNodes = members.map { IOSMultihopNodeSelection(id: $0.id, mode: $0.mode) }
+            let completeProfiles = try members.map { try JSONDecoder().decode(RouterProfile.self, from: Data($0.profileJSON.utf8)) }
+            guard pairedProxyCount == members.count, schema == 1, identitySources.allSatisfy({ !$0.isEmpty }),
+                  IOSMultihopNodeSelection.pairedProxyEntryLocalSource(completeNodes, execution: selectionExecution, profiles: completeProfiles) else {
+                throw Self.issue("The complete native source lost its original paired proxy entry family.")
+            }
+        }
         let pairedHysteriaCount = Int(plan.pairedHysteriaLocalNodeCount())
-        if pairedHysteriaCount != 0 || members.dropFirst().dropLast().contains(where: { $0.mode == "hysteria2" }) {
+        if pairedHysteriaCount != 0 || pairedProxyCount == 0 && members.dropFirst().dropLast().contains(where: { $0.mode == "hysteria2" }) {
             let completeNodes = members.map { IOSMultihopNodeSelection(id: $0.id, mode: $0.mode) }
             let completeProfiles = try members.map { try JSONDecoder().decode(RouterProfile.self, from: Data($0.profileJSON.utf8)) }
             guard pairedHysteriaCount == members.count, schema == 1, identitySources.allSatisfy({ !$0.isEmpty }),

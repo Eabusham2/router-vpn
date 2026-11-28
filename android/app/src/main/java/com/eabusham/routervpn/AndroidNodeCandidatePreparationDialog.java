@@ -125,6 +125,7 @@ final class AndroidNodeCandidatePreparationDialog {
     private static void appendMeasuredRows(StringBuilder text,List<AndroidNodeCandidatePreparation.Choice> rows){
         for(var choice:rows){
             text.append(String.format(Locale.US,"\n%s • %.2f ms (50/50, trimmed mean)",choice.result.name,choice.result.score));
+            if(!choice.result.executionDetails.isEmpty())text.append("\n").append(choice.result.executionDetails);
             if(!choice.saveReason.isEmpty())text.append("\nSave unavailable: ").append(choice.saveReason);
             if(!choice.draftReason().isEmpty())text.append("\nCannot use in this draft. ").append(choice.draftReason());
         }

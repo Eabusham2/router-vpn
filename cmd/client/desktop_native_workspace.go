@@ -295,6 +295,7 @@ var desktopSelectedCandidateStagingName = regexp.MustCompile(`^\.node-chain-exec
 func desktopRuntimeOwnedFile(name string) bool {
 	switch name {
 	case desktopSelectedThroughputResultFile, "node-candidate-prefix-source.json", "node-candidate-prefix-ready.json", ".node-candidate-prefix-ready.json.pending",
+		"node-candidate-append-execution-ready.json", ".node-candidate-append-execution-ready.json.pending",
 		"node-candidate-prefix-request.json", ".node-candidate-prefix-request.json.pending", "node-candidate-prefix-live.json", ".node-candidate-prefix-live.json.pending",
 		"node-candidate-prefix-cancel.json", ".node-candidate-prefix-cancel.json.pending", "node-candidate-prefix-result.json", ".node-candidate-prefix-result.json.pending",
 		"sing-box.json", "source.json", "capture.json", "proof.json", "progress.json", "stop.json", "stopped.json", "native-multihop.process.json",

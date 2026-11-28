@@ -251,6 +251,15 @@ func captureDesktopNodeChain(base, projected *NodeChain) (DesktopPhysicalCapture
 		}
 		lan = lan && capture.HomeLANAccess
 	}
+	if base.pairedProxyEntry != nil {
+		if projected == nil || base.validateCapture() != nil || projected.validateCapture() != nil ||
+			!base.pairedProxyEntry.current(base) || !projected.pairedProxyEntry.current(projected) ||
+			base.sourceJSON != projected.sourceJSON || base.sourceSHA != projected.sourceSHA ||
+			!reflect.DeepEqual(base.proofs, projected.proofs) || !nodeChainSamePhysical(base.physical, projected.physical) {
+			return bad()
+		}
+		return captureDesktopNodeChainGraphWithCompleteProxy(base.config, projected.config, projected.proofs, projected.dns, base.physical, finalCapture, kill, ipv6, lan, nil, base)
+	}
 	return captureDesktopNodeChainGraph(base.config, projected.config, projected.proofs, projected.dns, base.physical, finalCapture, kill, ipv6, lan)
 }
 
@@ -263,10 +272,14 @@ func captureDesktopNodeChainGraph(originalConfig, projectedConfig string, proofs
 // Only a sealed CONNECT constructor can supply its final UoT capability. The
 // ordinary physical scanner remains closed to inline or caller-supplied UoT.
 func captureDesktopNodeChainGraphWithCONNECT(originalConfig, projectedConfig string, proofs []NodeChainProof, dnsCapture NodeChainDNSCapture, physical []PhysicalEgress, finalCapture NodeDesktopCapture, kill, ipv6 string, lan bool, original *NodeChainCONNECTSource) (DesktopPhysicalCapture, string, bool, error) {
+	return captureDesktopNodeChainGraphWithCompleteProxy(originalConfig, projectedConfig, proofs, dnsCapture, physical, finalCapture, kill, ipv6, lan, original, nil)
+}
+
+func captureDesktopNodeChainGraphWithCompleteProxy(originalConfig, projectedConfig string, proofs []NodeChainProof, dnsCapture NodeChainDNSCapture, physical []PhysicalEgress, finalCapture NodeDesktopCapture, kill, ipv6 string, lan bool, original *NodeChainCONNECTSource, complete *NodeChain) (DesktopPhysicalCapture, string, bool, error) {
 	bad := func() (DesktopPhysicalCapture, string, bool, error) {
 		return DesktopPhysicalCapture{}, "", false, desktopNodeChainPolicyError
 	}
-	if len(proofs) < 2 || len(proofs) > NodeChainMaximumNodes && !extendedLocalProofs(proofs) && !extendedPairedLocalProofs(proofs) && !pairedHysteriaLocalProofs(proofs) {
+	if len(proofs) < 2 || len(proofs) > NodeChainMaximumNodes && !extendedLocalProofs(proofs) && !extendedPairedLocalProofs(proofs) && !pairedHysteriaLocalProofs(proofs) && !pairedProxyEntryLocalProofs(proofs) {
 		return bad()
 	}
 	var graph map[string]any
@@ -288,6 +301,12 @@ func captureDesktopNodeChainGraphWithCONNECT(originalConfig, projectedConfig str
 			return bad()
 		}
 	}
+	aggregateProxy := complete != nil
+	if aggregateProxy && (original != nil || complete.validateCapture() != nil || !complete.pairedProxyEntry.current(complete) ||
+		complete.config != originalConfig || !reflect.DeepEqual(complete.proofs, proofs) || !nodeChainSamePhysical(complete.physical, physical)) {
+		return bad()
+	}
+	var projections [][]PhysicalEgress
 	collector := &externalDesktopRecorder{families: map[string]string{}, roots: map[string]*ExternalDesktopPhysicalRoot{}, bootstrap: map[string]ExternalDesktopDNS{}}
 	traversal, err := parseCapturedEgressGraph(string(projection), connect)
 	if err != nil {
@@ -295,7 +314,15 @@ func captureDesktopNodeChainGraphWithCONNECT(originalConfig, projectedConfig str
 	}
 	for _, proof := range proofs {
 		tuples, err := traversal.physical([]string{"tcp", "udp"}, collector, proof.Tag, false)
-		if err != nil || !nodeChainSamePhysical(tuples, physical) {
+		if err != nil || !aggregateProxy && !nodeChainSamePhysical(tuples, physical) {
+			return bad()
+		}
+		if aggregateProxy {
+			projections = append(projections, tuples)
+		}
+	}
+	if aggregateProxy {
+		if _, err = nodeChainPairedProxyPhysical(projections, physical, len(proofs)); err != nil {
 			return bad()
 		}
 	}

@@ -276,6 +276,7 @@ final class AndroidNodeCandidatePreparation implements AndroidNodeChainRuntime.T
         boolean found=false;for(Choice choice:choices)if(choice.result==result)found=true;
         if(!found)throw new IllegalStateException("This result does not belong to the original completed candidate batch.");
         requireSavedInputs();catalog.requireSavedSourcesCurrent();network.requireCurrent();
+        if(source.appendExecutionDraft())result.requireAppendExecution(capturedPrefix,false);
         AndroidHomeStateStore.Snapshot now=AndroidHomeStateStore.snapshot(context);
         if(runtime.isActiveOrTransitioning()||!sameIdle(now,resultHome)||AndroidHomeStateStore.emergencyDisconnectPending(context))
             throw new IllegalStateException("A newer connection or Home epoch retired the completed candidate batch.");

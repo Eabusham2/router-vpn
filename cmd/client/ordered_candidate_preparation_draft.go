@@ -320,30 +320,57 @@ func (p *orderedCandidatePreparation) draftDeliveryCurrentLocked() bool {
 // An incomplete editor prefix has no selected final and cannot be decoded as
 // a complete Connect request. Only the explicit append purpose accepts it.
 type orderedCandidateAppendRequest struct {
-	Schema         int                            `json:"schema"`
-	Purpose        string                         `json:"purpose"`
-	Execution      string                         `json:"execution"`
-	DraftRevision  string                         `json:"draft_revision"`
-	AppendPosition int                            `json:"append_position"`
-	NextMode       string                         `json:"next_mode"`
-	NextKind       string                         `json:"next_kind,omitempty"`
-	Nodes          []common.MultihopNodeSelection `json:"nodes"`
+	Schema             int                            `json:"schema"`
+	Purpose            string                         `json:"purpose"`
+	Execution          string                         `json:"execution"`
+	RequestedExecution string                         `json:"requested_execution,omitempty"`
+	DraftRevision      string                         `json:"draft_revision"`
+	AppendPosition     int                            `json:"append_position"`
+	NextMode           string                         `json:"next_mode"`
+	NextKind           string                         `json:"next_kind,omitempty"`
+	Nodes              []common.MultihopNodeSelection `json:"nodes"`
 	desktopProfileExpectations
 }
 
 func (q *orderedCandidateAppendRequest) validate() error {
 	bad := errors.New("append measurement requires its exact incomplete Local prefix, next transport mode and original device selection")
-	if q == nil || q.Schema != 1 || q.Purpose != orderedCandidateAppendScope || q.Execution != "local" ||
+	if q == nil || q.Schema != 1 || !orderedCandidateAppendPurpose(q.Purpose) || q.Execution != "local" ||
 		!validViaEntryRequestID(q.DraftRevision) || len(q.Nodes) < 1 || len(q.Nodes) >= mobilemultihop.NodeChainExtendedLocalMaximumNodes ||
 		q.AppendPosition != len(q.Nodes) || !mobilemultihop.NodeChainCandidateAppendNextMode(q.NextMode) ||
 		q.NextKind != "" && (q.NextKind != "external" || q.NextMode != "shadowsocks") ||
 		q.ExpectedSelectedNodeID == nil || !validProfileID(*q.ExpectedSelectedNodeID) || q.ExpectedProfileTokens == nil {
 		return bad
 	}
+	if q.Purpose == orderedCandidateAppendExecutionScope {
+		if (q.RequestedExecution != "server" && q.RequestedExecution != "auto") || q.NextMode != "shadowsocks" || q.NextKind != "" {
+			return bad
+		}
+		// This checks only public row order. The original captured source
+		// still proves every member is paired, literal, Off and current.
+		streamTail := false
+		for position, node := range q.Nodes {
+			if mobilemultihop.NodeChainPrefixMode(node.Mode) {
+				if streamTail {
+					return bad
+				}
+				continue
+			}
+			if position == 0 || node.Mode != "shadowsocks" {
+				return bad
+			}
+			streamTail = true
+		}
+	} else if q.RequestedExecution != "" {
+		return bad
+	}
+	pairedProxyEntry := q.pairedProxyEntry()
+	if pairedProxyEntry && q.NextKind != "" {
+		return bad
+	}
 	seen := map[string]bool{}
 	for position, node := range q.Nodes {
 		if !validProfileID(node.ID) || seen[node.ID] ||
-			!mobilemultihop.NodeChainPrefixMode(node.Mode) && (position == 0 || node.Mode != "shadowsocks" && node.Mode != "hysteria2") {
+			!mobilemultihop.NodeChainPrefixMode(node.Mode) && (position == 0 && !pairedProxyEntry || node.Mode != "shadowsocks" && node.Mode != "hysteria2") {
 			return bad
 		}
 		seen[node.ID] = true
@@ -358,6 +385,12 @@ func (q *orderedCandidateAppendRequest) validate() error {
 		}
 	}
 	return nil
+}
+
+// This shape selects only the distinct append capture; saved source and
+// native schema-3 validation still require every actual member to be paired.
+func (q *orderedCandidateAppendRequest) pairedProxyEntry() bool {
+	return q != nil && len(q.Nodes) > 0 && (q.Nodes[0].Mode == "shadowsocks" || q.Nodes[0].Mode == "hysteria2")
 }
 
 func (q *orderedCandidateAppendRequest) candidateKind() string {
@@ -404,12 +437,28 @@ func decodeOrderedCandidateAppendRequest(body io.Reader) (*orderedCandidateAppen
 	}
 	for name := range fields {
 		switch name {
-		case "schema", "purpose", "execution", "draft_revision", "append_position", "next_mode", "next_kind", "nodes", "expected_selected_node_id", "expected_profile_tokens":
+		case "schema", "purpose", "execution", "draft_revision", "append_position", "next_mode", "next_kind", "nodes", "expected_selected_node_id", "expected_profile_tokens", "requested_execution":
 		default:
 			return nil, errors.New("append source cannot mix complete-route, selected or unknown fields")
 		}
 	}
+	var purpose string
+	if json.Unmarshal(fields["purpose"], &purpose) != nil || !orderedCandidateAppendPurpose(purpose) {
+		return nil, errors.New("append source requires its exact purpose")
+	}
 	expectedFields := 9
+	if purpose == orderedCandidateAppendExecutionScope {
+		var requested string
+		if raw, present := fields["requested_execution"]; !present || json.Unmarshal(raw, &requested) != nil || (requested != "server" && requested != "auto") {
+			return nil, errors.New("append execution must explicitly select Server or Compare")
+		}
+		if _, present := fields["next_kind"]; present {
+			return nil, errors.New("append execution requires paired candidates")
+		}
+		expectedFields++
+	} else if _, present := fields["requested_execution"]; present {
+		return nil, errors.New("Local append cannot carry a separate execution choice")
+	}
 	if kind, present := fields["next_kind"]; present {
 		var value string
 		if json.Unmarshal(kind, &value) != nil || value != "external" {
@@ -446,7 +495,7 @@ func decodeOrderedCandidateAppendRequest(body io.Reader) (*orderedCandidateAppen
 }
 
 func (a *app) candidateAppendNodesLocked(q *orderedCandidateAppendRequest, scope string) ([]common.MultihopNodeSelection, error) {
-	if scope != orderedCandidateAppendScope || q.validate() != nil {
+	if !orderedCandidateAppendPurpose(scope) || q.validate() != nil || scope != q.Purpose {
 		return nil, errors.New("incomplete prefix requires its distinct append purpose")
 	}
 	if err := a.validateDesktopProfileExpectationsLocked(q.desktopProfileExpectations, q.requiredIDs(), true); err != nil {

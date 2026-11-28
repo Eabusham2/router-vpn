@@ -95,6 +95,9 @@ import Libbox
                         case "openvpn": importedAllowed = IOSImportedOpenVPNSource.eligible(saved)
                         default: importedAllowed = false
                         }
+                    } else if appendResponse {
+                        importedAllowed = original.position > 0 && original.mode == "shadowsocks" &&
+                            IOSImportedShadowsocksSource.eligible(saved)
                     } else { importedAllowed = IOSImportedShadowsocksSource.eligibleLiteral(saved) }
                     guard (saved.nodeProofID ?? "") == original.node_id, layerAllowed,
                           original.node_id.isEmpty ? importedAllowed :

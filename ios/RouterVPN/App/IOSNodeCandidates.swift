@@ -21,6 +21,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
         let candidate_mode: String?, candidate_kind: String?
         let response_source_nodes: [IOSNodeCandidateResponseNode]?
         let candidate_purpose: String?, append_source_metadata_sha256: String?
+        let requested_execution: String?, execution_source_sha256: String?, execution_capture_sha256: String?
     }
     struct Progress: Decodable {
         let request_id: String; let complete: Bool; let drained: Bool
@@ -36,9 +37,11 @@ private final class IOSCandidateReply: @unchecked Sendable {
     private let responseSourceNodes: [IOSNodeCandidateResponseNode]?
     private let appendSourceMetadataSHA256: String?
     private let appendCandidateKind: String?
+    private let appendExecution: IOSNodeCandidatePrefixCapture?
+    private(set) var executionCaptureSHA256: String?
     private var cancelled = false, observationActive = false
     init(epoch: String, owner: String, responseMode: String? = nil, responseSourceNodes: [IOSNodeCandidateResponseNode]? = nil,
-         preparedResponse: Bool = false, appendSourceMetadataSHA256: String? = nil, appendCandidateKind: String? = nil, send: @escaping Send, recovered: @escaping @MainActor () -> Bool,
+         preparedResponse: Bool = false, appendSourceMetadataSHA256: String? = nil, appendCandidateKind: String? = nil, appendExecution: IOSNodeCandidatePrefixCapture? = nil, send: @escaping Send, recovered: @escaping @MainActor () -> Bool,
          pause: @escaping @MainActor () async -> Void = { try? await Task.sleep(for: .milliseconds(250)) }) throws {
         let responseNodes = responseSourceNodes ?? []
         let extendedPacket = responseMode == "wg" &&
@@ -58,6 +61,9 @@ private final class IOSCandidateReply: @unchecked Sendable {
                     index > 0 && row.kind == "external" && row.mode == "shadowsocks"
             }
         let completeSource = pairedSource || importedSource
+        let appendProxySource = appendCandidateKind == nil && responseNodes.first?.kind == "router-vpn" &&
+            IOSNodeCandidateAppendSource.proxyEntryMode(responseNodes.first?.mode ?? "") &&
+            responseNodes.allSatisfy { !$0.id.isEmpty && $0.kind == "router-vpn" && IOSNodeCandidateAppendSource.supportsNextMode($0.mode) }
         let appendSource = appendSourceMetadataSHA256 != nil && preparedResponse &&
             IOSCandidateCatalogPublication.isDigest(appendSourceMetadataSHA256 ?? "") &&
             (appendCandidateKind == nil || appendCandidateKind == "external") &&
@@ -65,12 +71,12 @@ private final class IOSCandidateReply: @unchecked Sendable {
             (1..<IOSMultihopNodeSelection.physicalTraversalDepth).contains(responseNodes.count) &&
             Set(responseNodes.map(\.id)).count == responseNodes.count &&
             responseNodes.first?.kind == "router-vpn" &&
-            IOSMultihopNodeSelection.supportsNativePrefix(responseNodes.first?.mode ?? "") &&
+            (appendProxySource || IOSMultihopNodeSelection.supportsNativePrefix(responseNodes.first?.mode ?? "") &&
             responseNodes.enumerated().allSatisfy { index, row in
                 !row.id.isEmpty && (row.kind == "router-vpn" && IOSMultihopNodeSelection.supportsNativePrefix(row.mode) ||
                     index > 0 && (row.mode == "shadowsocks" && ["router-vpn", "external"].contains(row.kind) ||
                          row.mode == "hysteria2" && row.kind == "router-vpn"))
-            }
+            })
         let packetResponse = IOSMultihopNodeSelection.supportsNativePrefix(responseMode ?? "") &&
             ["shadowsocks", "hysteria2"].contains(responseNodes.last?.mode ?? "") &&
             ((3...IOSMultihopNodeSelection.maximumNodes).contains(responseNodes.count) || extendedPacket)
@@ -80,6 +86,14 @@ private final class IOSCandidateReply: @unchecked Sendable {
         guard UUID(uuidString: epoch) != nil, IOSCandidateCatalogPublication.validRequest(owner),
                appendSource || appendSourceMetadataSHA256 == nil && appendCandidateKind == nil &&
                 ((responseMode == nil && responseSourceNodes == nil) || completeSource && (packetResponse || preparedFinal)) else { throw IOSNodeCandidateResult.issue() }
+        if let appendExecution {
+            guard appendSource, appendExecution.isAppendExecution, appendExecution.native.isExecution,
+                  ["server", "auto"].contains(appendExecution.requestedExecution ?? ""), appendCandidateKind == nil, responseMode == "shadowsocks",
+                  appendExecution.responseSourceNodes == responseSourceNodes, appendExecution.appendSourceMetadataSHA256 == appendSourceMetadataSHA256,
+                  IOSCandidateCatalogPublication.isDigest(appendExecution.sourceSHA256),
+                  responseNodes.allSatisfy({ $0.kind == "router-vpn" && IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) else { throw IOSNodeCandidateResult.issue() }
+        }
+        self.appendExecution = appendExecution
         self.epoch = epoch; self.owner = owner; self.send = send; self.recovered = recovered; self.pause = pause
         self.responseMode = responseMode; self.responseSourceNodes = responseSourceNodes
         self.appendSourceMetadataSHA256 = appendSourceMetadataSHA256; self.appendCandidateKind = appendCandidateKind
@@ -93,10 +107,26 @@ private final class IOSCandidateReply: @unchecked Sendable {
         // The protected close receipt survives the retired native owner. It
         // grants no score or proposal authority when a Close reply was lost.
         if operation == "candidate-close", value.closed == true, value.candidate_mode == nil, value.candidate_kind == nil, value.response_source_nodes == nil,
-           value.candidate_purpose == nil, value.append_source_metadata_sha256 == nil { return value }
+           value.candidate_purpose == nil, value.append_source_metadata_sha256 == nil, value.requested_execution == nil, value.execution_source_sha256 == nil, value.execution_capture_sha256 == nil { return value }
         guard value.candidate_mode == responseMode, value.candidate_kind == appendCandidateKind, value.response_source_nodes == responseSourceNodes,
-              value.candidate_purpose == (appendSourceMetadataSHA256 == nil ? nil : "draft-prefix-append"),
+              value.candidate_purpose == (appendExecution != nil ? "draft-prefix-append-execution" : appendSourceMetadataSHA256 == nil ? nil : "draft-prefix-append"),
               value.append_source_metadata_sha256 == appendSourceMetadataSHA256 else { throw IOSNodeCandidateResult.issue() }
+        if let appendExecution {
+            guard value.requested_execution == appendExecution.requestedExecution, value.execution_source_sha256 == appendExecution.sourceSHA256,
+                  let capture = value.execution_capture_sha256, IOSCandidateCatalogPublication.isDigest(capture),
+                  executionCaptureSHA256 == nil || executionCaptureSHA256 == capture,
+                  let object = try JSONSerialization.jsonObject(with: raw) as? [String: Any] else { throw IOSNodeCandidateResult.issue() }
+            var keys: Set<String> = ["session_id","owner_request","request_id","candidate_mode","response_source_nodes","candidate_purpose","append_source_metadata_sha256","requested_execution","execution_source_sha256","execution_capture_sha256"]
+            if operation == "candidate-open" {
+                keys.insert("metadata")
+                guard value.metadata == appendExecution.immutableMetadata else { throw IOSNodeCandidateResult.issue() }
+            } else if operation == "candidate-start" || operation == "candidate-status" { keys.insert("status") }
+            else { throw IOSNodeCandidateResult.issue() }
+            guard Set(object.keys) == keys else { throw IOSNodeCandidateResult.issue() }
+            executionCaptureSHA256 = capture
+        } else {
+            guard value.requested_execution == nil, value.execution_source_sha256 == nil, value.execution_capture_sha256 == nil else { throw IOSNodeCandidateResult.issue() }
+        }
         return value
     }
     func open(prefix: Int, inventoryBytes: Int = IOSCandidateCatalogPublication.maximumInventoryBytes,
@@ -130,7 +160,12 @@ private final class IOSCandidateReply: @unchecked Sendable {
                   raw.utf8.count <= 65536 else { throw IOSNodeCandidateResult.issue() }
             guard !cancelled, !Task.isCancelled else { throw CancellationError() }
             try current()
-            let data = Data(raw.utf8), progress = try JSONDecoder().decode(Progress.self, from: data)
+            let data = Data(raw.utf8)
+            if let appendExecution {
+                guard let capture = executionCaptureSHA256 else { throw IOSNodeCandidateResult.issue() }
+                try IOSNodeCandidateResult.validateAppendExecutionStatus(data, request: request, prefix: appendExecution, runtimeCapture: capture, completed: false)
+            }
+            let progress = try JSONDecoder().decode(Progress.self, from: data)
             guard progress.request_id == request else { throw IOSNodeCandidateResult.issue() }
             if progress.complete && progress.drained { return data }
             operation = "candidate-status"; await pause()
@@ -148,9 +183,13 @@ private final class IOSCandidateReply: @unchecked Sendable {
         guard !cancelled, !Task.isCancelled,
               let raw = try await reply("candidate-status", request: request).status else { throw CancellationError() }
         guard !cancelled, !Task.isCancelled else { throw CancellationError() }
+        if let appendExecution {
+            guard let capture = executionCaptureSHA256 else { throw IOSNodeCandidateResult.issue() }
+            try IOSNodeCandidateResult.validateAppendExecutionStatus(Data(raw.utf8), request: request, prefix: appendExecution, runtimeCapture: capture, completed: true)
+        }
         let value = try JSONDecoder().decode(Progress.self, from: Data(raw.utf8))
         guard value.request_id == request, value.complete, value.drained, ["complete", "failed"].contains(value.stage),
-              value.measurement == metadata.metric, value.capture_sha256 == metadata.capture_sha256,
+              value.measurement == metadata.metric, value.capture_sha256 == (appendExecution == nil ? metadata.capture_sha256 : executionCaptureSHA256),
               value.prefix_position == metadata.prefix_position, value.prefix_id == metadata.prefix_id else { throw IOSNodeCandidateResult.issue() }
     }
     /// A lost reply never releases the parent lease. Retain this transaction
@@ -570,7 +609,7 @@ private final class IOSCandidateReply: @unchecked Sendable {
               let binding = temporary.prefixBinding, capture.source.request == owner else { throw CancellationError() }
         let owned = try IOSNodeCandidateTransaction(epoch: temporary.prefixEpoch.uuidString, owner: owner,
             responseMode: prefix.responseMode, responseSourceNodes: prefix.responseSourceNodes,
-            preparedResponse: prefix.responseMode != nil, appendSourceMetadataSHA256: prefix.appendSourceMetadataSHA256, appendCandidateKind: prefix.responseKind, send: { op, request, candidate, selected, deadline in
+            preparedResponse: prefix.responseMode != nil, appendSourceMetadataSHA256: prefix.appendSourceMetadataSHA256, appendCandidateKind: prefix.responseKind, appendExecution: prefix.isAppendExecution ? prefix : nil, send: { op, request, candidate, selected, deadline in
                 try await self.send(binding.connection, operation: "prefix-" + op, request: request,
                     epoch: temporary.prefixEpoch.uuidString, owner: owner, candidate: candidate, prefix: selected, deadline: deadline)
             }, recovered: { IOSCandidateCatalogPublication.shared.closed(epoch: temporary.prefixEpoch.uuidString, request: owner) })
@@ -580,11 +619,16 @@ private final class IOSCandidateReply: @unchecked Sendable {
                   self.selectedPrefix == position else { throw CancellationError() }
             try temporary.requireLive(); try capture.requireCurrent()
         }
-        let metadata = try await owned.open(prefix: position, inventoryBytes: capture.source.inventory.data.count, family: prefix.isAppend ? .appendPreparation : .preparation, current: current)
+        let metadata = try await owned.open(prefix: position, inventoryBytes: capture.source.inventory.data.count, family: prefix.isAppendExecution ? .appendExecutionPreparation : prefix.isAppend ? .appendPreparation : .preparation, current: current)
         try current()
         guard metadata.targets.map(\.id) == capture.rows.filter({ !$0.input.isEmpty }).map(\.id) else { throw IOSNodeCandidateResult.issue() }
-        try metadata.validate(prefix: capture.prefix, source: prefix.sourceSHA256, config: prefix.configSHA256,
-            ids: Set(capture.rows.filter { !$0.input.isEmpty }.map(\.id)))
+        if prefix.isAppendExecution {
+            try metadata.validateAppendExecution(prefix: prefix, ids: Set(capture.rows.filter { !$0.input.isEmpty }.map(\.id)))
+            guard IOSCandidateCatalogPublication.isDigest(owned.executionCaptureSHA256 ?? "") else { throw IOSNodeCandidateResult.issue() }
+        } else {
+            try metadata.validate(prefix: capture.prefix, source: prefix.sourceSHA256, config: prefix.configSHA256,
+                ids: Set(capture.rows.filter { !$0.input.isEmpty }.map(\.id)))
+        }
         guard metadata.capture_sha256 == prefix.captureSHA256,
               metadata.append_source_metadata_sha256 == prefix.appendSourceMetadataSHA256, metadata.candidate_kind == prefix.responseKind else { throw IOSNodeCandidateResult.issue() }
         var detached: [Score] = [], proposals: [UUID: IOSNodeCandidateProposal] = [:], failures: [UUID: String] = [:]
@@ -598,9 +642,14 @@ private final class IOSCandidateReply: @unchecked Sendable {
                 : "50 \(IOSNodeCandidateMetadata.label(metadata.metric)) through the selected prefix: \(row.name.prefix(100)). The saved suffix remains unused."
             let raw = try await owned.measure(request: request, candidate: target.id, current: current)
             try current()
-            if let receipt = try? JSONDecoder().decode(IOSNodeCandidateResult.self, from: raw),
-               let score = try? receipt.score(request: request, target: target, metadata: metadata,
-                   now: Int64(Date().timeIntervalSince1970 * 1000)) {
+            if prefix.isAppendExecution {
+                if let (receipt, score) = try IOSNodeCandidateResult.measuredAppendExecution(raw, request: request, target: target,
+                    metadata: metadata, prefix: prefix, runtimeCapture: owned.executionCaptureSHA256 ?? "", now: Int64(Date().timeIntervalSince1970 * 1000)) {
+                    detached.append(Score(id: target.id, name: String(row.name.prefix(100)), receipt: receipt, benchmark: score))
+                }
+            } else if let receipt = try? JSONDecoder().decode(IOSNodeCandidateResult.self, from: raw),
+                      let score = try? receipt.score(request: request, target: target, metadata: metadata,
+                          now: Int64(Date().timeIntervalSince1970 * 1000)) {
                 detached.append(Score(id: target.id, name: String(row.name.prefix(100)), receipt: receipt, benchmark: score))
             }
         }
@@ -613,8 +662,14 @@ private final class IOSCandidateReply: @unchecked Sendable {
             try current(); try await owned.observe(request: last, metadata: metadata); try current()
             guard let target = metadata.targets.first(where: { $0.id == score.id }),
                   let row = capture.rows.first(where: { $0.id == score.id }) else { throw IOSNodeCandidateResult.issue() }
-            _ = try score.receipt.score(request: score.receipt.request_id, target: target, metadata: metadata,
-                now: Int64(Date().timeIntervalSince1970 * 1000), selectedPublic: capture.prefix)
+            if prefix.isAppendExecution {
+                _ = try score.receipt.scoreAppendExecution(request: score.receipt.request_id, target: target, metadata: metadata,
+                    prefix: prefix, runtimeCapture: owned.executionCaptureSHA256 ?? "", now: Int64(Date().timeIntervalSince1970 * 1000))
+                try prefix.requireAppendExecutionInput(row.input)
+            } else {
+                _ = try score.receipt.score(request: score.receipt.request_id, target: target, metadata: metadata,
+                    now: Int64(Date().timeIntervalSince1970 * 1000), selectedPublic: capture.prefix)
+            }
             if prefix.isAppend {
                 guard editor else { throw IOSNodeCandidateResult.issue() }
                 let original = try temporary.originalForProposal()
@@ -696,6 +751,13 @@ private final class IOSCandidateReply: @unchecked Sendable {
         guard let preparation, let insertion = draftInsertion(for: score) else { throw CancellationError() }
         let proposal = try insertion.get()
         try preparation.requireSaved(token: score.token)
+        if let prefix = preparation.prefixCapture, prefix.isAppendExecution {
+            guard let row = preparation.prefixCandidate?.rows.first(where: { $0.id == score.id }),
+                  score.receipt.candidate_id == row.id else { throw IOSNodeCandidateResult.issue() }
+            try score.receipt.requireAppendExecution(prefix: prefix, runtimeCapture: score.receipt.capture_sha256)
+            try prefix.requireAppendExecutionInput(row.input)
+            try preparation.requireSaved(token: score.token)
+        }
         try apply(proposal)
         cancel()
     }
@@ -793,6 +855,7 @@ struct IOSCandidateProfileChoices: View {
             ForEach(probe.scores) { row in
                 VStack(alignment: .leading) {
                     Text(String(format: "%@ — %.2f ms (50 %@)", row.name, row.benchmark.trimmed_mean_ms, IOSNodeCandidateMetadata.label(row.benchmark.measurement))).font(.caption.monospacedDigit())
+                    if let details = row.receipt.appendExecutionDetails { Text(details).font(.caption) }
                     if let useInDraft, let insertion = probe.draftInsertion(for: row) {
                         switch insertion {
                         case .success: Button("Use in draft") { useInDraft(row) }
@@ -833,11 +896,11 @@ struct IOSCandidateProfileChoices: View {
     }
 
     func startEditorAppend(model: RouterVPNModel, nodes: [IOSMultihopNodeSelection], editorOwner: IOSNodeChainEditorOwner,
-                           nextKind: String, nextMode: String, draftRevision: String, current: @escaping @MainActor () throws -> Void) throws {
+                           nextKind: String, nextMode: String, requestedExecution: String = "local", draftRevision: String, current: @escaping @MainActor () throws -> Void) throws {
         guard !running else { throw CancellationError() }
         let request = Self.nonce(), position = nodes.count - 1
         let temporary = try IOSNodeCandidatePreparation.reserveAppend(model: model, nodes: nodes, editorOwner: editorOwner,
-            nextKind: nextKind, nextMode: nextMode, draftRevision: draftRevision, request: request, current: current) { [weak self] in self?.cancel() }
+            nextKind: nextKind, nextMode: nextMode, requestedExecution: requestedExecution, draftRevision: draftRevision, request: request, current: current) { [weak self] in self?.cancel() }
         selectedPrefix = position
         begin(model: model, temporary: temporary, position: position, owner: request, editor: true)
     }

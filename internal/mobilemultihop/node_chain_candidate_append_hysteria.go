@@ -130,8 +130,18 @@ func validateNodeChainCapturedHybridKeys(closures []*externalPredecessor) error 
 	if !hasHysteria {
 		return nil
 	}
+	return validateNodeChainCapturedTransportKeys(closures)
+}
+
+// All paired first-proxy closures need independent original transport secrets,
+// including SS-to-packet graphs without HY2. This is pure alias validation;
+// the caller must still retain its exact append or complete-source owner.
+func validateNodeChainCapturedTransportKeys(closures []*externalPredecessor) error {
 	owners := make(map[string]int)
 	for position, closure := range closures {
+		if closure == nil || closure.final == nil || len(closure.nodes) == 0 {
+			return nodeChainCandidateAppendError
+		}
 		keys := make(map[string]bool)
 		for _, row := range closure.nodes {
 			switch predecessorText(row, "type") {

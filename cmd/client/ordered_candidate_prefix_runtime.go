@@ -194,8 +194,12 @@ func validateOrderedCandidatePreparedStatus(p *orderedCandidatePreparation, id s
 	if p == nil {
 		return errors.New("candidate receipt has no captured preparation")
 	}
+	if p.appendExecutionPreparation != nil {
+		_, err := p.retainedAppendExecutionResult(id, status, now)
+		return err
+	}
 	if p.prefixPreparation != nil {
-		return validateDesktopNodeCandidatePrefixStatus(p.prefixPreparation, id, status, now)
+		return validateDesktopNodeCandidatePrefixStatusForPreparation(p, id, status, now)
 	}
 	if p.runtime == nil || p.runtime.catalog == nil {
 		return errors.New("candidate receipt has no original complete saved inventory")

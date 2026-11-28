@@ -47,11 +47,13 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
               position == proofs.count - 1, proofs.last == self,
               Set(proofs.map(\.profile_id)).count == proofs.count else { return false }
         let pairedIDs = proofs.map(\.node_id).filter { !$0.isEmpty }
-        guard Set(pairedIDs).count == pairedIDs.count,
-              !proofs[0].node_id.isEmpty, IOSMultihopNodeSelection.supportsNativePrefix(proofs[0].mode) else { return false }
+        let proxyEntry = IOSNodeCandidateAppendSource.proxyEntryMode(proofs[0].mode)
+        guard Set(pairedIDs).count == pairedIDs.count, !proofs[0].node_id.isEmpty,
+              proxyEntry ? kind == "router-vpn" && pairedIDs.count == proofs.count : IOSMultihopNodeSelection.supportsNativePrefix(proofs[0].mode) else { return false }
         return proofs.enumerated().allSatisfy { index, row in
             row.position == index && !row.profile_id.isEmpty &&
-                (IOSMultihopNodeSelection.supportsNativePrefix(row.mode) && !row.node_id.isEmpty ||
+                (proxyEntry ? !row.node_id.isEmpty && IOSNodeCandidateAppendSource.supportsNextMode(row.mode) :
+                  IOSMultihopNodeSelection.supportsNativePrefix(row.mode) && !row.node_id.isEmpty ||
                   index > 0 && (row.mode == "shadowsocks" || row.mode == "hysteria2" && !row.node_id.isEmpty)) &&
                 (index == position ? row == self : row.measurement == nil && row.candidate_mode == nil && row.candidate_kind == nil && row.purpose == nil)
         }
@@ -63,6 +65,7 @@ struct IOSNodeCandidatePrefix: Decodable, Equatable {
                 metric == IOSNodeCandidateAppendSource.measurement(kind: kind) &&
                 IOSNodeCandidateAppendSource.supportsNext(kind: kind, mode: candidate_mode ?? "") &&
                 (IOSMultihopNodeSelection.supportsNativePrefix(mode) && !node_id.isEmpty ||
+                  IOSNodeCandidateAppendSource.proxyEntryMode(mode) && !node_id.isEmpty && candidate_kind == nil ||
                   position > 0 && (mode == "shadowsocks" || mode == "hysteria2" && !node_id.isEmpty)) &&
                 (0..<(IOSMultihopNodeSelection.physicalTraversalDepth - 1)).contains(position)
         }

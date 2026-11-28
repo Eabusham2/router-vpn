@@ -124,7 +124,7 @@ func projectNodeChainTUN(config string, finalProfile map[string]any, targetOS st
 func nodeChainMTUPlan(config string, proofs []NodeChainProof) (NodeChainMTUPlan, error) {
 	bad := errors.New("ordered chain MTU requires every original selected prefix and its exact single-choice selector")
 	var graph map[string]any
-	if exactJSON([]byte(config), &graph, 4<<20) != nil || len(proofs) < 2 || len(proofs) > NodeChainMaximumNodes && !extendedLocalProofs(proofs) && !extendedPairedLocalProofs(proofs) && !pairedHysteriaLocalProofs(proofs) {
+	if exactJSON([]byte(config), &graph, 4<<20) != nil || len(proofs) < 2 || len(proofs) > NodeChainMaximumNodes && !extendedLocalProofs(proofs) && !extendedPairedLocalProofs(proofs) && !pairedHysteriaLocalProofs(proofs) && !pairedProxyEntryLocalProofs(proofs) {
 		return NodeChainMTUPlan{}, bad
 	}
 	inbounds, ok := graph["inbounds"].([]any)
@@ -197,12 +197,16 @@ func nodeChainMTUPlan(config string, proofs []NodeChainProof) (NodeChainMTUPlan,
 }
 
 func orderedPrefixMTUBounds(config string, proofs []NodeChainProof, actual int, tunTag string) (NodeChainMTUPlan, error) {
+	return orderedPrefixMTUBoundsWithHostnameFamilies(config, proofs, actual, tunTag, nil)
+}
+
+func orderedPrefixMTUBoundsWithHostnameFamilies(config string, proofs []NodeChainProof, actual int, tunTag string, ipv4Only map[string]bool) (NodeChainMTUPlan, error) {
 	result := NodeChainMTUPlan{Original: actual, Ceiling: 9000, TUNTag: tunTag, Prefixes: make([]NodeChainMTUBound, 0, len(proofs))}
 	tags := make([]string, len(proofs))
 	for i, proof := range proofs {
 		tags[i] = proof.Tag
 	}
-	ceilings, err := mobilemtu.PrefixCeilings(config, actual, tags)
+	ceilings, err := mobilemtu.PrefixCeilingsWithHostnameFamilies(config, actual, tags, ipv4Only)
 	if err != nil {
 		return NodeChainMTUPlan{}, err
 	}

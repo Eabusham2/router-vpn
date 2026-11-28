@@ -359,7 +359,13 @@ func nodeChainServerQueryLinuxRoute(ctx context.Context, target PhysicalEgress, 
 	request[syscall.NLMSG_HDRLEN], request[syscall.NLMSG_HDRLEN+1] = family, bits
 	request = append(request, nodeChainServerRouteAttr(syscall.RTA_DST, destination.AsSlice())...)
 	// Linux RTA_IP_PROTO/DPORT bind policy routing to the original transport.
-	request = append(request, nodeChainServerRouteAttr(27, []byte{syscall.IPPROTO_UDP})...)
+	protocol := byte(syscall.IPPROTO_UDP)
+	if target.Network == "tcp" {
+		protocol = syscall.IPPROTO_TCP
+	} else if target.Network != "udp" {
+		return empty, nodeChainServerCarrierError
+	}
+	request = append(request, nodeChainServerRouteAttr(27, []byte{protocol})...)
 	port := make([]byte, 2)
 	binary.BigEndian.PutUint16(port, uint16(target.Port))
 	request = append(request, nodeChainServerRouteAttr(29, port)...)

@@ -14,17 +14,22 @@ import (
 )
 
 const (
-	orderedCandidateSavedCompleteScope = "saved-complete-local"
-	orderedCandidateSavedPrefixScope   = "saved-prefix-local"
-	orderedCandidateSelectedDraftScope = "draft-complete-selected"
-	orderedCandidateAppendScope        = "draft-prefix-append"
+	orderedCandidateSavedCompleteScope   = "saved-complete-local"
+	orderedCandidateSavedPrefixScope     = "saved-prefix-local"
+	orderedCandidateSelectedDraftScope   = "draft-complete-selected"
+	orderedCandidateAppendScope          = "draft-prefix-append"
+	orderedCandidateAppendExecutionScope = "draft-prefix-append-execution"
 )
+
+func orderedCandidateAppendPurpose(scope string) bool {
+	return scope == orderedCandidateAppendScope || scope == orderedCandidateAppendExecutionScope
+}
 
 func normalizedOrderedCandidateSavedScope(scope string) (string, error) {
 	if scope == "" {
 		return orderedCandidateSavedCompleteScope, nil
 	}
-	if scope != orderedCandidateSavedCompleteScope && scope != orderedCandidateSavedPrefixScope && scope != orderedCandidateSelectedDraftScope && scope != orderedCandidateAppendScope {
+	if scope != orderedCandidateSavedCompleteScope && scope != orderedCandidateSavedPrefixScope && scope != orderedCandidateSelectedDraftScope && !orderedCandidateAppendPurpose(scope) {
 		return "", errors.New("saved candidates require an exact captured preparation purpose")
 	}
 	return scope, nil
@@ -174,33 +179,41 @@ func captureDesktopCandidateAppendSelection(ctx context.Context, root string, co
 	}
 	capture := &desktopNodeChainCapture{root: root, control: cloneRouterProfile(control), controlToken: liveMeasurementProfileToken(control)}
 	sourceSchema := 1
+	pairedProxyEntry := q.pairedProxyEntry()
+	if pairedProxyEntry {
+		sourceSchema = 3
+	}
 	for i, node := range q.Nodes {
 		profile, found := byID[node.ID]
 		if !found || q.ExpectedProfileTokens[node.ID] != publicProfileToken(profile) {
 			return empty, errors.New("append prefix lost an original saved member")
 		}
 		if profile.NodeKind == "external" || profile.External != nil {
-			if i == 0 || !desktopNodeChainImported(profile, node.Mode) {
-				return empty, errors.New("append imported member requires its original literal UDP-capable SS2022 capture")
+			if pairedProxyEntry || i == 0 || !desktopNodeChainImported(profile, node.Mode) {
+				return empty, errors.New("append imported member requires its original SS2022 capture and saved resolver")
 			}
 			sourceSchema = 2
 		} else {
 			if profile.NodeKind != "" && profile.NodeKind != "router-vpn" || !common.ValidNodeProofID(profile.NodeProofID) ||
-				!desktopCONNECTExecutionPairedLayer(profile.StartLayer) {
+				!desktopCONNECTExecutionPairedLayer(profile.StartLayer) || pairedProxyEntry && profile.StartLayer != "" && profile.StartLayer != "off" {
 				return empty, errors.New("append prefix lost its original paired identity or captured layer")
 			}
 			if node.Mode == "shadowsocks" || node.Mode == "hysteria2" {
-				if i == 0 || profile.StartLayer != "" && profile.StartLayer != "off" {
-					return empty, errors.New("append paired proxy requires its original capture with Start Layer off after a packet entry")
+				if i == 0 && !pairedProxyEntry || profile.StartLayer != "" && profile.StartLayer != "off" {
+					return empty, errors.New("append paired proxy requires its original captured prefix with Start Layer off")
 				}
-				sourceSchema = 2
+				if !pairedProxyEntry {
+					sourceSchema = 2
+				}
 			} else if !mobilemultihop.NodeChainPrefixMode(node.Mode) {
 				return empty, errors.New("append prefix member has no captured UDP carrier")
 			}
 		}
-		if i > 0 {
+		// The imported constructor above captures hostname DNS through the
+		// prefix. Paired members retain their original literal-only boundary.
+		if (i > 0 || pairedProxyEntry) && profile.NodeKind != "external" {
 			if _, err := netip.ParseAddr(profile.Endpoint); err != nil {
-				return empty, errors.New("later append members require their original literal endpoint")
+				return empty, errors.New("this paired append member requires its original literal endpoint")
 			}
 		}
 		capture.members = append(capture.members, desktopNodeChainMember{Profile: cloneRouterProfile(profile), Mode: node.Mode})
@@ -326,16 +339,19 @@ func validateDesktopCandidatePurposeSelection(ctx context.Context, selection mul
 }
 
 func orderedCandidateClosedScope(scope string) bool {
-	return scope == orderedCandidateSavedPrefixScope || scope == orderedCandidateAppendScope
+	return scope == orderedCandidateSavedPrefixScope || orderedCandidateAppendPurpose(scope)
 }
 
 func (p *orderedCandidatePreparation) closedPurposeCurrent() bool {
 	if p == nil || p.prefixPreparation == nil || !orderedCandidateClosedScope(p.request.Scope) {
 		return false
 	}
-	if p.request.Scope == orderedCandidateAppendScope {
+	if orderedCandidateAppendPurpose(p.request.Scope) {
+		if !p.appendExecutionSourceCurrent() {
+			return false
+		}
 		c := desktopCandidateAppendCapture(p.selection)
-		return p.request.draft == nil && !p.request.serverResponse && p.request.append != nil && c != nil && c.request == p.request.append &&
+		return p.request.draft == nil && !p.request.serverResponse && p.request.append != nil && p.request.append.Purpose == p.request.Scope && c != nil && c.request == p.request.append &&
 			p.prefixPreparation.IsAppend() && p.prefixPreparation.AppendPosition() == p.request.append.AppendPosition &&
 			p.prefixPreparation.CandidateKind() == c.source.CandidateKind() && p.prefixPreparation.CandidateMeasurement() == c.source.CandidateMeasurement() &&
 			p.request.Position == p.request.append.AppendPosition-1 && p.prefixPreparation.OriginalSourceSHA256() == c.source.SourceSHA256()
@@ -358,7 +374,7 @@ func captureDesktopAppendCandidateSourceProfiles(ctx context.Context, a *app, se
 	}
 	result.appendCapture = c
 	if seal {
-		if err = result.sealSourcePlan(ctx, len(selection.Nodes)-1, orderedCandidateAppendScope); err != nil {
+		if err = result.sealSourcePlan(ctx, len(selection.Nodes)-1, c.request.Purpose); err != nil {
 			return nil, err
 		}
 	}
@@ -401,11 +417,11 @@ func newDesktopCandidateAppendSourceLaunch(selection multihopSelection) (*deskto
 }
 
 func (p *orderedCandidatePreparation) recaptureCandidateSources(ctx context.Context) (*desktopNodeChainCandidateCatalog, error) {
-	if p.request.Scope == orderedCandidateAppendScope {
+	if orderedCandidateAppendPurpose(p.request.Scope) {
 		if !p.closedPurposeCurrent() {
 			return nil, errors.New("append catalog lost its original closed purpose")
 		}
-		return captureDesktopAppendCandidateSources(ctx, p.app, p.selection, p.inventory.launch, p.request.CandidateIDs)
+		return captureDesktopAppendCandidateSources(ctx, p.app, p.selection, p.inventory.launch, p.originalCandidateInventoryIDs())
 	}
 	return captureDesktopNodeChainCandidateSourcesForScope(candidateServerIntent(ctx, p.request.serverResponse), p.app, p.inventory.launch, p.request.Position, p.request.CandidateIDs, p.request.Scope)
 }

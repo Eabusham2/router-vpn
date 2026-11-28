@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
 	"sync"
 	"time"
@@ -12,12 +14,20 @@ import (
 	"router-vpn/internal/mobilemultihop"
 )
 
+const desktopNodeCandidateAppendExecutionCommand = "routervpn-node-candidate-append-execution"
+
 // This is a separate, never-connected native purpose. The complete saved graph
 // is retained in selection only for immutable inventory and explicit Save
 // provenance; it supplies no runnable final or ordinary Ready record.
 type desktopNodeCandidatePrefixLaunch struct {
 	preparation         *orderedCandidatePreparation
 	policy              *mobilemultihop.DesktopNodeCandidatePreparationPolicy
+	executionPolicy     *mobilemultihop.DesktopNodeCandidateAppendExecutionPolicy
+	executionOriginal   *mobilemultihop.NodeChainCandidateAppendExecutionPreparation
+	executionReady      *mobilemultihop.DesktopNodeCandidateAppendExecutionReadyRecord
+	executionReadyInfo  os.FileInfo
+	executionReadyRaw   []byte
+	executionStarted    time.Time
 	selection           multihopSelection
 	input               string
 	capture             *desktopNodeChainHostCapture
@@ -29,6 +39,48 @@ type desktopNodeCandidatePrefixLaunch struct {
 	candidateGeneration uint64
 	candidateLast       string
 	candidatePending    *desktopNodeCandidatePrefixRetirement
+}
+
+func (owner *desktopNodeCandidatePrefixLaunch) commandName() string {
+	if owner == nil {
+		return ""
+	}
+	if owner.executionPolicy != nil {
+		return desktopNodeCandidateAppendExecutionCommand
+	}
+	return "routervpn-node-candidate-prefix"
+}
+
+func (owner *desktopNodeCandidatePrefixLaunch) sourceInput() string {
+	if owner == nil || owner.policy == nil {
+		return ""
+	}
+	if owner.executionPolicy != nil {
+		return owner.executionPolicy.Source()
+	}
+	return owner.policy.Source()
+}
+
+// The execution wrapper is additive. The original Local policy still owns the
+// physical path, closed TUN and finite inventory; a Server capture cannot replace it.
+func (owner *desktopNodeCandidatePrefixLaunch) executionPolicyCurrent() bool {
+	if owner == nil || owner.policy == nil {
+		return false
+	}
+	if owner.executionPolicy == nil {
+		return owner.executionOriginal == nil && owner.executionReady == nil && owner.executionReadyInfo == nil && len(owner.executionReadyRaw) == 0 && owner.executionStarted.IsZero() &&
+			(owner.preparation == nil || owner.preparation.appendExecutionPreparation == nil)
+	}
+	wrapper, original := owner.executionPolicy, owner.executionOriginal
+	if wrapper.Validate() != nil || original == nil || original.OriginalPreparation() == nil || wrapper.LocalPolicy() != owner.policy || wrapper.Preparation() != owner.policy.Preparation() {
+		return false
+	}
+	projected := wrapper.ExecutionPreparation()
+	meta := owner.policy.Metadata()
+	return projected != nil && projected.OriginalPreparation() == owner.policy.Preparation() && projected.Source() == original.Source() &&
+		projected.SourceSHA256() == original.SourceSHA256() && projected.OriginalSourceSHA256() == original.OriginalSourceSHA256() &&
+		meta.PreparationSHA256 == original.OriginalPreparation().SourceSHA256() && meta.OriginalCaptureSHA256 == original.OriginalPreparation().CaptureSHA256() &&
+		(owner.preparation == nil || owner.preparation.appendExecutionPreparation == original && owner.preparation.prefixPreparation == original.OriginalPreparation())
 }
 
 type desktopNodeCandidatePrefixPlatform interface {
@@ -51,9 +103,25 @@ func newDesktopNodeCandidatePrefixLaunchForPurpose(ctx context.Context, selectio
 	if err := p.sourceCurrent(ctx); err != nil {
 		return nil, err
 	}
-	policy, err := mobilemultihop.NewDesktopNodeCandidatePreparationPolicy(p.prefixPreparation, session, target, selection.restoreMTU)
+	var policy *mobilemultihop.DesktopNodeCandidatePreparationPolicy
+	var execution *mobilemultihop.DesktopNodeCandidateAppendExecutionPolicy
+	var err error
+	if p.appendExecutionPreparation != nil {
+		if p.appendExecutionPreparation.OriginalPreparation() != p.prefixPreparation || !p.appendExecutionSourceCurrent() {
+			return nil, errors.New("append execution launch lost its original Local preparation")
+		}
+		execution, err = mobilemultihop.NewDesktopNodeCandidateAppendExecutionPolicy(p.appendExecutionPreparation, session, target, selection.restoreMTU)
+		if err == nil {
+			policy = execution.LocalPolicy()
+		}
+	} else {
+		policy, err = mobilemultihop.NewDesktopNodeCandidatePreparationPolicy(p.prefixPreparation, session, target, selection.restoreMTU)
+	}
 	if err != nil {
 		return nil, err
+	}
+	if policy == nil {
+		return nil, errors.New("candidate prefix lost its typed Local policy")
 	}
 	meta := policy.Metadata()
 	if meta.PrefixPosition != p.request.Position || meta.OriginalSourceSHA256 != selection.Native.source || meta.PreparationSHA256 != p.prefixPreparation.SourceSHA256() {
@@ -68,7 +136,8 @@ func newDesktopNodeCandidatePrefixLaunchForPurpose(ctx context.Context, selectio
 	launch := &desktopNodeLaunch{root: selection.Native.root, endpoint: selection.Native.endpoint, profileID: meta.ProfileID,
 		policyProfileID: selection.Control.ID, mode: meta.Mode, config: []byte(policy.Config()), metadata: raw,
 		configSHA256: meta.ConfigSHA256, mtuSession: session,
-		candidatePrefix: &desktopNodeCandidatePrefixLaunch{policy: policy, selection: selection, input: policy.Source()}}
+		candidatePrefix: &desktopNodeCandidatePrefixLaunch{policy: policy, executionPolicy: execution, executionOriginal: p.appendExecutionPreparation, selection: selection}}
+	launch.candidatePrefix.input = launch.candidatePrefix.sourceInput()
 	_, _, physical, err := policy.PhysicalReadValidated()
 	if err != nil {
 		return nil, err
@@ -90,7 +159,7 @@ func validateDesktopNodeCandidatePrefixLaunch(ctx context.Context, launch *deskt
 	}
 	owner := launch.candidatePrefix
 	selection := owner.selection
-	if owner.policy == nil || owner.policy.Validate() != nil || selection.Native == nil || selection.Native.chain == nil || validateDesktopCandidatePurposeSelection(ctx, selection, owner.policy.Preparation()) != nil {
+	if owner.policy == nil || owner.policy.Validate() != nil || !owner.executionPolicyCurrent() || selection.Native == nil || selection.Native.chain == nil || validateDesktopCandidatePurposeSelection(ctx, selection, owner.policy.Preparation()) != nil {
 		return errors.New("candidate prefix lost its sealed source")
 	}
 	meta := owner.policy.Metadata()
@@ -103,7 +172,7 @@ func validateDesktopNodeCandidatePrefixLaunch(ctx context.Context, launch *deskt
 		actual = string(raw)
 		clear(raw)
 	}
-	if owner.policy.Config() != actual || owner.policy.Source() != owner.input || meta.SourceSHA256 == "" ||
+	if owner.policy.Config() != actual || owner.sourceInput() != owner.input || meta.SourceSHA256 == "" ||
 		meta.ConfigSHA256 != launch.configSHA256 || meta.SessionID != launch.mtuSession || meta.ProfileID != launch.profileID ||
 		meta.Mode != launch.mode || meta.PolicyProfileID != selection.Control.ID || launch.policyProfileID != selection.Control.ID || meta.OriginalSourceSHA256 != selection.Native.source ||
 		launch.root != selection.Native.root || launch.endpoint != selection.Native.endpoint || meta.ApplicationOpen || meta.DNSOpen ||
@@ -111,7 +180,7 @@ func validateDesktopNodeCandidatePrefixLaunch(ctx context.Context, launch *deskt
 		return errors.New("candidate prefix changed its original projected input or full saved provenance")
 	}
 	if owner.preparation != nil && (owner.preparation.prefixPreparation == nil || owner.preparation.selection.Native != selection.Native ||
-		meta.PreparationSHA256 != owner.preparation.prefixPreparation.SourceSHA256() || meta.PrefixPosition != owner.preparation.request.Position) {
+		meta.PreparationSHA256 != owner.preparation.prefixPreparation.SourceSHA256() || meta.OriginalCaptureSHA256 != owner.preparation.prefixPreparation.CaptureSHA256() || meta.PrefixPosition != owner.preparation.request.Position) {
 		return errors.New("candidate prefix belongs to another original preparation")
 	}
 	return ctx.Err()
@@ -119,7 +188,8 @@ func validateDesktopNodeCandidatePrefixLaunch(ctx context.Context, launch *deskt
 
 func (p *orderedCandidatePreparation) bindCandidatePrefixLaunch(ctx context.Context, launch *desktopNodeLaunch) error {
 	if p == nil || p.prefixPreparation == nil || launch == nil || launch.candidatePrefix == nil || launch.candidatePrefix.preparation != nil ||
-		launch.command != nil || launch.directory != "" || launch.candidatePrefix.ready != nil || launch.candidatePrefix.selection.Native != p.selection.Native {
+		launch.command != nil || launch.directory != "" || launch.candidatePrefix.ready != nil || launch.candidatePrefix.executionReady != nil ||
+		launch.candidatePrefix.executionOriginal != p.appendExecutionPreparation || launch.candidatePrefix.selection.Native != p.selection.Native {
 		return errors.New("candidate prefix purpose requires its unused original launch")
 	}
 	if err := p.sourceCurrent(ctx); err != nil {
@@ -187,8 +257,93 @@ func readDesktopNodeCandidatePrefixReadyContext(ctx context.Context, launch *des
 	if err := ctx.Err(); err != nil {
 		return empty, err
 	}
+	var execution *mobilemultihop.DesktopNodeCandidateAppendExecutionReadyRecord
+	var executionInfo os.FileInfo
+	var executionRaw []byte
+	if owner.executionPolicy != nil {
+		if !owner.executionPolicyCurrent() {
+			return empty, errors.New("append discovery lost its original typed preparation")
+		}
+		executionRaw, executionInfo, err = readDesktopNodeCandidateAppendExecutionReadySnapshot(ctx, launch)
+		if err != nil {
+			return empty, err
+		}
+		observed, readErr := mobilemultihop.ParseDesktopNodeCandidateAppendExecutionReadyRecord(executionRaw, owner.executionPolicy, transfer, record)
+		now = time.Now()
+		executionStarted := owner.executionStarted
+		if executionStarted.IsZero() {
+			executionStarted = started
+		}
+		if readErr != nil || observed.ObservedAt < executionStarted.UnixMilli() || observed.ObservedAt > now.UnixMilli() || now.UnixMilli()-observed.ObservedAt > 1500 || !fresh && owner.executionReady == nil {
+			return empty, errors.Join(readErr, errors.New("append discovery changed its original freshness or native reader"))
+		}
+		if previous := owner.executionReady; previous != nil {
+			before, after := *previous, observed
+			before.ObservedAt, after.ObservedAt = 0, 0
+			if !reflect.DeepEqual(before, after) || observed.ObservedAt < previous.ObservedAt || owner.executionStarted.IsZero() || owner.executionReadyInfo == nil ||
+				os.SameFile(owner.executionReadyInfo, executionInfo) && (!bytes.Equal(owner.executionReadyRaw, executionRaw) || owner.executionReadyInfo.Size() != executionInfo.Size() || !owner.executionReadyInfo.ModTime().Equal(executionInfo.ModTime())) {
+				return empty, errors.New("append discovery replaced its original runtime identity or immutable publication")
+			}
+		}
+		execution = &observed
+	}
+	if err := ctx.Err(); err != nil {
+		return empty, err
+	}
 	copy := record
 	owner.ready = &copy
+	if execution != nil {
+		if owner.executionStarted.IsZero() {
+			owner.executionStarted = started
+		}
+		owner.executionReady, owner.executionReadyInfo = execution, executionInfo
+		owner.executionReadyRaw = append(owner.executionReadyRaw[:0], executionRaw...)
+	}
 	owner.mtuPath = live.Path
 	return record, nil
+}
+
+// Observe a single atomic sidecar publication through the already retained
+// runtime directory. The native owner may replace the file between observations;
+// it cannot mutate an accepted inode or redirect the original directory handle.
+func readDesktopNodeCandidateAppendExecutionReadySnapshot(ctx context.Context, launch *desktopNodeLaunch) ([]byte, os.FileInfo, error) {
+	if launch == nil || launch.candidatePrefix == nil || launch.candidatePrefix.executionPolicy == nil {
+		return nil, nil, errors.New("append discovery has no original native launch")
+	}
+	if err := desktopnetwork.LockContext(ctx, &launch.workspaceMu); err != nil {
+		return nil, nil, err
+	}
+	defer launch.workspaceMu.Unlock()
+	if err := desktopExternalDirectoryCurrent(launch); err != nil {
+		return nil, nil, err
+	}
+	const name = "node-candidate-append-execution-ready.json"
+	for attempt := 0; attempt < 3; attempt++ {
+		before, err := launch.directoryRoot.Lstat(name)
+		if err != nil {
+			return nil, nil, err
+		}
+		raw, err := readDesktopRuntimeSnapshot(launch.directoryRoot, name, mobilemultihop.DesktopNodeCandidateAppendExecutionReadyLimit)
+		if errors.Is(err, errDesktopRuntimeSnapshotChanged) {
+			continue
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		after, err := launch.directoryRoot.Lstat(name)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !os.SameFile(before, after) || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+			continue
+		}
+		if err := desktopExternalDirectoryCurrent(launch); err != nil {
+			return nil, nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		return raw, after, nil
+	}
+	return nil, nil, errDesktopRuntimeSnapshotChanged
 }

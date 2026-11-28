@@ -14,15 +14,17 @@ import (
 )
 
 type routerVPNNodeCandidatePrefixRequest struct {
-	Schema     int                                                       `json:"schema"`
-	Request    string                                                    `json:"request_id"`
-	Generation uint64                                                    `json:"generation"`
-	Deadline   int64                                                     `json:"deadline_at"`
-	Position   int                                                       `json:"prefix_position"`
-	Candidate  string                                                    `json:"candidate_id"`
-	CaptureSHA string                                                    `json:"capture_sha256"`
-	Path       string                                                    `json:"path_id"`
-	Capture    mobilemultihop.DesktopNodeCandidatePreparationReadyRecord `json:"capture"`
+	Schema              int                                                            `json:"schema"`
+	Request             string                                                         `json:"request_id"`
+	Generation          uint64                                                         `json:"generation"`
+	Deadline            int64                                                          `json:"deadline_at"`
+	Position            int                                                            `json:"prefix_position"`
+	Candidate           string                                                         `json:"candidate_id"`
+	CaptureSHA          string                                                         `json:"capture_sha256"`
+	Path                string                                                         `json:"path_id"`
+	Capture             mobilemultihop.DesktopNodeCandidatePreparationReadyRecord      `json:"capture"`
+	ExecutionCaptureSHA string                                                         `json:"execution_capture_sha256,omitempty"`
+	ExecutionCapture    *mobilemultihop.DesktopNodeCandidateAppendExecutionReadyRecord `json:"execution_capture,omitempty"`
 }
 
 type routerVPNNodeCandidatePrefixPulse struct {
@@ -47,6 +49,7 @@ type routerVPNNodeCandidatePrefixOperation struct {
 	cancel           context.CancelFunc
 	state            *routerVPNNodeCandidatePrefixState
 	started          bool
+	nextStatusAt     time.Time // Command-loop scheduling only; never a cached status.
 }
 
 func (owner *routerVPNNodeCandidatePrefixRuntime) candidateRequestCurrent(ctx context.Context, request routerVPNNodeCandidatePrefixRequest) error {
@@ -62,7 +65,7 @@ func (owner *routerVPNNodeCandidatePrefixRuntime) candidateRequestCurrent(ctx co
 		!reflect.DeepEqual(r.Prefixes, state.proof.Progress().Prefixes) {
 		return routerVPNExternalFailure
 	}
-	return ctx.Err()
+	return errors.Join(ctx.Err(), owner.executionRequestCurrent(ctx, request))
 }
 
 // The capture digest already binds the exact catalog revision and its complete
@@ -114,12 +117,12 @@ func (owner *routerVPNNodeCandidatePrefixRuntime) pollCandidates(ctx context.Con
 		work, cancel := context.WithDeadline(owner.ctx, time.UnixMilli(request.Deadline))
 		op := &routerVPNNodeCandidatePrefixOperation{request: request, raw: raw, info: info, cancel: cancel, state: owner.state.Load()}
 		owner.op.Store(op) // Retain original work before any construction or fallible join.
-		service, err := op.state.proof.NewMeasurementContext(ctx)
+		service, err := owner.newCandidateMeasurement(ctx, op.state)
+		op.service = service // Keep an original partial service even when its constructor returns an error.
 		if err != nil {
 			cancel()
 			return errors.Join(errors.New("prefix measurement construction refused original live capture"), err)
 		}
-		op.service = service
 		if info, err := owner.files.root.Lstat("node-candidate-prefix-cancel.json"); !errors.Is(err, os.ErrNotExist) {
 			body, readErr := owner.files.read("node-candidate-prefix-cancel.json", 16384)
 			if err != nil || readErr != nil || !bytes.Equal(body, raw) {
@@ -128,6 +131,9 @@ func (owner *routerVPNNodeCandidatePrefixRuntime) pollCandidates(ctx context.Con
 			}
 			op.cancelInfo = info
 			cancel()
+			if op.state.execution != nil {
+				return context.Canceled
+			}
 		} else {
 			if err := service.StartContext(work, request.Request, request.Candidate); err != nil {
 				cancel()
@@ -153,7 +159,22 @@ func (owner *routerVPNNodeCandidatePrefixRuntime) pollCandidates(ctx context.Con
 		op.service.Cancel(op.request.Request)
 	}
 	var status hopmeasure.CandidateStatus
-	if !op.started {
+	var executionRaw json.RawMessage
+	if op.state.execution != nil {
+		// Original input, native and cancel checks above still run every tick.
+		// An unfinished remote observation never grants cached readiness.
+		if op.cancelInfo == nil && time.Now().Before(op.nextStatusAt) {
+			return ctx.Err()
+		}
+		var err error
+		status, executionRaw, err = owner.executionCandidateStatus(ctx, op)
+		if err != nil {
+			return err
+		}
+		if !status.Complete || !status.Drained {
+			op.nextStatusAt = time.Now().Add(100 * time.Millisecond)
+		}
+	} else if !op.started {
 		status = routerVPNCancelledPrefixCandidate(op.request)
 	} else if json.Unmarshal([]byte(op.service.StatusContextJSON(ctx)), &status) != nil || status.Request != op.request.Request {
 		return routerVPNExternalFailure
@@ -161,7 +182,7 @@ func (owner *routerVPNNodeCandidatePrefixRuntime) pollCandidates(ctx context.Con
 	if !status.Complete || !status.Drained {
 		return nil
 	}
-	if op.started {
+	if op.started && op.state.execution == nil {
 		if err := op.service.Drain(op.request.Request); err != nil {
 			return err
 		}
@@ -171,15 +192,31 @@ func (owner *routerVPNNodeCandidatePrefixRuntime) pollCandidates(ctx context.Con
 	}
 	result := routerVPNNodeCandidatePrefixResult{routerVPNNodeCandidatePrefixRequest: op.request, CompletedAt: time.Now().UnixMilli(), Status: status}
 	if result.CompletedAt > op.request.Deadline || op.cancelInfo != nil {
+		// Execution status is never rewritten to synthesize a winning, failed
+		// or cancelled receipt. Retire the original request without admission.
+		if op.state.execution != nil {
+			if op.cancelInfo != nil {
+				return context.Canceled
+			}
+			return context.DeadlineExceeded
+		}
 		result.Status = routerVPNCancelledPrefixCandidate(op.request)
 	}
-	if err := op.service.CloseContext(ctx); err != nil {
+	if err := owner.releaseCandidateMeasurement(ctx, op); err != nil {
 		return err
 	}
 	if owner.candidateInputCurrent(ctx, op, op.request.CaptureSHA) != nil {
 		return routerVPNExternalFailure
 	}
-	if err := owner.files.publish("node-candidate-prefix-result.json", result); err != nil {
+	var publication any = result
+	if op.state.execution != nil {
+		publication = struct {
+			routerVPNNodeCandidatePrefixRequest
+			CompletedAt int64           `json:"completed_at"`
+			Status      json.RawMessage `json:"status"`
+		}{op.request, result.CompletedAt, executionRaw}
+	}
+	if err := owner.files.publish("node-candidate-prefix-result.json", publication); err != nil {
 		return err
 	}
 	for _, item := range []struct {

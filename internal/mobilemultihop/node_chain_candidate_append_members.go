@@ -13,24 +13,26 @@ import (
 func (s *NodeChainCandidateAppendSource) captureMembers() error {
 	s.nodes = make([]*NodeProfile, len(s.record.Nodes))
 	s.imports = make([]*nodeChainImportedMember, len(s.record.Nodes))
+	s.importOwners = make([]*nodeChainAppendImportedSeal, len(s.record.Nodes))
 	for position, input := range s.record.Nodes {
 		if s.record.IdentitySources[position] == "" {
 			if s.record.Schema != 2 || position == 0 {
 				return nodeChainCandidateAppendError
 			}
 			member, err := parseNodeChainImportedMember(input)
-			if err != nil || member == nil || member.hostname != nil {
+			if err != nil || member == nil {
 				return errors.Join(err, nodeChainCandidateAppendError)
 			}
-			if err = member.rememberMultipleImportedMember(); err != nil {
+			original, err := rememberAppendImportedMember(member)
+			if err != nil {
 				return err
 			}
-			s.imports[position] = member
+			s.imports[position], s.importOwners[position] = member, original
 			continue
 		}
 		node, err := ParseNodeLaunchInput(input)
 		if err != nil || node == nil ||
-			!NodeChainPrefixMode(node.mode) && (s.record.Schema != 2 || position == 0 || !nodeChainAppendProxyMode(node.mode)) ||
+			!NodeChainPrefixMode(node.mode) && (!nodeChainAppendProxyMode(node.mode) || s.record.Schema != 3 && (s.record.Schema != 2 || position == 0)) ||
 			validateNodeChainIdentity(s.record.IdentitySources[position], node) != nil {
 			return nodeChainCandidateAppendError
 		}
@@ -46,11 +48,12 @@ func (s *NodeChainCandidateAppendSource) captureMembers() error {
 
 func (s *NodeChainCandidateAppendSource) memberCapturesCurrent() error {
 	if s == nil || s.self != s || s.device == nil || s.device != s.originalDevice ||
-		s.device.validateNodeDesktopCapture() != nil || s.record.Schema != 1 && s.record.Schema != 2 ||
+		s.device.validateNodeDesktopCapture() != nil || s.record.Schema != 1 && s.record.Schema != 2 && s.record.Schema != 3 ||
 		len(s.nodes) < 1 || len(s.nodes) != len(s.originalNodes) || len(s.nodes) != len(s.imports) ||
-		len(s.nodes) != len(s.originalImports) || len(s.nodes) != len(s.record.Nodes) ||
+		len(s.nodes) != len(s.originalImports) || len(s.nodes) != len(s.importOwners) || len(s.nodes) != len(s.record.Nodes) ||
 		len(s.nodes) != len(s.record.IdentitySources) || s.nodes[0] == nil ||
-		!NodeChainPrefixMode(s.nodes[0].mode) {
+		s.record.Schema != 3 && !NodeChainPrefixMode(s.nodes[0].mode) ||
+		s.record.Schema == 3 && (s.record.NextKind != "" || !pairedProxyEntryPrefixNodes(s.nodes)) {
 		return nodeChainCandidateAppendError
 	}
 	streams := 0
@@ -60,19 +63,19 @@ func (s *NodeChainCandidateAppendSource) memberCapturesCurrent() error {
 			return nodeChainCandidateAppendError
 		}
 		if member != nil {
-			if s.record.Schema != 2 || position == 0 || node != nil || member.hostname != nil ||
-				member.input != s.record.Nodes[position] || member.validate() != nil ||
+			if s.record.Schema != 2 || position == 0 || node != nil ||
+				member.input != s.record.Nodes[position] || member.validate() != nil || !s.importOwners[position].matches(member) ||
 				s.record.IdentitySources[position] != "" {
 				return nodeChainCandidateAppendError
 			}
 			streams++
 			continue
 		}
-		if node == nil || node.validateNodeDesktopCapture() != nil || s.record.IdentitySources[position] == "" {
+		if node == nil || s.importOwners[position] != nil || node.validateNodeDesktopCapture() != nil || s.record.IdentitySources[position] == "" {
 			return nodeChainCandidateAppendError
 		}
 		if !NodeChainPrefixMode(node.mode) {
-			if s.record.Schema != 2 || position == 0 || !nodeChainAppendProxyMode(node.mode) ||
+			if !nodeChainAppendProxyMode(node.mode) || s.record.Schema != 3 && (s.record.Schema != 2 || position == 0) ||
 				predecessorText(node.profile, "start_layer") != "" && predecessorText(node.profile, "start_layer") != "off" {
 				return nodeChainCandidateAppendError
 			}
@@ -160,7 +163,7 @@ func (scope *nodeChainAppendGraphScope) validate(members []nodeChainGraphMember,
 	// original prefix stays schema one; only this captured extra slot needs
 	// the append resolver scope. It is never a complete imported route.
 	last := len(scope.nodes) - 1
-	if scope.owner.record.Schema != 2 && (scope.owner.record.Schema != 1 ||
+	if scope.owner.record.Schema != 2 && scope.owner.record.Schema != 3 && (scope.owner.record.Schema != 1 ||
 		len(scope.nodes) != len(scope.owner.nodes)+1 || scope.owner.record.NextKind != "external" ||
 		scope.imports[last] == nil) {
 		return nodeChainCandidateAppendError
@@ -173,7 +176,7 @@ func (scope *nodeChainAppendGraphScope) validate(members []nodeChainGraphMember,
 			}
 		} else if member != nil {
 			if node != nil || scope.owner.record.NextKind != "external" || scope.owner.record.NextMode != "shadowsocks" ||
-				member.multipleSeal == nil || !member.multipleSeal.matches(member) {
+				!nodeChainAppendImportCaptured(member) {
 				return nodeChainCandidateAppendError
 			}
 		} else if scope.owner.record.NextKind != "" || node == nil || node.mode != scope.owner.record.NextMode ||
@@ -185,7 +188,7 @@ func (scope *nodeChainAppendGraphScope) validate(members []nodeChainGraphMember,
 			return nodeChainCandidateAppendError
 		}
 		if member != nil {
-			if node != nil || member.validate() != nil || member.hostname != nil || !members[i].imported ||
+			if node != nil || member.validate() != nil || !members[i].imported ||
 				members[i].source != member.source || members[i].mode != "shadowsocks" ||
 				!reflect.DeepEqual(members[i].profile, member.selection.Profile) {
 				return nodeChainCandidateAppendError
@@ -224,7 +227,7 @@ func (s *NodeChainCandidateAppendSource) compileGraphCandidate(candidate *NodePr
 	}
 	if imported != nil {
 		if candidate != nil || s.record.NextKind != "external" || s.record.NextMode != "shadowsocks" ||
-			imported.hostname != nil || imported.multipleSeal == nil || !imported.multipleSeal.matches(imported) {
+			!nodeChainAppendImportCaptured(imported) {
 			return fail(nil)
 		}
 		nodes, imports = append(nodes, nil), append(imports, imported)
@@ -236,7 +239,7 @@ func (s *NodeChainCandidateAppendSource) compileGraphCandidate(candidate *NodePr
 	members := make([]nodeChainGraphMember, len(nodes))
 	streams := make([]*externalPredecessor, 0, len(nodes))
 	targets := map[netip.AddrPort]bool{}
-	withStreams := s.record.Schema == 2 || imported != nil || candidate != nil && nodeChainAppendProxyMode(candidate.mode)
+	withStreams := s.record.Schema == 2 || s.record.Schema == 3 || imported != nil || candidate != nil && nodeChainAppendProxyMode(candidate.mode)
 	for i, node := range nodes {
 		var closure *externalPredecessor
 		var err error
@@ -254,12 +257,12 @@ func (s *NodeChainCandidateAppendSource) compileGraphCandidate(candidate *NodePr
 			return fail(nil)
 		}
 		if members[i].mode == "shadowsocks" {
-			if i == 0 || !nodeChainAppendSSClosure(closure) {
+			if i == 0 && s.record.Schema != 3 || imports[i] == nil && !nodeChainAppendSSClosure(closure) || imports[i] != nil && !nodeChainAppendImportedClosure(imports[i], closure) {
 				return fail(nil)
 			}
 			streams = append(streams, closure)
 		} else if members[i].mode == "hysteria2" {
-			if i == 0 || !nodeChainAppendHysteriaClosure(node, closure) {
+			if i == 0 && s.record.Schema != 3 || !nodeChainAppendHysteriaClosure(node, closure) {
 				return fail(nil)
 			}
 			streams = append(streams, closure)
@@ -288,11 +291,15 @@ func (s *NodeChainCandidateAppendSource) compileGraphCandidate(candidate *NodePr
 		if len(streams) == 0 {
 			return fail(nil)
 		}
-		if err := validateNodeChainAppendProxyTargets(streams, targets); err != nil {
+		if err := s.validateAppendProxyTargets(closures, imports, targets); err != nil {
 			return fail(err)
 		}
 	}
-	if err := validateNodeChainAppendHybridKeys(closures); err != nil {
+	if s.record.Schema == 3 {
+		if err := validateNodeChainCapturedTransportKeys(closures); err != nil {
+			return fail(err)
+		}
+	} else if err := validateNodeChainAppendHybridKeys(closures); err != nil {
 		return fail(err)
 	}
 	expected, err := nodes[0].PhysicalEgress()
@@ -337,8 +344,16 @@ func (s *NodeChainCandidateAppendSource) streamCandidateAliases() (map[string]bo
 	}
 	rememberAddress := func(host string, value any) bool {
 		ip, err := netip.ParseAddr(host)
+		if err != nil {
+			address, err := appendHostnameAddress(host, value)
+			if err != nil {
+				return false
+			}
+			addresses[address] = true
+			return true
+		}
 		port, ok := value.(float64)
-		if err != nil || ip.Zone() != "" || ip.Is4In6() || !ok || !externalPort(port) {
+		if ip.Zone() != "" || ip.Is4In6() || !ok || !externalPort(port) {
 			return false
 		}
 		addresses[netip.AddrPortFrom(ip, uint16(port)).String()] = true

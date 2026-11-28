@@ -1,0 +1,219 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/service"
+	"github.com/spf13/cobra"
+)
+
+func init() {
+	var directory string
+	command := &cobra.Command{Use: "routervpn-node-chain-prefix-relay", Short: "Run one private ordered prefix lease", Args: cobra.NoArgs, SilenceUsage: true, SilenceErrors: true, RunE: func(command *cobra.Command, _ []string) error {
+		ctx, cancel := signal.NotifyContext(command.Context(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		return routerVPNRunNodeChainPrefixRelay(ctx, directory, os.Stdin, os.Stdout)
+	}}
+	command.Flags().StringVar(&directory, "runtime-dir", "", "Original private prefix lease directory")
+	mainCommand.AddCommand(command)
+	var checkDirectory string
+	check := &cobra.Command{Use: "routervpn-node-chain-prefix-check", Short: "Check an original closed prefix source", Args: cobra.NoArgs, SilenceUsage: true, SilenceErrors: true, RunE: func(command *cobra.Command, _ []string) error {
+		return routerVPNCheckNodeChainPrefixSource(command.Context(), checkDirectory)
+	}}
+	check.Flags().StringVar(&checkDirectory, "runtime-dir", "", "Original private prefix source directory")
+	mainCommand.AddCommand(check)
+}
+func routerVPNOpenPrefixRoot(directory string) (*os.Root, error) {
+	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
+		return nil, errServerChainFront
+	}
+	before, err := os.Lstat(directory)
+	if err != nil || !before.IsDir() || before.Mode().Perm() != 0700 || before.Mode()&os.ModeSymlink != 0 {
+		return nil, errServerChainFront
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return nil, err
+	}
+	actual, err := root.Stat(".")
+	if err != nil || !os.SameFile(before, actual) {
+		_ = root.Close()
+		return nil, errServerChainFront
+	}
+	return root, nil
+}
+func routerVPNCheckNodeChainPrefixSource(ctx context.Context, directory string) error {
+	if ctx == nil || ctx.Err() != nil {
+		return errServerChainFront
+	}
+	root, err := routerVPNOpenPrefixRoot(directory)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	raw, file, err := routerVPNReadCandidateSource(root, "node-chain-prefix-source.json", mobilemultihop.NodeChainInputLimit)
+	if err != nil {
+		return err
+	}
+	defer clear(raw)
+	policy, err := mobilemultihop.NewNodeChainServerPrefixPolicy(string(raw))
+	if err != nil {
+		return err
+	}
+	descriptor, err := policy.Descriptor()
+	if err != nil {
+		return err
+	}
+	config := policy.Config()
+	if len(descriptor.Members) == 0 {
+		if config != "" || !file.current(root, "node-chain-prefix-source.json") || ctx.Err() != nil {
+			return errServerChainFront
+		}
+		return nil
+	}
+	owned := service.ContextWithDefaultRegistry(service.ExtendContext(globalCtx))
+	options, err := SJ.UnmarshalExtendedContext[option.Options](owned, []byte(config))
+	if err != nil || len(options.Inbounds) != 0 {
+		return errServerChainFront
+	}
+	// Offline registration checks actual native option construction only. It
+	// never starts this Box, binds a listener or manufactures a lease capture.
+	instance, err := box.New(box.Options{Context: owned, Options: options})
+	if instance != nil {
+		closeErr := instance.Close()
+		err = errors.Join(err, closeErr)
+	}
+	if err != nil || instance == nil || !file.current(root, "node-chain-prefix-source.json") || ctx.Err() != nil {
+		return errors.Join(err, errServerChainFront)
+	}
+	return nil
+}
+func routerVPNRunNodeChainPrefixRelay(ctx context.Context, directory string, input io.Reader, output io.Writer) error {
+	if ctx == nil || ctx.Err() != nil || input == nil || output == nil {
+		return errServerChainFront
+	}
+	root, err := routerVPNOpenPrefixRoot(directory)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	raw, err := routerVPNServerChainRead(root, "node-chain-prefix-capture.json", multihoprelay.NodeChainPrefixIPCMaximumBytes)
+	if err != nil {
+		return err
+	}
+	capture, err := multihoprelay.DecodeNodeChainPrefixCapture(raw)
+	clear(raw)
+	if err != nil {
+		return err
+	}
+	digest, _ := capture.Digest()
+	owner, constructionErr := routerVPNNewServerPrefix(ctx, root, directory, capture)
+	routerVPNWriteServerChainDiagnostic(os.Stderr, "construction", constructionErr)
+	if owner == nil {
+		return errors.Join(constructionErr, errServerChainFront)
+	}
+	encoder := json.NewEncoder(output)
+	defer func() {
+		// Original late owners remain reachable across expiry. A terminal frame is
+		// sent only after their actual join, never after a forced stop or timeout.
+		for {
+			drain, cancel := context.WithTimeout(context.Background(), routerVPNServerChainDrainBudget)
+			failure := owner.Close(drain)
+			cancel()
+			if failure == nil {
+				_ = encoder.Encode(multihoprelay.NodeChainPrefixIPCResponse{Schema: 1, Operation: "closed", Nonce: capture.OwnerID, CaptureSHA256: digest, OK: true})
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+	scanner := bufio.NewScanner(input)
+	scanner.Buffer(make([]byte, 1024), multihoprelay.NodeChainPrefixIPCMaximumBytes+1)
+	if original, ok := input.(io.ReadCloser); ok {
+		joined := make(chan struct{})
+		stop := context.AfterFunc(ctx, func() { defer close(joined); _ = original.Close() })
+		defer func() {
+			if !stop() {
+				<-joined
+			}
+		}()
+	}
+	snapshotFailureReported, prepareFailureReported := false, false
+	for scanner.Scan() {
+		request, err := multihoprelay.DecodeNodeChainPrefixIPCRequest(scanner.Bytes())
+		if err != nil || request.CaptureSHA256 != digest {
+			return errServerChainFront
+		}
+		response := multihoprelay.NodeChainPrefixIPCResponse{Schema: 1, Operation: request.Operation, Nonce: request.Nonce, CaptureSHA256: digest}
+		switch request.Operation {
+		case "snapshot":
+			if constructionErr == nil {
+				call, cancel := context.WithTimeout(ctx, time.Second)
+				receipt, e := owner.Snapshot(call, request.Nonce)
+				cancel()
+				if e == nil {
+					response.OK = true
+					response.Receipt = &receipt
+				} else if !snapshotFailureReported {
+					snapshotFailureReported = true
+					routerVPNWriteServerChainDiagnostic(os.Stderr, "snapshot", routerVPNServerChainAtStage("snapshot-lifecycle", e))
+				}
+			}
+		case "prepare":
+			if constructionErr == nil {
+				failure := owner.Begin()
+				response.OK = failure == nil
+				if failure != nil && !prepareFailureReported {
+					prepareFailureReported = true
+					routerVPNWriteServerChainDiagnostic(os.Stderr, "bootstrap", routerVPNServerChainAtStage("front-current", failure))
+				}
+			}
+		case "candidate-prepare", "candidate-status", "candidate-close":
+			if constructionErr == nil || request.Operation == "candidate-close" {
+				call, cancel := context.WithTimeout(ctx, routerVPNServerChainDrainBudget)
+				if request.Operation == "candidate-close" {
+					cancel()
+					call, cancel = context.WithTimeout(context.Background(), routerVPNServerChainDrainBudget)
+				}
+				receipt, e := owner.CandidateCommand(call, request)
+				cancel()
+				if e == nil {
+					response.OK = true
+					response.CandidateReceipt = receipt
+				}
+			}
+		case "stop":
+			drain, cancel := context.WithTimeout(context.Background(), routerVPNServerChainDrainBudget)
+			response.OK = owner.Close(drain) == nil
+			cancel()
+			if encoder.Encode(response) != nil {
+				return errServerChainFront
+			}
+			if response.OK {
+				return nil
+			}
+			continue
+		}
+		if !response.Valid() || encoder.Encode(response) != nil {
+			return errServerChainFront
+		}
+	}
+	if scanner.Err() != nil {
+		return errServerChainFront
+	}
+	return nil
+}

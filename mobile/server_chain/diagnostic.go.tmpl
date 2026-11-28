@@ -10,8 +10,9 @@ import (
 // Failure output is a fixed vocabulary. Never format the underlying native
 // error: it can contain credentials, private paths, source JSON or peer data.
 type routerVPNServerChainStageError struct {
-	stage string
-	cause error
+	stage       string
+	cause       error
+	proofExpiry *routerVPNServerPrefixProofExpiryDiagnostic
 }
 
 func (e *routerVPNServerChainStageError) Error() string {
@@ -19,8 +20,36 @@ func (e *routerVPNServerChainStageError) Error() string {
 }
 func (e *routerVPNServerChainStageError) Unwrap() error { return e.cause }
 func routerVPNServerChainAtStage(stage string, cause error) error {
+	if stage == "snapshot-lifecycle" {
+		var original *routerVPNServerChainStageError
+		if errors.As(cause, &original) {
+			return cause
+		}
+	}
 	return &routerVPNServerChainStageError{stage: stage, cause: cause}
 }
+
+// Only a failed original prefix expiry check attaches this fixed, bounded
+// observation. No timestamp changes the original proof or its lifetime.
+type routerVPNServerPrefixProofExpiryDiagnostic struct {
+	Phase                    string `json:"phase"`
+	LifetimeNS               int64  `json:"lifetime_ns"`
+	ProofWallAgeNS           int64  `json:"proof_wall_age_ns"`
+	RefreshBeginObserved     bool   `json:"refresh_begin_observed"`
+	RefreshBeginAgeNS        int64  `json:"refresh_begin_age_ns"`
+	RefreshCompletedObserved bool   `json:"refresh_completed_observed"`
+	RefreshCompletedAgeNS    int64  `json:"refresh_completed_age_ns"`
+	InstalledObserved        bool   `json:"installed_observed"`
+	InstalledAgeNS           int64  `json:"installed_age_ns"`
+	InstalledProofWallAgeNS  int64  `json:"installed_proof_wall_age_ns"`
+	InstalledProofMatches    bool   `json:"installed_proof_matches"`
+	AgesClamped              bool   `json:"ages_clamped"`
+}
+
+func routerVPNServerChainAtProofExpiry(cause error, observation routerVPNServerPrefixProofExpiryDiagnostic) error {
+	return &routerVPNServerChainStageError{stage: "snapshot-proof-age", cause: cause, proofExpiry: &observation}
+}
+
 func routerVPNServerChainDiagnostic(operation string, failure error) string {
 	if operation != "construction" && operation != "snapshot" && operation != "bootstrap" && operation != "stop" {
 		operation = "unknown"
@@ -29,16 +58,21 @@ func routerVPNServerChainDiagnostic(operation string, failure error) string {
 	var observed *routerVPNServerChainStageError
 	if errors.As(failure, &observed) {
 		switch observed.stage {
-		case "capture", "source", "carrier", "configuration", "binding", "dns-capture", "options", "box-create", "box-start", "outbounds", "openvpn-owner", "dns-owner", "front-routes", "front-create", "initial-observation", "native-admission", "carrier-observation", "source-identity", "observation-context", "front-current", "snapshot-lifecycle", "close-front", "close-proof", "close-expiry", "close-connections", "close-socks", "close-connect", "close-transport", "close-box", "close-carrier", "close-carrier-join", "close-parent":
+		case "capture", "source", "carrier", "configuration", "binding", "dns-capture", "options", "box-create", "box-start", "outbounds", "openvpn-owner", "dns-owner", "front-routes", "front-create", "initial-observation", "native-admission", "carrier-observation", "source-identity", "observation-context", "front-current", "snapshot-lifecycle", "prefix-original-owner", "prefix-caller-context", "prefix-owner-context", "prefix-session-identity", "prefix-source-identity", "prefix-capture-binding", "prefix-session-observation", "prefix-session-binding", "prefix-retiring", "prefix-empty-graph", "prefix-graph-owner", "prefix-inbound-owner", "prefix-outbound-owner", "prefix-outbound-inventory", "prefix-resolver-owner", "prefix-final-context", "snapshot-owner-context", "snapshot-retiring", "snapshot-listener", "snapshot-proof-age", "close-front", "close-proof", "close-expiry", "close-connections", "close-socks", "close-connect", "close-transport", "close-box", "close-carrier", "close-carrier-join", "close-parent":
 			stage = observed.stage
 		}
 	}
+	var proofExpiry *routerVPNServerPrefixProofExpiryDiagnostic
+	if operation == "snapshot" && stage == "snapshot-proof-age" && observed != nil {
+		proofExpiry = observed.proofExpiry
+	}
 	value := struct {
-		Operation string `json:"operation"`
-		Stage     string `json:"stage"`
-		Deadline  bool   `json:"deadline"`
-		Cancelled bool   `json:"cancelled"`
-	}{operation, stage, errors.Is(failure, context.DeadlineExceeded), errors.Is(failure, context.Canceled)}
+		Operation   string                                      `json:"operation"`
+		Stage       string                                      `json:"stage"`
+		Deadline    bool                                        `json:"deadline"`
+		Cancelled   bool                                        `json:"cancelled"`
+		ProofExpiry *routerVPNServerPrefixProofExpiryDiagnostic `json:"proof_expiry,omitempty"`
+	}{operation, stage, errors.Is(failure, context.DeadlineExceeded), errors.Is(failure, context.Canceled), proofExpiry}
 	raw, _ := json.Marshal(value)
 	return "ROUTERVPN_SERVER_FAILURE " + string(raw)
 }

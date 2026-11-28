@@ -49,6 +49,9 @@ func validateDesktopLinuxProtectedArguments(arguments []string, directory string
 	if len(arguments) > 0 && arguments[0] == "routervpn-node-chain-execution" {
 		return validateDesktopNodeChainExecutionProcessArguments(arguments, directory)
 	}
+	if len(arguments) > 0 && arguments[0] == desktopNodeCandidateAppendExecutionCommand {
+		return validateDesktopNodeCandidateAppendExecutionProcessArguments(arguments, directory)
+	}
 	if len(arguments) > 0 && arguments[0] == "routervpn-node-candidate-prefix" {
 		return validateDesktopNodeCandidatePrefixProcessArguments(arguments, directory)
 	}

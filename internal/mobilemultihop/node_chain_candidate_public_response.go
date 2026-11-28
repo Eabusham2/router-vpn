@@ -12,10 +12,11 @@ import (
 )
 
 type candidatePublicResponseSource struct {
-	Target           hopmeasure.CandidateTarget
-	ExpectedIP       string
-	Method, Password string
-	keyIdentity      string
+	Target                      hopmeasure.CandidateTarget
+	ExpectedIP                  string
+	Method, Password            string
+	keyIdentity                 string
+	appendResolver, appendQuery string // original append-only Custom TCP DNS capture
 }
 
 // PublicCandidatePrefixMeasurements classifies positions in one original

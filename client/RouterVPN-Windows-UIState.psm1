@@ -13,8 +13,16 @@ function Assert-RouterVPNUIStateName([string]$Name){
 }
 
 function Get-RouterVPNUIStateEntry([string]$Path,[bool]$Directory,[bool]$MissingAllowed=$false){
-    try{$Item=Microsoft.PowerShell.Management\Get-Item -LiteralPath $Path -Force -ErrorAction Stop}
-    catch [System.Management.Automation.ItemNotFoundException]{if($MissingAllowed){return $null};throw}
+    # Keep the controller's canonical volume-GUID path unchanged. Query its
+    # metadata directly instead of resolving it through a PowerShell provider.
+    # Optional leaves accept only an actual file/directory not-found error.
+    try{
+        $Attributes=[IO.File]::GetAttributes($Path)
+        $Item=if(($Attributes-band[IO.FileAttributes]::Directory)-ne0){[IO.DirectoryInfo]::new($Path)}else{[IO.FileInfo]::new($Path)}
+        $Item.Refresh()
+    }
+    catch [IO.FileNotFoundException]{if($MissingAllowed){return $null};throw}
+    catch [IO.DirectoryNotFoundException]{if($MissingAllowed){return $null};throw}
     if($Item-isnot[IO.FileSystemInfo]){throw 'The Windows UI state path is not a filesystem entry.'}
     $IsDirectory=($Item.Attributes-band[IO.FileAttributes]::Directory)-ne0
     $Link=$Item.PSObject.Properties['LinkType']

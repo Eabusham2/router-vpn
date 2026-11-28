@@ -40,7 +40,7 @@ func (s nodeChainServerCarrierSnapshot) validate(target PhysicalEgress) error {
 	if err != nil || failure != nil || source.IsUnspecified() || source.Is4In6() || source.Zone() != "" ||
 		source.Is6() != destination.Is6() || s.NamespaceInode == 0 || s.InterfaceIndex <= 0 || s.InterfaceName == "" ||
 		s.InterfaceMTU < 1280 || s.RouteMTU < 0 || s.RouteMTU > s.InterfaceMTU || s.RouteMTU > 0 && s.RouteMTU < 1280 ||
-		!proofID.MatchString(s.RouteSHA256) || target.Network != "udp" || target.Port < 1 || target.Port > 65535 {
+		!proofID.MatchString(s.RouteSHA256) || target.Network != "udp" && target.Network != "tcp" || target.Port < 1 || target.Port > 65535 {
 		return nodeChainServerCarrierError
 	}
 	return nil

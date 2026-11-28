@@ -293,6 +293,23 @@ func validateDesktopNodeCandidatePrefixProcessArguments(arguments []string, dire
 	return append([]string(nil), arguments...), nil
 }
 
+// Append execution uses the same bounded Local physical arguments, but only
+// its dedicated typed owner may select this command. The original prefix
+// validator continues to reject the new command directly.
+func validateDesktopNodeCandidateAppendExecutionProcessArguments(arguments []string, directory string) ([]string, error) {
+	if len(arguments) == 0 || arguments[0] != desktopNodeCandidateAppendExecutionCommand {
+		return nil, errors.New("append execution requires its dedicated native command")
+	}
+	copied := append([]string(nil), arguments...)
+	copied[0] = "routervpn-node-candidate-prefix"
+	validated, err := validateDesktopNodeCandidatePrefixProcessArguments(copied, directory)
+	if err != nil {
+		return nil, err
+	}
+	validated[0] = desktopNodeCandidateAppendExecutionCommand
+	return validated, nil
+}
+
 // The external command shares bounded public digest syntax, never Router
 // readiness or its optional MTU argument. This is not a generic CLI selector.
 func validateDesktopExternalProcessArguments(arguments []string, directory string) ([]string, error) {

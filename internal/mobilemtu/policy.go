@@ -127,6 +127,10 @@ func planForGraph(config string, actual int, fixed bool) (*Plan, error) {
 }
 
 func planForParsedGraph(object map[string]any, config string, actual int, fixed bool) (*Plan, error) {
+	return planForParsedGraphWithHostnameFamilies(object, config, actual, fixed, nil)
+}
+
+func planForParsedGraphWithHostnameFamilies(object map[string]any, config string, actual int, fixed bool, hostnameIPv4Only map[string]bool) (*Plan, error) {
 	if object == nil || actual < MinMTU || actual > MaxMTU {
 		return nil, errors.New("MTU needs the exact live TUN graph")
 	}
@@ -294,7 +298,14 @@ func planForParsedGraph(object map[string]any, config string, actual int, fixed 
 	// own Start Layer before reaching an actual preceding packet interface.
 	// Validate the whole datagram envelope; a proxy TUN is not its capacity.
 	if packet["type"] == "wireguard" || packet["type"] == awgpolicy.Type {
-		e, entry, failure := awgpolicy.NestedPacketEnvelope(packet, all)
+		var e awgpolicy.PacketEnvelope
+		var entry map[string]any
+		var failure error
+		if len(hostnameIPv4Only) == 0 {
+			e, entry, failure = awgpolicy.NestedPacketEnvelope(packet, all)
+		} else {
+			e, entry, failure = awgpolicy.NestedPacketEnvelopeWithHostnameFamilies(packet, all, hostnameIPv4Only)
+		}
 		if failure != nil {
 			return nil, failure
 		}

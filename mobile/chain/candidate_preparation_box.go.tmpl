@@ -5,10 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"reflect"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/dialer"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/option"
@@ -17,6 +23,7 @@ import (
 	"github.com/sagernet/sing-box/route"
 	SJ "github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
 )
 
 var errRouterVPNCandidatePreparation = errors.New("original candidate prefix preparation changed or retired")
@@ -25,22 +32,31 @@ var errRouterVPNCandidatePreparation = errors.New("original candidate prefix pre
 // and candidate measurement. Native packet candidates reach their one captured
 // UDP peer only through the separately sealed prepared request.
 type RouterVPNNodeChainCandidatePreparationEngine struct {
-	instance  *Box
-	prep      *mobilemultihop.NodeChainCandidatePreparation
-	current   func(context.Context) error
-	identity  mobilemultihop.NodeChainIdentity
-	retired   atomic.Bool
-	inbound   adapter.Inbound
-	selector  *group.Selector
-	selected  string
-	prefixes  map[string]adapter.Outbound
-	outbounds map[string]adapter.Outbound
-	resolvers map[string]adapter.DNSTransport
-	services  map[string]adapter.Service
-	gate      *G.Outbound
-	control   *G.Control
-	ingress   *route.RouterVPNNodeChainIngress
-	gateID    string
+	instance           *Box
+	prep               *mobilemultihop.NodeChainCandidatePreparation
+	current            func(context.Context) error
+	identity           mobilemultihop.NodeChainIdentity
+	retired            atomic.Bool
+	inbound            adapter.Inbound
+	selector           *group.Selector
+	selected           string
+	prefixes           map[string]adapter.Outbound
+	outbounds          map[string]adapter.Outbound
+	resolvers          map[string]adapter.DNSTransport
+	services           map[string]adapter.Service
+	gate               *G.Outbound
+	control            *G.Control
+	ingress            *route.RouterVPNNodeChainIngress
+	gateID             string
+	hostnameTargets    map[string]mobilemultihop.NodeChainAppendHostnameTarget
+	hostnameDialers    map[string]N.Dialer
+	hostnameCandidates map[string]string
+	hostnameIPv4Only   map[string]bool
+	hostnameMu         sync.Mutex
+	hostnameAnswers    map[string][]netip.Addr
+	hostnameEndpoints  map[netip.AddrPort]string
+	hostnamePrepared   atomic.Bool
+	hostnameFailed     atomic.Bool
 }
 
 func (s *Box) RouterVPNNewNodeChainCandidatePreparationEngine(ctx context.Context, prep *mobilemultihop.NodeChainCandidatePreparation,
@@ -109,6 +125,9 @@ func (s *Box) RouterVPNNewNodeChainCandidatePreparationEngine(ctx context.Contex
 		}
 		e.prefixes[proof.Tag] = retained
 	}
+	if err := e.captureAppendHostnames(); err != nil {
+		return nil, err
+	}
 	selector, ok := e.outbounds[mobilemultihop.SelectorTag].(*group.Selector)
 	if !ok || selector == nil || !reflect.DeepEqual(selector.All(), []string{e.selected}) || selector.Now() != e.selected {
 		return nil, errRouterVPNCandidatePreparation
@@ -138,7 +157,7 @@ func (s *Box) RouterVPNNewNodeChainCandidatePreparationEngine(ctx context.Contex
 // Keep it acyclic: only exact native managers, physical generation and outer
 // lifetime are read here, never ingress.Current or control.Observe.
 func (e *RouterVPNNodeChainCandidatePreparationEngine) nativeCurrent(ctx context.Context) error {
-	if e == nil || ctx == nil || ctx.Err() != nil || e.retired.Load() || e.instance == nil || e.current == nil || e.current(ctx) != nil {
+	if e == nil || ctx == nil || ctx.Err() != nil || e.retired.Load() || e.hostnameFailed.Load() || e.instance == nil || e.current == nil || e.current(ctx) != nil {
 		return errRouterVPNCandidatePreparation
 	}
 	s := e.instance
@@ -220,11 +239,21 @@ func (e *RouterVPNNodeChainCandidatePreparationEngine) Dial(ctx context.Context,
 	if retained == nil || !e.prep.AllowsDial(tag, address) {
 		return nil, errRouterVPNCandidatePreparation
 	}
-	destination, err := routerVPNExecutionDestination(address)
-	if err != nil {
-		return nil, err
+	ctx = e.hostnameContext(ctx)
+	var conn net.Conn
+	var dialErr error
+	if resolver, hostname := e.hostnameCandidates[address]; hostname {
+		if tag != e.selected || !e.hostnamePrepared.Load() || e.hostnameDialers[resolver] == nil {
+			return nil, errRouterVPNCandidatePreparation
+		}
+		conn, dialErr = e.hostnameDialers[resolver].DialContext(ctx, "tcp", M.ParseSocksaddr(address))
+	} else {
+		destination, err := routerVPNExecutionDestination(address)
+		if err != nil {
+			return nil, err
+		}
+		conn, dialErr = retained.DialContext(ctx, "tcp", destination)
 	}
-	conn, dialErr := retained.DialContext(ctx, "tcp", destination)
 	observed, err := e.ObservePreparationContext(ctx)
 	if err != nil || observed != e.identity || ctx.Err() != nil || conn == nil {
 		return conn, errors.Join(dialErr, err, ctx.Err(), errRouterVPNCandidatePreparation)
@@ -248,6 +277,7 @@ func (e *RouterVPNNodeChainCandidatePreparationEngine) DialPreparedCandidatePack
 	if retained == nil || !target.IsIP() || target.Port == 0 {
 		return nil, errRouterVPNCandidatePreparation
 	}
+	ctx = e.hostnameContext(ctx)
 	conn, dialErr := retained.DialContext(ctx, "udp", target)
 	after, actualTag, actualAddress, observed := request.ReadPrepared(ctx, e, e.prep)
 	if conn == nil || after != identity || actualTag != tag || actualAddress != address {
@@ -278,4 +308,183 @@ func (e *RouterVPNNodeChainCandidatePreparationEngine) RetireContext(ctx context
 		e.ingress.Retire()
 	}
 	return ctx.Err()
+}
+
+// Only the original append preparation can supply these exact resolver and
+// prefix tags. The dialers add no transport, worker, physical route or final.
+func (e *RouterVPNNodeChainCandidatePreparationEngine) captureAppendHostnames() error {
+	policy, err := e.prep.AppendHostnamePolicy()
+	if err != nil {
+		return err
+	}
+	if len(policy.Targets) == 0 {
+		return nil
+	}
+	e.hostnameTargets = make(map[string]mobilemultihop.NodeChainAppendHostnameTarget)
+	e.hostnameDialers = make(map[string]N.Dialer)
+	e.hostnameCandidates = make(map[string]string)
+	e.hostnameIPv4Only = make(map[string]bool)
+	e.hostnameAnswers = make(map[string][]netip.Addr)
+	e.hostnameEndpoints = make(map[netip.AddrPort]string)
+	for _, literal := range policy.LiteralTargets {
+		target, err := netip.ParseAddrPort(literal)
+		if err != nil || target.String() != literal {
+			return errRouterVPNCandidatePreparation
+		}
+		e.hostnameEndpoints[target] = "literal"
+	}
+	for _, target := range policy.Targets {
+		if target.ResolverTag == "" || e.hostnameTargets[target.ResolverTag].ResolverTag != "" || e.prefixes[target.PrefixTag] == nil ||
+			e.resolvers[target.ResolverTag] == nil || e.resolvers[target.ResolverTag].Type() != "tcp" {
+			return errRouterVPNCandidatePreparation
+		}
+		var query option.DomainResolveOptions
+		if SJ.Unmarshal([]byte(target.Query), &query) != nil || query.Server != target.ResolverTag {
+			return errRouterVPNCandidatePreparation
+		}
+		peer := M.ParseSocksaddr(target.Address)
+		if !peer.IsDomain() || peer.Port == 0 {
+			return errRouterVPNCandidatePreparation
+		}
+		original, err := dialer.New(e.instance.ctx, option.DialerOptions{Detour: target.PrefixTag, AbstractDialerOptions: option.AbstractDialerOptions{DomainResolver: &query}}, true)
+		if err != nil {
+			return err
+		}
+		original, err = dialer.BindRouterVPNOriginalPeer(original, peer, target.ResolverTag, target.Exclusions)
+		if err != nil {
+			return err
+		}
+		e.hostnameTargets[target.ResolverTag], e.hostnameDialers[target.ResolverTag] = target, original
+		e.hostnameIPv4Only[target.ResolverTag] = query.Strategy == option.DomainStrategy(C.DomainStrategyIPv4Only)
+		if target.Candidate {
+			if target.PrefixTag != e.selected || e.hostnameCandidates[target.Address] != "" {
+				return errRouterVPNCandidatePreparation
+			}
+			e.hostnameCandidates[target.Address] = target.ResolverTag
+		}
+	}
+	return nil
+}
+
+func (e *RouterVPNNodeChainCandidatePreparationEngine) hostnameContext(ctx context.Context) context.Context {
+	if len(e.hostnameTargets) == 0 {
+		return ctx
+	}
+	return dialer.ContextWithRouterVPNOriginalPeerCheck(ctx, e.checkHostnameAnswers)
+}
+
+func (e *RouterVPNNodeChainCandidatePreparationEngine) checkHostnameAnswers(ctx context.Context, host string, port uint16, transport adapter.DNSTransport, answers []netip.Addr) error {
+	if ctx == nil {
+		return errRouterVPNCandidatePreparation
+	}
+	if ctx.Err() != nil || e.retired.Load() || e.hostnameFailed.Load() {
+		return errors.Join(ctx.Err(), errRouterVPNCandidatePreparation)
+	}
+	fail := func() error { e.hostnameFailed.Store(true); return errRouterVPNCandidatePreparation }
+	if transport == nil {
+		return fail()
+	}
+	target, found := e.hostnameTargets[transport.Tag()]
+	if !found || e.resolvers[transport.Tag()] != transport || target.Address != net.JoinHostPort(strings.ToLower(host), strconv.Itoa(int(port))) || len(answers) == 0 || len(answers) > 4096 {
+		return fail()
+	}
+	unique := map[netip.Addr]bool{}
+	for _, answer := range answers {
+		if !answer.IsValid() || answer.Zone() != "" || answer.Is4In6() || answer.IsUnspecified() || answer.IsMulticast() || e.hostnameIPv4Only[target.ResolverTag] && !answer.Is4() {
+			return fail()
+		}
+		unique[answer] = true
+	}
+	captured := make([]netip.Addr, 0, len(unique))
+	for address := range unique {
+		captured = append(captured, address)
+	}
+	slices.SortFunc(captured, func(a, b netip.Addr) int { return a.Compare(b) })
+	e.hostnameMu.Lock()
+	defer e.hostnameMu.Unlock()
+	if e.retired.Load() || e.hostnameFailed.Load() || ctx.Err() != nil {
+		return errors.Join(ctx.Err(), errRouterVPNCandidatePreparation)
+	}
+	if original, exists := e.hostnameAnswers[target.ResolverTag]; exists && !slices.Equal(original, captured) {
+		return fail()
+	}
+	for _, address := range captured {
+		endpoint := netip.AddrPortFrom(address, port)
+		if owner := e.hostnameEndpoints[endpoint]; owner != "" && owner != target.ResolverTag {
+			return fail()
+		}
+	}
+	if _, exists := e.hostnameAnswers[target.ResolverTag]; !exists {
+		e.hostnameAnswers[target.ResolverTag] = append([]netip.Addr(nil), captured...)
+		for _, address := range captured {
+			e.hostnameEndpoints[netip.AddrPortFrom(address, port)] = target.ResolverTag
+		}
+	}
+	return nil
+}
+
+// This synchronous phase is inside the original runtime Start budget. Every
+// captured hostname is admitted before Prepared and before candidate sockets;
+// repeated or inconsistent DNS cannot replace an already captured answer set.
+func (e *RouterVPNNodeChainCandidatePreparationEngine) PrepareAppendHostnameContext(ctx context.Context, prep *mobilemultihop.NodeChainCandidatePreparation) error {
+	if e == nil || prep == nil || prep != e.prep || e.hostnamePrepared.Load() {
+		return errRouterVPNCandidatePreparation
+	}
+	if _, err := e.ObservePreparationContext(ctx); err != nil {
+		return err
+	}
+	ctx = e.hostnameContext(ctx)
+	policy, err := prep.AppendHostnamePolicy()
+	if err != nil || len(policy.Targets) != len(e.hostnameTargets) || len(policy.Targets) == 0 {
+		return errors.Join(err, errRouterVPNCandidatePreparation)
+	}
+	for _, target := range policy.Targets {
+		if e.hostnameDialers[target.ResolverTag] == nil {
+			return errRouterVPNCandidatePreparation
+		}
+		if err := dialer.ResolveRouterVPNOriginalPeer(ctx, e.hostnameDialers[target.ResolverTag]); err != nil {
+			return err
+		}
+		if _, err := e.ObservePreparationContext(ctx); err != nil {
+			return err
+		}
+	}
+	e.hostnameMu.Lock()
+	complete := len(e.hostnameAnswers) == len(e.hostnameTargets) && !e.hostnameFailed.Load() && !e.retired.Load()
+	e.hostnameMu.Unlock()
+	if !complete {
+		return errRouterVPNCandidatePreparation
+	}
+	e.hostnamePrepared.Store(true)
+	_, err = e.ObservePreparationContext(ctx)
+	return err
+}
+
+// Only this purpose-bound request can reach the original entry control/front
+// tuple. The native engine, preparation, packet endpoint and network generation
+// stay the same; normal AllowsDial remains unchanged.
+func (e *RouterVPNNodeChainCandidatePreparationEngine) DialAppendExecutionContext(ctx context.Context, request *mobilemultihop.NodeChainCandidateAppendExecutionDialRequest) (net.Conn, error) {
+	if e == nil || request == nil {
+		return nil, errRouterVPNCandidatePreparation
+	}
+	tag, address, err := request.Read(ctx, e, e.prep)
+	if err != nil {
+		return nil, err
+	}
+	identity, err := e.ObservePreparationContext(ctx)
+	if err != nil || identity != e.identity {
+		return nil, errors.Join(err, errRouterVPNCandidatePreparation)
+	}
+	retained := e.prefixes[tag]
+	target, err := routerVPNExecutionDestination(address)
+	if err != nil || retained == nil {
+		return nil, errors.Join(err, errRouterVPNCandidatePreparation)
+	}
+	original, dialErr := retained.DialContext(ctx, "tcp", target)
+	actualTag, actualAddress, currentErr := request.Read(ctx, e, e.prep)
+	observed, observeErr := e.ObservePreparationContext(ctx)
+	if actualTag != tag || actualAddress != address || observed != identity || original == nil {
+		currentErr = errors.Join(currentErr, errRouterVPNCandidatePreparation)
+	}
+	return original, errors.Join(dialErr, currentErr, observeErr, ctx.Err())
 }

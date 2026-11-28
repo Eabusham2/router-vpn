@@ -69,7 +69,12 @@ func (c *NodeChain) PlanForMTU(config string, actual int) (*mobilemtu.Plan, erro
 		plans = append(plans, plan)
 	}
 	var combined *mobilemtu.Plan
-	if count := c.PairedHysteriaLocalNodeCount(); count > NodeChainMaximumNodes {
+	if count := c.PairedProxyEntryLocalNodeCount(); count > NodeChainMaximumNodes {
+		if count != len(plans) {
+			return nil, nodeChainError
+		}
+		combined, err = mobilemtu.CombineExtendedPairedProxyEntryLocalPlans(config, actual, plans, c.PrefixTags())
+	} else if count := c.PairedHysteriaLocalNodeCount(); count > NodeChainMaximumNodes {
 		if count != len(plans) {
 			return nil, nodeChainError
 		}

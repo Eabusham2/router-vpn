@@ -53,12 +53,17 @@ func startDesktopProtectedProcessWithJournal(ctx context.Context, arguments, env
 				return nil, errors.New("execution process requires its original typed journal and preparation")
 			}
 			arguments, err = journal.launch.chain.execution.validateProcessArguments(journal.launch, arguments)
-		} else if len(arguments) > 0 && arguments[0] == "routervpn-node-candidate-prefix" {
+		} else if len(arguments) > 0 && (arguments[0] == "routervpn-node-candidate-prefix" || arguments[0] == desktopNodeCandidateAppendExecutionCommand) {
 			if journal == nil || journal.launch == nil || journal.launch.candidatePrefix == nil || journal.launch.ownedNode == nil ||
-				journal.launch.ownedNode.candidatePrefix != journal.launch.candidatePrefix || journal.launch.chain != nil {
+				journal.launch.ownedNode.candidatePrefix != journal.launch.candidatePrefix || journal.launch.chain != nil ||
+				journal.launch.candidatePrefix.commandName() != arguments[0] || validateDesktopNodeCandidatePrefixLaunch(ctx, journal.launch) != nil {
 				return nil, errors.New("prefix native process requires its original typed journal")
 			}
-			arguments, err = validateDesktopNodeCandidatePrefixProcessArguments(arguments, directory)
+			if journal.launch.candidatePrefix.executionPolicy != nil {
+				arguments, err = validateDesktopNodeCandidateAppendExecutionProcessArguments(arguments, directory)
+			} else {
+				arguments, err = validateDesktopNodeCandidatePrefixProcessArguments(arguments, directory)
+			}
 		} else if len(arguments) > 0 && arguments[0] == "routervpn-node-chain-socks" {
 			if journal == nil || journal.launch == nil || journal.launch.chain == nil || !journal.launch.chain.hasPolicy() || journal.launch.chain.socksPolicy == nil || !journal.launch.chain.originalPolicyCurrent() {
 				return nil, errors.New("typed ordered native process requires its original typed journal")

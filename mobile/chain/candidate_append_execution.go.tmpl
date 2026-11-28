@@ -1,0 +1,304 @@
+package libbox
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// Pure source and exclusive process-owned execution are separate facade types.
+// Neither is an ordinary complete/selected source or an application-ready path.
+type RouterNodeChainCandidateAppendExecutionSource struct {
+	source *mobilemultihop.NodeChainCandidateAppendExecutionPolicy
+}
+type RouterNodeChainCandidateAppendExecutionPreparation struct {
+	preparation *mobilemultihop.NodeChainCandidateAppendExecutionPreparation
+	local       *RouterNodeChainCandidatePreparation
+}
+
+func NewRouterNodeChainCandidateAppendExecutionSource(input string) (*RouterNodeChainCandidateAppendExecutionSource, error) {
+	source, err := mobilemultihop.NewNodeChainCandidateAppendExecutionPolicy(input)
+	if err != nil {
+		return nil, err
+	}
+	return &RouterNodeChainCandidateAppendExecutionSource{source: source}, nil
+}
+func RouterNodeChainCandidateAppendExecutionInputFitsSource(source *RouterNodeChainCandidateAppendExecutionSource, input string) bool {
+	return source != nil && source.source != nil && source.source.CandidateInputFitsSource(input)
+}
+func routerNodeAppendExecutionFacade(prep *mobilemultihop.NodeChainCandidateAppendExecutionPreparation) (*RouterNodeChainCandidateAppendExecutionPreparation, error) {
+	if prep == nil || prep.SourceSHA256() == "" || prep.OriginalPreparation() == nil {
+		return nil, errRouterCandidatePreparation()
+	}
+	var original struct {
+		Inventory string `json:"inventory"`
+	}
+	if json.Unmarshal([]byte(prep.Source()), &original) != nil || original.Inventory == "" {
+		return nil, errRouterCandidatePreparation()
+	}
+	digest := sha256.Sum256([]byte(original.Inventory))
+	local := &RouterNodeChainCandidatePreparation{prep: prep.OriginalPreparation(), inventorySHA: hex.EncodeToString(digest[:]), execution: prep}
+	return &RouterNodeChainCandidateAppendExecutionPreparation{preparation: prep, local: local}, nil
+}
+func NewRouterNodeChainCandidateAppendExecutionPreparation(input string) (*RouterNodeChainCandidateAppendExecutionPreparation, error) {
+	prep, err := mobilemultihop.NewNodeChainCandidateAppendExecutionPreparation(input)
+	if err != nil {
+		return nil, err
+	}
+	return routerNodeAppendExecutionFacade(prep)
+}
+func RouterNodeChainCandidateAppendExecutionPreparationLaunch(input string) (*RouterNodeChainCandidateAppendExecutionPreparation, error) {
+	prep, err := mobilemultihop.ParseNodeChainCandidateAppendExecutionPreparationCapture(input)
+	if err != nil {
+		return nil, err
+	}
+	return routerNodeAppendExecutionFacade(prep)
+}
+func (s *RouterNodeChainCandidateAppendExecutionSource) Source() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.Source()
+}
+func (s *RouterNodeChainCandidateAppendExecutionSource) LocalSource() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.LocalSource()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) Source() string {
+	if m == nil || m.preparation == nil {
+		return ""
+	}
+	return m.preparation.Source()
+}
+func (s *RouterNodeChainCandidateAppendExecutionSource) SourceSHA256() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.SourceSHA256()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) SourceSHA256() string {
+	if m == nil || m.preparation == nil {
+		return ""
+	}
+	return m.preparation.SourceSHA256()
+}
+func (s *RouterNodeChainCandidateAppendExecutionSource) OriginalSourceSHA256() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.OriginalSourceSHA256()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) OriginalSourceSHA256() string {
+	if m == nil || m.preparation == nil {
+		return ""
+	}
+	return m.preparation.OriginalSourceSHA256()
+}
+func (s *RouterNodeChainCandidateAppendExecutionSource) Config() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.Config()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) Config() string {
+	if m == nil || m.preparation == nil {
+		return ""
+	}
+	return m.preparation.Config()
+}
+func (s *RouterNodeChainCandidateAppendExecutionSource) ConfigSHA256() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.ConfigSHA256()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) ConfigSHA256() string {
+	if m == nil || m.preparation == nil {
+		return ""
+	}
+	return m.preparation.ConfigSHA256()
+}
+func (s *RouterNodeChainCandidateAppendExecutionSource) Metadata() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.Metadata()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) Metadata() string {
+	if m == nil || m.preparation == nil {
+		return ""
+	}
+	return m.preparation.Metadata()
+}
+func (s *RouterNodeChainCandidateAppendExecutionSource) AppendSourceMetadata() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.AppendSourceMetadata()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) AppendSourceMetadata() string {
+	if m == nil || m.preparation == nil {
+		return ""
+	}
+	return m.preparation.AppendSourceMetadata()
+}
+func (s *RouterNodeChainCandidateAppendExecutionSource) CandidateMode() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.CandidateMode()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) CandidateMode() string {
+	if m == nil || m.preparation == nil {
+		return ""
+	}
+	return m.preparation.CandidateMode()
+}
+func (s *RouterNodeChainCandidateAppendExecutionSource) CandidateKind() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.CandidateKind()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) CandidateKind() string {
+	if m == nil || m.preparation == nil {
+		return ""
+	}
+	return m.preparation.CandidateKind()
+}
+func (s *RouterNodeChainCandidateAppendExecutionSource) CandidateMeasurement() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.CandidateMeasurement()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) CandidateMeasurement() string {
+	if m == nil || m.preparation == nil {
+		return ""
+	}
+	return m.preparation.CandidateMeasurement()
+}
+func (s *RouterNodeChainCandidateAppendExecutionSource) Execution() string {
+	if s == nil || s.source == nil {
+		return ""
+	}
+	return s.source.Execution()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) Execution() string {
+	if m == nil || m.preparation == nil {
+		return ""
+	}
+	return m.preparation.Execution()
+}
+
+func (s *RouterNodeChainCandidateAppendExecutionSource) AppendPosition() int32 {
+	if s == nil || s.source == nil {
+		return -1
+	}
+	return int32(s.source.AppendPosition())
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) AppendPosition() int32 {
+	if m == nil || m.preparation == nil {
+		return -1
+	}
+	return int32(m.preparation.AppendPosition())
+}
+func (s *RouterNodeChainCandidateAppendExecutionSource) MetadataPage(offset int32) string {
+	if offset != 0 {
+		return ""
+	}
+	return s.Metadata()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) MetadataPage(offset int32) string {
+	if offset != 0 {
+		return ""
+	}
+	return m.Metadata()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) LaunchInput() string { return m.Source() }
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) BindNative(server *CommandServer) error {
+	if m == nil || m.local == nil {
+		return errRouterCandidatePreparation()
+	}
+	return m.local.BindNative(server)
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) Run(server *CommandServer, catalog RouterNodeChainCandidateCatalog) error {
+	if m == nil || m.local == nil {
+		return errRouterCandidatePreparation()
+	}
+	return m.local.Run(server, catalog)
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) Healthy() bool {
+	return m != nil && m.local != nil && m.local.Healthy()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) ProgressJSON() string {
+	if m == nil || m.local == nil {
+		return ""
+	}
+	return m.local.ProgressJSON()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) CaptureSHA256() string {
+	if m == nil || m.local == nil {
+		return ""
+	}
+	state := m.local.state.Load()
+	if state == nil || state.execution.Load() == nil {
+		return ""
+	}
+	return state.execution.Load().CaptureSHA256()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) Start(request, candidateID string) error {
+	if m == nil || m.local == nil {
+		return errRouterCandidatePreparation()
+	}
+	return m.local.Start(request, candidateID)
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) Cancel(request string) {
+	if m != nil && m.local != nil {
+		m.local.Cancel(request)
+	}
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) Drain(request string) error {
+	if m == nil || m.local == nil {
+		return errRouterCandidatePreparation()
+	}
+	return m.local.Drain(request)
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) StatusJSON() string {
+	if m == nil || m.local == nil {
+		return ""
+	}
+	return m.local.StatusJSON()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) SelectionJSON() string {
+	if m == nil || m.local == nil || m.local.callbackActive.Load() {
+		return ""
+	}
+	state := m.local.state.Load()
+	if state == nil || state.execution.Load() == nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), hopmeasure.ObservationTimeout)
+	defer cancel()
+	return state.execution.Load().SelectionContextJSON(ctx)
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) NetworkChanged() {
+	if m != nil && m.local != nil {
+		m.local.NetworkChanged()
+	}
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) Close() error {
+	if m == nil || m.local == nil {
+		return errRouterCandidatePreparation()
+	}
+	return m.local.Close()
+}
+func (m *RouterNodeChainCandidateAppendExecutionPreparation) NativeClosed() bool {
+	return m != nil && m.local != nil && m.local.NativeClosed()
+}

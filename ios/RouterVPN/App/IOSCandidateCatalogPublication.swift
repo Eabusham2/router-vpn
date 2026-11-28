@@ -246,7 +246,7 @@ final class IOSCandidateCatalogPublication: @unchecked Sendable {
 /// Reassembles only the public target inventory of one original native owner.
 /// Header and digest are immutable across frames; offsets come from accepted rows.
 struct IOSCandidateMetadataPages {
-    enum Family { case ordinary, selected, preparation, appendPreparation }
+    enum Family { case ordinary, selected, preparation, appendPreparation, appendExecutionPreparation }
     private let family: Family
     private let selectedResponse: (position: Int, id: String)?
     private let selectedResponseMetric: String
@@ -325,6 +325,25 @@ struct IOSCandidateMetadataPages {
         guard objects.isEmpty else { throw issue() }
     }
     private func validateFields(_ body: [String: Any], paged: Bool) throws {
+        if family == .appendExecutionPreparation {
+            let fields: Set<String> = ["schema","purpose","capture_sha256","source_sha256","config_sha256","prefix_position","prefix_id","append_position","targets","measurement","candidate_mode","draft_revision","device_revision","device_source_sha256","device_mtu_revision","original_source_sha256","prefix_count","prefixes_sha256","mtu_sha256","append_source_metadata_sha256","application_open","dns_open","ready","stage","mtu_measurement","execution_source_sha256","requested_execution","execution_capture_sha256","original_preparation_source_sha256","original_preparation_capture_sha256"]
+            guard !paged, Set(body.keys) == fields, Self.integer(body["schema"]) == 1,
+                  body["purpose"] as? String == "draft-prefix-append-execution", body["measurement"] as? String == "routed-candidate-response",
+                  body["candidate_mode"] as? String == "shadowsocks", ["server", "auto"].contains(body["requested_execution"] as? String ?? ""),
+                  body["capture_sha256"] as? String == "", body["execution_capture_sha256"] as? String == "",
+                  body["source_sha256"] as? String == body["execution_source_sha256"] as? String,
+                  body["source_sha256"] as? String != body["original_source_sha256"] as? String,
+                  let count = Self.integer(body["prefix_count"]), (1..<IOSMultihopNodeSelection.physicalTraversalDepth).contains(count),
+                  Self.integer(body["append_position"]) == count, Self.integer(body["prefix_position"]) == count - 1,
+                  ["source_sha256","config_sha256","device_source_sha256","original_source_sha256","prefixes_sha256","mtu_sha256","append_source_metadata_sha256","execution_source_sha256","original_preparation_source_sha256","original_preparation_capture_sha256"].allSatisfy({ IOSCandidateCatalogPublication.isDigest(body[$0] as? String ?? "") }),
+                  ["draft_revision","device_revision","prefix_id"].allSatisfy({ (body[$0] as? String)?.isEmpty == false }), body["device_mtu_revision"] is String,
+                  body["application_open"] as? Bool == false, body["dns_open"] as? Bool == false, body["ready"] as? Bool == false,
+                  body["stage"] as? String == "pending-prefix-proof", body["mtu_measurement"] as? String == "configured-bounds-only",
+                  let targets = body["targets"] as? [[String: String]], (1...50).contains(targets.count),
+                  Set(targets.compactMap { $0["id"] }).count == targets.count,
+                  targets.allSatisfy({ Set($0.keys) == ["id","source_sha256"] && ($0["id"]?.isEmpty == false) && ($0["id"]?.utf8.count ?? 129) <= 128 && IOSCandidateCatalogPublication.isDigest($0["source_sha256"] ?? "") }) else { throw Self.issue() }
+            return
+        }
         var fields: Set<String> = ["schema","capture_sha256","prefix_position","prefix_id","source_sha256","config_sha256","targets"]
         if let metric = body["measurement"] {
             guard let value = metric as? String, value == "routed-tcp-connect" ||
@@ -383,6 +402,7 @@ struct IOSCandidateMetadataPages {
     mutating func append(_ raw: String) throws {
         guard !raw.isEmpty, raw.utf8.count <= legacyLimit, legacy == nil else { throw Self.issue() }
         let data = Data(raw.utf8)
+        guard family != .appendExecutionPreparation || data.count <= 24 * 1024 else { throw Self.issue() }
         try Self.canonicalKeys(data)
         guard var body = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw Self.issue() }
         try validateFields(body, paged: Self.integer(body["schema"]) == 2)

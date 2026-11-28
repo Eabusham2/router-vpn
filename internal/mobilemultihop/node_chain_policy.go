@@ -16,7 +16,7 @@ func applyNodeChainMemberMTUWithAppendScope(nodes []nodeChainGraphMember, closur
 	return applyNodeChainMemberMTUWithOwnedScopes(nodes, closures, server, appendScope, nil)
 }
 
-func applyNodeChainMemberMTUWithOwnedScopes(nodes []nodeChainGraphMember, closures []*externalPredecessor, server *nodeChainMultipleImportedServerScope, appendScope *nodeChainAppendGraphScope, completeScope *nodeChainPairedHysteriaGraphScope) error {
+func applyNodeChainMemberMTUWithOwnedScopes(nodes []nodeChainGraphMember, closures []*externalPredecessor, server *nodeChainMultipleImportedServerScope, appendScope *nodeChainAppendGraphScope, completeScope nodeChainCompleteLocalScope) error {
 	if completeScope != nil && (server != nil || appendScope != nil) {
 		return nodeChainError
 	}

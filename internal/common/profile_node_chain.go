@@ -124,10 +124,29 @@ func PairedHysteriaLocalMultihopSelection(nodes []MultihopNodeSelection) bool {
 	return retained
 }
 
+// PairedProxyEntryLocalMultihopSelection describes a complete paired Local
+// route whose first actual transport is SS/HY2. Only the original source
+// compiler can prove its literal endpoints, Off layers and independent peers.
+func PairedProxyEntryLocalMultihopSelection(nodes []MultihopNodeSelection) bool {
+	if len(nodes) < 2 || len(nodes) > MultihopPhysicalTraversalDepth ||
+		(nodes[0].Mode != "shadowsocks" && nodes[0].Mode != "hysteria2") ||
+		(nodes[len(nodes)-1].Mode != "shadowsocks" && nodes[len(nodes)-1].Mode != "hysteria2") {
+		return false
+	}
+	for _, node := range nodes[1 : len(nodes)-1] {
+		switch node.Mode {
+		case "wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // ValidateMultihopNodes checks the saved selection independently of transport
 // admission. The native compiler must also prove each complete selected source.
 func ValidateMultihopNodes(nodes []MultihopNodeSelection) error {
-	if len(nodes) < 2 || len(nodes) > MultihopMaximumNodes && !ExtendedLocalMultihopSelection(nodes) && !ExtendedPairedLocalMultihopSelection(nodes) && ExtendedMixedLocalPacketCount(nodes) == 0 && !PairedHysteriaLocalMultihopSelection(nodes) {
+	if len(nodes) < 2 || len(nodes) > MultihopMaximumNodes && !ExtendedLocalMultihopSelection(nodes) && !ExtendedPairedLocalMultihopSelection(nodes) && ExtendedMixedLocalPacketCount(nodes) == 0 && !PairedHysteriaLocalMultihopSelection(nodes) && !PairedProxyEntryLocalMultihopSelection(nodes) {
 		return fmt.Errorf("ordered multihop requires at least two nodes; paths beyond %d require a supported complete ordered family", MultihopMaximumNodes)
 	}
 	seen := make(map[string]bool, len(nodes))

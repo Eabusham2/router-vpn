@@ -41,7 +41,7 @@ func checkRelayRegistryWithSources(registryPath, agentPath, torSources, nodeChai
 // The production executable/package paths remain fixed; tests can exercise the
 // identical checker against a real isolated build without installing it.
 type relayRegistryCheckPaths struct {
-	torSources, nodeChainSources, packagePrefix, core, temporary string
+	torSources, nodeChainSources, nodeChainPrefixSources, packagePrefix, core, temporary string
 }
 
 func checkRelayRegistryWithPaths(registryPath, agentPath string, paths relayRegistryCheckPaths) (int, error) {
@@ -91,6 +91,10 @@ func checkRelayRegistryWithPaths(registryPath, agentPath string, paths relayRegi
 	if err != nil {
 		return 0, err
 	}
+	prefixes, err := newRelayNodeChainPrefixRegistryCheck(registry, entry, paths)
+	if err != nil {
+		return 0, err
+	}
 	root := paths.temporary
 	if err = validatePrivilegedStateParent(filepath.Join(root, "plan")); err != nil {
 		return 0, err
@@ -128,6 +132,9 @@ func checkRelayRegistryWithPaths(registryPath, agentPath string, paths relayRegi
 	if err := ordered.checkNative(dir); err != nil {
 		return 0, err
 	}
+	if err := prefixes.checkNative(dir); err != nil {
+		return 0, err
+	}
 	for _, source := range registry.TorExits {
 		if _, err := torSources.source(source, entry.NodeID); err != nil || !torBinary.Current() {
 			return 0, errors.New("private server Tor source or package changed during validation")
@@ -136,7 +143,10 @@ func checkRelayRegistryWithPaths(registryPath, agentPath string, paths relayRegi
 	if err := ordered.current(); err != nil {
 		return 0, err
 	}
-	return len(registry.Exits) + len(registry.TorExits) + len(registry.NodeChains), nil
+	if err := prefixes.current(); err != nil {
+		return 0, err
+	}
+	return len(registry.Exits) + len(registry.TorExits) + len(registry.NodeChains) + len(registry.NodeChainPrefixes), nil
 }
 
 func checkNativeRelayConfig(dir, core string, body []byte) error {

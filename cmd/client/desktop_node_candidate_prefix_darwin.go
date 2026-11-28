@@ -43,6 +43,26 @@ type desktopMacOSCandidatePrefixHost struct {
 	stageInfo                                                          os.FileInfo
 }
 
+func (h *desktopMacOSCandidatePrefixHost) processFamily() macosprocess.Family {
+	if h != nil && h.launch != nil && h.launch.candidatePrefix != nil && h.launch.candidatePrefix.executionPolicy != nil {
+		return macosprocess.CandidateAppendExecutionFamily
+	}
+	return macosprocess.CandidatePrefixFamily
+}
+
+func (h *desktopMacOSCandidatePrefixHost) transferSHA256(selection macosprocess.Selection) (string, error) {
+	if h == nil || h.launch == nil || h.launch.candidatePrefix == nil {
+		return "", errors.New("candidate prefix transfer lost its original host")
+	}
+	if execution := h.launch.candidatePrefix.executionPolicy; execution != nil {
+		if execution.Validate() != nil || execution.LocalPolicy() != h.policy {
+			return "", errors.New("append execution transfer changed its original Local policy")
+		}
+		return macosprocess.CandidateAppendExecutionTransferSHA256(selection)
+	}
+	return macosprocess.CandidatePrefixTransferSHA256(selection)
+}
+
 func (capture *desktopNodeChainPlatformCapture) prepareCandidatePrefixForPurpose(ctx context.Context, owner *desktopNodeChainHostCapture,
 	selection multihopSelection, purpose *orderedCandidatePreparation) (launch *desktopNodeLaunch, image string, failure error) {
 	if capture == nil || capture.parent == nil || owner == nil || owner.platform != capture || owner.windows != nil ||
@@ -275,7 +295,7 @@ func (owner *desktopNodeCandidatePrefixPlatformRuntime) start(ctx context.Contex
 	if err := h.currentLocked(ctx, false); err != nil {
 		return err
 	}
-	scope := macosprocess.Scope{Family: macosprocess.CandidatePrefixFamily, Session: h.selection.Session,
+	scope := macosprocess.Scope{Family: h.processFamily(), Session: h.selection.Session,
 		Source: h.selection.Source, Config: h.selection.Config, Workspace: h.launch.directory}
 	h.started = time.Now()
 	h.process, err = startDesktopMacOSProcessWithVerifier(ctx, h.parent, scope, owner.capture.platform.verify)
@@ -396,7 +416,7 @@ func (h *desktopMacOSCandidatePrefixHost) currentLocked(ctx context.Context, run
 		}
 	}
 	if running {
-		scope := macosprocess.Scope{Family: macosprocess.CandidatePrefixFamily, Session: h.selection.Session, Source: h.selection.Source, Config: h.selection.Config, Workspace: h.launch.directory}
+		scope := macosprocess.Scope{Family: h.processFamily(), Session: h.selection.Session, Source: h.selection.Source, Config: h.selection.Config, Workspace: h.launch.directory}
 		if !h.published || h.process == nil || h.process.parent != h.parent || h.process.capture == nil || h.process.scope != scope ||
 			h.process.command != h.launch.command || h.baseline == nil || h.baseline.Phase != "active" || h.started.IsZero() {
 			return errors.New("macOS candidate prefix has no admitted original child and PF receipt")
@@ -415,7 +435,7 @@ func (h *desktopMacOSCandidatePrefixHost) readReadyLocked(ctx context.Context, f
 	if err := h.currentLocked(ctx, true); err != nil {
 		return err
 	}
-	transfer, err := macosprocess.CandidatePrefixTransferSHA256(h.process.capture.Selection())
+	transfer, err := h.transferSHA256(h.process.capture.Selection())
 	if err != nil || h.transfer != "" && h.transfer != transfer {
 		return errors.Join(err, errors.New("macOS candidate prefix changed its original inherited transfer"))
 	}
@@ -438,7 +458,7 @@ func (h *desktopMacOSCandidatePrefixHost) readReadyLocked(ctx context.Context, f
 	if err := h.currentLocked(ctx, true); err != nil {
 		return err
 	}
-	if next, err := macosprocess.CandidatePrefixTransferSHA256(h.process.capture.Selection()); err != nil || next != transfer {
+	if next, err := h.transferSHA256(h.process.capture.Selection()); err != nil || next != transfer {
 		return errors.Join(err, errors.New("macOS candidate prefix lost its original transfer after readback"))
 	}
 	h.transfer = transfer

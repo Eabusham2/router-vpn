@@ -884,16 +884,95 @@ function TestOrderedCandidatePacketCatalog($Value,[int]$Position){
  return $true
 }
 
+function OrderedCandidateAppendScope($S){return (OrderedCandidateScope $S)-cin@('draft-prefix-append','draft-prefix-append-execution')}
+function OrderedCandidateAppendRequested($S){
+ $draft=ExternalComparisonValue $S 'Draft';$purpose=ExternalComparisonValue $draft 'purpose'
+ $fields=if($draft-is[Collections.IDictionary]){@($draft.Keys)}elseif($null-ne$draft){@($draft.PSObject.Properties.Name)}else{@()}
+ if($purpose-ceq'draft-prefix-append'){if('requested_execution'-cnotin$fields){return 'local'};return ''}
+ $requested=ExternalComparisonValue $draft 'requested_execution'
+ if($purpose-ceq'draft-prefix-append-execution'-and$requested-is[string]-and$requested-cin@('server','auto')){return $requested};return ''
+}
+function TestOrderedAppendKeys($Value,$Required,$Optional=@()){
+ if($null-eq$Value){return $false}
+ $keys=if($Value-is[Collections.IDictionary]){@($Value.Keys)}else{@($Value.PSObject.Properties.Name)}
+ foreach($key in $Required){if($key-cnotin$keys){return $false}}
+ foreach($key in $keys){if($key-cnotin$Required-and$key-cnotin$Optional){return $false}};return $true
+}
+function TestOrderedAppendExecutionCandidate($Value,[string]$Execution,[string]$Entry,[string]$Candidate){
+ return (TestOrderedAppendKeys $Value @('execution','transport','entry_id','exit_id'))-and
+  (ExternalComparisonValue $Value 'execution')-ceq$Execution-and(ExternalComparisonValue $Value 'transport')-ceq'ordered-prefix-append'-and
+  (ExternalComparisonValue $Value 'entry_id')-ceq$Entry-and(ExternalComparisonValue $Value 'exit_id')-ceq$Candidate
+}
+function TestOrderedAppendExecutionMeasurement($Value,[string]$Execution,[string]$Entry,[string]$Candidate){
+ if(-not(TestOrderedAppendKeys $Value @('candidate','eligible') @('last_node_ms','external_ms','score_ms','failure'))-or
+    -not(TestOrderedAppendExecutionCandidate (ExternalComparisonValue $Value 'candidate') $Execution $Entry $Candidate)){return $false}
+ $eligible=ExternalComparisonValue $Value 'eligible';if($eligible-isnot[bool]){return $false}
+ $last=OrderedCandidateNumber $Value 'last_node_ms';$external=OrderedCandidateNumber $Value 'external_ms';$score=OrderedCandidateNumber $Value 'score_ms'
+ if($eligible){
+  if((ExternalComparisonValue $Value 'failure')-or[double]::IsNaN($last)-or[double]::IsNaN($external)-or[double]::IsNaN($score)-or$last-le0-or$external-le0-or$score-le0){return $false}
+  return [Math]::Abs($score-($last/2+$external/2))-le[Math]::Max(0.000001,[Math]::Abs($score)*0.000000001)
+ }
+ $failure=ExternalComparisonValue $Value 'failure'
+ if($failure-isnot[string]-or-not$failure-or$null-ne(ExternalComparisonValue $Value 'score_ms')){return $false}
+ foreach($field in @('last_node_ms','external_ms')){if($null-ne(ExternalComparisonValue $Value $field)){$n=OrderedCandidateNumber $Value $field;if([double]::IsNaN($n)-or$n-le0){return $false}}};return $true
+}
+function TestOrderedAppendExecutionSelection($Value,[string]$Winner,[string]$Entry,[string]$Candidate){
+ if(-not(TestOrderedAppendKeys $Value @('target','measurements','winner','final'))-or
+    (ExternalComparisonValue $Value 'target')-cnotin@('https://1.1.1.1/cdn-cgi/trace','https://1.0.0.1/cdn-cgi/trace')-or
+    -not(TestOrderedAppendExecutionCandidate (ExternalComparisonValue $Value 'winner') $Winner $Entry $Candidate)){return $false}
+ $rows=ExternalComparisonValue $Value 'measurements';if($rows-isnot[array]-or$rows.Count-ne2){return $false}
+ $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal);$winning=$null
+ foreach($row in $rows){
+  $execution=ExternalComparisonValue (ExternalComparisonValue $row 'candidate') 'execution'
+  if($execution-cnotin@('local','server')-or-not$seen.Add($execution)-or-not(TestOrderedAppendExecutionMeasurement $row $execution $Entry $Candidate)){return $false}
+  if($execution-ceq$Winner){$winning=$row}
+ }
+ if($null-eq$winning-or-not[bool](ExternalComparisonValue $winning 'eligible')){return $false}
+ $best=OrderedCandidateNumber $winning 'score_ms'
+ foreach($row in $rows){if([bool](ExternalComparisonValue $row 'eligible')-and(OrderedCandidateNumber $row 'score_ms')-lt$best-0.000001){return $false}}
+ $final=ExternalComparisonValue $Value 'final'
+ return (TestOrderedAppendExecutionMeasurement $final $Winner $Entry $Candidate)-and[bool](ExternalComparisonValue $final 'eligible')
+}
+function OrderedCandidateReceiptScore($S,$Row,[long]$Now,[string]$Metric){
+ $score=OrderedCandidateScore $Row $Now $Metric
+ if($null-eq$score-or(OrderedCandidateScope $S)-cne'draft-prefix-append-execution'){return $score}
+ $view=ExternalComparisonValue $S 'View';$requested=OrderedCandidateAppendRequested $S
+ if($Metric-cne'routed-candidate-response'-or$requested-cnotin@('server','auto')-or
+    (OrderedCandidateNumber $Row 'schema')-ne1-or(ExternalComparisonValue $Row 'purpose')-cne'draft-prefix-append-execution'-or
+    (ExternalComparisonValue $Row 'source_sha256')-cne(ExternalComparisonValue $view 'source_sha256')-or
+    (ExternalComparisonValue $Row 'execution_source_sha256')-cne(ExternalComparisonValue $view 'execution_source_sha256')-or
+    (ExternalComparisonValue $Row 'requested_execution')-cne$requested-or(OrderedCandidateNumber $Row 'prefix_position')-ne$S.Position){return $null}
+ $nodes=@(ExternalComparisonValue $view 'response_source_nodes');if($nodes.Count-le$S.Position-or(ExternalComparisonValue $Row 'prefix_id')-cne$nodes[$S.Position].id){return $null}
+ $request=ExternalComparisonValue $Row 'request_id';$capture=ExternalComparisonValue $Row 'capture_sha256';$candidate=ExternalComparisonValue $Row 'candidate_id'
+ if($request-isnot[string]-or$request-cnotmatch'\A[0-9a-f]{32}\z'-or$capture-isnot[string]-or$capture-cnotmatch'\A[0-9a-f]{64}\z'-or
+    (ExternalComparisonValue $Row 'execution_capture_sha256')-cne$capture){return $null}
+ $choices=@($view.candidates|Where-Object{(ExternalComparisonValue $_ 'id')-ceq$candidate})
+ if($choices.Count-ne1-or(ExternalComparisonValue $Row 'candidate_source_sha256')-cne(ExternalComparisonValue $choices[0] 'source_sha256')){return $null}
+ $winner=ExternalComparisonValue $Row 'winning_execution';$selection=ExternalComparisonValue $Row 'selection'
+ if($requested-ceq'server'){if($winner-cne'server'-or$null-ne$selection){return $null}}
+ elseif($winner-cnotin@('local','server')-or-not(TestOrderedAppendExecutionSelection $selection $winner ([string]$nodes[0].id) $candidate)){return $null}
+ return $score
+}
+function OrderedCandidateExecutionSummary($S,$Row){
+ if((OrderedCandidateScope $S)-cne'draft-prefix-append-execution'-or$null-eq(OrderedCandidateReceiptScore $S $Row ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) 'routed-candidate-response')){return ''}
+ $winner=[string](ExternalComparisonValue $Row 'winning_execution');$selection=ExternalComparisonValue $Row 'selection'
+ if($null-eq$selection){return 'Measured execution: '+$winner+'. This receipt does not change the draft execution.'}
+ $lines=@('Compare winner: '+$winner+' · '+[string]$selection.target)
+ foreach($m in @($selection.measurements)){$lane=[string]$m.candidate.execution;if($m.eligible){$lines+=('{0}: last node {1:N2} ms; HTTPS {2:N2} ms; score {3:N2} ms'-f$lane,$m.last_node_ms,$m.external_ms,$m.score_ms)}else{$lines+=$lane+': unavailable'}}
+ $f=$selection.final;$lines+=('Final recheck: last node {0:N2} ms; HTTPS {1:N2} ms; score {2:N2} ms'-f$f.last_node_ms,$f.external_ms,$f.score_ms)
+ return $lines-join[Environment]::NewLine
+}
+
 function TestOrderedCandidateAppendEnvelope($S,$Value){
- $draft=ExternalComparisonValue $S 'Draft'
+ $draft=ExternalComparisonValue $S 'Draft';$purpose=ExternalComparisonValue $draft 'purpose';$requested=OrderedCandidateAppendRequested $S;$executionAppend=$purpose-ceq'draft-prefix-append-execution'
  $nextKind=ExternalComparisonValue $draft 'next_kind'
  if($null-ne$nextKind-and($nextKind-isnot[string]-or$nextKind-cne'external'-or(ExternalComparisonValue $draft 'next_mode')-cne'shadowsocks')){return $false}
  $external=$nextKind-ceq'external';$metric=if($external){'routed-public-candidate-response'}else{'routed-candidate-response'}
- if($null-eq$draft -or (ExternalComparisonValue $draft 'purpose')-cne'draft-prefix-append' -or
+ if($null-eq$draft -or -not$requested -or
     (ExternalComparisonValue $draft 'execution')-cne'local' -or -not[bool](ExternalComparisonValue $S 'SavedPath') -or
-    -not[bool](ExternalComparisonValue $S 'SavedPrefix') -or (OrderedCandidateScope $S)-cne'draft-prefix-append' -or
-    (ExternalComparisonValue $Value 'purpose')-cne'draft-prefix-append' -or (ExternalComparisonValue $Value 'scope')-cne'draft-prefix-append' -or
-    (ExternalComparisonValue $Value 'origin')-cne'editor-draft' -or (ExternalComparisonValue $Value 'requested_execution')-cne'local' -or
+    -not[bool](ExternalComparisonValue $S 'SavedPrefix') -or (OrderedCandidateScope $S)-cne$purpose -or
+    (ExternalComparisonValue $Value 'purpose')-cne$purpose -or (ExternalComparisonValue $Value 'scope')-cne$purpose -or
+    (ExternalComparisonValue $Value 'origin')-cne'editor-draft' -or (ExternalComparisonValue $Value 'requested_execution')-cne$requested -or
     (ExternalComparisonValue $Value 'measurement')-cne$metric -or (ExternalComparisonValue $Value 'proof_scope')-cne'selected-prefix' -or
     (OrderedCandidateNumber $Value 'schema')-ne1 -or (OrderedCandidateNumber $Value 'prefix_position')-ne$S.Position){return $false}
  foreach($name in @('application_open','dns_open')){$flag=ExternalComparisonValue $Value $name;if($flag-isnot[bool]-or$flag){return $false}}
@@ -902,6 +981,10 @@ function TestOrderedCandidateAppendEnvelope($S,$Value){
  foreach($name in @('original_final','selected_execution','selection_epoch','required_selected_execution','response_executions','public_response_source_nodes','external_final')){
   if($name-cin$fields){return $false}
  }
+ if($executionAppend){
+  $executionSource=ExternalComparisonValue $Value 'execution_source_sha256'
+  if($external-or(ExternalComparisonValue $draft 'next_mode')-cne'shadowsocks'-or$executionSource-isnot[string]-or$executionSource-cnotmatch'\A[0-9a-f]{64}\z'){return $false}
+ }else{foreach($name in @('execution_source_sha256','execution_capture_sha256','winning_execution','selection')){if($name-cin$fields){return $false}}}
  $mode=ExternalComparisonValue $Value 'candidate_mode';$nodes=$null
  if($Value-is[Collections.IDictionary]){$nodes=$Value['response_source_nodes']}else{$property=$Value.PSObject.Properties['response_source_nodes'];if($null-ne$property){$nodes=$property.Value}}
  if($mode-cnotin@('wg','awg2-fast','awg2-strong','shadowsocks','hysteria2')-or$mode-cne(ExternalComparisonValue $draft 'next_mode')-or
@@ -917,18 +1000,26 @@ function TestOrderedCandidateAppendEnvelope($S,$Value){
   $valueHash=ExternalComparisonValue $Value $name
   if($valueHash-isnot[string]-or$valueHash-cnotmatch'\A[0-9a-f]{64}\z'){return $false}
  }
+ $proxyEntry=$nodes[0].kind-ceq'router-vpn'-and$nodes[0].mode-cin@('shadowsocks','hysteria2')
+ if($proxyEntry-and$external){return $false}
  $ids=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+ $retainedSS=$false
  for($i=0;$i-lt$nodes.Count;$i++){
   $node=$nodes[$i];$original=$draft.nodes[$i]
   $keys=if($node-is[Collections.IDictionary]){$node.Keys}else{$node.PSObject.Properties.Name}
   $originalKeys=if($original-is[Collections.IDictionary]){$original.Keys}else{$original.PSObject.Properties.Name}
   $packet=$node.kind-ceq'router-vpn'-and$node.mode-cin@('wg','awg2-fast','awg2-strong')
-  $stream=$i-gt0-and$node.kind-cin@('router-vpn','external')-and$node.mode-ceq'shadowsocks'
-  $hy2=$i-gt0-and$node.kind-ceq'router-vpn'-and$node.mode-ceq'hysteria2'
+  $stream=($i-gt0-or$proxyEntry)-and$node.kind-cin@('router-vpn','external')-and$node.mode-ceq'shadowsocks'
+  $hy2=($i-gt0-or$proxyEntry)-and$node.kind-ceq'router-vpn'-and$node.mode-ceq'hysteria2'
   if(@($keys).Count-ne3-or'id'-cnotin$keys-or'mode'-cnotin$keys-or'kind'-cnotin$keys-or@($originalKeys).Count-ne2-or
      'id'-cnotin$originalKeys-or'mode'-cnotin$originalKeys-or$node.id-isnot[string]-or$node.id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'-or
-     -not$ids.Add($node.id)-or-not($packet-or$stream-or$hy2)-or
+     -not$ids.Add($node.id)-or-not($packet-or$stream-or$hy2)-or($proxyEntry-and$node.kind-cne'router-vpn')-or
      $original.id-cne$node.id-or$original.mode-cne$node.mode){return $false}
+  if($executionAppend){
+   if($packet){if($retainedSS){return $false}}
+   elseif($i-gt0-and$node.kind-ceq'router-vpn'-and$node.mode-ceq'shadowsocks'){$retainedSS=$true}
+   else{return $false}
+  }
  }
  return $true
 }
@@ -954,6 +1045,7 @@ function TestOrderedCandidateAppendCatalog($S,$Value){
  if($choices-isnot[array]-or$choices.Count-eq0-or$prefixes-isnot[array]-or$prefixes.Count-ne$nodes.Count){return $false}
  $ids=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
  foreach($choice in $choices){
+  if((OrderedCandidateScope $S)-ceq'draft-prefix-append-execution'){$source=ExternalComparisonValue $choice 'source_sha256';if($source-isnot[string]-or$source-cnotmatch'\A[0-9a-f]{64}\z'){return $false}}
   if(-not$ids.Add($choice.id)-or-not(TestOrderedCandidateAppendPath $S $Value $choice (ExternalComparisonValue $choice 'proposed_path'))-or
      -not(TestOrderedCandidateAppendPath $S $Value $choice (ExternalComparisonValue $choice 'draft_path'))){return $false}
  }
@@ -965,7 +1057,7 @@ function TestOrderedCandidateAppendCatalog($S,$Value){
 }
 
 function TestOrderedCandidatePreparedEnvelope($S,$Value){
- if((OrderedCandidateScope $S)-ceq'draft-prefix-append'-or(ExternalComparisonValue $Value 'purpose')-ceq'draft-prefix-append'){return TestOrderedCandidateAppendEnvelope $S $Value}
+ if((OrderedCandidateAppendScope $S)-or(ExternalComparisonValue $Value 'purpose')-cin@('draft-prefix-append','draft-prefix-append-execution')){return TestOrderedCandidateAppendEnvelope $S $Value}
  $draft=ExternalComparisonValue $S 'Draft'
  if((OrderedCandidateScope $S) -ceq 'draft-complete-selected' -or (ExternalComparisonValue $Value 'scope') -ceq 'draft-complete-selected'){
   if(-not [bool](ExternalComparisonValue $S 'SavedPath') -or $null -eq $draft -or $draft.execution -cnotin @('auto','server') -or
@@ -1000,7 +1092,7 @@ function TestOrderedCandidatePreparedEnvelope($S,$Value){
  return $true
 }
 function TestOrderedCandidatePreparedPath($S,$View,$Choice,$Path){
- if((OrderedCandidateScope $S)-ceq'draft-prefix-append'){return TestOrderedCandidateAppendPath $S $View $Choice $Path}
+ if((OrderedCandidateAppendScope $S)){return TestOrderedCandidateAppendPath $S $View $Choice $Path}
  if(-not(TestOrderedCandidatePreparedEnvelope $S $View)){return $false}
  $nodes=$View.response_source_nodes;$id=ExternalComparisonValue $Choice 'id'
  if($Path -isnot [array] -or $Path.Count -ne $nodes.Count -or (ExternalComparisonValue $Choice 'kind') -cne 'router-vpn' -or
@@ -1015,7 +1107,7 @@ function TestOrderedCandidatePreparedPath($S,$View,$Choice,$Path){
  return $true
 }
 function TestOrderedCandidatePreparedCatalog($S,$Value){
- if((OrderedCandidateScope $S)-ceq'draft-prefix-append'){return TestOrderedCandidateAppendCatalog $S $Value}
+ if((OrderedCandidateAppendScope $S)){return TestOrderedCandidateAppendCatalog $S $Value}
  if(-not(TestOrderedCandidatePreparedEnvelope $S $Value) -or (OrderedCandidateNumber $Value 'samples') -ne 50){return $false}
  $nodes=$Value.response_source_nodes;$prefixes=$Value.prefixes;$choices=$Value.candidates
  if($choices -isnot [array] -or $choices.Count -eq 0 -or $prefixes -isnot [array] -or $prefixes.Count -ne $nodes.Count-1){return $false}
@@ -1080,7 +1172,7 @@ function OrderedCandidateViewMetric($S,$View){
 function TestOrderedCandidateDraftInsertion($S,$Choice,$Path,$View=$null){
  $draft=ExternalComparisonValue $S 'Draft'
  if($null -eq $View){$View=ExternalComparisonValue $S 'View'}
- if((OrderedCandidateScope $S)-ceq'draft-prefix-append'){return TestOrderedCandidateAppendPath $S $View $Choice $Path}
+ if((OrderedCandidateAppendScope $S)){return TestOrderedCandidateAppendPath $S $View $Choice $Path}
  if($null -ne (ExternalComparisonValue $View 'candidate_mode')){return $null -ne $draft -and $View.candidate_mode -cne 'hysteria2' -and (ExternalComparisonValue $Choice 'draft_action') -ceq 'replace-measured-hop' -and (TestOrderedCandidatePreparedPath $S $View $Choice $Path)}
  if($null -ne $draft -and (OrderedCandidateViewMetric $S $View) -ceq 'routed-public-candidate-response'){
   return (ExternalComparisonValue $Choice 'draft_action') -ceq 'insert-measured-hop' -and (TestOrderedCandidatePublicPath $S $View $Choice $Path)
@@ -1104,7 +1196,7 @@ function TestOrderedCandidateDraftInsertion($S,$Choice,$Path,$View=$null){
  return $true
 }
 function OrderedCandidateFinalProfileChoice($S,$Choice){
- if((OrderedCandidateScope $S)-ceq'draft-prefix-append'){return $false}
+ if((OrderedCandidateAppendScope $S)){return $false}
  $draft=ExternalComparisonValue $S 'Draft'
  if($null -ne (ExternalComparisonValue (ExternalComparisonValue $S 'View') 'original_final')){
   return (ExternalComparisonValue $Choice 'proposal_action') -ceq 'save-final-profile' -and
@@ -1168,7 +1260,7 @@ function OrderedCandidateBase($S){
  if($null-ne(ExternalComparisonValue $S 'Draft')){return '/api/multihop/draft-candidates'}
  if([bool](ExternalComparisonValue $S 'SavedPath')){return '/api/multihop/saved-candidates'};return '/api/multihop/prefix-candidates'
 }
-function OrderedCandidateScope($S){if((ExternalComparisonValue (ExternalComparisonValue $S 'Draft') 'purpose')-ceq'draft-prefix-append'){return 'draft-prefix-append'};if([string](ExternalComparisonValue (ExternalComparisonValue $S 'Draft') 'execution')-cin@('server','auto')){return 'draft-complete-selected'};if([bool](ExternalComparisonValue $S 'SavedPrefix')){return 'saved-prefix-local'};return 'saved-complete-local'}
+function OrderedCandidateScope($S){$purpose=ExternalComparisonValue (ExternalComparisonValue $S 'Draft') 'purpose';if($purpose-cin@('draft-prefix-append','draft-prefix-append-execution')){return $purpose};if([string](ExternalComparisonValue (ExternalComparisonValue $S 'Draft') 'execution')-cin@('server','auto')){return 'draft-complete-selected'};if([bool](ExternalComparisonValue $S 'SavedPrefix')){return 'saved-prefix-local'};return 'saved-complete-local'}
 function OrderedCandidateCatalogPath($S){$Path=(OrderedCandidateBase $S)+'/catalog?prefix_position='+$S.Position;if([bool](ExternalComparisonValue $S 'SavedPrefix')){$Path+='&scope='+(OrderedCandidateScope $S)};if(-not [bool](ExternalComparisonValue $S 'SavedPath') -or (OrderedCandidateScope $S) -ceq 'draft-complete-selected'){$Path+='&server_response=true'};return $Path}
 function OrderedCandidateScopedBody($S,[hashtable]$Body){$Captured=@{}+$Body;if([bool](ExternalComparisonValue $S 'SavedPrefix')){$Captured.scope=OrderedCandidateScope $S};return $Captured}
 function OrderedCandidateNumber($Value,[string]$Key){
@@ -1233,9 +1325,9 @@ function SetOrderedCandidateControls($S){
   $row=$S.Table.SelectedItem
   $insert=$null -ne $row -and (TestOrderedCandidateDraftInsertion $S $row.Choice (ExternalComparisonValue $row.Choice 'draft_path'))
   $useDraft.Visibility=if($insert){'Visible'}else{'Collapsed'}
-  $useDraft.Content=if((OrderedCandidateScope $S)-ceq'draft-prefix-append'){'Append measured node'}elseif((ExternalComparisonValue $S.View 'candidate_mode')){'Use replacement in draft'}else{'Use in draft'}
+  $useDraft.Content=if((OrderedCandidateAppendScope $S)){'Append measured node'}elseif((ExternalComparisonValue $S.View 'candidate_mode')){'Use replacement in draft'}else{'Use in draft'}
   $useDraft.IsEnabled=$insert -and $null -eq $S.Task -and $Captured -and (OrderedCandidateReady $S) -and $null -ne $row.Receipt -and
-     $null -ne (OrderedCandidateScore $row.Receipt ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) (OrderedCandidateViewMetric $S $S.View))
+     $null -ne (OrderedCandidateReceiptScore $S $row.Receipt ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) (OrderedCandidateViewMetric $S $S.View))
  }
  $draft=ExternalComparisonValue $S 'Draft'
  $finalChoice=$null -ne $draft -and $null -ne $S.Table.SelectedItem -and (OrderedCandidateFinalProfileChoice $S $S.Table.SelectedItem.Choice)
@@ -1243,7 +1335,7 @@ function SetOrderedCandidateControls($S){
   $S.ProfileName.Parent.Visibility=if($finalChoice){'Visible'}else{'Collapsed'}
   $S.Save.Content=if($finalChoice -and $S.Table.SelectedItem.Choice.proposal_action -ceq 'save-intermediate-profile'){'Save profile with this hop'}elseif($finalChoice){'Save profile with this final'}else{'Add measured hop to draft'}
  }
- if($null-eq$S.Task-and$Captured-and(OrderedCandidateReady $S)-and$null-ne$S.Table.SelectedItem){$Row=$S.Table.SelectedItem;if($null-ne$Row.Receipt-and$null-ne(OrderedCandidateScore $Row.Receipt ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) (OrderedCandidateViewMetric $S $S.View))-and@((ExternalComparisonValue $Row.Choice 'proposed_path')|Where-Object{$null-ne$_}).Count-ge2){$S.Save.IsEnabled=(OrderedCandidateScope $S)-cne'draft-prefix-append'-and($null -eq $draft -or (OrderedCandidateViewMetric $S $S.View) -ne 'routed-candidate-response' -or $finalChoice)}}
+ if($null-eq$S.Task-and$Captured-and(OrderedCandidateReady $S)-and$null-ne$S.Table.SelectedItem){$Row=$S.Table.SelectedItem;if($null-ne$Row.Receipt-and$null-ne(OrderedCandidateReceiptScore $S $Row.Receipt ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) (OrderedCandidateViewMetric $S $S.View))-and@((ExternalComparisonValue $Row.Choice 'proposed_path')|Where-Object{$null-ne$_}).Count-ge2){$S.Save.IsEnabled=-not(OrderedCandidateAppendScope $S)-and($null -eq $draft -or (OrderedCandidateViewMetric $S $S.View) -ne 'routed-candidate-response' -or $finalChoice)}}
 }
 function StartOrderedCandidateRequest($S,[string]$Phase,[string]$Path,$Body=$null){
  if($S.Closed-or$null-ne$S.Task){return};$S.Phase=$Phase
@@ -1262,7 +1354,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
  }else{
   $priorMode -cin @('wg','awg2-fast','awg2-strong') -and $null -eq (ExternalComparisonValue (ExternalComparisonValue $S 'View') 'original_final')
  }
- $appendMode=(OrderedCandidateScope $S)-ceq'draft-prefix-append'
+ $appendMode=(OrderedCandidateAppendScope $S)
  $preparedMode=($packetMode -or $appendMode) -and ([bool](ExternalComparisonValue $S 'SavedPath') -or $null -ne (ExternalComparisonValue $S 'Draft'))
   if($preparedMode){
    if($Phase -ceq 'catalog'){
@@ -1279,10 +1371,11 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
     foreach($field in @('ok','cancelled','drained')){$flag=ExternalComparisonValue $Value $field;if($flag -isnot [bool] -or -not $flag){throw 'Original temporary candidate cleanup was not confirmed.'}}
     foreach($field in @('running','accepted','reviewing','cleanup_pending','active_path_changed')){if($Value.$field){throw 'Temporary candidate work or review remains active.'}}
    }elseif($Value.admission_cancelled){throw 'An unstarted candidate response cannot complete admitted work.'}
-     if((OrderedCandidateScope $S)-ceq'draft-prefix-append'){
+     if((OrderedCandidateAppendScope $S)){
       foreach($field in @('purpose','source_sha256','config_sha256','draft_revision','device_revision','device_source_sha256','device_mtu_revision','append_position')){
        if((ExternalComparisonValue $Value $field)-cne(ExternalComparisonValue $S.View $field)){throw 'The append response changed its original prefix or independent device source.'}
       }
+       if((OrderedCandidateScope $S)-ceq'draft-prefix-append-execution'){foreach($field in @('execution_source_sha256','requested_execution')){if((ExternalComparisonValue $Value $field)-cne(ExternalComparisonValue $S.View $field)){throw 'The append execution response changed its original source or explicit choice.'}}}
       if($Phase-ceq'save'-or[string](ExternalComparisonValue $Value 'saved_profile_id')){throw 'An incomplete prefix cannot save a connection profile.'}
      }
     for($i=0;$i -lt $Value.response_source_nodes.Count;$i++){foreach($key in @('id','mode','kind')){if($Value.response_source_nodes[$i].$key -cne $S.View.response_source_nodes[$i].$key){throw 'The temporary candidate changed an original member.'}}}
@@ -1291,7 +1384,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
      if($choices.Count -ne 1 -or $Value.candidate_id -cne $S.ChoiceID -or
         -not(TestOrderedCandidatePreparedPath $S $S.View $choices[0] (ExternalComparisonValue $Value 'proposed_path'))){throw 'The temporary candidate changed the measured replacement or retained suffix.'}
      if($Phase -ceq 'choose'){
-      if((-not$appendMode -and $Value.candidate_mode -ceq 'hysteria2') -or $null -eq (ExternalComparisonValue $S 'Draft') -or (ExternalComparisonValue $Value 'draft_action') -cne $(if((OrderedCandidateScope $S)-ceq'draft-prefix-append'){'append-measured-hop'}else{'replace-measured-hop'})){throw 'The draft update is not the measured replacement.'}
+      if((-not$appendMode -and $Value.candidate_mode -ceq 'hysteria2') -or $null -eq (ExternalComparisonValue $S 'Draft') -or (ExternalComparisonValue $Value 'draft_action') -cne $(if((OrderedCandidateAppendScope $S)){'append-measured-hop'}else{'replace-measured-hop'})){throw 'The draft update is not the measured replacement.'}
      }elseif($Value.proposal_action -cne $choices[0].proposal_action){throw 'The saved replacement changed its original profile action.'}
     }
    }
@@ -1475,7 +1568,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
   if([bool](ExternalComparisonValue $Value 'running')-or[bool](ExternalComparisonValue $Value 'started')-or[bool](ExternalComparisonValue $Value 'native_down')-or[bool](ExternalComparisonValue $Value 'reviewing')){$S.SavedAdmitted=$true}
   $draft=ExternalComparisonValue $S 'Draft'
   if($Phase -ceq 'choose'){
-   $draftAction=if((OrderedCandidateScope $S)-ceq'draft-prefix-append'){'append-measured-hop'}elseif($preparedMode){'replace-measured-hop'}else{'insert-measured-hop'}
+   $draftAction=if((OrderedCandidateAppendScope $S)){'append-measured-hop'}elseif($preparedMode){'replace-measured-hop'}else{'insert-measured-hop'}
    $matches=@($S.View.candidates | Where-Object {$_.id -ceq $S.ChoiceID})
    $ownerMatches=if($null -ne (ExternalComparisonValue $S.View 'response_executions')){
     $S.SelectedWinner -ceq (ExternalComparisonValue $Value 'selected_execution') -and $S.SelectedEpoch -gt 0
@@ -1486,6 +1579,7 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
       -not (TestOrderedCandidateDraftInsertion $S $matches[0] (ExternalComparisonValue $matches[0] 'draft_path')) -or
       -not (TestOrderedCandidateDraftInsertion $S $matches[0] (ExternalComparisonValue $Value 'proposed_path')) -or
       -not $ownerMatches){throw 'The chosen path differs from the measured draft update.'}
+    if((OrderedCandidateScope $S)-ceq'draft-prefix-append-execution'){$retained=@($S.Rows|Where-Object{$_.ID-ceq$S.ChoiceID});if($retained.Count-ne1-or$null-eq(OrderedCandidateReceiptScore $S $retained[0].Receipt ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) 'routed-candidate-response')){throw 'The original per-candidate execution receipt expired or changed before Choose.'}}
    foreach($field in @('chosen','drained','native_down')){
     $flag=ExternalComparisonValue $Value $field
     if($flag -isnot [bool] -or -not $flag){throw 'The measured draft choice did not finish cleanup.'}
@@ -1532,12 +1626,13 @@ function ReceiveOrderedCandidates($S,$Value,[string]$Phase){
  if(-not $metric -or (ExternalComparisonValue $Value 'measurement') -cne $metric){throw 'Candidate result changed its original measurement method.'}
  $timing=if($metric -ceq 'routed-candidate-response'){'50/50 private responses'}elseif($metric -ceq 'routed-public-candidate-response'){'50/50 HTTPS exit responses'}else{'50/50 TCP'}
  $S.PendingDrain=-not[bool]$Value.drained;$S.Receipt=$Value;$Valid=@();$Now=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
- if(-not$SavedPath-or(OrderedCandidateReady $S)){foreach($R in @($Value.results)){$Score=OrderedCandidateScore $R $Now $metric;if($null-eq$Score){continue};$C=@($S.View.candidates|Where-Object{[string]$_.id-ceq[string]$R.candidate_id});if($C.Count-ne1 -or ($metric -ceq 'routed-candidate-response' -and [string](ExternalComparisonValue $C[0] 'kind') -cne 'router-vpn')){throw 'Candidate result is outside its eligible saved catalog.'};$Valid+=[pscustomobject]@{Name=[string]$C[0].name;ID=[string]$R.candidate_id;Timing=('{0:N2} ms · {1}'-f$Score,$timing);Score=$Score;Choice=$C[0];Receipt=$R}}}
+ $executionIDs=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal);$executionRequests=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+ if(-not$SavedPath-or(OrderedCandidateReady $S)){foreach($R in @($Value.results)){$Score=OrderedCandidateReceiptScore $S $R $Now $metric;if($null-eq$Score){continue};if((OrderedCandidateScope $S)-ceq'draft-prefix-append-execution'-and(-not$executionIDs.Add([string]$R.candidate_id)-or-not$executionRequests.Add([string]$R.request_id))){throw 'The batch repeated a candidate execution receipt.'};$C=@($S.View.candidates|Where-Object{[string]$_.id-ceq[string]$R.candidate_id});if($C.Count-ne1 -or ($metric -ceq 'routed-candidate-response' -and [string](ExternalComparisonValue $C[0] 'kind') -cne 'router-vpn')){throw 'Candidate result is outside its eligible saved catalog.'};$Valid+=[pscustomobject]@{Name=[string]$C[0].name;ID=[string]$R.candidate_id;Timing=('{0:N2} ms · {1}'-f$Score,($timing+$(if((OrderedCandidateScope $S)-ceq'draft-prefix-append-execution'){' · '+[string]$R.winning_execution}else{''})));Score=$Score;Choice=$C[0];Receipt=$R}}}
  $SelectedID=if($null-ne$S.Table.SelectedItem){[string]$S.Table.SelectedItem.ID}else{''};$S.Rows=@($Valid|Sort-Object Score,ID);$S.Table.ItemsSource=$S.Rows
  if($SelectedID){$Original=@($S.Rows|Where-Object{[string]$_.ID-ceq$SelectedID});if($Original.Count-eq1){$S.Table.SelectedItem=$Original[0]}}
  if($SavedPath){
   $Cleanup=[bool](ExternalComparisonValue $Value 'cleanup_pending');if($Cleanup){$S.CancelWanted=$true}
-  $S.Status.Text=if((OrderedCandidateReady $S)-and(OrderedCandidateScope $S)-ceq'draft-complete-selected'){'Selected execution: '+$S.SelectedWinner+'. Choose a measured hop for this draft.'}elseif(OrderedCandidateReady $S){'Disconnected. Results are sorted by 10% trimmed mean and expire 120 seconds after measurement. Select one to save an explicit future profile.'}elseif($Cleanup){'Original cleanup is pending; Cancel will retry before another operation.'}elseif($S.PendingDrain-and(OrderedCandidateScope $S)-ceq'draft-complete-selected'){'Testing the original draft. Waiting for its temporary route to close.'}elseif($S.PendingDrain){'Testing the original saved Local path. Waiting for native shutdown before showing choices.'}else{'No adoptable receipt. '+[string](ExternalComparisonValue $Value 'failure')}
+  $S.Status.Text=if((OrderedCandidateReady $S)-and(OrderedCandidateScope $S)-ceq'draft-complete-selected'){'Selected execution: '+$S.SelectedWinner+'. Choose a measured hop for this draft.'}elseif((OrderedCandidateReady $S)-and(OrderedCandidateAppendScope $S)){'Disconnected. Choose one measured node for this draft; each candidate retains its own execution receipt.'}elseif(OrderedCandidateReady $S){'Disconnected. Results are sorted by 10% trimmed mean and expire 120 seconds after measurement. Select one to save an explicit future profile.'}elseif($Cleanup){'Original cleanup is pending; Cancel will retry before another operation.'}elseif($S.PendingDrain-and(OrderedCandidateScope $S)-ceq'draft-complete-selected'){'Testing the original draft. Waiting for its temporary route to close.'}elseif($S.PendingDrain){'Testing the original saved Local path. Waiting for native shutdown before showing choices.'}else{'No adoptable receipt. '+[string](ExternalComparisonValue $Value 'failure')}
  }else{$S.Status.Text=if($S.PendingDrain){'Native cleanup is pending. Retry Cancel before another operation.'}elseif([bool]$Value.accepted){'Complete '+$timing+' results, sorted by 10% trimmed mean. Each expires 120 seconds after measurement. Select one to preview an explicit next-connection profile.'}else{'No adoptable receipt. '+[string]$Value.failure}}
 }
 function TickOrderedCandidates($S){
@@ -1554,7 +1649,7 @@ function TickOrderedCandidates($S){
  if($S.CloseWanted-and$null-eq$S.Task-and-not$S.PendingDrain){$S.AllowClose=$true;$S.Dialog.Close();return}
  $Observe=([bool](ExternalComparisonValue $S 'SavedPath')-and$S.PendingDrain-and-not$S.CancelWanted)-or(-not$S.PendingDrain-and$null-ne$S.Receipt-and[bool](ExternalComparisonValue $S.Receipt 'accepted'))
  if($null-eq$S.Task-and$Observe-and[DateTime]::UtcNow-ge$S.Next){StartOrderedCandidateRequest $S 'poll' ((OrderedCandidateBase $S)+'?request_id='+$S.RequestID)}
- foreach($Row in $S.Rows){if($null-ne$Row.Receipt-and$null-eq(OrderedCandidateScore $Row.Receipt ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) (OrderedCandidateViewMetric $S $S.View))){$Row.Timing='Expired — retest'}}
+ foreach($Row in $S.Rows){if($null-ne$Row.Receipt-and$null-eq(OrderedCandidateReceiptScore $S $Row.Receipt ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) (OrderedCandidateViewMetric $S $S.View))){$Row.Timing='Expired — retest'}}
  SetOrderedCandidateControls $S
 }
 function UseExistingOrderedCandidateDialog($Existing,[bool]$SavedPath,[bool]$SavedPrefix,$Draft){
@@ -1584,7 +1679,7 @@ function ShowOrderedCandidates{
  $S.Client.Timeout=[System.Threading.Timeout]::InfiniteTimeSpan;$script:RouterVPNOrderedCandidates=$S
  if($SavedPrefix){$D.Title='Test saved prefix';$D.FindName('PurposeNote').Text='Temporarily measure each supported candidate through the selected prefix. Packet prefixes time 50 TCP handshakes. Eligible Shadowsocks prefixes time 50 private-agent responses or HTTPS responses through an independent imported candidate. HTTPS timing starts after TLS and verifies the expected exit IP. The current exit does not need to respond. The VPN returns to Disconnected before choices appear. Choose a measured candidate to save a future profile.'}elseif($SavedPath){$D.Title='Test saved Local path';$D.FindName('PurposeNote').Text='Temporarily prove the complete saved Local path. For each eligible candidate, measure 50 TCP handshakes through a packet prefix or 50 responses through a Shadowsocks prefix. Paired candidates answer private-agent challenges; imported candidates use HTTPS after TLS with their expected exit IP. The path returns to Disconnected before future-profile choices appear. Choose a measured candidate to save a future profile.'}
  if($null-ne$Draft){$D.Owner=$Editor;$D.Title='Measure the next hop';$S.ProfileName.Parent.Visibility='Collapsed';$S.Save.Content='Add measured hop to draft';$D.FindName('PurposeNote').Text='Measure 50 samples per eligible linked candidate through the selected draft prefix. The captured prefix determines whether each sample times a TCP handshake, a private-agent response, or HTTPS through an imported candidate after TLS and exit-IP verification. Add one measured hop after the temporary route closes.'}
- if((OrderedCandidateScope $S)-ceq'draft-prefix-append'){$D.Title='Measure next node';$D.FindName('PurposeNote').Text=if((ExternalComparisonValue $Draft 'next_kind')-ceq'external'){'Measure 50 verified public HTTPS responses through this incomplete prefix. Each response must match the expected exit captured from the import. Application traffic and DNS remain closed. Choose appends only after the temporary path fully stops.'}else{'Measure 50 authenticated responses through this incomplete prefix. Application traffic and DNS remain closed. Choose appends the measured node only after the temporary path fully stops. Select a real final before saving a connection.'};$S.Save.Visibility='Collapsed'}
+ if((OrderedCandidateAppendScope $S)){$D.Title='Measure next node';$D.FindName('PurposeNote').Text=if((OrderedCandidateScope $S)-ceq'draft-prefix-append-execution'){'Measure this actual packet prefix through Server, or compare Local and Server using the same private last-node and HTTPS target. Each candidate then needs 50 fresh private responses. Choose appends one node after shutdown; the draft remains Local.'}elseif((ExternalComparisonValue $Draft 'next_kind')-ceq'external'){'Measure 50 verified public HTTPS responses through this incomplete prefix. Each response must match the expected exit captured from the import. Application traffic and DNS remain closed. Choose appends only after the temporary path fully stops.'}else{'Measure 50 authenticated responses through this incomplete prefix. Application traffic and DNS remain closed. Choose appends the measured node only after the temporary path fully stops. Select a real final before saving a connection.'};$S.Save.Visibility='Collapsed'}
  $S.Refresh.Add_Click({if($null-ne$S.Prefix.SelectedValue){$S.Position=[int]$S.Prefix.SelectedValue};$S.View=$null;$S.Receipt=$null;StartOrderedCandidateRequest $S 'catalog' (OrderedCandidateCatalogPath $S) $S.Draft}.GetNewClosure())
  $S.Run.Add_Click({SetOrderedCandidateControls $S;if(-not$S.Run.IsEnabled){$S.Status.Text='Capture the selected prefix before testing.';return};if([long]$S.View.expires_at-le[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()){$S.Status.Text='The catalog expired. Capture this prefix again before testing.';return};$IDs=@($S.Table.SelectedItems|ForEach-Object{[string]$_.ID});if($IDs.Count-lt1){$S.Status.Text='Select at least one candidate row.';return};$S.RequestID=[Guid]::NewGuid().ToString('N');$S.SelectedWinner='';$S.SelectedEpoch=0;$S.Receipt=$null;$S.PendingDrain=$true;$S.CancelWanted=$false;$S.SavedAdmitted=$false;StartOrderedCandidateRequest $S 'run' (OrderedCandidateBase $S) (OrderedCandidateScopedBody $S @{request_id=$S.RequestID;view_token=[string]$S.View.view_token;prefix_position=$S.Position;candidate_ids=$IDs;samples=50})}.GetNewClosure())
  $S.Prefix.Add_SelectionChanged({SetOrderedCandidateControls $S}.GetNewClosure())
@@ -1599,6 +1694,7 @@ function ShowOrderedCandidates{
     $S.Preview.Text='Use in draft · '+$insert
     if($named -and $named -cne $insert){$S.Preview.Text+=[Environment]::NewLine+'Named profile · '+$named}
    }elseif($named){$S.Preview.Text='Proposed complete path: '+$named}else{$S.Preview.Text=[string](ExternalComparisonValue $row.Choice 'save_reason')}
+    $executionText=OrderedCandidateExecutionSummary $S $row.Receipt;if($executionText){$S.Preview.Text+=[Environment]::NewLine+$executionText}
   }
   SetOrderedCandidateControls $S
  }.GetNewClosure())

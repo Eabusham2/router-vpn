@@ -8,13 +8,14 @@ import "errors"
 type Family string
 
 const (
-	ExternalFamily           Family = ""
-	NodeFamily               Family = "paired-node-v1"
-	NodeChainFamily          Family = "ordered-node-chain-v1"
-	NodeChainSOCKSFamily     Family = "ordered-node-chain-socks-v1"
-	NodeChainCONNECTFamily   Family = "ordered-node-chain-connect-v1"
-	NodeChainExecutionFamily Family = "ordered-node-chain-execution-v1"
-	CandidatePrefixFamily    Family = "node-candidate-prefix-v1"
+	ExternalFamily                 Family = ""
+	NodeFamily                     Family = "paired-node-v1"
+	NodeChainFamily                Family = "ordered-node-chain-v1"
+	NodeChainSOCKSFamily           Family = "ordered-node-chain-socks-v1"
+	NodeChainCONNECTFamily         Family = "ordered-node-chain-connect-v1"
+	NodeChainExecutionFamily       Family = "ordered-node-chain-execution-v1"
+	CandidatePrefixFamily          Family = "node-candidate-prefix-v1"
+	CandidateAppendExecutionFamily Family = "node-candidate-append-execution-v1"
 )
 
 // Scope is the expected policy identity, never a substitute for the original
@@ -34,7 +35,7 @@ func (family Family) protocolSchema() int {
 	switch family {
 	case ExternalFamily:
 		return 1
-	case NodeFamily, NodeChainFamily, NodeChainSOCKSFamily, NodeChainCONNECTFamily, NodeChainExecutionFamily, CandidatePrefixFamily:
+	case NodeFamily, NodeChainFamily, NodeChainSOCKSFamily, NodeChainCONNECTFamily, NodeChainExecutionFamily, CandidatePrefixFamily, CandidateAppendExecutionFamily:
 		return 2
 	default:
 		return 0
@@ -66,6 +67,10 @@ func (scope Scope) inputManifest() ([]scopeInput, error) {
 		// This sealed input retains the full saved path for provenance while
 		// authorizing only its selected packet prefix. Ordinary chain inputs
 		// cannot stand in for this independent, application-closed purpose.
+		return []scopeInput{{"node-candidate-prefix-source.json", 40 << 20}, {"sing-box.json", 4 << 20}}, nil
+	case CandidateAppendExecutionFamily:
+		// The dedicated execution envelope retains its genuine Local physical
+		// preparation beside the separately captured Server/Compare source.
 		return []scopeInput{{"node-candidate-prefix-source.json", 40 << 20}, {"sing-box.json", 4 << 20}}, nil
 	case NodeChainExecutionFamily:
 		// Server and Compare retain their complete execution preparation, not

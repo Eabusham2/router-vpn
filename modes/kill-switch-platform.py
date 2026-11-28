@@ -884,6 +884,7 @@ def _darwin_node_chain_rows(capture):
         raise RuntimeError(fail)
     private_streams = _linux._darwin_private_stream_roles(capture['family'], rows)
     paired_hysteria = capture['schema'] == 3 and _linux._darwin_paired_hysteria_roles(capture['family'], rows)
+    paired_proxy = capture['schema'] == 3 and _linux._darwin_paired_proxy_entry_roles(capture['family'], rows)
     if extended and capture['family'] not in ('ordered-node-chain-v1', 'ordered-node-chain-execution-v1'):
         raise RuntimeError(fail)
     seen, policy, lan = set(), 'off', True
@@ -916,7 +917,7 @@ def _darwin_node_chain_rows(capture):
                 positioned = position > 0
             if not count_valid or not positioned or row[1] not in middle.get(capture['family'], ()) or rows[-1][1] != 'shadowsocks':
                 raise RuntimeError(fail)
-        elif position < len(rows)-1 and row[1] not in ('wg', 'awg2-fast', 'awg2-strong') and not (private_streams and row[1] == 'shadowsocks') and not paired_hysteria or position == len(rows)-1 and row[1] not in ('shadowsocks', 'hysteria2'):
+        elif position < len(rows)-1 and row[1] not in ('wg', 'awg2-fast', 'awg2-strong') and not (private_streams and row[1] == 'shadowsocks') and not paired_hysteria and not paired_proxy or position == len(rows)-1 and row[1] not in ('shadowsocks', 'hysteria2'):
             raise RuntimeError(fail)
         if row[3] == 'always' or policy == 'off' and row[3] == 'on-connect':
             policy = row[3]
@@ -945,13 +946,14 @@ def _darwin_node_chain_profile(profile, runtime_id, control_id, capture, store=N
             raise RuntimeError(fail)
         rows = _darwin_node_chain_rows(capture)
         paired_hysteria = capture['schema'] == 3 and _linux._darwin_paired_hysteria_roles(capture['family'], rows)
+        paired_proxy = capture['schema'] == 3 and _linux._darwin_paired_proxy_entry_roles(capture['family'], rows)
         for position, row in enumerate(rows):
             matches = [member for member in store['profiles'] if type(member) is dict and member.get('id') == row[0]]
             if len(matches) != 1:
                 raise RuntimeError(fail)
             member = matches[0]
             expected_layer = capture.get('entry_start_layer', 'off') if position == 0 else 'off'
-            if (paired_hysteria or len(rows) > 8 or capture['schema'] in (4, 5)) and (member.get('start_layer', '') or 'off') != expected_layer:
+            if (paired_hysteria or paired_proxy or len(rows) > 8 or capture['schema'] in (4, 5)) and (member.get('start_layer', '') or 'off') != expected_layer:
                 raise RuntimeError(fail)
             kind = member.get('node_kind', '') or 'router-vpn'
             if kind != row[2]:

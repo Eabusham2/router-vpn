@@ -240,6 +240,9 @@ func (r *NodeChainCandidatePreparationRuntime) StartContext(parent context.Conte
 	if err := r.provePrefixes(ctx, true); err != nil {
 		return err
 	}
+	if err := r.prepareAppendHostnames(ctx); err != nil {
+		return err
+	}
 	if err := r.nativeCurrent(ctx); err != nil {
 		return err
 	}

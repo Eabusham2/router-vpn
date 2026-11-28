@@ -315,7 +315,7 @@ function global:Get-RouterVPNOrderedFinalModes {
     if($null-eq$Profile-or[string](Get-RouterVPNOrderedValue $Profile 'node_kind' '')-cnotin@('','router-vpn')){return @()}
     $choices=@('shadowsocks')
     $retained=@($Prefixes)+@([pscustomobject]@{id=[string](Get-RouterVPNOrderedValue $Profile 'id');mode='hysteria2'})
-    if(Test-RouterVPNOrderedHysteriaLocalPath $retained $Execution $ProfileIndex){return @('shadowsocks','hysteria2')}
+    if((Test-RouterVPNOrderedHysteriaLocalPath $retained $Execution $ProfileIndex) -or (Test-RouterVPNOrderedPairedProxyEntryLocalPath $retained $Execution $ProfileIndex)){return @('shadowsocks','hysteria2')}
     $layer=Get-RouterVPNOrderedValue $Profile 'start_layer' ''
     $imported=@($Prefixes|Where-Object{(Get-RouterVPNOrderedValue $_ 'mode')-cin@('shadowsocks','socks5','http-connect','https-connect','openvpn')}).Count-gt0
     if($Prefixes.Count -lt 8 -and $layer-is[string]-and$layer-cin@('','off','aes-256-gcm','aes-256-gcm+xor-whitening')-and-not$imported){$choices+='hysteria2'}
@@ -406,6 +406,20 @@ function global:Test-RouterVPNOrderedHysteriaLocalPath {
     foreach($node in $Nodes){if(-not(Test-RouterVPNOrderedPairedOff $ProfileIndex[[string]$node.id])){return $false}}
     return $true
 }
+function global:Test-RouterVPNOrderedPairedProxyEntryLocalShape {
+    param($Nodes)
+    if($Nodes -isnot [Collections.IList] -or $Nodes.Count -lt 2 -or $Nodes.Count -gt (Get-RouterVPNOrderedPhysicalTraversalDepth) -or
+       (Get-RouterVPNOrderedValue $Nodes[0] 'mode') -cnotin @('shadowsocks','hysteria2') -or
+       (Get-RouterVPNOrderedValue $Nodes[-1] 'mode') -cnotin @('shadowsocks','hysteria2')){return $false}
+    foreach($node in $Nodes){if((Get-RouterVPNOrderedValue $node 'mode') -cnotin @('wg','awg2-fast','awg2-strong','shadowsocks','hysteria2')){return $false}}
+    return $true
+}
+function global:Test-RouterVPNOrderedPairedProxyEntryLocalPath {
+    param($Nodes,[string]$Execution,$ProfileIndex)
+    if($Execution -cne 'local' -or $null -eq $ProfileIndex -or -not(Test-RouterVPNOrderedPairedProxyEntryLocalShape $Nodes)){return $false}
+    foreach($node in $Nodes){$profile=$ProfileIndex[[string]$node.id];if(-not(Test-RouterVPNOrderedPairedOff $profile)-or($node.mode-cin@('shadowsocks','hysteria2')-and-not(Test-RouterVPNOrderedPairedLiteralOff $profile))){return $false}}
+    return $true
+}
 function global:Test-RouterVPNOrderedHysteriaEdit {
     param($Prefixes,[int]$Position,[string]$ID,[string]$Mode,[string]$FinalID,[string]$FinalMode,[string]$Execution,$Profiles,$ProfileIndex=$null)
     if($Position -lt 0 -or $Position -gt $Prefixes.Count -or $Execution -cne 'local'){return $false}
@@ -417,7 +431,7 @@ function global:Test-RouterVPNOrderedHysteriaEdit {
     $nodes+=@([pscustomobject]@{id=$FinalID;mode=$FinalMode})
     $seen=New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
     foreach($node in $nodes){if([string]$node.id -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or -not $seen.Add([string]$node.id)){return $false}}
-    return Test-RouterVPNOrderedHysteriaLocalPath $nodes $Execution $ProfileIndex
+    return (Test-RouterVPNOrderedHysteriaLocalPath $nodes $Execution $ProfileIndex) -or (Test-RouterVPNOrderedPairedProxyEntryLocalPath $nodes $Execution $ProfileIndex)
 }
 
 function global:Test-RouterVPNOrderedPairedLayer {
@@ -431,6 +445,16 @@ function global:Test-RouterVPNOrderedPairedLayer {
 function global:Test-RouterVPNOrderedPairedOff {
     param($Profile)
     return Test-RouterVPNOrderedPairedLayer $Profile
+}
+
+function global:Test-RouterVPNOrderedPairedLiteralOff {
+    param($Profile)
+    if(-not(Test-RouterVPNOrderedPairedOff $Profile)){return $false}
+    $endpoint=Get-RouterVPNOrderedValue $Profile 'endpoint'
+    $address=$null
+    if($endpoint-isnot[string]-or$endpoint.Contains('%')-or-not[Net.IPAddress]::TryParse($endpoint,[ref]$address)){return $false}
+    if($address.AddressFamily-eq[Net.Sockets.AddressFamily]::InterNetwork){return $address.ToString()-ceq$endpoint}
+    return $address.AddressFamily-eq[Net.Sockets.AddressFamily]::InterNetworkV6
 }
 
 function global:Test-RouterVPNOrderedLiteralOff {
@@ -470,13 +494,14 @@ function global:Test-RouterVPNOrderedExternalFinalProfile {
 function global:Copy-RouterVPNOrderedNodes {
     param($Nodes,[string]$ControlID)
     $hysteria=Test-RouterVPNOrderedHysteriaLocalShape $Nodes
-    if($Nodes-isnot[Collections.IList]-or$Nodes.Count-lt2-or($Nodes.Count-gt8-and-not(Test-RouterVPNOrderedExtendedLocalShape $Nodes)-and-not(Test-RouterVPNOrderedPairedShape $Nodes)-and(Get-RouterVPNOrderedMixedPacketCount $Nodes)-eq0-and-not$hysteria)){throw 'Choose a supported ordered path. Longer Local routes support paired WireGuard prefixes or paired packet prefixes followed by independent Shadowsocks imports and a paired Shadowsocks exit. Keep Start Layer Off.'}
+    $proxyEntry=Test-RouterVPNOrderedPairedProxyEntryLocalShape $Nodes
+    if($Nodes-isnot[Collections.IList]-or$Nodes.Count-lt2-or($Nodes.Count-gt8-and-not(Test-RouterVPNOrderedExtendedLocalShape $Nodes)-and-not(Test-RouterVPNOrderedPairedShape $Nodes)-and(Get-RouterVPNOrderedMixedPacketCount $Nodes)-eq0-and-not$hysteria-and-not$proxyEntry)){throw 'Choose a supported ordered path. Longer Local routes support paired WireGuard prefixes or paired packet prefixes followed by independent Shadowsocks imports and a paired Shadowsocks exit. Keep Start Layer Off.'}
     $seen=New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
     $copy=New-Object 'Collections.Generic.List[object]'
     for($i=0;$i-lt$Nodes.Count;$i++){
         $id=Get-RouterVPNOrderedValue $Nodes[$i] 'id';$mode=Get-RouterVPNOrderedValue $Nodes[$i] 'mode'
         if($id-isnot[string]-or$id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'-or-not$seen.Add($id)){throw 'Ordered nodes require distinct linked node IDs.'}
-        if($mode-isnot[string]-or($i-lt$Nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $mode)-and-not$hysteria-and-not(((Test-RouterVPNOrderedImportedPosition $mode $i $Nodes.Count)-or(Test-RouterVPNOrderedLocalSSPosition $mode $i $Nodes.Count)-or($i-eq0-and(Test-RouterVPNOrderedCustomEntryShape $Nodes)))-and$mode-cin@('shadowsocks','socks5','http-connect','https-connect','openvpn')-and(Get-RouterVPNOrderedValue $Nodes[-1] 'mode')-ceq'shadowsocks'))-or($i-eq$Nodes.Count-1-and-not(Test-RouterVPNOrderedFinalMode $mode))){throw 'Use paired packet prefixes, supported imported middle hops, or two distinct custom Shadowsocks hops before a paired Shadowsocks exit in Local. Keep SOCKS5, CONNECT and OpenVPN immediately before a Shadowsocks exit.'}
+        if($mode-isnot[string]-or($i-lt$Nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $mode)-and-not$hysteria-and-not$proxyEntry-and-not(((Test-RouterVPNOrderedImportedPosition $mode $i $Nodes.Count)-or(Test-RouterVPNOrderedLocalSSPosition $mode $i $Nodes.Count)-or($i-eq0-and(Test-RouterVPNOrderedCustomEntryShape $Nodes)))-and$mode-cin@('shadowsocks','socks5','http-connect','https-connect','openvpn')-and(Get-RouterVPNOrderedValue $Nodes[-1] 'mode')-ceq'shadowsocks'))-or($i-eq$Nodes.Count-1-and-not(Test-RouterVPNOrderedFinalMode $mode))){throw 'Use paired packet prefixes, supported imported middle hops, or two distinct custom Shadowsocks hops before a paired Shadowsocks exit in Local. Keep SOCKS5, CONNECT and OpenVPN immediately before a Shadowsocks exit.'}
         [void]$copy.Add([pscustomobject]@{id=$id;mode=$mode})
     }
     if([string]::IsNullOrEmpty($ControlID)-or($copy[$copy.Count-1].id-cne$ControlID -and -not(Test-RouterVPNOrderedExternalFinalShape $copy $ControlID))){throw 'The final ordered node must be the selected exit node.'}
@@ -778,6 +803,10 @@ function global:New-RouterVPNOrderedConnectPayload {
     # Each lookup uses the same captured catalog. Duplicate IDs stay ambiguous.
     $profileIndex=Get-RouterVPNOrderedProfileIndex $profiles
     $hysteria=Test-RouterVPNOrderedHysteriaLocalPath $nodes $execution $profileIndex
+    $proxyEntry=Test-RouterVPNOrderedPairedProxyEntryLocalPath $nodes $execution $profileIndex
+    $firstSource=$profileIndex[[string]$nodes[0].id]
+    $pairedFirst=$null-ne$firstSource-and(Get-RouterVPNOrderedValue $firstSource 'node_kind' '')-cin@('','router-vpn')-and$null-eq(Get-RouterVPNOrderedValue $firstSource 'external')
+    if($pairedFirst-and(Test-RouterVPNOrderedPairedProxyEntryLocalShape $nodes)-and-not$proxyEntry){throw 'A paired Shadowsocks or Hysteria2 entry requires Local execution and paired nodes with Start Layer Off throughout.'}
     if((Test-RouterVPNOrderedHysteriaLocalShape $nodes) -and -not $hysteria){throw 'A retained Hysteria2 route requires Local execution and paired nodes with Start Layer Off throughout.'}
     $externalFinal=$nodes[0].id -ceq $control
     if($externalFinal){
@@ -789,7 +818,7 @@ function global:New-RouterVPNOrderedConnectPayload {
     }
     $localImported=$execution-ceq'local'-and(Test-RouterVPNOrderedLocalImportedPath $nodes $profiles -ProfileIndex $profileIndex)
     $multipleImported=$execution-cne'local'-and(Test-RouterVPNOrderedLocalImportedPath $nodes $profiles -SelectedExecution -ProfileIndex $profileIndex)
-    $paired=$hysteria -or ($execution -ceq 'local' -and (Test-RouterVPNOrderedPairedShape $nodes))
+    $paired=$hysteria -or $proxyEntry -or ($execution -ceq 'local' -and (Test-RouterVPNOrderedPairedShape $nodes))
     if($nodes.Count-gt8-and-not($externalFinal-or$localImported-or$multipleImported-or$paired)){throw 'This extended route requires its supported execution and every original transport.'}
     if(-not$externalFinal-and$execution-cne'local'-and(Test-RouterVPNOrderedMultipleImportedShape $nodes)-and-not$multipleImported){throw 'Each imported Shadowsocks interior must advertise support for this execution.'}
     $expected=Get-RouterVPNOrderedValue $Draft 'profile_tokens';$tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
@@ -830,7 +859,7 @@ function global:New-RouterVPNOrderedConnectPayload {
             }
         }
         if(-not $externalFinal -and $imported){if((-not(Test-RouterVPNOrderedImportedPosition $node.mode $position $nodes.Count)-and-not(($localImported-or$multipleImported)-and((Test-RouterVPNOrderedLocalSSPosition $node.mode $position $nodes.Count)-or($position-eq0-and(Test-RouterVPNOrderedCustomEntryShape $nodes)))))-or$node.mode-cne(Get-RouterVPNOrderedImportedMode $profile)){throw 'An imported node retains its exact Shadowsocks 2022, SOCKS5, HTTP(S) CONNECT or OpenVPN transport between the paired entry and final.'}}
-        elseif(-not $externalFinal -and ([string](Get-RouterVPNOrderedValue $profile 'node_kind' '')-cnotin@('','router-vpn')-or($position-lt$nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $node.mode)-and-not$hysteria-and-not(($localImported-or$multipleImported)-and$node.mode-ceq'shadowsocks')))){throw 'The ordered source kind or transport changed.'}
+        elseif(-not $externalFinal -and ([string](Get-RouterVPNOrderedValue $profile 'node_kind' '')-cnotin@('','router-vpn')-or($position-lt$nodes.Count-1-and-not(Test-RouterVPNOrderedPrefixMode $node.mode)-and-not$hysteria-and-not$proxyEntry-and-not(($localImported-or$multipleImported)-and$node.mode-ceq'shadowsocks')))){throw 'The ordered source kind or transport changed.'}
         if(-not$externalFinal-and$position-eq$nodes.Count-1-and@(Get-RouterVPNOrderedFinalModes $profile @($nodes|Select-Object -SkipLast 1) $execution $profileIndex)-cnotcontains$node.mode){throw 'The selected final transport is incompatible with its captured Start Layer or imported middle.'}
         $token=Get-RouterVPNOrderedValue $expected $node.id
         if($token-isnot[string]-or$token-cnotmatch'\A[0-9a-f]{64}\z'-or[string](Get-RouterVPNOrderedValue $profile 'profile_token')-cne$token){throw 'An ordered node changed or was relinked. Reopen its editor before connecting.'}
@@ -1498,37 +1527,75 @@ function global:Show-RouterVPNProfileSettingsDialog {
 # profile mutation and persistent Settings Save fail closed while controller status is connected/transitioning or unavailable.
 
 
-function Get-RouterVPNOrderedAppendModes($Profile,[int]$Position){
- if($Position-lt0){return @()}
+# The saved source compiler owns this hostname capability and its Custom TCP resolver.
+function Test-RouterVPNOrderedAppendImportedOff($Profile){
+ if(Test-RouterVPNOrderedLiteralOff $Profile){return $true}
+ if((Get-RouterVPNOrderedImportedMode $Profile)-cne'shadowsocks'){return $false}
+ $layer=Get-RouterVPNOrderedValue $Profile 'start_layer' ''
+ $external=Get-RouterVPNOrderedValue $Profile 'external'
+ $hostname=Get-RouterVPNOrderedValue $external 'ordered_hostname_execution_middle_supported'
+ $literal=Get-RouterVPNOrderedValue $external 'ordered_execution_middle_supported'
+ $local=Get-RouterVPNOrderedValue $external 'ordered_local_imported_nodes_supported'
+ return $layer-is[string]-and$layer-cin@('','off')-and$hostname-is[bool]-and$hostname-and
+  $literal-is[bool]-and-not$literal-and$local-is[bool]-and-not$local
+}
+
+function Get-RouterVPNOrderedAppendModes($Profile,[int]$Position,[bool]$PairedProxyEntry=$false){
+ if($Position-lt0-or($PairedProxyEntry-and-not(Test-RouterVPNOrderedPairedOff $Profile))){return @()}
  if(Test-RouterVPNOrderedPairedLayer $Profile -AllowAuthenticated){
   $modes=@('wg','awg2-fast','awg2-strong')
-  if($Position-gt0-and(Test-RouterVPNOrderedPairedOff $Profile)){$modes+=@('shadowsocks','hysteria2')}
+  if(($Position-gt0-and(Test-RouterVPNOrderedPairedOff $Profile)-and(-not$PairedProxyEntry-or(Test-RouterVPNOrderedPairedLiteralOff $Profile)))-or($Position-eq0-and(Test-RouterVPNOrderedPairedLiteralOff $Profile))){$modes+=@('shadowsocks','hysteria2')}
   return $modes
  }
- if($Position-gt0-and(Test-RouterVPNOrderedLiteralOff $Profile)){return @('shadowsocks')}
+ if(-not$PairedProxyEntry-and$Position-gt0-and(Test-RouterVPNOrderedAppendImportedOff $Profile)){return @('shadowsocks')}
  return @()
 }
 function Test-RouterVPNOrderedAppendNodes($Nodes,$Profiles,[int]$Maximum=96){
  $rows=@($Nodes);if($rows.Count-lt1-or$rows.Count-gt$Maximum){return $false}
  $index=Get-RouterVPNOrderedProfileIndex $Profiles
+ $proxyEntry=(Get-RouterVPNOrderedValue $rows[0] 'mode')-cin@('shadowsocks','hysteria2')
  $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
  for($i=0;$i-lt$rows.Count;$i++){
   $node=$rows[$i]
   $keys=if($node-is[Collections.IDictionary]){@($node.Keys)}else{@($node.PSObject.Properties.Name)}
   if($keys.Count-ne2-or[string]$node.id-cnotmatch'\A[A-Za-z0-9_-]{1,64}\z'-or
      -not$seen.Add([string]$node.id)-or
-     [string]$node.mode-cnotin@(Get-RouterVPNOrderedAppendModes $index[[string]$node.id] $i)){return $false}
+     [string]$node.mode-cnotin@(Get-RouterVPNOrderedAppendModes $index[[string]$node.id] $i $proxyEntry)){return $false}
+ }
+ return $true
+}
+function Get-RouterVPNOrderedAppendExecution($Draft){
+ $purpose=Get-RouterVPNOrderedValue $Draft 'purpose'
+ $fields=if($Draft-is[Collections.IDictionary]){@($Draft.Keys)}else{@($Draft.PSObject.Properties.Name)}
+ if($purpose-ceq'draft-prefix-append'){if('requested_execution'-cnotin$fields){return 'local'};return ''}
+ $requested=Get-RouterVPNOrderedValue $Draft 'requested_execution'
+ if($purpose-ceq'draft-prefix-append-execution'-and$requested-is[string]-and$requested-cin@('server','auto')){return $requested}
+ return ''
+}
+function Test-RouterVPNOrderedAppendExecutionNodes($Nodes,$Profiles){
+ if(-not(Test-RouterVPNOrderedAppendNodes $Nodes $Profiles 95)){return $false}
+ $index=Get-RouterVPNOrderedProfileIndex $Profiles;$rows=@($Nodes);$retainedSS=$false
+ if([string]$rows[0].mode-cnotin@('wg','awg2-fast','awg2-strong')){return $false}
+ foreach($node in $rows){
+  $profile=$index[[string]$node.id]
+  if(-not(Test-RouterVPNOrderedPairedOff $profile)){return $false}
+  if([string]$node.mode-cin@('wg','awg2-fast','awg2-strong')){if($retainedSS){return $false}}
+  elseif([string]$node.mode-ceq'shadowsocks'-and(Test-RouterVPNOrderedPairedLiteralOff $profile)){$retainedSS=$true}
+  else{return $false}
  }
  return $true
 }
 function New-RouterVPNOrderedAppendPayload($Draft,$Store){
  $id=[string]$Draft.control_id;$nodes=@($Draft.nodes)
+ $requested=Get-RouterVPNOrderedAppendExecution $Draft;$remote=$requested-cin@('server','auto')
  $nextKind=Get-RouterVPNOrderedValue $Draft 'next_kind'
  if($null-ne$nextKind-and($nextKind-isnot[string]-or$nextKind-cne'external'-or$Draft.next_mode-cne'shadowsocks')){throw 'Choose the original paired or imported next-node source.'}
- if($Draft.purpose-cne'draft-prefix-append'-or$Draft.execution-cne'local'-or
+ if(-not$requested-or$Draft.execution-cne'local'-or
     $Draft.draft_revision-cnotmatch'\A[0-9a-f]{32}\z'-or
     [string]$Draft.next_mode-cnotin@('wg','awg2-fast','awg2-strong','shadowsocks','hysteria2')-or
     [string]$Store.selected_id-cne$id-or-not(Test-RouterVPNOrderedAppendNodes $nodes $Store.profiles 95)){throw 'Recapture the original Local prefix and device selection.'}
+ if($remote-and($null-ne$nextKind-or$Draft.next_mode-cne'shadowsocks'-or-not(Test-RouterVPNOrderedAppendExecutionNodes $nodes $Store.profiles))){throw 'Server and Compare require a paired packet head, an optional literal Shadowsocks tail, and a paired Shadowsocks next node, all with Start Layer Off.'}
+ if($null-ne$nextKind-and$nodes[0].mode-cin@('shadowsocks','hysteria2')){throw 'A paired Shadowsocks or Hysteria2 entry requires a paired next node.'}
  $index=Get-RouterVPNOrderedProfileIndex $Store.profiles
  if(-not(Test-RouterVPNOrderedPairedLayer $index[$id] -AllowAuthenticated)){throw 'The selected device control must remain a paired node.'}
  $tokens=[Collections.Hashtable]::new([StringComparer]::Ordinal)
@@ -1541,21 +1608,23 @@ function New-RouterVPNOrderedAppendPayload($Draft,$Store){
  }
  $tokenKeys=if($Draft.profile_tokens-is[Collections.IDictionary]){@($Draft.profile_tokens.Keys)}else{@($Draft.profile_tokens.PSObject.Properties.Name)}
  if($tokenKeys.Count-ne$tokens.Count){throw 'The captured prefix profile set changed.'}
- $body=[ordered]@{schema=1;purpose='draft-prefix-append';execution='local';draft_revision=[string]$Draft.draft_revision;append_position=$nodes.Count;next_mode=[string]$Draft.next_mode;nodes=$nodes;expected_selected_node_id=$id;expected_profile_tokens=$tokens}
+ $body=[ordered]@{schema=1;purpose=[string]$Draft.purpose;execution='local';draft_revision=[string]$Draft.draft_revision;append_position=$nodes.Count;next_mode=[string]$Draft.next_mode;nodes=$nodes;expected_selected_node_id=$id;expected_profile_tokens=$tokens}
  if($nextKind-ceq'external'){$body['next_kind']='external'}
+ if($remote){$body['requested_execution']=$requested}
  return $body
 }
 function Convert-RouterVPNOrderedAppendChoice($Draft,$Body,$Choice,$Store){
  [void](New-RouterVPNOrderedAppendPayload $Draft $Store)
+ $requested=Get-RouterVPNOrderedAppendExecution $Draft;$remote=$requested-cin@('server','auto')
  $original=@($Draft.nodes);$path=@($Choice.proposed_path);$mode=[string]$Draft.next_mode
  $id=[string]$Draft.control_id;$index=Get-RouterVPNOrderedProfileIndex $Store.profiles
  $external=(Get-RouterVPNOrderedValue $Draft 'next_kind')-ceq'external'
  $metric=if($external){'routed-public-candidate-response'}else{'routed-candidate-response'}
  $fields=if($Choice-is[Collections.IDictionary]){$Choice.Keys}else{$Choice.PSObject.Properties.Name}
  $candidate=$index[[string]$Choice.candidate_id]
- $sourceFits=if($external){$Choice.candidate_kind-ceq'external'-and(Test-RouterVPNOrderedLiteralOff $candidate)}else{'candidate_kind'-cnotin$fields-and(Test-RouterVPNOrderedPairedOff $candidate)}
- if($Choice.scope-cne'draft-prefix-append'-or$Choice.purpose-cne'draft-prefix-append'-or$Choice.origin-cne'editor-draft'-or
-    $Choice.requested_execution-cne'local'-or$Choice.draft_action-cne'append-measured-hop'-or
+ $sourceFits=if($external){$Choice.candidate_kind-ceq'external'-and(Test-RouterVPNOrderedAppendImportedOff $candidate)}else{'candidate_kind'-cnotin$fields-and(Test-RouterVPNOrderedPairedOff $candidate)}
+ if($Choice.scope-cne$Draft.purpose-or$Choice.purpose-cne$Draft.purpose-or$Choice.origin-cne'editor-draft'-or
+    $Choice.requested_execution-cne$requested-or$Choice.draft_action-cne'append-measured-hop'-or
     $Choice.candidate_mode-cne$mode-or$Choice.measurement-cne$metric-or-not$sourceFits-or
     (Get-RouterVPNOrderedValue $Body 'next_kind')-cne(Get-RouterVPNOrderedValue $Draft 'next_kind')-or$Choice.draft_revision-cne$Body.draft_revision-or
     $Choice.expected_selected_node_id-cne$id-or$Choice.device_revision-cne(Get-RouterVPNOrderedValue $Body.expected_profile_tokens $id)-or
@@ -1565,6 +1634,8 @@ function Convert-RouterVPNOrderedAppendChoice($Draft,$Body,$Choice,$Store){
     -not(Test-RouterVPNOrderedAppendNodes $path $Store.profiles)){
   throw 'The measured append no longer belongs to this original closed prefix.'
  }
+ if($remote-and((Get-RouterVPNOrderedValue $Body 'requested_execution')-cne$requested-or
+    (Get-RouterVPNOrderedValue $Choice 'execution_source_sha256')-cnotmatch'\A[0-9a-f]{64}\z'-or-not(Test-RouterVPNOrderedPairedLiteralOff $candidate))){throw 'The measured append changed its requested execution or paired candidate source.'}
  for($i=0;$i-lt$original.Count;$i++){foreach($key in @('id','mode')){if($path[$i].$key-cne$original[$i].$key){throw 'The measured append changed an original prefix node.'}}}
  $issued=$Choice.expected_profile_tokens;$keys=if($issued-is[Collections.IDictionary]){@($issued.Keys)}else{@($issued.PSObject.Properties.Name)}
  if($keys.Count-ne$path.Count){throw 'The appended profile expectations changed.'}
@@ -1578,7 +1649,7 @@ function Convert-RouterVPNOrderedAppendChoice($Draft,$Body,$Choice,$Store){
 
 function New-RouterVPNOrderedCompletionPayload($Draft,$Store){
  $id=[string]$Draft.control_id;$nodes=@($Draft.nodes)
- if($Draft.purpose-cne'draft-prefix-append'-or$Draft.execution-cne'local'-or
+ if(-not(Get-RouterVPNOrderedAppendExecution $Draft)-or$Draft.execution-cne'local'-or
     [string]$Draft.draft_revision-cnotmatch'\A[0-9a-f]{32}\z'-or[string]$Store.selected_id-cne$id-or
     $nodes.Count-lt2-or-not(Test-RouterVPNOrderedAppendNodes $nodes $Store.profiles 96)){
   throw 'Recapture the unchanged Local prefix before choosing its last node as final.'

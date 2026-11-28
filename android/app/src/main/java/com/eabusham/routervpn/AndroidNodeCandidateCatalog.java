@@ -118,7 +118,9 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
                 &&session.capture.append==appendSource&&session.candidatePrefix.plan.isAppend()
                 &&session.candidatePrefix.plan.appendPosition()==originalSource.members.size()
                 &&appendSource.kind.equals(session.candidatePrefix.plan.candidateKind())
-                &&measurement.equals(session.candidatePrefix.plan.candidateMeasurement());
+                &&measurement.equals(session.candidatePrefix.plan.candidateMeasurement())
+                &&originalSource.appendExecutionDraft()==session.candidatePrefix.appendExecution()
+                &&originalSource.appendExecution.equals(session.candidatePrefix.requestedExecution());
     }
     boolean connectedPacketResponse() throws Exception {
         if(!NativeSingBoxController.nativeWireGuardFamily(responseMode)||session==null||prefix<0||prefix>=originalSource.members.size()-2
@@ -222,8 +224,9 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
                 if(!java.util.Arrays.asList("","off","aes-256-gcm","aes-256-gcm+xor-whitening").contains(layer)
                         ||candidate.imported&&!layer.isEmpty()&&!"off".equals(layer))throw new IllegalStateException("Candidate Start Layer has no captured TCP owner");
                 if(publicResponse) {
-                    if(!candidate.imported)throw new IllegalStateException("Choose a saved literal imported Shadowsocks 2022 node.");
-                    AndroidNodeChainCapture.requireLiteralImportedSS(candidate);
+                    if(!candidate.imported)throw new IllegalStateException(appendSource!=null?"Choose a saved imported Shadowsocks 2022 node.":"Choose a saved literal imported Shadowsocks 2022 node.");
+                    if(appendSource!=null)AndroidNodeCandidateAppendSource.requireImportedShadowsocks(candidate);
+                    else AndroidNodeChainCapture.requireLiteralImportedSS(candidate);
                 }
                 input=AndroidNodeChainCapture.memberInput(candidate,measuredMode(candidate),profile);
                 boolean supported;
@@ -248,6 +251,8 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
             if(!input.isEmpty())inputs.put(input);
             captured.add(new Row(node.id,id,node.name,input,reason));
         }
+        if(source.appendExecutionDraft()&&inputs.length()>50)
+            throw new IllegalStateException("This Server or Compare request has more than 50 captured candidates; narrow the saved catalog explicitly before measuring.");
         JSONObject offeredSource=new JSONObject().put("schema",1).put("revision",signature).put("inputs",inputs);
         if(!responseMode.isEmpty())offeredSource.put("response_mode",responseMode);
         String offered=offeredSource.toString();
@@ -268,7 +273,7 @@ final class AndroidNodeCandidateCatalog implements RouterNodeChainCandidateCatal
             }
             if(index!=eligible.length())throw new IllegalStateException("The verified catalog replaced an original imported candidate.");
         }else {
-            if(inputs.length()==0)throw new IllegalStateException(publicResponse?"No independent literal imported Shadowsocks 2022 candidate has a captured public exit address.":"No saved candidate supports this prefix measurement. A private response requires a paired "+(responseMode.isEmpty()?"Shadowsocks 2022":AndroidOrderedPathSelection.finalModeTitle(responseMode))+" candidate with Start Layer off.");
+            if(inputs.length()==0)throw new IllegalStateException(publicResponse?(appendSource!=null?"No independent imported Shadowsocks 2022 candidate fits this prefix and its captured public exit address.":"No independent literal imported Shadowsocks 2022 candidate has a captured public exit address."):"No saved candidate supports this prefix measurement. A private response requires a paired "+(responseMode.isEmpty()?"Shadowsocks 2022":AndroidOrderedPathSelection.finalModeTitle(responseMode))+" candidate with Start Layer off.");
             inventory=offered;
         }
         rows=java.util.Collections.unmodifiableList(captured);

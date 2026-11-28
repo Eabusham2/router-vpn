@@ -13,6 +13,17 @@ import (
 // families retain their own MTU validators. The returned map is the original
 // predecessor, never a proxy's unrelated TUN baseline or historical measurement.
 func NestedPacketEnvelope(packet map[string]any, all map[string]map[string]any) (PacketEnvelope, map[string]any, error) {
+	return nestedPacketEnvelope(packet, all, nil)
+}
+
+// The caller must own the captured hostname resolver policy. This pure
+// arithmetic input grants no endpoint, DNS, route or execution authority.
+// True means enforced IPv4-only; false reserves the IPv6 worst case.
+func NestedPacketEnvelopeWithHostnameFamilies(packet map[string]any, all map[string]map[string]any, ipv4Only map[string]bool) (PacketEnvelope, map[string]any, error) {
+	return nestedPacketEnvelope(packet, all, ipv4Only)
+}
+
+func nestedPacketEnvelope(packet map[string]any, all map[string]map[string]any, ipv4Only map[string]bool) (PacketEnvelope, map[string]any, error) {
 	bad := errors.New("invalid captured packet carrier path")
 	if packet == nil || packet["type"] != "wireguard" && packet["type"] != Type {
 		return PacketEnvelope{}, nil, bad
@@ -40,7 +51,7 @@ func NestedPacketEnvelope(packet map[string]any, all map[string]map[string]any) 
 		seen[id] = true
 		switch entry["type"] {
 		case "wireguard", Type:
-			envelope, err := packetCarriersEnvelope(packet, layers)
+			envelope, err := packetCarriersEnvelopeWithHostnameFamilies(packet, layers, ipv4Only)
 			return envelope, entry, err
 		case "shadowsocks", "routervpn-aes-xor":
 			layers = append(layers, entry)
@@ -59,6 +70,10 @@ func NestedPacketEnvelope(packet map[string]any, all map[string]map[string]any) 
 // 900 bytes, including control messages. Each wrapper adds these bytes to the
 // previous payload; only the outermost destination contributes IP/UDP headers.
 func packetCarriersEnvelope(packet map[string]any, layers []map[string]any) (PacketEnvelope, error) {
+	return packetCarriersEnvelopeWithHostnameFamilies(packet, layers, nil)
+}
+
+func packetCarriersEnvelopeWithHostnameFamilies(packet map[string]any, layers []map[string]any, ipv4Only map[string]bool) (PacketEnvelope, error) {
 	bad := errors.New("invalid captured SS2022 packet envelope")
 	envelope, err := EndpointEnvelope(packet, nil)
 	if err != nil {
@@ -70,14 +85,15 @@ func packetCarriersEnvelope(packet map[string]any, layers []map[string]any) (Pac
 	if err != nil && len(layers) != 0 {
 		return PacketEnvelope{}, err
 	}
-	ipUDP := func(address netip.Addr) int {
-		if address.Is6() {
+	ipv6 := ip.Is6()
+	ipUDP := func(isIPv6 bool) int {
+		if isIPv6 {
 			return 48
 		}
 		return 28
 	}
-	envelope.DataOverhead -= ipUDP(ip)
-	envelope.ControlMax -= ipUDP(ip)
+	envelope.DataOverhead -= ipUDP(ipv6)
+	envelope.ControlMax -= ipUDP(ipv6)
 	for _, layer := range layers {
 		method, _ := layer["method"].(string)
 		keySize, nonce := 32, 0
@@ -111,7 +127,7 @@ func packetCarriersEnvelope(packet map[string]any, layers []map[string]any) (Pac
 			}
 		}
 		addressBytes := 7
-		if ip.Is6() {
+		if ipv6 {
 			addressBytes = 19
 		}
 		overhead := nonce + max(43+addressBytes+16*(len(keys)-1), 51+addressBytes)
@@ -125,16 +141,26 @@ func packetCarriersEnvelope(packet map[string]any, layers []map[string]any) (Pac
 			return PacketEnvelope{}, bad
 		}
 		ip, err = netip.ParseAddr(server)
-		if err != nil || ip.Zone() != "" || ip.Is4In6() {
-			return PacketEnvelope{}, bad
+		if err != nil {
+			tag, _ := layer["tag"].(string)
+			onlyIPv4, captured := ipv4Only[tag]
+			if !captured || layer["type"] != "shadowsocks" || layer["domain_resolver"] == nil {
+				return PacketEnvelope{}, bad
+			}
+			ipv6 = !onlyIPv4
+		} else {
+			if ip.Zone() != "" || ip.Is4In6() {
+				return PacketEnvelope{}, bad
+			}
+			ipv6 = ip.Is6()
 		}
 		port, err = packetCarrierPort(layer["server_port"])
 		if err != nil {
 			return PacketEnvelope{}, err
 		}
 	}
-	envelope.DataOverhead += ipUDP(ip)
-	envelope.ControlMax += ipUDP(ip)
+	envelope.DataOverhead += ipUDP(ipv6)
+	envelope.ControlMax += ipUDP(ipv6)
 	return envelope, nil
 }
 

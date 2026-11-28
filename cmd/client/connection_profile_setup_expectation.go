@@ -162,11 +162,12 @@ func decodeConnectionProfileCompletion(raw []byte, saving bool) (connectionProfi
 		return q, bad
 	}
 	pairedHysteria := common.PairedHysteriaLocalMultihopSelection(q.Nodes)
+	pairedProxyEntry := common.PairedProxyEntryLocalMultihopSelection(q.Nodes)
 	seen := map[string]bool{}
 	for position, node := range q.Nodes {
 		pairedHY2Final := q.Purpose == connectionProfileHY2CompletionPurpose && position == len(q.Nodes)-1 && node.Mode == "hysteria2"
 		if !validProfileID(node.ID) || seen[node.ID] ||
-			!mobilemultihop.NodeChainPrefixMode(node.Mode) && (position == 0 || node.Mode != "shadowsocks" && !pairedHY2Final && !(pairedHysteria && node.Mode == "hysteria2")) ||
+			!mobilemultihop.NodeChainPrefixMode(node.Mode) && (position == 0 && !pairedProxyEntry || node.Mode != "shadowsocks" && !pairedHY2Final && !((pairedHysteria || pairedProxyEntry) && node.Mode == "hysteria2")) ||
 			!validExternalProfileExpectationToken(q.ExpectedProfileTokens[node.ID]) {
 			return q, bad
 		}
@@ -214,12 +215,13 @@ func (a *app) validateConnectionProfileCompletionLocked(q connectionProfileCompl
 		seen[profile.ID] = true
 	}
 	pairedHysteria := common.PairedHysteriaLocalMultihopSelection(q.Nodes)
+	pairedProxyEntry := common.PairedProxyEntryLocalMultihopSelection(q.Nodes)
 	for position, row := range q.Nodes {
 		profile, ok := a.profileByIDLocked(row.ID)
 		if !ok || publicProfileToken(profile) != q.ExpectedProfileTokens[row.ID] {
 			return bad
 		}
-		if pairedHysteria && (profile.External != nil || profile.NodeKind == "external" || profile.StartLayer != "" && profile.StartLayer != "off") {
+		if (pairedHysteria || pairedProxyEntry) && (profile.External != nil || profile.NodeKind == "external" || profile.StartLayer != "" && profile.StartLayer != "off") {
 			return bad
 		}
 		if profile.External != nil || profile.NodeKind == "external" {

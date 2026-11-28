@@ -56,6 +56,18 @@ final class AndroidOrderedPathSelection {
     String execution() { return execution; }
     boolean unfinished(){return unfinished;}
     long revision(){return revision;}
+    private boolean proxyEntryPrefix(){return (unfinished||members.size()>=2)&&!members.isEmpty()&&!members.get(0).source.imported&&AndroidNodeCandidateAppendSource.proxyEntryMode(members.get(0).mode);}
+    List<AndroidNodeCandidateAppendSource.NextChoice> appendNextChoices()throws Exception {
+        requireCurrent();requireBound();
+        List<AndroidNodeCandidateAppendSource.NextChoice> choices=new ArrayList<>(AndroidNodeCandidateAppendSource.nextChoices(proxyEntryPrefix()));
+        List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();List<String> modes=new ArrayList<>();
+        for(Member member:members){sources.add(member.source);modes.add(member.mode);}
+        if(AndroidNodeCandidateAppendSource.permitsExecution(sources,modes,"router-vpn","shadowsocks","server")) {
+            choices.add(new AndroidNodeCandidateAppendSource.NextChoice("router-vpn","shadowsocks","server"));
+            choices.add(new AndroidNodeCandidateAppendSource.NextChoice("router-vpn","shadowsocks","auto"));
+        }
+        return Collections.unmodifiableList(choices);
+    }
     static String executionTitle(String value) {
         switch(value) {
             case "local":return "Local";
@@ -106,15 +118,17 @@ final class AndroidOrderedPathSelection {
                 :catalog.captureSelectedCandidateDraft(sources,modes,prefix,capturedExecution,()->revision==capturedRevision);
     }
 
-    java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> candidateAppendCapture(String nextKind,String nextMode)throws Exception {
+    java.util.concurrent.Callable<AndroidNodeStore.ChainCapture> candidateAppendCapture(String nextKind,String nextMode,String requestedExecution)throws Exception {
         requireCurrent();requireBound();
         if(!unfinished||!"local".equals(execution)||members.isEmpty()||members.size()>=AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH
-                ||!AndroidNodeCandidateAppendSource.supportsNext(nextKind,nextMode))throw new IllegalStateException("Choose the next transport for the original unfinished prefix.");
+                ||!AndroidNodeCandidateAppendSource.supportsNext(nextKind,nextMode,proxyEntryPrefix()))throw new IllegalStateException("Choose the next transport for the original unfinished prefix.");
         long capturedRevision=revision;
         List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();List<String> modes=new ArrayList<>();
         for(Member member:members){sources.add(member.source);modes.add(member.mode);}
+        if(!AndroidNodeCandidateAppendSource.permitsExecution(sources,modes,nextKind,nextMode,requestedExecution))
+            throw new IllegalStateException("This prefix cannot continue the original Server or Compare request. Choose an explicit Local next-node measurement or finish the draft.");
         String originalRevision=draftIdentity+"-"+capturedRevision;
-        return ()->catalog.captureCandidateAppend(sources,modes,nextKind,nextMode,originalRevision,
+        return ()->catalog.captureCandidateAppend(sources,modes,nextKind,nextMode,requestedExecution,originalRevision,
                 ()->unfinished&&revision==capturedRevision);
     }
 
@@ -125,12 +139,13 @@ final class AndroidOrderedPathSelection {
     }
     List<String> prefixStartModes(String id)throws Exception {
         requireCurrent();AndroidNodeStore.ChainSource source=catalog.source(id);List<String> result=new ArrayList<>();
-        if(!source.imported)for(String mode:PREFIX_MODES)if(hasMode(source,mode))result.add(mode);
+        for(String mode:AndroidNodeCandidateAppendSource.NEXT_MODES)
+            if(AndroidNodeCandidateAppendSource.permitsPrefixMember(source,mode,0,AndroidNodeCandidateAppendSource.proxyEntryMode(mode))&&hasMode(source,mode))result.add(mode);
         return result;
     }
     void beginPrefix(String id,String mode)throws Exception {
         requireCurrent();
-        if(!prefixStartModes(id).contains(mode))throw new IllegalStateException("Choose an original paired packet prefix.");
+        if(!prefixStartModes(id).contains(mode))throw new IllegalStateException("Choose an original paired packet entry or literal Shadowsocks or Hysteria2 entry with Start Layer Off.");
         List<Member> previous=new ArrayList<>(members);boolean wasUnfinished=unfinished;String previousExecution=execution;
         members.clear();members.add(new Member(catalog.source(id),mode));unfinished=true;execution="local";
         try{requireBound();}catch(Exception failed){members.clear();members.addAll(previous);unfinished=wasUnfinished;execution=previousExecution;throw failed;}
@@ -139,6 +154,11 @@ final class AndroidOrderedPathSelection {
 
     private boolean canExtendOriginalRoute() throws Exception {
         if (!List.of("local","server","auto").contains(execution) || members.size() < 8 || members.size() >= AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH) return false;
+        if(proxyEntryPrefix()) {
+            List<AndroidNodeStore.ChainSource> sources=new ArrayList<>();List<String> modes=new ArrayList<>();
+            for(Member member:members){sources.add(member.source);modes.add(member.mode);}
+            return AndroidNodeChainCapture.pairedProxyEntryLocalSource(sources,modes,execution);
+        }
         if (members.get(members.size()-1).source.imported) return externalExitPrefix();
         boolean stream=false;
         for(int i=0;i<members.size();i++) {
@@ -177,7 +197,14 @@ final class AndroidOrderedPathSelection {
             int position=members.size();
             for(int i=0;i<members.size();i++)if(members.get(i).source.id.equals(id))position=i;
             for(String mode:AndroidNodeCandidateAppendSource.NEXT_MODES)
-                if(AndroidNodeCandidateAppendSource.permitsPrefixMember(source,mode,position))result.add(mode);
+                if(AndroidNodeCandidateAppendSource.permitsPrefixMember(source,mode,position,proxyEntryPrefix()))result.add(mode);
+            return Collections.unmodifiableList(result);
+        }
+        if(proxyEntryPrefix()&&"local".equals(execution)) {
+            int position=members.size()-1;
+            for(int i=0;i<members.size()-1;i++)if(members.get(i).source.id.equals(id))position=i;
+            for(String mode:AndroidNodeCandidateAppendSource.NEXT_MODES)
+                if(AndroidNodeCandidateAppendSource.permitsPrefixMember(source,mode,position,true))result.add(mode);
             return Collections.unmodifiableList(result);
         }
         if (!members.isEmpty() && members.get(members.size()-1).source.imported) {
@@ -246,6 +273,11 @@ final class AndroidOrderedPathSelection {
 
     List<String> finalModes(String id) throws Exception {
         requireCurrent();AndroidNodeStore.ChainSource source=catalog.source(id);List<String> result=new ArrayList<>();
+        if(proxyEntryPrefix()) {
+            if("local".equals(execution))for(String mode:List.of("shadowsocks","hysteria2"))
+                if(AndroidNodeCandidateAppendSource.permitsPrefixMember(source,mode,1,true))result.add(mode);
+            return Collections.unmodifiableList(result);
+        }
         if(!source.imported) {
             if(hasMode(source,"shadowsocks"))result.add("shadowsocks");
             boolean imported=false;for(Member member:members)imported|=member.source.imported;
@@ -358,7 +390,7 @@ final class AndroidOrderedPathSelection {
             java.util.function.BooleanSupplier fresh)throws Exception {
         requireCurrent();
         if(!unfinished||!original.appendDraft()||!"local".equals(execution)||!mode.equals(original.appendMode)
-                ||!AndroidNodeCandidateAppendSource.supportsNext(original.appendKind,mode)||candidate.imported!="external".equals(original.appendKind)
+                ||!AndroidNodeCandidateAppendSource.supportsNext(original.appendKind,mode,proxyEntryPrefix())||candidate.imported!="external".equals(original.appendKind)
                 ||members.size()!=original.members.size()||members.size()>=AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH)
             throw new IllegalStateException("This measured node belongs to a different unfinished prefix.");
         for(int i=0;i<members.size();i++)if(!members.get(i).mode.equals(original.modes.get(i))
@@ -374,7 +406,7 @@ final class AndroidOrderedPathSelection {
             members.add(new Member(linked,mode));
             try{requireBound();if(!fresh.getAsBoolean())throw new IllegalStateException("The measured append expired before adoption.");}
             catch(Exception failed){members.remove(members.size()-1);throw failed;}
-            revision++;appendContinuation=new AndroidNodeCandidateAppendSource.NextChoice(original.appendKind,original.appendMode);
+            revision++;appendContinuation=new AndroidNodeCandidateAppendSource.NextChoice(original.appendKind,original.appendMode,original.appendExecution);
             appendContinuationRevision=revision;return null;
         });
     }
@@ -382,7 +414,7 @@ final class AndroidOrderedPathSelection {
     AndroidNodeCandidateAppendSource.NextChoice appendContinuation()throws Exception {
         requireCurrent();
         if(!unfinished||appendContinuation==null||appendContinuationRevision!=revision
-                ||!AndroidNodeCandidateAppendSource.supportsNext(appendContinuation.kind,appendContinuation.mode))
+                ||!AndroidNodeCandidateAppendSource.supportsNext(appendContinuation.kind,appendContinuation.mode,proxyEntryPrefix()))
             throw new IllegalStateException("The original next-node choice changed after adoption.");
         return appendContinuation;
     }
@@ -393,7 +425,7 @@ final class AndroidOrderedPathSelection {
             if(members.size()>=AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH-1)throw new IllegalStateException("Choose a final node within the original traversal budget.");
             for(Member member:members)if(member.source.id.equals(id))throw new IllegalStateException("Choose an unused prefix node.");
             AndroidNodeStore.ChainSource original=catalog.source(id);
-            AndroidNodeCandidateAppendSource.requirePrefixMember(original,mode,members.size());
+            AndroidNodeCandidateAppendSource.requirePrefixMember(original,mode,members.size(),proxyEntryPrefix());
             members.add(new Member(original,mode));
             try{requireBound();}catch(Exception failed){members.remove(members.size()-1);throw failed;}
             revision++;return;
@@ -403,7 +435,8 @@ final class AndroidOrderedPathSelection {
         for(Member member:members)if(member.source.id.equals(id))throw new IllegalStateException("Each ordered position needs a different saved node.");
         AndroidNodeStore.ChainSource source=catalog.source(id);
         if(source.imported&&!"shadowsocks".equals(members.get(members.size()-1).mode))throw new IllegalStateException("An imported middle requires its paired Shadowsocks 2022 final.");
-        if (!"shadowsocks".equals(mode) || source.imported || !canAppendPairedStream(source)) requirePrefixMode(source,mode);
+        if(proxyEntryPrefix())AndroidNodeCandidateAppendSource.requirePrefixMember(source,mode,members.size()-1,true);
+        else if (!"shadowsocks".equals(mode) || source.imported || !canAppendPairedStream(source)) requirePrefixMode(source,mode);
         int position=members.size()-1;
         if(!source.imported&&members.size()>=3&&members.get(members.size()-2).source.imported&&!literalSS(members.get(members.size()-2).source))position--;
         members.add(position,new Member(source,mode));
@@ -416,7 +449,7 @@ final class AndroidOrderedPathSelection {
         requireCurrent();
         if(position<0||position>=members.size()-(unfinished?0:1))throw new IllegalStateException("Choose an intermediate node to change its transport.");
         AndroidNodeStore.ChainSource source=members.get(position).source;
-        if(unfinished)AndroidNodeCandidateAppendSource.requirePrefixMember(source,mode,position);
+        if(unfinished||proxyEntryPrefix())AndroidNodeCandidateAppendSource.requirePrefixMember(source,mode,position,position==0?AndroidNodeCandidateAppendSource.proxyEntryMode(mode):proxyEntryPrefix());
         else if (!"shadowsocks".equals(mode) || source.imported || !hasMode(source,mode) || !qualifiesPairedStream(position,source,false)) requirePrefixMode(source,mode);
         Member previous = members.set(position,new Member(source,mode));
         try { requireBound(); }
@@ -493,6 +526,8 @@ final class AndroidOrderedPathSelection {
                 if(preview.config()==null||preview.config().isEmpty())throw new IllegalStateException("The native compiler returned no complete ordered graph.");
                 if((AndroidNodeChainCapture.pairedHysteriaLocalSource(sources,modes,execution)?sources.size():0)!=preview.pairedHysteriaLocalNodeCount())
                     throw new IllegalStateException("The complete preview lost its original paired Local Hysteria2 family.");
+                if((AndroidNodeChainCapture.pairedProxyEntryLocalSource(sources,modes,execution)?sources.size():0)!=preview.pairedProxyEntryLocalNodeCount())
+                    throw new IllegalStateException("The complete preview lost its original paired proxy entry.");
                 if(!"local".equals(execution))AndroidNodeChainCapture.validateExecutionPlan(preview,execution);
                 requireCurrent();
             } finally { preview.close(); }
@@ -565,7 +600,7 @@ final class AndroidOrderedPathSelection {
             long bytes=0;Set<String> ids=new HashSet<>(),proofs=new HashSet<>();
             for(int i=0;i<members.size();i++) {
                 Member member=members.get(i);
-                AndroidNodeCandidateAppendSource.requirePrefixMember(member.source,member.mode,i);
+                AndroidNodeCandidateAppendSource.requirePrefixMember(member.source,member.mode,i,proxyEntryPrefix());
                 if(!ids.add(member.source.profileId)||!proofs.add(member.source.identityKey()))
                     throw new IllegalStateException("The unfinished prefix requires distinct original source identities.");
                 bytes+=member.source.bytes().length;

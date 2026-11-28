@@ -667,8 +667,19 @@ def _darwin_paired_hysteria_roles(family, rows):
             and any(row[1] == 'hysteria2' for row in rows[1:-1]))
 
 
+def _darwin_paired_proxy_entry_roles(family, rows):
+    # Mode shape is descriptive; every original paired source and Off policy is
+    # still checked before the existing native owner grants physical tuples.
+    return (family == 'ordered-node-chain-v1' and type(rows) is list and 2 <= len(rows) <= 96
+            and all(type(row) is list and len(row) == 6 and row[2] == 'router-vpn' for row in rows)
+            and rows[0][1] in ('shadowsocks', 'hysteria2')
+            and rows[-1][1] in ('shadowsocks', 'hysteria2')
+            and all(row[1] in ('wg', 'awg2-fast', 'awg2-strong', 'shadowsocks', 'hysteria2') for row in rows[1:-1]))
+
+
 def _darwin_extended_member_role(family, rows, position):
-    if _darwin_paired_hysteria_roles(family, rows) or _darwin_private_stream_roles(family, rows):
+    if (_darwin_paired_hysteria_roles(family, rows) or _darwin_paired_proxy_entry_roles(family, rows)
+            or _darwin_private_stream_roles(family, rows)):
         return tuple(rows[position][1:3])
     if position == len(rows) - 1:
         return ('shadowsocks', 'router-vpn')

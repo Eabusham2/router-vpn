@@ -476,6 +476,13 @@ func (m *Manager) validatePacketPinsLocked(pins []string) error {
 					}
 				}
 			}
+			if active.prefix != nil {
+				for _, captured := range active.prefix.capture.Request.LocalPacketPublicKeys {
+					if proposed == captured {
+						return errors.New("paired packet credentials already belong to an original unfinished prefix")
+					}
+				}
+			}
 		}
 	}
 	return nil

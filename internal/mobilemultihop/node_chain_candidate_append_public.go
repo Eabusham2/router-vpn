@@ -57,19 +57,23 @@ func (p *NodeChainCandidatePreparation) CandidateMeasurement() string {
 }
 
 // The prospective import keeps its original policy/member owner. Only its
-// exact literal SS closure is compiled; no paired API or final route is made.
-func (s *NodeChainCandidateAppendSource) candidateImportedSSResponse(input string) (candidatePublicResponseSource, *nodeChainMultipleImportedMemberSeal, error) {
-	bad := func() (candidatePublicResponseSource, *nodeChainMultipleImportedMemberSeal, error) {
+// exact SS closure and saved hostname resolver are compiled; no paired API or final route is made.
+func (s *NodeChainCandidateAppendSource) candidateImportedSSResponse(input string) (candidatePublicResponseSource, *nodeChainAppendImportedSeal, error) {
+	bad := func() (candidatePublicResponseSource, *nodeChainAppendImportedSeal, error) {
 		return candidatePublicResponseSource{}, nil, nodeChainCandidateAppendError
 	}
 	if s.validate() != nil || s.record.NextKind != "external" || s.record.NextMode != "shadowsocks" {
 		return bad()
 	}
 	member, err := parseNodeChainImportedMember(input)
-	if err != nil || member == nil || member.hostname != nil || member.rememberMultipleImportedMember() != nil {
+	if err != nil || member == nil {
 		return bad()
 	}
-	response, err := publicCandidateMember(member)
+	original, err := rememberAppendImportedMember(member)
+	if err != nil {
+		return bad()
+	}
+	response, err := s.appendPublicCandidateMember(member)
 	if err != nil {
 		return bad()
 	}
@@ -78,7 +82,7 @@ func (s *NodeChainCandidateAppendSource) candidateImportedSSResponse(input strin
 		return bad()
 	}
 	closure, err := member.closure()
-	if err != nil || !nodeChainAppendSSClosure(closure) {
+	if err != nil || !nodeChainAppendImportedClosure(member, closure) {
 		return bad()
 	}
 	proof := proofs[len(proofs)-1]
@@ -90,11 +94,22 @@ func (s *NodeChainCandidateAppendSource) candidateImportedSSResponse(input strin
 	projected, err := candidatePrefixClosure(config, proofs)
 	want := predecessorCopy(closure.final)
 	want["tag"], want["detour"] = proof.Tag, s.proofs[len(s.proofs)-1].Tag
+	if member.hostname != nil {
+		var projectionErr error
+		want, projectionErr = s.appendHostnameCandidateOut(closure, proof)
+		if projectionErr != nil {
+			return bad()
+		}
+		var resolver map[string]any
+		if json.Unmarshal([]byte(response.appendResolver), &resolver) != nil || !reflect.DeepEqual(projected["dns/"+predecessorText(resolver, "tag")], resolver) {
+			return bad()
+		}
+	}
 	if err != nil || !reflect.DeepEqual(projected["outbounds/"+proof.Tag], want) ||
 		predecessorText(want, "method") != response.Method || predecessorText(want, "password") != response.Password {
 		return bad()
 	}
-	return response, member.multipleSeal, nil
+	return response, original, nil
 }
 
 func (s *NodeChainCandidateAppendSource) newPublicAppendCandidatePlan(inventory string, record NodeChainCandidateInventory) (*NodeChainCandidatePlan, error) {
@@ -141,10 +156,10 @@ func (p *NodeChainCandidatePlan) validatePublicAppend() error {
 		return nodeChainCandidateAppendError
 	}
 	for i, original := range p.appendImportSeals {
-		if original == nil || original.owner == nil || original.owner.multipleSeal != original || !original.matches(original.owner) {
+		if original == nil || original.owner == nil || !original.matches(original.owner) {
 			return nodeChainCandidateAppendError
 		}
-		source, err := publicCandidateMember(original.owner)
+		source, err := p.appendSource.appendPublicCandidateMember(original.owner)
 		if err != nil || source != p.publicResponses[i] || source.Target != p.targets[i] {
 			return nodeChainCandidateAppendError
 		}

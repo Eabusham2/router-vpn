@@ -132,6 +132,8 @@ type Service struct {
 	cancel               context.CancelFunc
 	done                 chan struct{}
 	pending              *measurementAdmission
+	// Set only by the original response-run worker; retained through its final result.
+	responseRetirementStarted bool
 	// Unexported trusted-root seam for local TLS protocol/lifetime tests.
 	publicTLS *tls.Config
 }
@@ -521,6 +523,14 @@ func privateAPI(raw string) (*url.URL, error) {
 	return u, nil
 }
 func (s *Service) valid(ctx context.Context) error {
+	return s.validWithIdentity(ctx, func(call context.Context) (string, error) {
+		return observedIdentity(call, s.engine)
+	})
+}
+
+// validWithIdentity observes one fresh identity between the original service
+// lifetime checks. The result is consumed by this call only; it is never cached.
+func (s *Service) validWithIdentity(ctx context.Context, observe func(context.Context) (string, error)) error {
 	if ctx == nil {
 		return errors.New("hop observation has no caller")
 	}
@@ -535,9 +545,15 @@ func (s *Service) valid(ctx context.Context) error {
 	if closed {
 		return ErrStale
 	}
-	identity, err := observedIdentity(ctx, s.engine)
+	identity, err := observe(ctx)
 	if err != nil {
 		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if identity == "" {
+		return ErrStale
 	}
 	if err := lockOrderedLatencyService(ctx, s); err != nil {
 		return err
@@ -667,6 +683,7 @@ func (s *Service) startContextOwned(parent context.Context, id string, work func
 	s.pending = nil
 	s.cancel = cancel
 	s.done = op.done
+	s.responseRetirementStarted = false
 	s.state = Status{Request: id, Stage: "starting", Results: []Result{}}
 	accepted = true
 	go func() { defer close(op.done); defer cancel(); defer release(); work(ctx) }()
@@ -792,7 +809,9 @@ func (s *Service) StatusContextJSON(ctx context.Context) string {
 func (s *Service) statusJSON(ctx context.Context) string {
 	s.mu.Lock()
 	request, done, pending := s.state.Request, s.done, s.pending
-	observe := !s.closed && s.state.Stage != "cancelled" && s.state.Stage != "invalidated"
+	retirement := s.responseRetirementStarted
+	draining := retirement && s.state.Stage == "draining" && !s.state.Complete
+	observe := !s.closed && !draining && s.state.Stage != "cancelled" && s.state.Stage != "invalidated"
 	s.mu.Unlock()
 	var identity string
 	var err error
@@ -801,10 +820,13 @@ func (s *Service) statusJSON(ctx context.Context) string {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// A late status read cannot invalidate a replacement admission, worker, or
-	// cancellation. No native owner is ever queried while the status lock is held.
+	// A late status read cannot invalidate a replacement admission, worker,
+	// cancellation, or the same original response entering retirement.
+	// No native owner is ever queried while the status lock is held.
+	same := request == s.state.Request && done == s.done && pending == s.pending
+	crossedRetirement := retirement != s.responseRetirementStarted
 	if observe && !s.closed && s.state.Stage != "cancelled" && s.state.Stage != "invalidated" &&
-		request == s.state.Request && done == s.done && pending == s.pending && (err != nil || identity != s.identity) {
+		same && !crossedRetirement && (err != nil || identity != s.identity) {
 		if s.cancel != nil {
 			s.cancel()
 		}
@@ -821,7 +843,20 @@ func (s *Service) statusJSON(ctx context.Context) string {
 		default:
 		}
 	}
-	b, _ := json.Marshal(s.state)
+	view := s.state
+	if same && (draining || crossedRetirement) && !s.closed && view.Stage != "cancelled" && view.Stage != "invalidated" && view.Failure == "" {
+		failed := false
+		for _, result := range view.Results {
+			failed = failed || result.Failure != ""
+		}
+		if !failed {
+			// This read did not freshly observe the post-retirement source.
+			// A later normal read must do so before any result can be shown.
+			view.Stage, view.Complete, view.Drained = "draining", false, false
+			view.Results = []Result{}
+		}
+	}
+	b, _ := json.Marshal(view)
 	return string(b)
 }
 func (s *Service) phase(ctx context.Context, id, phase string) error {

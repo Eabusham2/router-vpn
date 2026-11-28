@@ -60,6 +60,8 @@ type Config struct {
 	// Immutable public descriptors resolve separately installed private sources.
 	// An explicit native NodeChainRunner is required before discovery or use.
 	NodeChains []NodeChainDescriptor `json:"node_chains,omitempty"`
+	// Separate unfinished-prefix registrations share the same peer/port/key ledger.
+	NodeChainPrefixes []NodeChainPrefixDescriptor `json:"node_chain_prefixes,omitempty"`
 }
 type Request struct {
 	SessionID      string `json:"session_id"`
@@ -114,6 +116,7 @@ type live struct {
 	retired bool
 	tor     *torOwnedProcess
 	chain   *nodeChainOwnedProcess
+	prefix  *nodeChainPrefixOwnedProcess
 	// Retain the identities actually used by this original process. A later
 	// registry replacement cannot free a still-live roaming packet identity.
 	packetPins []string
@@ -130,6 +133,7 @@ type Manager struct {
 	packetAttempts map[string]int64
 	torAttempts    map[string]torAttempt
 	chainAttempts  map[string]nodeChainAttempt
+	prefixAttempts map[string]nodeChainPrefixAttempt
 }
 
 func New(c Config, node string, r Runner) (*Manager, error) {
@@ -144,7 +148,7 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 	if c.TTLSeconds == 0 {
 		c.TTLSeconds = 90
 	}
-	if c.TTLSeconds < 15 || c.TTLSeconds > 300 || len(c.Exits)+len(c.TorExits)+len(c.NodeChains) > MaxPairedExits {
+	if c.TTLSeconds < 15 || c.TTLSeconds > 300 || len(c.Exits)+len(c.TorExits)+len(c.NodeChains)+len(c.NodeChainPrefixes) > MaxPairedExits {
 		return nil, errors.New("relay TTL or exit limit is invalid")
 	}
 	seen := map[string]bool{}
@@ -196,6 +200,12 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 		}
 		seen["node-chain/"+source.SourceSHA256] = true
 	}
+	for _, source := range c.NodeChainPrefixes {
+		if source.Validate() != nil || source.EntryNodeID != node || seen["node-chain-prefix/"+source.SourceSHA256] {
+			return nil, errors.New("invalid or duplicate private prefix source reference")
+		}
+		seen["node-chain-prefix/"+source.SourceSHA256] = true
+	}
 	// Copy the supplied private configuration so callers cannot mutate live plans.
 	raw, _ := json.Marshal(c)
 	var frozen Config
@@ -207,7 +217,7 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 		return nil, errors.New("relay ownership epoch could not be generated")
 	}
 	return &Manager{cfg: frozen, node: node, runner: r, leases: map[string]*live{}, now: time.Now,
-		packetEpoch: hex.EncodeToString(epochBytes), packetAttempts: map[string]int64{}, torAttempts: map[string]torAttempt{}, chainAttempts: map[string]nodeChainAttempt{}}, nil
+		packetEpoch: hex.EncodeToString(epochBytes), packetAttempts: map[string]int64{}, torAttempts: map[string]torAttempt{}, chainAttempts: map[string]nodeChainAttempt{}, prefixAttempts: map[string]nodeChainPrefixAttempt{}}, nil
 }
 func PeerKey(peer netip.Addr) string { return peer.Unmap().String() }
 func (m *Manager) Available() []map[string]string {
@@ -543,6 +553,9 @@ func (m *Manager) stopLocked(ctx context.Context, key string) error {
 	if s.chain != nil {
 		_ = m.rememberChainAttemptLocked(s.peer, s.chain.capture.Request, true)
 	}
+	if s.prefix != nil {
+		_ = m.rememberPrefixAttemptLocked(s.peer, s.prefix.capture.Request, true)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	if err := s.p.Stop(ctx); err != nil || s.p.Alive() {
@@ -554,7 +567,7 @@ func (m *Manager) stopLocked(ctx context.Context, key string) error {
 func (m *Manager) reapLocked(ctx context.Context) error {
 	m.sweepPacketAttemptsLocked()
 	for key, s := range m.leases {
-		if !s.ExpiresAt.After(m.now()) || !s.p.Alive() || s.tor != nil && s.tor.terminal() || s.chain != nil && s.chain.terminal() {
+		if !s.ExpiresAt.After(m.now()) || !s.p.Alive() || s.tor != nil && s.tor.terminal() || s.chain != nil && s.chain.terminal() || s.prefix != nil && s.prefix.terminal() {
 			if err := m.stopLocked(ctx, key); err != nil {
 				return err
 			}

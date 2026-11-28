@@ -16,18 +16,62 @@ final class AndroidNodeCandidateAppendSource {
     static final List<String> NEXT_MODES=List.of("wg","awg2-fast","awg2-strong","shadowsocks","hysteria2");
     static boolean supportsNextMode(String mode){return mode!=null&&NEXT_MODES.contains(mode);}
     static final class NextChoice {
-        final String kind,mode;
-        NextChoice(String kind,String mode){this.kind=kind;this.mode=mode;}
-        String title(){return "external".equals(kind)?"Shadowsocks — imported public HTTPS":AndroidOrderedPathSelection.finalModeTitle(mode)+" — paired private response";}
+        final String kind,mode,execution;
+        NextChoice(String kind,String mode){this(kind,mode,"local");}
+        NextChoice(String kind,String mode,String execution){this.kind=kind;this.mode=mode;this.execution=execution;}
+        String title(){return "external".equals(kind)?"Shadowsocks — imported public HTTPS":AndroidOrderedPathSelection.finalModeTitle(mode)+" — "+AndroidOrderedPathSelection.executionTitle(execution)+" private response";}
     }
     static final List<NextChoice> NEXT_CHOICES=List.of(new NextChoice("router-vpn","wg"),new NextChoice("router-vpn","awg2-fast"),
             new NextChoice("router-vpn","awg2-strong"),new NextChoice("router-vpn","shadowsocks"),new NextChoice("router-vpn","hysteria2"),new NextChoice("external","shadowsocks"));
+    static boolean proxyEntryMode(String mode){return "shadowsocks".equals(mode)||"hysteria2".equals(mode);}
+    static boolean proxyEntry(List<String> modes){return !modes.isEmpty()&&proxyEntryMode(modes.get(0));}
+    static boolean supportsNext(String kind,String mode,boolean proxyEntry){return (!proxyEntry||"router-vpn".equals(kind))&&supportsNext(kind,mode);}
+    static List<NextChoice> nextChoices(boolean proxyEntry){
+        List<NextChoice> choices=new ArrayList<>();
+        for(NextChoice choice:NEXT_CHOICES)if(supportsNext(choice.kind,choice.mode,proxyEntry))choices.add(choice);
+        return Collections.unmodifiableList(choices);
+    }
+    // This is only an append-choice hint. The exact native execution wrapper
+    // independently validates the original Local source and whole inventory.
+    static boolean permitsExecution(List<AndroidNodeStore.ChainSource> members,List<String> modes,String kind,String mode,String execution) {
+        if("local".equals(execution))return supportsNext(kind,mode,proxyEntry(modes));
+        if(!List.of("server","auto").contains(execution)||!"router-vpn".equals(kind)||!"shadowsocks".equals(mode)
+                ||members.isEmpty()||members.size()>95||members.size()!=modes.size())return false;
+        try {
+            boolean shadowsocksTail=false;
+            for(int i=0;i<members.size();i++) {
+                AndroidNodeStore.ChainSource member=members.get(i);String retainedMode=modes.get(i);
+                boolean packet=List.of("wg","awg2-fast","awg2-strong").contains(retainedMode);
+                if(packet) {
+                    if(shadowsocksTail)return false;
+                } else {
+                    if(i==0||!"shadowsocks".equals(retainedMode))return false;
+                    shadowsocksTail=true;
+                }
+                if(member.imported||!List.of("","off").contains(member.profile().optString("start_layer","off")))return false;
+                member.requirePairedIdentity();AndroidNumericAddress.parse(member.profile().getString("endpoint"));
+                if(!permitsPrefixMember(member,retainedMode,i,false))return false;
+            }
+            return true;
+        } catch(Exception unavailable){return false;}
+    }
     static boolean supportsNext(String kind,String mode){return "router-vpn".equals(kind)&&supportsNextMode(mode)||"external".equals(kind)&&"shadowsocks".equals(mode);}
     static String measurement(String kind){return "external".equals(kind)?"routed-public-candidate-response":"router-vpn".equals(kind)?"routed-candidate-response":"";}
     static void requireCandidate(AndroidNodeStore.ChainSource member,String kind,String mode)throws Exception {
         if(member==null||!supportsNext(kind,mode)||member.imported!="external".equals(kind))throw invalid();
-        if(member.imported){AndroidNodeChainCapture.requireLiteralImportedSS(member);if(!AndroidNodeChainCapture.identityInput(member).isEmpty())throw invalid();}
+        if(member.imported){requireImportedShadowsocks(member);if(!AndroidNodeChainCapture.identityInput(member).isEmpty())throw invalid();}
         else member.requirePairedIdentity();
+    }
+    // This append-only source check performs no DNS lookup. The canonical
+    // imported compiler and original preparation own resolver admission.
+    static void requireImportedShadowsocks(AndroidNodeStore.ChainSource member)throws Exception {
+        AndroidStandardExitStore.Entry source=member.external();
+        if(!AndroidStandardExitStore.importedHostname(source)) {
+            AndroidNodeChainCapture.requireLiteralImportedSS(member);return;
+        }
+        AndroidNodeStore.ChainSource.requireImported(source);
+        if(!"shadowsocks".equals(AndroidExternalPolicy.protocol(source.protocol)))throw invalid();
+        AndroidStandardExitStore.validateImportedHostnamePolicy(source);
     }
     final RouterNodeChainCandidateAppendSource plan;
     final AndroidNodeStore.ChainCapture original;
@@ -38,7 +82,8 @@ final class AndroidNodeCandidateAppendSource {
     private final Context context;
 
     AndroidNodeCandidateAppendSource(Context context,AndroidNodeStore.ChainCapture original)throws Exception {
-        if(original==null||!original.appendDraft()||!"local".equals(original.execution)||!supportsNext(original.appendKind,original.appendMode))
+        if(original==null||!original.appendDraft()||!"local".equals(original.execution)
+                ||!permitsExecution(original.members,original.modes,original.appendKind,original.appendMode,original.appendExecution))
             throw invalid();
         this.context=context.getApplicationContext();this.original=original;
         original.requireCurrent();deviceMTU=AndroidDeviceMTU.capture(this.context);
@@ -52,11 +97,13 @@ final class AndroidNodeCandidateAppendSource {
             protect|=!"off".equals(policy)||profile.optBoolean("kill_switch",false);
             lan&=profile.optBoolean("home_lan_access",true);
         }
-        int sourceSchema=1;
+        boolean proxyEntry=proxyEntry(original.modes);
+        if(!supportsNext(original.appendKind,original.appendMode,proxyEntry))throw invalid();
+        int sourceSchema=proxyEntry?3:1;
         for(int i=0;i<original.members.size();i++) {
             AndroidNodeStore.ChainSource member=original.members.get(i);String mode=original.modes.get(i);
-            requirePrefixMember(member,mode,i);
-            if(member.imported||List.of("shadowsocks","hysteria2").contains(mode))sourceSchema=2;
+            requirePrefixMember(member,mode,i,proxyEntry);
+            if(!proxyEntry&&(member.imported||proxyEntryMode(mode)))sourceSchema=2;
             inputs.add(AndroidNodeChainCapture.memberInput(member,mode,member.profile()));
             identities.add(AndroidNodeChainCapture.identityInput(member));
         }
@@ -113,13 +160,20 @@ final class AndroidNodeCandidateAppendSource {
     // Eligibility is specific to an unfinished append source. The shared
     // constructor remains the authority for whole-prefix closures and keys.
     static boolean permitsPrefixMember(AndroidNodeStore.ChainSource member,String mode,int position) {
+        return permitsPrefixMember(member,mode,position,false);
+    }
+    static boolean permitsPrefixMember(AndroidNodeStore.ChainSource member,String mode,int position,boolean proxyEntry) {
         try {
             if(member==null||position<0)return false;
             boolean packet=List.of("wg","awg2-fast","awg2-strong").contains(mode);
-            if(position==0&&(member.imported||!packet))return false;
+            if(position==0&&(member.imported||!(proxyEntry?proxyEntryMode(mode):packet)))return false;
+            if(proxyEntry) {
+                if(member.imported||!List.of("","off").contains(member.profile().optString("start_layer","off")))return false;
+                if(proxyEntryMode(mode))AndroidNumericAddress.parse(member.profile().getString("endpoint"));
+            }
             if(member.imported) {
                 if(!"shadowsocks".equals(mode))return false;
-                AndroidNodeChainCapture.requireLiteralImportedSS(member);
+                requireImportedShadowsocks(member);
                 return true;
             }
             if(!packet&&!List.of("shadowsocks","hysteria2").contains(mode))return false;
@@ -130,8 +184,12 @@ final class AndroidNodeCandidateAppendSource {
         } catch(Exception unavailable) {return false;}
     }
     static void requirePrefixMember(AndroidNodeStore.ChainSource member,String mode,int position)throws Exception {
-        if(!permitsPrefixMember(member,mode,position))throw new IllegalStateException(
-                "Keep the original paired packet entry and supported packet, literal Shadowsocks 2022 or paired Hysteria2 prefix members.");
+        requirePrefixMember(member,mode,position,false);
+    }
+    static void requirePrefixMember(AndroidNodeStore.ChainSource member,String mode,int position,boolean proxyEntry)throws Exception {
+        if(!permitsPrefixMember(member,mode,position,proxyEntry))throw new IllegalStateException(
+                proxyEntry?"Keep this paired proxy entry and every retained node literal, paired and Start Layer Off.":
+                "Keep the original paired packet entry and supported packet, captured Shadowsocks 2022 or paired Hysteria2 prefix members.");
         // Imported sources use their original external capture and empty paired
         // identity companion; they never acquire a Router pairing identity.
         AndroidNodeChainCapture.memberInput(member,mode,member.profile());

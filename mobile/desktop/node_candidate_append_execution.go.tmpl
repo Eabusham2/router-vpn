@@ -1,0 +1,229 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"reflect"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+const routerVPNAppendExecutionReadyFile = "node-candidate-append-execution-ready.json"
+const routerVPNAppendExecutionReadyPending = ".node-candidate-append-execution-ready.json.pending"
+
+func init() {
+	mainCommand.AddCommand(routerVPNNewNodeCandidatePrefixCommandPurpose(routerVPNRunNodeCandidatePrefixCommand, true))
+}
+
+// The command selects this parser before opening private input. Its sealed
+// wrapper retains the original Local policy; neither JSON kind nor a flag can
+// reinterpret the ordinary prefix command as this execution purpose.
+func routerVPNNodeCandidateAppendExecutionCommandCapture(files *routerVPNExternalFiles, session, config, source, capture, target string, restoredMTU int) (*mobilemultihop.DesktopNodeCandidateAppendExecutionPolicy, error) {
+	policy, err := routerVPNNodeCandidateAppendExecutionPhysicalCapture(files, session, config, source, target)
+	if err != nil || policy == nil || !routerVPNExternalSource.MatchString(capture) || policy.LocalPolicy().Metadata().CaptureSHA256 != capture || policy.LocalPolicy().Metadata().RestoredMTU != restoredMTU {
+		return nil, routerVPNExternalFailure
+	}
+	return policy, nil
+}
+func routerVPNNodeCandidateAppendExecutionPhysicalCapture(files *routerVPNExternalFiles, session, config, source, target string) (*mobilemultihop.DesktopNodeCandidateAppendExecutionPolicy, error) {
+	if files == nil || files.root == nil || !routerVPNExternalSession.MatchString(session) || !routerVPNExternalSource.MatchString(config) || !routerVPNExternalSource.MatchString(source) || (target != "linux" && target != "windows" && target != "darwin") {
+		return nil, routerVPNExternalFailure
+	}
+	for _, name := range []string{"node-source.json", "node-chain-source.json", "imported-source.json", "node-chain-execution-source.json"} {
+		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			return nil, routerVPNExternalFailure
+		}
+	}
+	raw, err := files.read("node-candidate-prefix-source.json", mobilemultihop.NodeChainInputLimit)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := mobilemultihop.ParseDesktopNodeCandidateAppendExecutionPolicy(string(raw))
+	clear(raw)
+	if err != nil || policy == nil || policy.Validate() != nil {
+		return nil, routerVPNExternalFailure
+	}
+	local := policy.LocalPolicy()
+	meta := local.Metadata()
+	if meta.SessionID != session || meta.TargetOS != target || meta.SourceSHA256 != source || meta.ConfigSHA256 != config || meta.ApplicationOpen || meta.DNSOpen || policy.Preparation() != local.Preparation() || policy.ExecutionPreparation().OriginalPreparation() != local.Preparation() {
+		return nil, routerVPNExternalFailure
+	}
+	staged, err := files.read("sing-box.json", 4<<20)
+	defer clear(staged)
+	if err != nil || string(staged) != policy.Config() || policy.Config() != local.Config() {
+		return nil, routerVPNExternalFailure
+	}
+	return policy, nil
+}
+
+func routerVPNNewNodeCandidateAppendExecutionRuntime(ctx context.Context, files *routerVPNExternalFiles, policy *mobilemultihop.DesktopNodeCandidateAppendExecutionPolicy, transfer string, instance *box.Box, original func(context.Context) error) (*routerVPNNodeCandidatePrefixRuntime, error) {
+	if policy == nil || policy.Validate() != nil || instance == nil || original == nil {
+		return nil, routerVPNExternalFailure
+	}
+	local := policy.LocalPolicy()
+	return routerVPNNewNodeCandidatePrefixRuntimePolicy(ctx, files, local, policy, transfer,
+		func(call context.Context, prep *mobilemultihop.NodeChainCandidatePreparation, current func(context.Context) error) (routerVPNNodeCandidatePrefixEngine, error) {
+			return instance.RouterVPNNewNodeChainCandidatePreparationEngine(call, prep, local.Metadata().SessionID, current)
+		}, original, instance)
+}
+
+// This observer retains actual source, graph, physical control, native manager
+// and TUN identity after logical cancellation. Ordinary Observe/Dial still use
+// nativeCurrent. Only the core's sealed request can use this engine to perform
+// authenticated retirement I/O; a retired original owner is never replaced.
+func (owner *routerVPNNodeCandidatePrefixRuntime) executionNativeCurrent(ctx context.Context, state *routerVPNNodeCandidatePrefixState) error {
+	if owner == nil || owner.executionPolicy == nil || owner.executionObserve == nil || owner.executionInstance == nil || state == nil || state.revoked.Load() || owner.state.Load() != state || owner.mtu == nil || owner.sourceFilesCurrent(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	if err := owner.executionObserve(ctx); err != nil {
+		return err
+	}
+	path, err := routerVPNDesktopPhysicalPathContext(ctx, owner.executionInstance)
+	if err != nil || path != state.record.Path {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	actual, err := owner.mtu.engine.CurrentContext(ctx)
+	if err != nil || actual != state.inbound {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	reader, ok := state.inbound.(interface {
+		RouterVPNDesktopMTUInterfaceContext(context.Context) (string, int, int, error)
+	})
+	if !ok {
+		return routerVPNExternalFailure
+	}
+	name, index, mtu, err := reader.RouterVPNDesktopMTUInterfaceContext(ctx)
+	if err != nil || name != state.record.Interface || index != state.record.Index || mtu != state.record.MTU || state.revoked.Load() || owner.state.Load() != state {
+		return errors.Join(err, routerVPNExternalFailure)
+	}
+	return errors.Join(ctx.Err(), owner.executionObserve(ctx), owner.sourceFilesCurrent(ctx))
+}
+func (m *routerVPNNodeCandidatePrefixOwner) AppendExecutionEngineContext(ctx context.Context, prep *mobilemultihop.NodeChainCandidatePreparation) (mobilemultihop.NodeChainCandidateAppendExecutionEngine, error) {
+	if m == nil || m.owner == nil || m.owner.executionPolicy == nil || prep == nil || prep != m.owner.preparation || m.owner.executionPolicy.ExecutionPreparation().OriginalPreparation() != prep || m.owner.executionNativeCurrent(ctx, m.state) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	engine, ok := m.state.engine.(mobilemultihop.NodeChainCandidateAppendExecutionEngine)
+	if !ok || engine == nil {
+		return nil, routerVPNExternalFailure
+	}
+	return engine, nil
+}
+func (owner *routerVPNNodeCandidatePrefixRuntime) publishAppendExecutionReady(ctx context.Context, state *routerVPNNodeCandidatePrefixState, local mobilemultihop.DesktopNodeCandidatePreparationReadyRecord) error {
+	if state == nil || state.execution == nil || owner.executionPolicy == nil || owner.state.Load() != state {
+		return routerVPNExternalFailure
+	}
+	discovery, err := state.execution.DiscoveryContext(ctx)
+	if err != nil {
+		return err
+	}
+	record := mobilemultihop.DesktopNodeCandidateAppendExecutionReadyRecord{NodeChainCandidateAppendExecutionDiscovery: discovery, Kind: "routervpn-node-candidate-append-execution-ready-v1", TransferSHA256: owner.transfer, Reader: local.Reader}
+	if _, err = mobilemultihop.CanonicalDesktopNodeCandidateAppendExecutionReadyRecord(record, owner.executionPolicy, owner.transfer, local); err != nil {
+		return err
+	}
+	if err = owner.current(ctx); err != nil {
+		return err
+	}
+	if err = owner.files.publish(routerVPNAppendExecutionReadyFile, record); err != nil {
+		return err
+	}
+	if err = owner.current(ctx); err != nil {
+		return errors.Join(err, owner.files.remove(routerVPNAppendExecutionReadyFile))
+	}
+	return nil
+}
+func (owner *routerVPNNodeCandidatePrefixRuntime) closeAppendExecution(ctx context.Context) error {
+	if ctx == nil {
+		return routerVPNExternalFailure
+	}
+	removeErr := owner.files.remove(routerVPNAppendExecutionReadyFile)
+	// publish removes its exact temporary inode on every returning failure.
+	// An unknown or interrupted partial publication cannot authorize stopped.
+	if _, err := owner.files.root.Lstat(routerVPNAppendExecutionReadyPending); !errors.Is(err, os.ErrNotExist) {
+		removeErr = errors.Join(removeErr, err, routerVPNExternalFailure)
+	}
+	state := owner.state.Load()
+	if state != nil && state.execution != nil {
+		state.execution.Cancel()
+		if err := state.execution.CloseContext(ctx); err != nil {
+			return errors.Join(removeErr, err)
+		}
+	}
+	return errors.Join(removeErr, owner.closeLocal(ctx))
+}
+func (owner *routerVPNNodeCandidatePrefixRuntime) executionRequestCurrent(ctx context.Context, request routerVPNNodeCandidatePrefixRequest) error {
+	if owner.executionPolicy == nil {
+		if request.ExecutionCaptureSHA != "" || request.ExecutionCapture != nil {
+			return routerVPNExternalFailure
+		}
+		return nil
+	}
+	state := owner.state.Load()
+	record := request.ExecutionCapture
+	if state == nil || state.execution == nil || record == nil || request.ExecutionCaptureSHA == "" || request.ExecutionCaptureSHA != state.execution.CaptureSHA256() || record.ExecutionCaptureSHA256 != request.ExecutionCaptureSHA || record.Validate(owner.executionPolicy, owner.transfer, request.Capture) != nil {
+		return routerVPNExternalFailure
+	}
+	now := time.Now().UnixMilli()
+	if record.ObservedAt > now || now-record.ObservedAt > 2500 {
+		return routerVPNExternalFailure
+	}
+	actual, err := state.execution.DiscoveryContext(ctx)
+	if err != nil {
+		return err
+	}
+	captured := record.NodeChainCandidateAppendExecutionDiscovery
+	captured.ObservedAt = actual.ObservedAt
+	if !reflect.DeepEqual(captured, actual) {
+		return routerVPNExternalFailure
+	}
+	return ctx.Err()
+}
+func (owner *routerVPNNodeCandidatePrefixRuntime) newCandidateMeasurement(ctx context.Context, state *routerVPNNodeCandidatePrefixState) (*hopmeasure.CandidateService, error) {
+	if state.execution != nil {
+		return state.execution.NewMeasurementContext(ctx)
+	}
+	return state.proof.NewMeasurementContext(ctx)
+}
+
+// Observe the enriched runtime first. Its draining view cannot publish a local
+// terminal score before the exact remote lease/hold is joined.
+func (owner *routerVPNNodeCandidatePrefixRuntime) executionCandidateStatus(ctx context.Context, op *routerVPNNodeCandidatePrefixOperation) (hopmeasure.CandidateStatus, json.RawMessage, error) {
+	var status hopmeasure.CandidateStatus
+	if op == nil || op.state == nil || op.state.execution == nil || op.service == nil || !op.started {
+		return status, nil, routerVPNExternalFailure
+	}
+	raw := json.RawMessage(op.state.execution.StatusContextJSON(ctx))
+	if len(raw) == 0 || len(raw) > 65536 || json.Unmarshal(raw, &status) != nil || status.Request != op.request.Request || status.CaptureSHA256 != op.request.ExecutionCaptureSHA {
+		return status, nil, routerVPNExternalFailure
+	}
+	workerJoined := status.Complete && status.Drained
+	if status.Stage == "draining" {
+		// The enriched view has no score. Read the original worker only to
+		// decide whether its retained remote cleanup may now be retried.
+		var original hopmeasure.CandidateStatus
+		if json.Unmarshal([]byte(op.service.StatusContextJSON(ctx)), &original) != nil || original.Request != op.request.Request {
+			return status, nil, routerVPNExternalFailure
+		}
+		workerJoined = original.Complete && original.Drained
+	}
+	if workerJoined {
+		if err := op.state.execution.DrainContext(ctx, op.request.Request); err != nil {
+			return status, nil, err
+		}
+		raw = json.RawMessage(op.state.execution.StatusContextJSON(ctx))
+		if len(raw) == 0 || len(raw) > 65536 || json.Unmarshal(raw, &status) != nil || status.Request != op.request.Request || status.CaptureSHA256 != op.request.ExecutionCaptureSHA {
+			return status, nil, routerVPNExternalFailure
+		}
+	}
+	return status, raw, nil
+}
+func (owner *routerVPNNodeCandidatePrefixRuntime) releaseCandidateMeasurement(ctx context.Context, op *routerVPNNodeCandidatePrefixOperation) error {
+	if op.state.execution != nil {
+		return op.state.execution.ReleaseMeasurementContext(ctx, op.service)
+	}
+	return op.service.CloseContext(ctx)
+}

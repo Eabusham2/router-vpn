@@ -39,7 +39,7 @@ func desktopOrderedMTUDepth(owner *nativeMultihopRuntime, graph activeMultihopGr
 	launch := owner.launch.chain
 	native := owner.selection.Native
 	if native == nil || native.chain == nil || native.chain.chain == nil || launch.selection.Native != native || launch.policy == nil ||
-		len(native.chain.members) != count || len(owner.selection.Nodes) != count || native.chain.chain.ExtendedPairedLocalNodeCount() != count && native.chain.chain.ExtendedMixedLocalPacketCount() == 0 && native.chain.chain.PairedHysteriaLocalNodeCount() != count {
+		len(native.chain.members) != count || len(owner.selection.Nodes) != count || native.chain.chain.ExtendedPairedLocalNodeCount() != count && native.chain.chain.ExtendedMixedLocalPacketCount() == 0 && native.chain.chain.PairedHysteriaLocalNodeCount() != count && native.chain.chain.PairedProxyEntryLocalNodeCount() != count {
 		return false
 	}
 	projected, err := launch.policy.ReadValidatedLaunch()

@@ -149,6 +149,24 @@ static gboolean linux_ordered_hysteria_local_shape_v1(JsonArray *nodes) {
     return retained;
 }
 
+static gboolean linux_ordered_proxy_mode_v1(const char *mode) {
+    return !g_strcmp0(mode, "shadowsocks") || !g_strcmp0(mode, "hysteria2");
+}
+
+static gboolean linux_ordered_paired_proxy_entry_shape_v1(JsonArray *nodes) {
+    guint count = nodes ? json_array_get_length(nodes) : 0;
+    if (count < 2 || count > ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH) return FALSE;
+    for (guint i = 0; i < count; i++) {
+        JsonNode *raw = json_array_get_element(nodes, i);
+        if (!raw || !JSON_NODE_HOLDS_OBJECT(raw)) return FALSE;
+        const char *mode = linux_ordered_string_v1(json_node_get_object(raw), "mode");
+        if (i == 0 || i + 1 == count) {
+            if (!linux_ordered_proxy_mode_v1(mode)) return FALSE;
+        } else if (!linux_ordered_prefix_v1(mode) && !linux_ordered_proxy_mode_v1(mode)) return FALSE;
+    }
+    return TRUE;
+}
+
 static guint linux_ordered_imported_packet_prefixes_v1(JsonArray *nodes) {
     guint count = nodes == NULL ? 0 : json_array_get_length(nodes), prefixes = 0;
     if (count < 3 || count > ROUTERVPN_PHYSICAL_TRAVERSAL_DEPTH) return 0;
@@ -187,7 +205,8 @@ static gboolean linux_ordered_external_final_shape_v1(JsonArray *nodes, const ch
 static gboolean linux_ordered_rows_v1(JsonArray *nodes, const char *control) {
     guint count = nodes != NULL ? json_array_get_length(nodes) : 0;
     gboolean paired_hysteria = linux_ordered_hysteria_local_shape_v1(nodes);
-    if (count < 2 || (count > 8 && !paired_hysteria && !linux_ordered_extended_shape_v1(nodes) && !linux_ordered_extended_paired_shape_v1(nodes) && !linux_ordered_extended_mixed_shape_v1(nodes)) || !external_source_id_v24(control)) return FALSE;
+    gboolean paired_proxy = linux_ordered_paired_proxy_entry_shape_v1(nodes);
+    if (count < 2 || (count > 8 && !paired_hysteria && !paired_proxy && !linux_ordered_extended_shape_v1(nodes) && !linux_ordered_extended_paired_shape_v1(nodes) && !linux_ordered_extended_mixed_shape_v1(nodes)) || !external_source_id_v24(control)) return FALSE;
     gboolean external_final = linux_ordered_external_final_shape_v1(nodes, control);
     gboolean imported_middle = FALSE;
     for (guint i = 0; i < count; i++) {
@@ -196,12 +215,12 @@ static gboolean linux_ordered_rows_v1(JsonArray *nodes, const char *control) {
         JsonObject *row = json_node_get_object(value);
         const char *id = linux_ordered_string_v1(row, "id"), *mode = linux_ordered_string_v1(row, "mode");
         if (json_object_get_size(row) != 2 || !external_source_id_v24(id) ||
-            (i + 1 == count ? !linux_ordered_final_v1(mode) || (!external_final && strcmp(id, control) != 0) : !linux_ordered_prefix_v1(mode) && !paired_hysteria && !((linux_ordered_imported_position_v1(mode, i, count) || linux_ordered_local_ss_position_v1(mode, i, count) || (i == 0 && linux_ordered_custom_entry_shape_v1(nodes))) && (strcmp(mode, "shadowsocks") == 0 || strcmp(mode, "socks5") == 0 || strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0 || strcmp(mode, "openvpn") == 0)))) return FALSE;
+            (i + 1 == count ? !linux_ordered_final_v1(mode) || (!external_final && strcmp(id, control) != 0) : !linux_ordered_prefix_v1(mode) && !paired_hysteria && !paired_proxy && !((linux_ordered_imported_position_v1(mode, i, count) || linux_ordered_local_ss_position_v1(mode, i, count) || (i == 0 && linux_ordered_custom_entry_shape_v1(nodes))) && (strcmp(mode, "shadowsocks") == 0 || strcmp(mode, "socks5") == 0 || strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0 || strcmp(mode, "openvpn") == 0)))) return FALSE;
         if (i + 1 < count && (strcmp(mode, "shadowsocks") == 0 || strcmp(mode, "socks5") == 0 || strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0 || strcmp(mode, "openvpn") == 0)) imported_middle = TRUE;
         for (guint j = 0; j < i; j++)
             if (strcmp(id, linux_ordered_string_v1(json_array_get_object_element(nodes, j), "id")) == 0) return FALSE;
     }
-    return paired_hysteria || !imported_middle || strcmp(linux_ordered_string_v1(json_array_get_object_element(nodes, count - 1), "mode"), "shadowsocks") == 0;
+    return paired_hysteria || paired_proxy || !imported_middle || strcmp(linux_ordered_string_v1(json_array_get_object_element(nodes, count - 1), "mode"), "shadowsocks") == 0;
 }
 
 static LinuxOrderedSelectionV1 *linux_ordered_selection_v1(const char *control, JsonArray *nodes, JsonObject *tokens) {
@@ -240,7 +259,7 @@ static gboolean linux_ordered_execution_v1(LinuxOrderedSelectionV1 *selection, c
     if (strcmp(execution, "local") && linux_ordered_hysteria_local_shape_v1(selection->nodes)) return FALSE;
     if (strcmp(execution, "local") && linux_ordered_prefix_v1(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, count-1), "mode"))) return FALSE;
     if (json_array_get_length(selection->nodes) > 8 && !linux_ordered_extended_selected_shape_v1(selection->nodes) &&
-        ((!linux_ordered_hysteria_local_shape_v1(selection->nodes) && !linux_ordered_extended_paired_shape_v1(selection->nodes) && !linux_ordered_extended_mixed_shape_v1(selection->nodes)) || strcmp(execution, "local") != 0)) return FALSE;
+        ((!linux_ordered_hysteria_local_shape_v1(selection->nodes) && !linux_ordered_paired_proxy_entry_shape_v1(selection->nodes) && !linux_ordered_extended_paired_shape_v1(selection->nodes) && !linux_ordered_extended_mixed_shape_v1(selection->nodes)) || strcmp(execution, "local") != 0)) return FALSE;
     if (strcmp(execution, "local") != 0 && !linux_ordered_multiple_imported_shape_v1(selection->nodes)) for (guint i = 0; i + 1 < json_array_get_length(selection->nodes); i++) {
         const char *mode = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, i), "mode");
         if (!linux_ordered_prefix_v1(mode) && !(i + 2 == json_array_get_length(selection->nodes) && (strcmp(mode, "shadowsocks") == 0 || strcmp(mode, "http-connect") == 0 || strcmp(mode, "https-connect") == 0 || strcmp(mode, "socks5") == 0 || strcmp(mode, "openvpn") == 0) && strcmp(linux_ordered_string_v1(json_array_get_object_element(selection->nodes, json_array_get_length(selection->nodes) - 1), "mode"), "shadowsocks") == 0)) return FALSE;
@@ -283,6 +302,13 @@ static gboolean linux_ordered_paired_off_v1(JsonObject *profile) {
     return linux_ordered_paired_layer_v1(profile, FALSE);
 }
 
+/* Callers selecting paired SS/HY2 membership require literal endpoints here. */
+static gboolean linux_ordered_paired_proxy_member_v1(JsonObject *profile, const char *mode) {
+    return linux_ordered_paired_off_v1(profile) &&
+        (linux_ordered_proxy_mode_v1(mode) ? g_hostname_is_ip_address(linux_ordered_string_v1(profile, "endpoint")) :
+         linux_ordered_prefix_v1(mode));
+}
+
 static gboolean linux_ordered_extended_paired_path_v1(const LinuxOrderedSelectionV1 *selection, JsonObject *catalog) {
     if (selection == NULL || strcmp(selection->execution, "local") != 0 || !linux_ordered_extended_paired_shape_v1(selection->nodes)) return FALSE;
     for (guint i = 0; i < json_array_get_length(selection->nodes); i++) {
@@ -297,6 +323,23 @@ static gboolean linux_ordered_hysteria_local_path_v1(const LinuxOrderedSelection
     for (guint i = 0; i < json_array_get_length(selection->nodes); i++) {
         const char *id = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, i), "id");
         if (!linux_ordered_paired_off_v1(external_source_profile_v24(catalog, id))) return FALSE;
+    }
+    return TRUE;
+}
+
+static gboolean linux_ordered_paired_proxy_entry_source_v1(JsonArray *nodes, JsonObject *catalog) {
+    if (!linux_ordered_paired_proxy_entry_shape_v1(nodes)) return FALSE;
+    const char *id = linux_ordered_string_v1(json_array_get_object_element(nodes, 0), "id");
+    return linux_ordered_router_v1(external_source_profile_v24(catalog, id));
+}
+
+static gboolean linux_ordered_paired_proxy_entry_path_v1(const LinuxOrderedSelectionV1 *selection, JsonObject *catalog) {
+    if (!selection || g_strcmp0(selection->execution, "local") ||
+        !linux_ordered_paired_proxy_entry_source_v1(selection->nodes, catalog)) return FALSE;
+    for (guint i = 0; i < json_array_get_length(selection->nodes); i++) {
+        JsonObject *row = json_array_get_object_element(selection->nodes, i);
+        const char *id = linux_ordered_string_v1(row, "id"), *mode = linux_ordered_string_v1(row, "mode");
+        if (!linux_ordered_paired_proxy_member_v1(external_source_profile_v24(catalog, id), mode)) return FALSE;
     }
     return TRUE;
 }
@@ -334,14 +377,24 @@ static gboolean linux_ordered_literal_import_off_v1(JsonObject *profile) {
 }
 
 
+static gboolean linux_ordered_hostname_import_off_v1(JsonObject *profile);
+
+/* This capability came from the captured Custom TCP source compiler. */
+static gboolean linux_ordered_append_import_off_v1(JsonObject *profile) {
+    return !strcmp(linux_ordered_imported_mode_v1(profile), "shadowsocks") &&
+        (linux_ordered_literal_import_off_v1(profile) || linux_ordered_hostname_import_off_v1(profile));
+}
+
 /* Prefix-only append has its own source family; complete-route modes stay unchanged. */
 static gboolean linux_ordered_append_member_v1(JsonObject *profile, const char *mode, guint position) {
     if (!mode) return FALSE;
     if (linux_ordered_prefix_v1(mode)) return linux_ordered_paired_layer_v1(profile, TRUE);
-    if (position == 0) return FALSE;
-    if (!strcmp(mode, "hysteria2")) return linux_ordered_paired_off_v1(profile);
-    return !strcmp(mode, "shadowsocks") &&
-        (linux_ordered_paired_off_v1(profile) || linux_ordered_literal_import_off_v1(profile));
+    if (linux_ordered_proxy_mode_v1(mode) && linux_ordered_paired_off_v1(profile)) return TRUE;
+    return position > 0 && !strcmp(mode, "shadowsocks") && linux_ordered_append_import_off_v1(profile);
+}
+
+static gboolean linux_ordered_append_family_member_v1(JsonObject *profile, const char *mode, guint position, gboolean proxy_entry) {
+    return (!proxy_entry || linux_ordered_paired_proxy_member_v1(profile, mode)) && linux_ordered_append_member_v1(profile, mode, position);
 }
 
 static gboolean linux_ordered_external_final_profile_v1(JsonObject *profile) {
@@ -481,9 +534,11 @@ static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selectio
     gboolean local_imported = linux_ordered_local_imported_path_v1(selection, catalog);
     gboolean paired_extended = linux_ordered_extended_paired_path_v1(selection, catalog);
     gboolean paired_hysteria = linux_ordered_hysteria_local_path_v1(selection, catalog);
+    gboolean paired_proxy = linux_ordered_paired_proxy_entry_path_v1(selection, catalog);
+    if (linux_ordered_paired_proxy_entry_source_v1(selection->nodes, catalog) && !paired_proxy) return FALSE;
     if (linux_ordered_hysteria_local_shape_v1(selection->nodes) && !paired_hysteria) return FALSE;
     gboolean multiple_imported = strcmp(selection->execution, "local") != 0 && linux_ordered_multiple_imported_shape_v1(selection->nodes);
-    if ((multiple_imported || json_array_get_length(selection->nodes) > 8) && !local_imported && !paired_extended && !paired_hysteria) return FALSE;
+    if ((multiple_imported || json_array_get_length(selection->nodes) > 8) && !local_imported && !paired_extended && !paired_hysteria && !paired_proxy) return FALSE;
     for (guint i = 0; i < json_array_get_length(selection->nodes); i++) {
         const char *id = linux_ordered_string_v1(json_array_get_object_element(selection->nodes, i), "id");
         JsonObject *profile = external_source_profile_v24(catalog, id);
@@ -534,7 +589,7 @@ static gboolean linux_ordered_current_v1(const LinuxOrderedSelectionV1 *selectio
                 if (strcmp(layer, "") != 0 && strcmp(layer, "off") != 0 && strcmp(layer, "aes-256-gcm") != 0 && strcmp(layer, "aes-256-gcm+xor-whitening") != 0) return FALSE;
             }
         }
-        gboolean admitted = imported ? (linux_ordered_imported_position_v1(mode, i, json_array_get_length(selection->nodes)) || (local_imported && (linux_ordered_local_ss_position_v1(mode, i, json_array_get_length(selection->nodes)) || (i == 0 && linux_ordered_custom_entry_shape_v1(selection->nodes))))) && strcmp(mode, linux_ordered_imported_mode_v1(profile)) == 0 : linux_ordered_router_v1(profile) && (i + 1 == json_array_get_length(selection->nodes) || linux_ordered_prefix_v1(mode) || paired_hysteria || (local_imported && !strcmp(mode,"shadowsocks")));
+        gboolean admitted = imported ? (linux_ordered_imported_position_v1(mode, i, json_array_get_length(selection->nodes)) || (local_imported && (linux_ordered_local_ss_position_v1(mode, i, json_array_get_length(selection->nodes)) || (i == 0 && linux_ordered_custom_entry_shape_v1(selection->nodes))))) && strcmp(mode, linux_ordered_imported_mode_v1(profile)) == 0 : linux_ordered_router_v1(profile) && (i + 1 == json_array_get_length(selection->nodes) || linux_ordered_prefix_v1(mode) || paired_hysteria || paired_proxy || (local_imported && !strcmp(mode,"shadowsocks")));
         if (!admitted || (i + 1 == json_array_get_length(selection->nodes) && !linux_ordered_final_profile_v1(profile, mode)) ||
             strcmp(linux_ordered_string_v1(profile, "profile_token"), linux_ordered_string_v1(selection->tokens, id)) != 0) return FALSE;
     }
@@ -974,6 +1029,35 @@ static gboolean linux_ordered_adopt_append_v1(LinuxOrderedEditorV1 *editor, cons
 static gboolean linux_ordered_continue_measured_v1(gpointer data);
 static void linux_ordered_measure_next_v1(GtkButton *button, gpointer data);
 
+static gboolean linux_ordered_editor_proxy_entry_v1(const LinuxOrderedEditorV1 *editor) {
+    return editor->ids->len > 0 && editor->ids->len == editor->modes->len &&
+        linux_ordered_proxy_mode_v1(g_ptr_array_index(editor->modes, 0)) &&
+        linux_ordered_router_v1(external_source_profile_v24(json_node_get_object(editor->catalog), g_ptr_array_index(editor->ids, 0)));
+}
+
+static const char *linux_ordered_append_requested_v1(const char *choice) {
+    if (!g_strcmp0(choice,"server-shadowsocks")) return "server";
+    if (!g_strcmp0(choice,"auto-shadowsocks")) return "auto";
+    return "local";
+}
+static gboolean linux_ordered_execution_append_v1(const LinuxOrderedEditorV1 *editor) {
+    if (!editor->append_only || editor->external_exit || editor->ids->len < 1 || editor->ids->len > 95 || editor->ids->len != editor->modes->len) return FALSE;
+    JsonObject *catalog=json_node_get_object(editor->catalog);
+    gboolean retained_ss=FALSE;
+    for (guint i=0;i<editor->ids->len;i++) {
+        JsonObject *profile=external_source_profile_v24(catalog,g_ptr_array_index(editor->ids,i));
+        const char *mode=g_ptr_array_index(editor->modes,i);
+        if (!linux_ordered_router_v1(profile) || !linux_ordered_paired_off_v1(profile)) return FALSE;
+        if (linux_ordered_prefix_v1(mode)) {
+            if (retained_ss) return FALSE;
+        } else {
+            if (i==0 || strcmp(mode,"shadowsocks") || !linux_ordered_paired_proxy_member_v1(profile,mode)) return FALSE;
+            retained_ss=TRUE;
+        }
+    }
+    return TRUE;
+}
+
 static const char *linux_ordered_editor_final_mode_v1(LinuxOrderedEditorV1 *editor) {
     return editor->final_mode != NULL ? editor->final_mode : "shadowsocks";
 }
@@ -999,7 +1083,8 @@ static gboolean linux_ordered_editor_hysteria_v1(LinuxOrderedEditorV1 *editor, i
     }
     LinuxOrderedSelectionV1 proposal = {.nodes = nodes, .execution = (char *)execution};
     return linux_ordered_rows_v1(nodes, editor->control) &&
-        linux_ordered_hysteria_local_path_v1(&proposal, json_node_get_object(editor->catalog));
+        (linux_ordered_hysteria_local_path_v1(&proposal, json_node_get_object(editor->catalog)) ||
+         linux_ordered_paired_proxy_entry_path_v1(&proposal, json_node_get_object(editor->catalog)));
 }
 
 static gboolean linux_ordered_editor_final_allowed_v1(LinuxOrderedEditorV1 *editor, const char *mode) {
@@ -1072,8 +1157,8 @@ static gboolean linux_ordered_editor_can_extend_v1(LinuxOrderedEditorV1 *editor)
         const char *id=gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->candidate));
         if(!id || editor->ids->len>=95)return FALSE;
         JsonObject *profile=external_source_profile_v24(json_node_get_object(editor->catalog),id);
-        if(!linux_ordered_append_member_v1(profile,"wg",editor->ids->len) &&
-           !linux_ordered_append_member_v1(profile,"shadowsocks",editor->ids->len))return FALSE;
+        if(!linux_ordered_append_family_member_v1(profile,"wg",editor->ids->len,linux_ordered_editor_proxy_entry_v1(editor)) &&
+           !linux_ordered_append_family_member_v1(profile,"shadowsocks",editor->ids->len,linux_ordered_editor_proxy_entry_v1(editor)))return FALSE;
         for(guint i=0;i<editor->ids->len;i++)if(!strcmp(id,g_ptr_array_index(editor->ids,i)))return FALSE;
         return TRUE;
     }
@@ -1145,6 +1230,16 @@ static void linux_ordered_render_v1(LinuxOrderedEditorV1 *editor, int selected) 
     gtk_widget_show_all(editor->list);
     gtk_list_box_select_row(GTK_LIST_BOX(editor->list), gtk_list_box_get_row_at_index(GTK_LIST_BOX(editor->list), selected));
     gtk_widget_set_visible(editor->append_mode,editor->append_only);
+    g_autofree char *original_next=g_strdup(gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->append_mode)));
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(editor->append_mode));
+    const char *next_modes[]={"wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"};
+    for(guint i=0;i<G_N_ELEMENTS(next_modes);i++)gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor->append_mode),next_modes[i],linux_ordered_mode_name_v1(next_modes[i]));
+    if(!linux_ordered_editor_proxy_entry_v1(editor))gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor->append_mode),"external-shadowsocks","Imported Shadowsocks");
+    if(linux_ordered_execution_append_v1(editor) || strcmp(linux_ordered_append_requested_v1(original_next),"local")) {
+        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor->append_mode),"server-shadowsocks","Shadowsocks · Server");
+        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(editor->append_mode),"auto-shadowsocks","Shadowsocks · Compare");
+    }
+    if(!original_next || !gtk_combo_box_set_active_id(GTK_COMBO_BOX(editor->append_mode),original_next))gtk_combo_box_set_active(GTK_COMBO_BOX(editor->append_mode),-1);
     gtk_widget_set_visible(editor->complete_prefix,editor->append_only);
     gtk_widget_set_sensitive(editor->complete_prefix,linux_ordered_can_complete_v1(editor));
     gtk_button_set_label(GTK_BUTTON(editor->complete_prefix),editor->modes->len &&
@@ -1192,7 +1287,7 @@ static void linux_ordered_add_v1(GtkButton *button, gpointer data) {
     if ((!linux_ordered_router_v1(profile) && !linux_ordered_imported_v1(profile)) || !external_source_token_v24(linux_ordered_string_v1(profile, "profile_token"))) return;
     if(editor->append_only){
         const char *mode=linux_ordered_router_v1(profile)?"wg":"shadowsocks";
-        if(!linux_ordered_append_member_v1(profile,mode,editor->ids->len))return;
+        if(!linux_ordered_append_family_member_v1(profile,mode,editor->ids->len,linux_ordered_editor_proxy_entry_v1(editor)))return;
         for(guint i=0;i<editor->ids->len;i++)if(!strcmp(id,g_ptr_array_index(editor->ids,i)))return;
         g_ptr_array_add(editor->ids,g_strdup(id));g_ptr_array_add(editor->modes,g_strdup(mode));
         linux_ordered_render_v1(editor,(int)editor->ids->len-1);linux_ordered_queue_append_v1(editor);return;
@@ -1214,8 +1309,9 @@ static void linux_ordered_remove_v1(GtkButton *button, gpointer data) {
     if (editor->external_exit && index == 0) return;
     if (editor->append_only) {
         JsonObject *catalog=json_node_get_object(editor->catalog);
+        gboolean proxy_entry=editor->ids->len > 1 && linux_ordered_proxy_mode_v1(g_ptr_array_index(editor->modes,index == 0 ? 1 : 0));
         for(guint i=0,j=0;i<editor->ids->len;i++)if(i!=(guint)index) {
-            if(!linux_ordered_append_member_v1(external_source_profile_v24(catalog,g_ptr_array_index(editor->ids,i)),g_ptr_array_index(editor->modes,i),j++))return;
+            if(!linux_ordered_append_family_member_v1(external_source_profile_v24(catalog,g_ptr_array_index(editor->ids,i)),g_ptr_array_index(editor->modes,i),j++,proxy_entry))return;
         }
     }
     g_ptr_array_remove_index(editor->ids, index); g_ptr_array_remove_index(editor->modes, index);
@@ -1229,8 +1325,12 @@ static void linux_ordered_move_v1(GtkButton *button, gpointer data) {
     if (editor->external_exit && (index == 0 || target == 0)) return;
     if (editor->append_only) {
         JsonObject *catalog=json_node_get_object(editor->catalog);
-        if(!linux_ordered_append_member_v1(external_source_profile_v24(catalog,g_ptr_array_index(editor->ids,index)),g_ptr_array_index(editor->modes,index),(guint)target) ||
-           !linux_ordered_append_member_v1(external_source_profile_v24(catalog,g_ptr_array_index(editor->ids,target)),g_ptr_array_index(editor->modes,target),(guint)index))return;
+        guint first=index == 0 ? (guint)target : target == 0 ? (guint)index : 0;
+        gboolean proxy_entry=linux_ordered_proxy_mode_v1(g_ptr_array_index(editor->modes,first));
+        for(guint i=0;i<editor->ids->len;i++) {
+            guint at=i == (guint)index ? (guint)target : i == (guint)target ? (guint)index : i;
+            if(!linux_ordered_append_family_member_v1(external_source_profile_v24(catalog,g_ptr_array_index(editor->ids,at)),g_ptr_array_index(editor->modes,at),i,proxy_entry))return;
+        }
     }
     gpointer id = editor->ids->pdata[index], mode = editor->modes->pdata[index];
     editor->ids->pdata[index] = editor->ids->pdata[target]; editor->modes->pdata[index] = editor->modes->pdata[target];
@@ -1243,8 +1343,14 @@ static void linux_ordered_mode_v1(GtkComboBox *combo, gpointer data) {
     const char *mode = gtk_combo_box_get_active_id(combo);
     if (editor->syncing || !linux_ordered_editable_v1(editor)) return;
     if(editor->append_only){
-        if(index<0 || (guint)index>=editor->ids->len ||
-           !linux_ordered_append_member_v1(external_source_profile_v24(json_node_get_object(editor->catalog),g_ptr_array_index(editor->ids,index)),mode,(guint)index)){linux_ordered_selected_v1(NULL,NULL,editor);return;}
+        if(index<0 || (guint)index>=editor->ids->len){linux_ordered_selected_v1(NULL,NULL,editor);return;}
+        gboolean proxy_entry=index == 0 ? linux_ordered_proxy_mode_v1(mode) : linux_ordered_editor_proxy_entry_v1(editor);
+        for(guint i=0;i<editor->ids->len;i++) {
+            const char *proposed=(guint)index == i ? mode : g_ptr_array_index(editor->modes,i);
+            if(!linux_ordered_append_family_member_v1(external_source_profile_v24(json_node_get_object(editor->catalog),g_ptr_array_index(editor->ids,i)),proposed,i,proxy_entry)){
+                linux_ordered_selected_v1(NULL,NULL,editor);return;
+            }
+        }
         char *copy=g_strdup(mode);g_free(editor->modes->pdata[index]);editor->modes->pdata[index]=copy;
         linux_ordered_render_v1(editor,index);return;
     }
@@ -1296,6 +1402,8 @@ static gboolean linux_ordered_append_current_v1(LinuxOrderedEditorV1 *editor, Js
     JsonObject *current_device=external_source_profile_v24(current,editor->control);
     if(!external_source_token_v24(device) || strcmp(device,linux_ordered_string_v1(current_device,"profile_token")) ||
        !linux_ordered_paired_layer_v1(current_device,TRUE))return FALSE;
+    JsonNode *first=json_array_get_element(nodes,0);
+    gboolean proxy_entry=linux_ordered_proxy_mode_v1(linux_ordered_string_v1(first && JSON_NODE_HOLDS_OBJECT(first)?json_node_get_object(first):NULL,"mode"));
     g_autoptr(GHashTable) ids=g_hash_table_new(g_str_hash,g_str_equal);
     for(guint i=0;i<json_array_get_length(nodes);i++){
         JsonNode *raw=json_array_get_element(nodes,i);JsonObject *row=raw && JSON_NODE_HOLDS_OBJECT(raw)?json_node_get_object(raw):NULL;
@@ -1303,7 +1411,7 @@ static gboolean linux_ordered_append_current_v1(LinuxOrderedEditorV1 *editor, Js
         JsonObject *old=external_source_profile_v24(original,id), *now=external_source_profile_v24(current,id);
         const char *token=linux_ordered_string_v1(old,"profile_token");
         if(!row || json_object_get_size(row)!=2 || !external_source_id_v24(id) || !g_hash_table_add(ids,(gpointer)id) ||
-           !linux_ordered_append_member_v1(old,mode,i) || !linux_ordered_append_member_v1(now,mode,i) ||
+           !linux_ordered_append_family_member_v1(old,mode,i,proxy_entry) || !linux_ordered_append_family_member_v1(now,mode,i,proxy_entry) ||
            !external_source_token_v24(token) || strcmp(token,linux_ordered_string_v1(tokens,id)) ||
            strcmp(token,linux_ordered_string_v1(now,"profile_token")))return FALSE;
     }
@@ -1314,7 +1422,10 @@ static char *linux_ordered_append_body_v1(LinuxOrderedEditorV1 *editor) {
        g_strcmp0(gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->execution)),"local"))return NULL;
     const char *choice=gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->append_mode));
     gboolean external=!g_strcmp0(choice,"external-shadowsocks");
-    const char *next_mode=external?"shadowsocks":choice;
+    const char *requested=linux_ordered_append_requested_v1(choice);
+    gboolean execution_append=strcmp(requested,"local")!=0;
+    if((external && linux_ordered_editor_proxy_entry_v1(editor)) || (execution_append && !linux_ordered_execution_append_v1(editor)))return NULL;
+    const char *next_mode=(external || execution_append)?"shadowsocks":choice;
     if(!linux_ordered_prefix_v1(next_mode) && g_strcmp0(next_mode,"shadowsocks") && g_strcmp0(next_mode,"hysteria2"))return NULL;
     JsonObject *catalog=json_node_get_object(editor->catalog);
     g_autoptr(JsonArray) nodes=json_array_new();g_autoptr(JsonObject) tokens=json_object_new();
@@ -1326,7 +1437,8 @@ static char *linux_ordered_append_body_v1(LinuxOrderedEditorV1 *editor) {
     if(!linux_ordered_append_current_v1(editor,nodes,tokens,catalog))return NULL;
     json_object_set_string_member(tokens,editor->control,linux_ordered_string_v1(external_source_profile_v24(catalog,editor->control),"profile_token"));
     g_autoptr(JsonObject) body=json_object_new();
-    json_object_set_int_member(body,"schema",1);json_object_set_string_member(body,"purpose","draft-prefix-append");json_object_set_string_member(body,"execution","local");
+    json_object_set_int_member(body,"schema",1);json_object_set_string_member(body,"purpose",execution_append?"draft-prefix-append-execution":"draft-prefix-append");json_object_set_string_member(body,"execution","local");
+    if(execution_append)json_object_set_string_member(body,"requested_execution",requested);
     json_object_set_string_member(body,"draft_revision",editor->append_revision);json_object_set_int_member(body,"append_position",editor->ids->len);
     json_object_set_string_member(body,"next_mode",next_mode);
     if(external)json_object_set_string_member(body,"next_kind","external");
@@ -1480,19 +1592,23 @@ static void linux_ordered_complete_prefix_v1(GtkButton *button, gpointer data) {
 
 static gboolean linux_ordered_adopt_append_v1(LinuxOrderedEditorV1 *editor, const char *captured, int position, JsonObject *response) {
     g_autofree char *original=linux_ordered_append_body_v1(editor);
+    const char *choice=gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->append_mode));
+    const char *requested=linux_ordered_append_requested_v1(choice);
+    gboolean execution_append=strcmp(requested,"local")!=0;
+    const char *purpose=execution_append?"draft-prefix-append-execution":"draft-prefix-append";
     if(!original || strcmp(original,captured) || position!=(int)editor->ids->len-1 ||
-       strcmp(linux_ordered_string_v1(response,"scope"),"draft-prefix-append") ||
-       strcmp(linux_ordered_string_v1(response,"purpose"),"draft-prefix-append") ||
+       strcmp(linux_ordered_string_v1(response,"scope"),purpose) ||
+       strcmp(linux_ordered_string_v1(response,"purpose"),purpose) ||
        strcmp(linux_ordered_string_v1(response,"origin"),"editor-draft") ||
-       strcmp(linux_ordered_string_v1(response,"requested_execution"),"local") ||
+       strcmp(linux_ordered_string_v1(response,"requested_execution"),requested) ||
+       (execution_append && !external_source_token_v24(linux_ordered_string_v1(response,"execution_source_sha256"))) ||
        strcmp(linux_ordered_string_v1(response,"draft_action"),"append-measured-hop") ||
        strcmp(linux_ordered_string_v1(response,"draft_revision"),editor->append_revision) ||
        strcmp(linux_ordered_string_v1(response,"expected_selected_node_id"),editor->control) ||
        strcmp(linux_ordered_string_v1(response,"device_revision"),linux_ordered_string_v1(external_source_profile_v24(json_node_get_object(editor->catalog),editor->control),"profile_token")) ||
        !linux_ordered_flag_v1(response,"chosen") || !linux_ordered_flag_v1(response,"native_down"))return FALSE;
-    const char *choice=gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->append_mode));
     gboolean external=!g_strcmp0(choice,"external-shadowsocks");
-    const char *mode=external?"shadowsocks":choice, *id=linux_ordered_string_v1(response,"candidate_id");
+    const char *mode=(external || execution_append)?"shadowsocks":choice, *id=linux_ordered_string_v1(response,"candidate_id");
     if(strcmp(linux_ordered_string_v1(response,"measurement"),external?"routed-public-candidate-response":"routed-candidate-response") ||
        (external?strcmp(linux_ordered_string_v1(response,"candidate_kind"),"external"):json_object_has_member(response,"candidate_kind")))return FALSE;
     JsonArray *nodes=linux_ordered_array_v1(response,"proposed_path");JsonObject *tokens=linux_ordered_object_v1(response,"expected_profile_tokens");
@@ -1510,12 +1626,14 @@ static gboolean linux_ordered_adopt_append_v1(LinuxOrderedEditorV1 *editor, cons
     g_autoptr(JsonNode) current=linux_ordered_read_v1("/api/profiles");
     if(!last || strcmp(linux_ordered_string_v1(last,"id"),id) || strcmp(linux_ordered_string_v1(last,"mode"),mode) || !current ||
        !linux_ordered_append_current_v1(editor,nodes,tokens,json_node_get_object(current)) ||
-       !(external?linux_ordered_literal_import_off_v1(external_source_profile_v24(json_node_get_object(current),id)):
-           linux_ordered_paired_off_v1(external_source_profile_v24(json_node_get_object(current),id))) || !linux_ordered_editable_v1(editor))return FALSE;
+       !(external?linux_ordered_append_import_off_v1(external_source_profile_v24(json_node_get_object(current),id)):
+           linux_ordered_paired_off_v1(external_source_profile_v24(json_node_get_object(current),id))) ||
+       (execution_append && !linux_ordered_paired_proxy_member_v1(external_source_profile_v24(json_node_get_object(current),id),"shadowsocks")) || !linux_ordered_editable_v1(editor))return FALSE;
     g_ptr_array_add(editor->ids,g_strdup(id));g_ptr_array_add(editor->modes,g_strdup(mode));
     g_autofree char *uuid=g_uuid_string_random();guint n=0;for(char *c=uuid;*c;c++)if(*c!='-')editor->append_revision[n++]=*c;editor->append_revision[n]=0;
     linux_ordered_render_v1(editor,(int)editor->ids->len-1);
-    gtk_label_set_text(GTK_LABEL(editor->status),"Appended the measured node after the temporary path stopped. Select a real final before using this path.");
+    gtk_label_set_text(GTK_LABEL(editor->status),
+        "Appended the measured node after the temporary path stopped. Select a real final before using this path.");
     linux_ordered_queue_append_v1(editor);
     return TRUE;
 }
@@ -1531,9 +1649,9 @@ static void linux_ordered_prefix_only_v1(GtkButton *button, gpointer data) {
     }else{
         if(editor->external_exit || g_strcmp0(gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->execution)),"local") || editor->ids->len>95)return;
         JsonObject *catalog=json_node_get_object(editor->catalog);
-        for(guint i=0;i<editor->ids->len;i++)if(!linux_ordered_append_member_v1(
-            external_source_profile_v24(catalog,g_ptr_array_index(editor->ids,i)),g_ptr_array_index(editor->modes,i),i)){
-            gtk_label_set_text(GTK_LABEL(editor->status),"Start the Local prefix with paired WireGuard or AWG2; later Shadowsocks hops must have Start Layer Off.");return;
+        for(guint i=0;i<editor->ids->len;i++)if(!linux_ordered_append_family_member_v1(
+            external_source_profile_v24(catalog,g_ptr_array_index(editor->ids,i)),g_ptr_array_index(editor->modes,i),i,linux_ordered_editor_proxy_entry_v1(editor))){
+            gtk_label_set_text(GTK_LABEL(editor->status),"Start with a paired transport. A Shadowsocks or Hysteria2 entry requires every prefix member paired with Start Layer Off.");return;
         }
         editor->append_only=TRUE;
         g_autofree char *uuid=g_uuid_string_random();guint n=0;for(char *c=uuid;*c;c++)if(*c!='-')editor->append_revision[n++]=*c;editor->append_revision[n]=0;
@@ -1750,7 +1868,7 @@ static void linux_ordered_editor_v1(LinuxUnifiedV8 *unified, gboolean fresh) {
     g_signal_connect(editor.dialog, "destroy", G_CALLBACK(linux_ordered_closed_v1), &editor);
     gtk_window_set_default_size(GTK_WINDOW(editor.dialog), 660, 480);
     GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(editor.dialog)); gtk_container_set_border_width(GTK_CONTAINER(box), 12);
-    GtkWidget *note = gtk_label_new("A Local route to an imported exit uses the paired entry’s saved Start Layer. Keep the imported hops and exit set to Off. Paired entries can use supported Shadowsocks 2022 imports at any interior position. Server and Compare require support from every import and the native controller. A custom entry uses Local with two distinct Shadowsocks imports and a paired Shadowsocks exit. SOCKS5, CONNECT and OpenVPN keep their single position immediately before a Shadowsocks final. A paired Hysteria2 final retains its selected Start Layer after paired WireGuard or AWG2 prefixes. A Local route with a Hysteria2 middle uses paired nodes with Start Layer Off throughout and ends at Shadowsocks or Hysteria2. WireGuard and AWG2 exits require two to eight paired Local packet nodes with Start Layer Off throughout. Apply saves the choices; Connect proves the complete path.");
+    GtkWidget *note = gtk_label_new("Choose the nodes in order. Use Build prefix only to select and measure the next node. Choose a final node when the path is ready. Each node keeps its saved settings.");
     gtk_label_set_line_wrap(GTK_LABEL(note), TRUE); gtk_box_pack_start(GTK_BOX(box), note, FALSE, FALSE, 6);
     GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL); gtk_widget_set_size_request(scroll, -1, 190);
     editor.list = gtk_list_box_new(); gtk_container_add(GTK_CONTAINER(scroll), editor.list); gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 6);

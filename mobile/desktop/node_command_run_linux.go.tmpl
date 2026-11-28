@@ -114,6 +114,14 @@ func routerVPNRunLinuxNodeChainCONNECTControlled(parent context.Context, directo
 
 func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, session, config, source, executionSource, prefixCapture, transfer string,
 	mtu int, options routerVPNNodeLinuxParentOptions, imported, ordered, socks, connect bool) (failure error) {
+	return routerVPNRunLinuxTypedFamilyControlledPurpose(parent, directory, session, config, source, executionSource, prefixCapture, transfer, mtu, options, imported, ordered, socks, connect, false)
+}
+
+func routerVPNRunLinuxTypedFamilyControlledPurpose(parent context.Context, directory, session, config, source, executionSource, prefixCapture, transfer string,
+	mtu int, options routerVPNNodeLinuxParentOptions, imported, ordered, socks, connect, appendExecution bool) (failure error) {
+	if appendExecution && (prefixCapture == "" || executionSource != "" || imported || ordered || socks || connect) {
+		return routerVPNExternalFailure
+	}
 	if connect && (socks || imported || ordered || executionSource != "" || prefixCapture != "") {
 		return routerVPNExternalFailure
 	}
@@ -150,6 +158,7 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 	defer stopPreparation()
 	var policy mobilemultihop.DesktopPhysicalPolicy
 	var executionPreparation *mobilemultihop.NodeChainExecutionPreparation
+	var appendExecutionPolicy *mobilemultihop.DesktopNodeCandidateAppendExecutionPolicy
 	if connect {
 		policy, err = control.compileCONNECT(ctx, files, session, source, config, transfer, mtu)
 		if err != nil {
@@ -161,8 +170,15 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 			return err
 		}
 	} else if prefixCapture != "" {
-		capture := routerVPNNodeCandidatePrefixCommand{directory: directory, session: session, config: config, physical: source, capture: prefixCapture, transfer: transfer, mtu: mtu, linux: options}
-		policy, err = control.compileCandidatePrefix(ctx, files, capture)
+		capture := routerVPNNodeCandidatePrefixCommand{directory: directory, session: session, config: config, physical: source, capture: prefixCapture, transfer: transfer, mtu: mtu, linux: options, appendExecution: appendExecution}
+		if appendExecution {
+			appendExecutionPolicy, err = control.compileCandidateAppendExecution(ctx, files, capture)
+			if appendExecutionPolicy != nil {
+				policy = appendExecutionPolicy.LocalPolicy()
+			}
+		} else {
+			policy, err = control.compileCandidatePrefix(ctx, files, capture)
+		}
 		if err != nil {
 			return err
 		}
@@ -282,7 +298,7 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 		}{routerVPNExternalStop{Schema: 1, Session: session, SourceSHA256: config}, true}
 		failure = errors.Join(failure, files.publish("stopped.json", closed))
 	}()
-	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-chain-ready.json", "node-chain-socks-ready.json", "node-chain-connect-ready.json", "node-chain-execution-ready.json", "node-chain-execution-adoption.json", "node-chain-execution-last.json", "node-chain-execution-latency-capture.json", "node-chain-execution-measure-request.json", "node-chain-execution-measure-cancel.json", "node-chain-execution-measure-result.json", routerVPNExecutionCandidateSource, routerVPNExecutionCandidateRequest, routerVPNExecutionCandidateMetadata, routerVPNExecutionCandidateStart, routerVPNExecutionCandidateLive, routerVPNExecutionCandidateCancel, routerVPNExecutionCandidateResult, "node-candidate-prefix-ready.json", "node-candidate-prefix-request.json", "node-candidate-prefix-result.json", "node-candidate-prefix-live.json", "node-candidate-prefix-cancel.json", "node-chain-measure-request.json", "node-chain-measure-cancel.json", "node-chain-measure-result.json", "node-chain-candidate-request.json", "node-chain-candidate-source.json", "node-chain-candidate-live.json", "node-chain-candidate-cancel.json", "node-chain-candidate-result.json", "node-protection-retired.json", "stopped.json", "node-protection-transfer.json", "node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json"} {
+	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-chain-ready.json", "node-chain-socks-ready.json", "node-chain-connect-ready.json", "node-chain-execution-ready.json", "node-chain-execution-adoption.json", "node-chain-execution-last.json", "node-chain-execution-latency-capture.json", "node-chain-execution-measure-request.json", "node-chain-execution-measure-cancel.json", "node-chain-execution-measure-result.json", routerVPNExecutionCandidateSource, routerVPNExecutionCandidateRequest, routerVPNExecutionCandidateMetadata, routerVPNExecutionCandidateStart, routerVPNExecutionCandidateLive, routerVPNExecutionCandidateCancel, routerVPNExecutionCandidateResult, "node-candidate-prefix-ready.json", routerVPNAppendExecutionReadyFile, routerVPNAppendExecutionReadyPending, "node-candidate-prefix-request.json", "node-candidate-prefix-result.json", "node-candidate-prefix-live.json", "node-candidate-prefix-cancel.json", "node-chain-measure-request.json", "node-chain-measure-cancel.json", "node-chain-measure-result.json", "node-chain-candidate-request.json", "node-chain-candidate-source.json", "node-chain-candidate-live.json", "node-chain-candidate-cancel.json", "node-chain-candidate-result.json", "node-protection-retired.json", "stopped.json", "node-protection-transfer.json", "node-dns-request.json", "node-dns-result.json", "node-dns-cancel.json"} {
 		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
 			return routerVPNExternalFailure
 		}
@@ -595,7 +611,22 @@ func routerVPNRunLinuxTypedFamilyControlled(parent context.Context, directory, s
 		}
 	}
 	if captured, ok := policy.(*mobilemultihop.DesktopNodeCandidatePreparationPolicy); ok {
-		prefix, err = routerVPNNewNodeCandidatePrefixRuntime(graph, files, captured, control.selectionHash, instance)
+		if appendExecutionPolicy != nil {
+			prefix, err = routerVPNNewNodeCandidateAppendExecutionRuntime(graph, files, appendExecutionPolicy, control.selectionHash, instance, func(call context.Context) error {
+				if call == nil || call.Err() != nil || graph.Err() != nil || physical == nil || appendExecutionPolicy.LocalPolicy() != captured {
+					return routerVPNExternalFailure
+				}
+				if err := physical.CandidatePrefixSourceCurrentContext(call, captured); err != nil {
+					return err
+				}
+				if err := cover.CurrentContext(call); err != nil {
+					return err
+				}
+				return control.current(call)
+			})
+		} else {
+			prefix, err = routerVPNNewNodeCandidatePrefixRuntime(graph, files, captured, control.selectionHash, instance)
+		}
 		if err != nil {
 			return err
 		}

@@ -91,8 +91,9 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 		return errors.New("saved packet final requires its complete bounded paired Local selection")
 	}
 	pairedHysteria := common.PairedHysteriaLocalMultihopSelection(record.Prefs.MultihopNodes)
-	if pairedHysteria && record.Prefs.MultihopExecution != "local" {
-		return errors.New("saved retained Hysteria2 requires its complete paired Local route")
+	pairedProxyEntry := common.PairedProxyEntryLocalMultihopSelection(record.Prefs.MultihopNodes) && record.NodeChain[0].NodeKind == "" && record.NodeChain[0].External == nil
+	if (pairedHysteria || pairedProxyEntry) && record.Prefs.MultihopExecution != "local" {
+		return errors.New("this saved paired source family requires its complete Local route")
 	}
 	privateStreams := savedPairedStreamPath(record)
 	paired := common.ExtendedPairedLocalMultihopSelection(record.Prefs.MultihopNodes)
@@ -106,7 +107,7 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 	}
 	for i, captured := range record.NodeChain {
 		selected := record.Prefs.MultihopNodes[i]
-		if (packetFinal || pairedHysteria) && (captured.NodeKind != "" || captured.External != nil || captured.Preferences == nil ||
+		if (packetFinal || pairedHysteria || pairedProxyEntry) && (captured.NodeKind != "" || captured.External != nil || captured.Preferences == nil ||
 			captured.Preferences.StartLayer != "" && captured.Preferences.StartLayer != "off") {
 			return errors.New("saved paired Local route lost an original member or its Off layer")
 		}
@@ -168,7 +169,7 @@ func validateSavedNodeChain(record connectionProfileRecord) error {
 		if captured.NodeKind != "" || captured.External != nil || captured.Preferences == nil || !common.ValidNodeProofID(captured.NodeProofID) {
 			return errors.New("saved paired member lost its original Router identity")
 		}
-		if i < len(record.NodeChain)-1 && !mobilemultihop.NodeChainPrefixMode(captured.Mode) && !(privateStreams && captured.Mode == "shadowsocks") && !(pairedHysteria && (captured.Mode == "shadowsocks" || captured.Mode == "hysteria2")) || i == len(record.NodeChain)-1 && !desktopNodeChainFinalSupported(captured.Mode, captured.Preferences.StartLayer) {
+		if i < len(record.NodeChain)-1 && !mobilemultihop.NodeChainPrefixMode(captured.Mode) && !(privateStreams && captured.Mode == "shadowsocks") && !((pairedHysteria || pairedProxyEntry) && (captured.Mode == "shadowsocks" || captured.Mode == "hysteria2")) || i == len(record.NodeChain)-1 && !desktopNodeChainFinalSupported(captured.Mode, captured.Preferences.StartLayer) {
 			return errors.New("saved ordered path lost a supported prefix or its captured final transport")
 		}
 		modes, err := savedNodeChainSourceModes(captured.Mode, captured.Preferences.StartLayer)

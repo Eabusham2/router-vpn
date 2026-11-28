@@ -26,3 +26,21 @@ func CandidatePrefixTransferSHA256(selection Selection) (string, error) {
 	_, _ = digest.Write(raw)
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
+
+const candidateAppendExecutionTransferDomain = "routervpn-macos-candidate-append-execution-transfer-v1\x00"
+
+// CandidateAppendExecutionTransferSHA256 binds only the dedicated execution
+// child capture. It grants no ordinary prefix or connected-path authority.
+func CandidateAppendExecutionTransferSHA256(selection Selection) (string, error) {
+	if selection.Family != CandidateAppendExecutionFamily || !selection.valid() {
+		return "", errors.New("append execution readiness requires its original complete capture")
+	}
+	raw, err := json.Marshal(selection)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.New()
+	_, _ = digest.Write([]byte(candidateAppendExecutionTransferDomain))
+	_, _ = digest.Write(raw)
+	return hex.EncodeToString(digest.Sum(nil)), nil
+}

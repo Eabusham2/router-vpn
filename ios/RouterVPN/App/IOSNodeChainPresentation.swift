@@ -90,7 +90,8 @@ enum IOSNodeChainPresentation {
                 exitID: selected.multihopExitID, exitMode: selected.multihopExitMode, controlID: selected.id)) != nil else { return nil }
         let publicExit = IOSMultihopNodeSelection.externalExitReferences(nodes, controlID: selected.id, execution: selected.multihopExecution)
         let pairedHysteria = IOSMultihopNodeSelection.pairedHysteriaLocalSource(nodes, execution: selected.multihopExecution, profiles: catalog)
-        let independentImports = !publicExit && !pairedHysteria && IOSMultihopNodeSelection.usesIndependentImports(nodes, execution: selected.multihopExecution)
+        let pairedProxy = IOSMultihopNodeSelection.pairedProxyEntryLocalSource(nodes, execution: selected.multihopExecution, profiles: catalog)
+        let independentImports = !publicExit && !pairedHysteria && !pairedProxy && IOSMultihopNodeSelection.usesIndependentImports(nodes, execution: selected.multihopExecution)
         let importedEntry = IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)
         let streams = IOSMultihopNodeSelection.localStreamLayout(nodes, execution: selected.multihopExecution, profiles: catalog)
         let pairedStreams = streams?.paired ?? []
@@ -101,14 +102,14 @@ enum IOSNodeChainPresentation {
             guard matches.count == 1, let profile = matches.first,
                   (profile.normalizedNodeKind == "router-vpn" && profile.external == nil && (!publicExit || position == 0) &&
                    (!packetRoute || [nil, "", "off"].contains(profile.startLayer)) &&
-                   (pairedHysteria || (position == nodes.count - 1 ? packetRoute || node.mode == "shadowsocks" || node.mode == "hysteria2" &&
+                   (pairedHysteria || pairedProxy || (position == nodes.count - 1 ? packetRoute || node.mode == "shadowsocks" || node.mode == "hysteria2" &&
                     ["", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(profile.startLayer ?? "") &&
                     points.allSatisfy({ $0.kind == "router-vpn" && IOSMultihopNodeSelection.supportsNativePrefix($0.mode ?? "") }) : IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || pairedStreams.contains(position))) ||
                    (publicExit ? position > 0 && IOSImportedShadowsocksSource.eligibleLiteral(profile) : independentImports ? IOSMultihopNodeSelection.supportsLocalImportedNode(node.mode, position: position, count: nodes.count, importedEntry: importedEntry) && IOSImportedShadowsocksSource.eligibleIndependent(profile, position: position, hostnamePosition: streams?.hostname) : IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count)) && (node.mode == "shadowsocks" && IOSImportedShadowsocksSource.eligible(profile) || node.mode == "socks5" && IOSImportedSOCKSSource.eligible(profile) || node.mode == profile.external?.protocolName && (IOSImportedCONNECTSource.eligible(profile) || IOSImportedOpenVPNSource.eligible(profile)))) else { return nil }
             if publicExit && position == 0 {
                 guard IOSMultihopNodeSelection.supportsExternalExitEntry(profile) else { return nil }
             } else if nodes.count > IOSMultihopNodeSelection.maximumNodes {
-                if pairedHysteria || IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || position == nodes.count - 1 && !publicExit || pairedStreams.contains(position) {
+                if pairedHysteria || pairedProxy || IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || position == nodes.count - 1 && !publicExit || pairedStreams.contains(position) {
                     guard profile.normalizedNodeKind == "router-vpn", [nil, "", "off"].contains(profile.startLayer) else { return nil }
                 } else {
                     guard IOSImportedShadowsocksSource.eligibleIndependent(profile, position: position, hostnamePosition: streams?.hostname) else { return nil }
@@ -207,6 +208,10 @@ enum IOSNodeChainPresentation {
                 guard launch.identity_sources?[position].isEmpty == (profile.normalizedNodeKind == "external") else { return nil }
             }
             profiles.append(profile); nodes.append(.init(id: profile.id, mode: mode))
+        }
+        if nodes.first.map({ IOSNodeCandidateAppendSource.proxyEntryMode($0.mode) }) == true, profiles.first?.normalizedNodeKind == "router-vpn" {
+            guard launch.schema == 1, let identities = launch.identity_sources, identities.count == nodes.count, identities.allSatisfy({ !$0.isEmpty }),
+                  IOSMultihopNodeSelection.pairedProxyEntryLocalSource(nodes, execution: control.multihopExecution, profiles: profiles) else { return nil }
         }
         if IOSMultihopNodeSelection.pairedHysteriaLocalModes(nodes.map(\.mode), execution: control.multihopExecution) {
             guard launch.schema == 1, let identities = launch.identity_sources, identities.count == nodes.count, identities.allSatisfy({ !$0.isEmpty }),

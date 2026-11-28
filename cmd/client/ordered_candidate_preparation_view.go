@@ -49,7 +49,7 @@ func captureOrderedCandidatePreparedViewScope(ctx context.Context, a *app, posit
 	if scopeErr != nil {
 		return nil, scopeErr
 	}
-	if scope == orderedCandidateAppendScope {
+	if orderedCandidateAppendPurpose(scope) {
 		return nil, errors.New("an incomplete prefix requires its explicit draft append source")
 	}
 	if scope == orderedCandidateSavedPrefixScope && !orderedCandidatePrefixPlatformSupported() {
@@ -254,6 +254,9 @@ func (view *orderedCandidatePreparedView) matchesPreparation(p *orderedCandidate
 		p.prefixPreparation.CandidateMeasurement() != candidateViewMetric(view.prefixes, view.position)) {
 		return false
 	}
+	if view.scopeValue() == orderedCandidateAppendExecutionScope && (view.catalog.appendExecutionPreparation == nil || p.appendExecutionPreparation == nil || !p.appendExecutionSourceCurrent() || view.catalog.inventory != p.inventory.inventory || view.catalog.inventorySHA != p.inventory.inventorySHA || view.catalog.appendExecutionPreparation.SourceSHA256() != p.appendExecutionPreparation.SourceSHA256() || view.catalog.appendExecutionPreparation.OriginalPreparation() != view.catalog.prefixPreparation) {
+		return false
+	}
 	for id, token := range p.inventory.profiles {
 		if view.catalog.profiles[id] != token {
 			return false
@@ -290,17 +293,19 @@ func (view *orderedCandidatePreparedView) addResponseSource(response map[string]
 // Append views are source selections for an incomplete prefix. They never
 // acquire a complete graph, original final, selected trial or connected owner.
 type orderedCandidateAppendViewSource struct {
-	Purpose           string `json:"purpose"`
-	SourceSHA         string `json:"source_sha256"`
-	ConfigSHA         string `json:"config_sha256"`
-	DraftRevision     string `json:"draft_revision"`
-	DeviceRevision    string `json:"device_revision"`
-	DeviceSourceSHA   string `json:"device_source_sha256"`
-	DeviceMTURevision string `json:"device_mtu_revision"`
-	CandidateMode     string `json:"candidate_mode"`
-	CandidateKind     string `json:"candidate_kind,omitempty"`
-	AppendPosition    int    `json:"append_position"`
-	PrefixPosition    int    `json:"prefix_position"`
+	Purpose            string `json:"purpose"`
+	SourceSHA          string `json:"source_sha256"`
+	ConfigSHA          string `json:"config_sha256"`
+	DraftRevision      string `json:"draft_revision"`
+	DeviceRevision     string `json:"device_revision"`
+	DeviceSourceSHA    string `json:"device_source_sha256"`
+	DeviceMTURevision  string `json:"device_mtu_revision"`
+	CandidateMode      string `json:"candidate_mode"`
+	CandidateKind      string `json:"candidate_kind,omitempty"`
+	AppendPosition     int    `json:"append_position"`
+	PrefixPosition     int    `json:"prefix_position"`
+	ExecutionSourceSHA string `json:"execution_source_sha256,omitempty"`
+	RequestedExecution string `json:"requested_execution,omitempty"`
 }
 
 func (source *orderedCandidateAppendViewSource) publish(response map[string]any) {
@@ -315,6 +320,9 @@ func (source *orderedCandidateAppendViewSource) publish(response map[string]any)
 		response["candidate_kind"] = source.CandidateKind
 	}
 	response["origin"], response["requested_execution"] = "editor-draft", "local"
+	if source.Purpose == orderedCandidateAppendExecutionScope {
+		response["requested_execution"], response["execution_source_sha256"] = source.RequestedExecution, source.ExecutionSourceSHA
+	}
 }
 
 func (view *orderedCandidatePreparedView) isDraft() bool {
@@ -322,6 +330,9 @@ func (view *orderedCandidatePreparedView) isDraft() bool {
 }
 func (view *orderedCandidatePreparedView) requestedExecution() string {
 	if view != nil && view.append != nil {
+		if view.append.Purpose == orderedCandidateAppendExecutionScope {
+			return view.append.RequestedExecution
+		}
 		return "local"
 	}
 	if view == nil {
@@ -347,7 +358,7 @@ func captureOrderedCandidateAppendView(ctx context.Context, a *app, position int
 		a.mu.Unlock()
 		return nil, errors.New("append view requires Home DOWN")
 	}
-	_, nodesErr := a.candidateAppendNodesLocked(q, orderedCandidateAppendScope)
+	_, nodesErr := a.candidateAppendNodesLocked(q, q.Purpose)
 	control, found := a.profileByIDLocked(a.profiles.SelectedID)
 	control = cloneRouterProfile(control)
 	profiles := cloneRouterProfileStore(a.profiles).Profiles
@@ -383,7 +394,7 @@ func captureOrderedCandidateAppendView(ctx context.Context, a *app, position int
 		metadata.AppendPosition != q.AppendPosition || metadata.PrefixPosition != position {
 		return nil, errors.New("append view lost its exact source metadata")
 	}
-	view := &orderedCandidatePreparedView{append: q, appendSource: metadata, scope: orderedCandidateAppendScope,
+	view := &orderedCandidatePreparedView{append: q, appendSource: metadata, scope: q.Purpose,
 		token: token, network: network, expires: time.Now().Add(120 * time.Second), position: position, selection: selection, candidateMode: q.NextMode,
 		responseNodes: originalCandidateResponseNodes(selection)}
 	for i, member := range selection.Nodes {
@@ -406,7 +417,7 @@ func captureOrderedCandidateAppendView(ctx context.Context, a *app, position int
 	if len(candidates) == 0 {
 		return nil, errors.New("no candidate preserves this exact prefix, requested kind, transport and prospective MTU")
 	}
-	view.catalog, err = combineDesktopCandidateViewSources(ctx, candidates, position, orderedCandidateAppendScope)
+	view.catalog, err = combineDesktopCandidateViewSources(ctx, candidates, position, q.Purpose)
 	if err != nil || view.catalog == nil || view.catalog.revision != revision || view.catalog.candidateMode != q.NextMode ||
 		view.catalog.prefixPreparation == nil || !view.catalog.prefixPreparation.IsAppend() ||
 		view.catalog.prefixPreparation.CandidateKind() != captured.source.CandidateKind() ||
@@ -414,6 +425,11 @@ func captureOrderedCandidateAppendView(ctx context.Context, a *app, position int
 		view.catalog.prefixPreparation.OriginalSourceSHA256() != selection.Native.source || view.catalog.plan != nil ||
 		view.catalog.typedPlan != nil || view.catalog.selectedPlan != nil {
 		return nil, errors.Join(err, errors.New("append catalog lost its distinct source seal"))
+	}
+	if q.Purpose == orderedCandidateAppendExecutionScope {
+		if err = view.bindAppendExecutionCatalog(); err != nil {
+			return nil, err
+		}
 	}
 	if err = validateDesktopCandidateSavedSelection(ctx, selection, profiles); err != nil {
 		return nil, err

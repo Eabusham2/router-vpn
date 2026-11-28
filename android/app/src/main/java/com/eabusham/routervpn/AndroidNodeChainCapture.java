@@ -238,6 +238,8 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         int schema = sourceSchema(original.members,original.modes);
         if((pairedHysteriaLocalSource(original.members,original.modes,original.execution)?original.members.size():0)!=plan.pairedHysteriaLocalNodeCount())
             throw new IllegalStateException("The native complete route lost its paired Local Hysteria2 source authority.");
+        if((pairedProxyEntryLocalSource(original.members,original.modes,original.execution)?original.members.size():0)!=plan.pairedProxyEntryLocalNodeCount())
+            throw new IllegalStateException("The native complete route lost its original paired proxy entry authority.");
         openVPN = schema == 5; multipleImported = schema == 6; externalFinal = schema == 8; selectionExecution = original.execution;
         if (inputs.size() != original.members.size()) throw new IllegalStateException("The native input omitted an original ordered member.");
         memberInputs = Collections.unmodifiableList(new ArrayList<>(inputs));
@@ -496,7 +498,7 @@ final class AndroidNodeChainCapture implements AutoCloseable {
     static int sourceSchema(List<AndroidNodeStore.ChainSource> members,List<String> modes) throws Exception {
         if(members.size()!=modes.size())throw new IllegalStateException("The original route lost a member transport.");
         int count = members.size();
-        if (pairedHysteriaLocalSource(members,modes,"local")) return 1;
+        if (pairedHysteriaLocalSource(members,modes,"local")||pairedProxyEntryLocalSource(members,modes,"local")) return 1;
         if (count > 0 && members.get(count - 1).imported) {
             if (count < 3 || count > AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH || members.get(0).imported
                     || !List.of("wg", "awg2-fast", "awg2-strong").contains(modes.get(0)) || !members.get(0).supportsExternalExitEntryLayer())
@@ -658,6 +660,23 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         return true;
     }
 
+    static boolean pairedProxyEntryLocalModes(List<String> modes,String execution) {
+        return "local".equals(execution)&&modes.size()>=2&&modes.size()<=AndroidNodeStore.PHYSICAL_TRAVERSAL_DEPTH
+                &&AndroidNodeCandidateAppendSource.proxyEntry(modes)
+                &&AndroidNodeCandidateAppendSource.proxyEntryMode(modes.get(modes.size()-1))
+                &&modes.stream().allMatch(AndroidNodeCandidateAppendSource::supportsNextMode);
+    }
+    static boolean pairedProxyEntryLocalSource(List<AndroidNodeStore.ChainSource> members,List<String> modes,String execution)throws Exception {
+        if(members.size()!=modes.size()||!pairedProxyEntryLocalModes(modes,execution))return false;
+        for(int i=0;i<members.size();i++) {
+            AndroidNodeStore.ChainSource member=members.get(i);
+            if(member.imported||!List.of("","off").contains(member.profile().optString("start_layer","off")))return false;
+            member.requirePairedIdentity();
+            if(AndroidNodeCandidateAppendSource.proxyEntryMode(modes.get(i)))AndroidNumericAddress.parse(member.profile().getString("endpoint"));
+        }
+        return true;
+    }
+
     static boolean pairedPacketWithoutStartLayer(AndroidNodeStore.ChainSource source,String mode) throws Exception {
         if(source.imported||!NativeSingBoxController.nativeWireGuardFamily(mode))return false;
         Object layer=source.profile().opt("start_layer");
@@ -666,6 +685,11 @@ final class AndroidNodeChainCapture implements AutoCloseable {
 
     static void requireCompleteShape(List<AndroidNodeStore.ChainSource> members,List<String> modes,String execution) throws Exception {
         int schema=sourceSchema(members,modes);
+        if(pairedProxyEntryLocalModes(modes,"local")&&!members.get(0).imported) {
+            if(schema!=1||!pairedProxyEntryLocalSource(members,modes,execution))
+                throw new IllegalStateException("A paired proxy entry requires its complete Local source with every original node paired and Start Layer Off.");
+            return;
+        }
         if(pairedHysteriaLocalModes(modes,"local")) {
             if(schema!=1||!pairedHysteriaLocalSource(members,modes,execution))
                 throw new IllegalStateException("A retained Hysteria2 path requires its complete paired Local source with every Start Layer Off.");
@@ -709,7 +733,8 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         int schema=sourceSchema(members,modes);
         boolean packetFinal=schema==1&&NativeSingBoxController.nativeWireGuardFamily(modes.get(modes.size()-1));
         boolean pairedHysteria=pairedHysteriaLocalSource(members,modes,"local");
-        if(!packetFinal&&!pairedHysteria&&schema!=6 && schema!=7 && schema!=8)throw new IllegalStateException("A complete staged Local source is required.");
+        boolean pairedProxy=pairedProxyEntryLocalSource(members,modes,"local");
+        if(!packetFinal&&!pairedHysteria&&!pairedProxy&&schema!=6 && schema!=7 && schema!=8)throw new IllegalStateException("A complete staged Local source is required.");
         JSONObject control=members.get(schema == 8 ? 0 : members.size()-1).profile();
         JSONArray selected=AndroidNodeStore.orderedSelection(control),inputs=new JSONArray(),identities=new JSONArray();
         if(!"local".equals(control.getString("multihop_execution"))||selected.length()!=members.size())
@@ -727,6 +752,8 @@ final class AndroidNodeChainCapture implements AutoCloseable {
         try {
             if((pairedHysteria?members.size():0)!=preview.pairedHysteriaLocalNodeCount())
                 throw new IllegalStateException("The complete Local graph lost its retained Hysteria2 source family.");
+            if((pairedProxy?members.size():0)!=preview.pairedProxyEntryLocalNodeCount())
+                throw new IllegalStateException("The complete Local graph lost its original paired proxy entry.");
             if(packetFinal&&!modes.get(modes.size()-1).equals(Libbox.routerNodeChainConnectedFinalCandidateResponseMode(preview,modes.size()-2)))
                 throw new IllegalStateException("The compiled Local path lost its original selected packet final.");
             String launch=bounded(preview.launchInput(),MAX_INPUT);

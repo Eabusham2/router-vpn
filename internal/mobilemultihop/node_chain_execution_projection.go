@@ -96,7 +96,7 @@ func newNodeChainExecutionPreparationProjected(localSource, execution string, de
 	}
 	local, err := NewNodeChain(localSource)
 	var original NodeChainSource
-	if err != nil || local.validateCapture() != nil || local.pairedHysteria != nil || local.importedNodes != nil || local.openVPNMiddle != nil || local.importedMiddle != nil && !nodeChainImportedExecutionMemberSupported(local.importedMiddle, len(local.nodes)) ||
+	if err != nil || local.validateCapture() != nil || local.pairedProxyEntry != nil || local.pairedHysteria != nil || local.importedNodes != nil || local.openVPNMiddle != nil || local.importedMiddle != nil && !nodeChainImportedExecutionMemberSupported(local.importedMiddle, len(local.nodes)) ||
 		exactJSON([]byte(localSource), &original, NodeChainInputLimit) != nil || (original.Schema != 1 && original.Schema != 2) ||
 		!nodeChainServerFinalCapture(original.Schema, local.nodes[len(local.nodes)-1]) ||
 		len(original.IdentitySources) != len(local.nodes) {
@@ -146,7 +146,7 @@ func newNodeChainExecutionPreparationOwnedMultiple(localSource, execution string
 // Closed family constructors retain their exact original physical owner. A
 // generic metadata field cannot supply either typed desktop adjunct.
 func newNodeChainExecutionPreparationOwnedFamilies(localSource, execution string, desktop *DesktopNodeChainPolicy, mobile *nodeChainExecutionMobileProjection, local *NodeChain, connect *NodeChainCONNECTSource, socks *NodeChainSOCKSSource, connectDesktop *nodeChainCONNECTExecutionDesktop, socksDesktop *nodeChainSOCKSExecutionDesktop, openvpn, multiple *NodeChain, openvpnDesktop *nodeChainOpenVPNExecutionDesktop, multipleDesktop *nodeChainMultipleImportedExecutionDesktop, externalFinal *nodeChainExternalFinalExecutionBinding) (*NodeChainExecutionPreparation, error) {
-	if local != nil && local.pairedHysteria != nil {
+	if local != nil && (local.pairedProxyEntry != nil || local.pairedHysteria != nil) {
 		// The complete Local owner grants no selected remote or Compare trial.
 		return nil, nodeChainExecutionError
 	}

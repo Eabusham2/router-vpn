@@ -116,6 +116,7 @@ type relayNodeChainPacketKeyReservation struct {
 	self      *relayNodeChainPacketKeyReservation
 	ledger    *relayNodeChainPacketKeyLedger
 	process   *relayNodeChainProcess
+	prefix    *relayNodeChainPrefixProcess
 	operation *relayNodeChainCandidateOperation
 	keys      []string
 }

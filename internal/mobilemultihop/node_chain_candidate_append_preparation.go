@@ -67,7 +67,7 @@ func (s *NodeChainCandidateAppendSource) newCandidatePlan(inventory string) (*No
 		}
 	}
 	var streamAddresses map[string]bool
-	if p.isAppendStreamResponse() || p.responseMode == "hysteria2" || s.hasHysteriaPrefix() {
+	if s.record.Schema == 3 || p.isAppendStreamResponse() || p.responseMode == "hysteria2" || s.hasHysteriaPrefix() {
 		streamKeys, addresses, err := s.streamCandidateAliases()
 		if err != nil {
 			return nil, err
@@ -230,8 +230,12 @@ func NewNodeChainCandidateAppendPreparation(prefixSource, inventory string) (*No
 	if err != nil {
 		return nil, err
 	}
+	config, err := candidates.appendPreparationConfig()
+	if err != nil {
+		return nil, err
+	}
 	p := &NodeChainCandidatePreparation{appendSource: source, candidates: candidates, position: len(source.nodes) - 1,
-		config: source.config, configSHA: source.configSHA, proofs: append([]NodeChainProof(nil), source.proofs...),
+		config: config, configSHA: externalDigest([]byte(config)), proofs: append([]NodeChainProof(nil), source.proofs...),
 		physical: append([]PhysicalEgress(nil), source.physical...), mtu: source.mtu}
 	p.mtu.Prefixes = append([]NodeChainMTUBound(nil), source.mtu.Prefixes...)
 	record := nodeChainCandidateAppendPreparationSource{Kind: nodeChainCandidateAppendPreparationKind, Schema: 1,
@@ -385,5 +389,9 @@ func (p *NodeChainCandidatePreparation) candidateMTU(graph map[string]any) (Node
 	if err != nil {
 		return NodeChainMTUPlan{}, err
 	}
-	return orderedPrefixMTUBounds(string(raw), p.proofs, actual, predecessorText(tun, "tag"))
+	families, err := p.appendSource.appendHostnameFamilies(string(raw), p.proofs)
+	if err != nil {
+		return NodeChainMTUPlan{}, err
+	}
+	return orderedPrefixMTUBoundsWithHostnameFamilies(string(raw), p.proofs, actual, predecessorText(tun, "tag"), families)
 }

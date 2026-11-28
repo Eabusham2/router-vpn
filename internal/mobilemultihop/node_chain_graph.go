@@ -81,7 +81,7 @@ func compileNodeChainGraphWithAppend(nodes []nodeChainGraphMember, closures []*e
 	return compileNodeChainGraphWithOwnedScopes(nodes, closures, expected, connect, server, closed, home, appendScope, nil)
 }
 
-func compileNodeChainGraphWithOwnedScopes(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress, connect nodeChainCapturedTransportScope, server *nodeChainMultipleImportedServerScope, closed *NodeChainCandidatePlan, home *NodeChainServerHomeDNS, appendScope *nodeChainAppendGraphScope, completeScope *nodeChainPairedHysteriaGraphScope) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
+func compileNodeChainGraphWithOwnedScopes(nodes []nodeChainGraphMember, closures []*externalPredecessor, expected []PhysicalEgress, connect nodeChainCapturedTransportScope, server *nodeChainMultipleImportedServerScope, closed *NodeChainCandidatePlan, home *NodeChainServerHomeDNS, appendScope *nodeChainAppendGraphScope, completeScope nodeChainCompleteLocalScope) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 	bad := errors.New("ordered chain lost a complete captured node closure")
 	fail := func(err error) (string, []NodeChainProof, NodeChainDNSCapture, []PhysicalEgress, error) {
 		return "", nil, NodeChainDNSCapture{}, nil, err
@@ -243,6 +243,10 @@ func compileNodeChainGraphWithOwnedScopes(nodes []nodeChainGraphMember, closures
 	var physical []PhysicalEgress
 	var projections [][]PhysicalEgress
 	aggregate := server != nil && server.firstPacket > 0
+	// This exact complete owner was validated against its original members,
+	// closures and first physical root above. A later packet carrier may use
+	// only the UDP half of the first SS root; its own proof also needs TCP.
+	_, aggregateProxy := completeScope.(*nodeChainPairedProxyEntryGraphScope)
 	traversal, err := parseCapturedEgressGraph(string(projected), connectPhysical)
 	if err != nil {
 		return fail(err)
@@ -250,15 +254,21 @@ func compileNodeChainGraphWithOwnedScopes(nodes []nodeChainGraphMember, closures
 	traversal.serverHome = home
 	for _, proof := range proofs {
 		physical, err = traversal.physical([]string{"tcp", "udp"}, nil, proof.Tag, false)
-		if err != nil || !aggregate && !nodeChainSamePhysical(physical, expected) {
+		if err != nil || !aggregate && !aggregateProxy && !nodeChainSamePhysical(physical, expected) {
 			return fail(errors.New("ordered chain introduced physical egress outside its original first node"))
 		}
-		if aggregate {
+		if aggregate || aggregateProxy {
 			projections = append(projections, append([]PhysicalEgress(nil), physical...))
 		}
 	}
 	if aggregate {
 		physical, err = server.completePhysicalEgress(projections, expected)
+		if err != nil {
+			return fail(err)
+		}
+	}
+	if aggregateProxy {
+		physical, err = nodeChainPairedProxyPhysical(projections, expected, len(proofs))
 		if err != nil {
 			return fail(err)
 		}

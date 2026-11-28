@@ -62,6 +62,12 @@ func (m *RouterNodeChain) HasImportedEntry() bool {
 func (m *RouterNodeChain) HasExternalFinal() bool {
 	return m != nil && m.self == m && m.chain != nil && m.chain.HasExternalFinal()
 }
+func (m *RouterNodeChain) PairedProxyEntryLocalNodeCount() int32 {
+	if m == nil || m.self != m || m.chain == nil {
+		return 0
+	}
+	return int32(m.chain.PairedProxyEntryLocalNodeCount())
+}
 func (m *RouterNodeChain) PairedHysteriaLocalNodeCount() int32 {
 	if m == nil || m.self != m || m.chain == nil {
 		return 0

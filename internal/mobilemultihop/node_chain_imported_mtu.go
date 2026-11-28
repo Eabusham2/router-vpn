@@ -18,11 +18,16 @@ func applyNodeChainCapturedStreamPacketMTU(members []nodeChainGraphMember, closu
 	return applyNodeChainCapturedStreamPacketMTUOwned(members, closures, position, appendScope, nil)
 }
 
-func applyNodeChainCapturedStreamPacketMTUOwned(members []nodeChainGraphMember, closures []*externalPredecessor, position int, appendScope *nodeChainAppendGraphScope, completeScope *nodeChainPairedHysteriaGraphScope) error {
-	if appendScope != nil && completeScope != nil || len(members) != len(closures) || position < 2 || position >= len(closures) || !NodeChainPrefixMode(members[position].mode) {
+func applyNodeChainCapturedStreamPacketMTUOwned(members []nodeChainGraphMember, closures []*externalPredecessor, position int, appendScope *nodeChainAppendGraphScope, completeScope nodeChainCompleteLocalScope) error {
+	if appendScope != nil && completeScope != nil || len(members) != len(closures) || position < 1 || position >= len(closures) || !NodeChainPrefixMode(members[position].mode) {
+		return nodeChainError
+	}
+	physicalProxy := nodeChainPhysicalProxyRoot(members, closures, appendScope, completeScope)
+	if position == 1 && !physicalProxy {
 		return nodeChainError
 	}
 	all := map[string]map[string]any{}
+	hostnameIPv4Only := map[string]bool{}
 	var packet, previousOuter map[string]any
 	for at := position; at >= 0; at-- {
 		closure := closures[at]
@@ -32,6 +37,21 @@ func applyNodeChainCapturedStreamPacketMTUOwned(members []nodeChainGraphMember, 
 		final := predecessorCopy(closure.final)
 		final["tag"] = fmt.Sprintf("packet-budget-%d", at)
 		all[final["tag"].(string)] = final
+		if appendScope != nil && at < len(appendScope.imports) && appendScope.imports[at] != nil && appendScope.imports[at].hostname != nil {
+			member := appendScope.imports[at]
+			if appendScope.owner == nil || appendScope.owner.memberCapturesCurrent() != nil || at >= len(appendScope.owner.imports) || member != appendScope.owner.imports[at] || appendScope.closures[at] != closure {
+				return nodeChainError
+			}
+			query, ok := final["domain_resolver"].(map[string]any)
+			if !ok || predecessorText(query, "server") != nodeChainImportedResolver {
+				return nodeChainError
+			}
+			onlyIPv4 := predecessorText(query, "strategy") == "ipv4_only"
+			if onlyIPv4 != (member.hostname.Device.IPv6Mode == "off") {
+				return nodeChainError
+			}
+			hostnameIPv4Only[final["tag"].(string)] = onlyIPv4
+		}
 		outer := final
 		if detour, exists := final["detour"]; exists {
 			if detour != NativeStartLayerTag || closure.nodes[NativeStartLayerTag] == nil {
@@ -55,7 +75,7 @@ func applyNodeChainCapturedStreamPacketMTUOwned(members []nodeChainGraphMember, 
 			if members[at].mode == "hysteria2" {
 				appendOwned := appendScope != nil && at < len(appendScope.nodes) && at < len(appendScope.closures) && appendScope.nodes[at] != nil &&
 					appendScope.closures[at] == closure && nodeChainAppendHysteriaClosure(appendScope.nodes[at], closure)
-				if !appendOwned && !completeScope.admitsProxy(at, closure, "hysteria2") {
+				if !appendOwned && (completeScope == nil || !completeScope.admitsProxy(at, closure, "hysteria2")) {
 					return nodeChainError
 				}
 				// HY2 owns native UDP message fragmentation/reassembly. The
@@ -70,19 +90,32 @@ func applyNodeChainCapturedStreamPacketMTUOwned(members []nodeChainGraphMember, 
 				appendOwned := appendScope != nil && at < len(appendScope.nodes) && at < len(appendScope.closures) &&
 					appendScope.nodes[at] != nil && appendScope.nodes[at].mode == "shadowsocks" &&
 					appendScope.closures[at] == closure && nodeChainAppendSSClosure(closure)
-				if !appendOwned && !completeScope.admitsProxy(at, closure, "shadowsocks") {
+				if !appendOwned && (completeScope == nil || !completeScope.admitsProxy(at, closure, "shadowsocks")) {
 					return nodeChainError
 				}
 			}
 		}
 		previousOuter = outer
 	}
-	envelope, entry, err := awgpolicy.NestedPacketEnvelope(packet, all)
+	var envelope awgpolicy.PacketEnvelope
+	var entry map[string]any
+	var err error
+	if len(hostnameIPv4Only) == 0 {
+		envelope, entry, err = awgpolicy.NestedPacketEnvelope(packet, all)
+	} else {
+		envelope, entry, err = awgpolicy.NestedPacketEnvelopeWithHostnameFamilies(packet, all, hostnameIPv4Only)
+	}
 	if err != nil {
 		return err
 	}
 	if entry == nil {
-		return nodeChainError
+		if !physicalProxy || len(hostnameIPv4Only) != 0 {
+			return nodeChainError
+		}
+		// The actual SS root has no earlier packet interface. The unchanged
+		// ordinary pass retained the source packet cap and device TUN policy;
+		// do not manufacture an ancestor MTU or claim physical PMTU discovery.
+		return nil
 	}
 	outer, err := mtuNumber(entry["mtu"])
 	if err != nil {

@@ -39,6 +39,7 @@ type orderedCandidateChoice struct {
 	ID             string                         `json:"id"`
 	Name           string                         `json:"name"`
 	Kind           string                         `json:"kind"`
+	SourceSHA256   string                         `json:"source_sha256,omitempty"`
 	Proposal       []common.MultihopNodeSelection `json:"proposed_path,omitempty"`
 	SaveReason     string                         `json:"save_reason,omitempty"`
 	ProposalAction string                         `json:"proposal_action,omitempty"`

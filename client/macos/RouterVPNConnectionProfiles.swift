@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import CoreFoundation
+import Darwin
 
 private let macConnectionModeKey = "routervpn.unified.selected-mode.v1"
 private let macConnectionCustomPresetsKey = "routervpn.unified.custom-presets.v1"
@@ -101,6 +102,29 @@ enum RouterVPNOrderedNodes {
     }
     static func pairedHysteriaLocalPath(_ rows: [[String: String]], execution: String, profiles: [[String: Any]]) -> Bool {
         execution == "local" && pairedHysteriaLocalShape(rows) && pairedMembersOff(rows, profiles: profiles)
+    }
+    static func pairedProxyEntryLocalShape(_ rows: [[String: String]]) -> Bool {
+        (2...physicalTraversalDepth).contains(rows.count) && ["shadowsocks", "hysteria2"].contains(rows.first?["mode"] ?? "") &&
+            ["shadowsocks", "hysteria2"].contains(rows.last?["mode"] ?? "") &&
+            rows.allSatisfy { prefixModes.contains($0["mode"] ?? "") || ["shadowsocks", "hysteria2"].contains($0["mode"] ?? "") }
+    }
+    static func pairedProxyEntrySource(_ rows: [[String: String]], profiles: [[String: Any]]) -> Bool {
+        guard pairedProxyEntryLocalShape(rows), let id = rows.first?["id"] else { return false }
+        let originals = profiles.filter { $0["id"] as? String == id }
+        return originals.count == 1 && finalProfile(originals[0], mode: "shadowsocks")
+    }
+    static func pairedProxyEntryLocalPath(_ rows: [[String: String]], execution: String, profiles: [[String: Any]]) -> Bool {
+        guard execution == "local", pairedProxyEntrySource(rows, profiles: profiles) else { return false }
+        return rows.allSatisfy { row in
+            let originals = profiles.filter { $0["id"] as? String == row["id"] }
+            return originals.count == 1 && (prefixModes.contains(row["mode"] ?? "") ? finalProfile(originals[0], mode: "shadowsocks") && startLayerOff(originals[0]) : pairedLiteralOff(originals[0]))
+        }
+    }
+    static func pairedLiteralOff(_ profile: [String: Any]) -> Bool {
+        guard finalProfile(profile, mode: "shadowsocks"), startLayerOff(profile),
+              let endpoint = profile["endpoint"] as? String, !endpoint.utf8.contains(0) else { return false }
+        var v4 = in_addr(), v6 = in6_addr()
+        return endpoint.withCString { inet_pton(AF_INET, $0, &v4) == 1 || inet_pton(AF_INET6, $0, &v6) == 1 }
     }
     static func pairedMembersOff(_ rows: [[String: String]], profiles: [[String: Any]]) -> Bool {
         return rows.allSatisfy { row in
@@ -349,12 +373,19 @@ enum RouterVPNOrderedNodes {
               let flag = external[final ? "ordered_external_final" : "ordered_local_imported_nodes_supported"] as? NSNumber else { return false }
         return CFGetTypeID(flag) == CFBooleanGetTypeID() && flag.boolValue
     }
-    static func appendPrefixModes(_ profile: [String: Any], position: Int) -> [String] {
-        guard position >= 0 else { return [] }
+    // The original saved source owns hostname eligibility and its Custom TCP resolver.
+    static func appendExternal(_ profile: [String: Any]) -> Bool {
+        if literalExternal(profile, final: false) { return true }
+        guard importedMiddleMode(profile) == "shadowsocks", startLayerOff(profile),
+              let external = profile["external"] as? [String: Any] else { return false }
+        return originalHostnameHint(external)
+    }
+    static func appendPrefixModes(_ profile: [String: Any], position: Int, pairedProxyEntry: Bool = false) -> [String] {
+        guard position >= 0, !pairedProxyEntry || finalProfile(profile, mode: "shadowsocks") && startLayerOff(profile) else { return [] }
         if externalFinalEntry(profile) {
-            return prefixModes + (position > 0 && startLayerOff(profile) ? ["shadowsocks", "hysteria2"] : [])
+            return prefixModes + ((position > 0 && startLayerOff(profile) && (!pairedProxyEntry || pairedLiteralOff(profile)) || position == 0 && pairedLiteralOff(profile)) ? ["shadowsocks", "hysteria2"] : [])
         }
-        return position > 0 && literalExternal(profile, final: false) ? ["shadowsocks"] : []
+        return !pairedProxyEntry && position > 0 && appendExternal(profile) ? ["shadowsocks"] : []
     }
     static func externalFinalPath(_ rows: [[String: String]], control: String, profiles: [[String: Any]]) -> Bool {
         guard externalFinalShape(rows, control: control) else { return false }
@@ -368,17 +399,18 @@ enum RouterVPNOrderedNodes {
         return true
     }
     static func decode(_ raw: Any, control: String) throws -> [[String: String]] {
-        guard let rows = raw as? [[String: String]], (2...8).contains(rows.count) || extendedLocalShape(rows) || extendedPairedShape(rows) || extendedMixedPacketCount(rows) > 0 || pairedHysteriaLocalShape(rows) else {
+        guard let rows = raw as? [[String: String]], (2...8).contains(rows.count) || extendedLocalShape(rows) || extendedPairedShape(rows) || extendedMixedPacketCount(rows) > 0 || pairedHysteriaLocalShape(rows) || pairedProxyEntryLocalShape(rows) else {
             throw issue("Choose at least two ordered nodes. Longer routes require a supported sequence of paired and imported nodes.")
         }
         let retainedHysteria = pairedHysteriaLocalShape(rows)
+        let pairedProxy = pairedProxyEntryLocalShape(rows)
         var seen = Set<String>()
         for (position, row) in rows.enumerated() {
             guard Set(row.keys) == Set(["id", "mode"]), let id = row["id"],
                   id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
                   seen.insert(id).inserted,
                   let mode = row["mode"],
-                  position == rows.count - 1 ? finalModes.contains(mode) : prefixModes.contains(mode) || retainedHysteria || ((importedPosition(mode, position: position, count: rows.count) || localSSPosition(mode, position: position, count: rows.count) || position == 0 && customEntryShape(rows)) && ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode) && rows.last?["mode"] == "shadowsocks") else {
+                  position == rows.count - 1 ? finalModes.contains(mode) : prefixModes.contains(mode) || retainedHysteria || pairedProxy || ((importedPosition(mode, position: position, count: rows.count) || localSSPosition(mode, position: position, count: rows.count) || position == 0 && customEntryShape(rows)) && ["shadowsocks", "socks5", "http-connect", "https-connect", "openvpn"].contains(mode) && rows.last?["mode"] == "shadowsocks") else {
                 throw issue("Use paired packet prefixes, supported imported middle hops, or two distinct custom Shadowsocks hops before a paired Shadowsocks exit in Local. Keep SOCKS5, CONNECT and OpenVPN immediately before a Shadowsocks exit.")
             }
         }
@@ -403,10 +435,12 @@ enum RouterVPNOrderedNodes {
             throw issue("An external exit requires the original paired WireGuard or AmneziaWG entry and independently linked literal Shadowsocks hops.")
         }
         let retainedHysteria = pairedHysteriaLocalPath(rows, execution: selection.execution, profiles: profiles)
+        let pairedProxy = pairedProxyEntryLocalPath(rows, execution: selection.execution, profiles: profiles)
+        if pairedProxyEntrySource(rows, profiles: profiles) && !pairedProxy { throw issue("A paired Shadowsocks or Hysteria2 entry requires Local execution and paired nodes with Start Layer Off throughout.") }
         if pairedHysteriaLocalShape(rows) && !retainedHysteria { throw issue("A retained Hysteria2 route requires Local execution and paired nodes with Start Layer Off throughout.") }
         let localImported = selection.execution == "local" && (externalFinal || localImportedPath(rows, profiles: profiles))
         let multipleImported = selection.execution != "local" && localImportedPath(rows, profiles: profiles, selectedExecution: true)
-        guard rows.count <= 8 || externalFinal || localImported || multipleImported || retainedHysteria || extendedPairedPath(rows, execution: selection.execution, profiles: profiles) else { throw issue("For a longer Local route, choose paired WireGuard nodes or paired WireGuard/AWG2 nodes followed by literal Shadowsocks 2022 imports. End at a paired Shadowsocks node and use Start Layer Off throughout. Longer Server or Compare routes require a single WireGuard, AWG2 Fast, or AWG2 Strong entry before the imports.") }
+        guard rows.count <= 8 || externalFinal || localImported || multipleImported || retainedHysteria || pairedProxy || extendedPairedPath(rows, execution: selection.execution, profiles: profiles) else { throw issue("For a longer Local route, choose paired WireGuard nodes or paired WireGuard/AWG2 nodes followed by literal Shadowsocks 2022 imports. End at a paired Shadowsocks node and use Start Layer Off throughout. Longer Server or Compare routes require a single WireGuard, AWG2 Fast, or AWG2 Strong entry before the imports.") }
         if !externalFinal && selection.execution != "local" && multipleImportedShape(rows) && !multipleImported { throw issue("Each imported Shadowsocks interior must support the selected execution.") }
         for (position, row) in rows.enumerated() {
             let id = row["id"]!
@@ -414,7 +448,7 @@ enum RouterVPNOrderedNodes {
             guard matches.count == 1 else { throw issue("An ordered source is missing.") }
             let importedMode = importedMiddleMode(matches[0])
             guard externalFinal || importedMode == nil || selection.execution == "local" || multipleImported || importedExecutionPrefixes(rows, profiles: profiles) || connectExecutionTrio(rows, profiles: profiles) || socksExecutionTrio(rows, profiles: profiles) || openVPNExecutionPath(rows, profiles: profiles) else { throw issue("This imported ordered path has not enabled native Server or Compare execution.") }
-            guard externalFinal || (importedMode != nil ? (importedPosition(importedMode!, position: position, count: rows.count) || (localImported || multipleImported) && (localSSPosition(importedMode!, position: position, count: rows.count) || position == 0 && customEntryShape(rows))) && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!) || retainedHysteria || (localImported || multipleImported) && row["mode"] == "shadowsocks")) else { throw issue("The ordered source kind or position changed.") }
+            guard externalFinal || (importedMode != nil ? (importedPosition(importedMode!, position: position, count: rows.count) || (localImported || multipleImported) && (localSSPosition(importedMode!, position: position, count: rows.count) || position == 0 && customEntryShape(rows))) && row["mode"] == importedMode && rows.last?["mode"] == "shadowsocks" : ["", "router-vpn"].contains(matches[0]["node_kind"] as? String ?? "router-vpn") && (position == rows.count - 1 || prefixModes.contains(row["mode"]!) || retainedHysteria || pairedProxy || (localImported || multipleImported) && row["mode"] == "shadowsocks")) else { throw issue("The ordered source kind or position changed.") }
             if position == rows.count - 1 && !externalFinal {
                 guard finalProfile(matches[0], mode: row["mode"]!) else { throw issue("Choose a paired final transport supported by its captured settings. Hysteria2 keeps its own Start Layer.") }
             }
@@ -507,19 +541,22 @@ struct RouterVPNOrderedNodeDraft {
     }
     var prefixNodes: [[String:String]] { prefixes.enumerated().map { ["id":$0.element,"mode":modes[$0.offset]] } }
     var nodes: [[String: String]] { prefixOnly ? prefixNodes : prefixNodes + [["id": externalExit ?? control, "mode": finalMode]] }
+    var pairedProxyEntryPrefix: Bool { ["shadowsocks", "hysteria2"].contains(modes.first ?? "") }
     func appendModes(for id: String, at position: Int) -> [String] {
         guard let profile=capturedCatalog.first(where:{$0["id"] as? String == id}) else { return [] }
-        return RouterVPNOrderedNodes.appendPrefixModes(profile,position:position)
+        return RouterVPNOrderedNodes.appendPrefixModes(profile,position:position,pairedProxyEntry:pairedProxyEntryPrefix)
     }
     private func validAppendPrefix(_ rows: [[String:String]], maximum: Int = 96) -> Bool {
         guard (1...maximum).contains(rows.count), Set(rows.compactMap{$0["id"]}).count == rows.count else { return false }
+        let proxyEntry = ["shadowsocks", "hysteria2"].contains(rows.first?["mode"] ?? "")
         return rows.enumerated().allSatisfy { position,row in
             guard row.count == 2, let id=row["id"], let mode=row["mode"] else { return false }
-            return appendModes(for:id,at:position).contains(mode)
+            let originals=capturedCatalog.filter{$0["id"] as? String == id}
+            return originals.count == 1 && RouterVPNOrderedNodes.appendPrefixModes(originals[0],position:position,pairedProxyEntry:proxyEntry).contains(mode)
         }
     }
     mutating func beginPrefixOnly() throws {
-        guard execution == "local", externalExit == nil, prefixes.isEmpty || validAppendPrefix(prefixNodes,maximum:95) else { throw RouterVPNOrderedNodes.issue("Start the Local prefix with paired WireGuard or AWG2; later Shadowsocks or Hysteria2 hops must have Start Layer Off.") }
+        guard execution == "local", externalExit == nil, prefixes.isEmpty || validAppendPrefix(prefixNodes,maximum:95) else { throw RouterVPNOrderedNodes.issue("Start with a paired transport. A Shadowsocks or Hysteria2 entry requires every prefix member paired with Start Layer Off.") }
         prefixOnly=true
     }
     mutating func finishPrefixOnly(current: [String:Any]) throws {
@@ -527,9 +564,23 @@ struct RouterVPNOrderedNodeDraft {
         _ = try RouterVPNOrderedNodes.connectBody(updated.selection(),current:current)
         self=updated
     }
-    func appendBody(mode: String, kind: String = "router-vpn", revision: UUID, current: [String:Any]) throws -> [String:Any] {
-        guard prefixOnly, execution == "local", externalExit == nil, ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"].contains(mode),
-              kind == "router-vpn" || kind == "external" && mode == "shadowsocks",
+    var executionAppendEligible: Bool {
+        let nodes=prefixNodes
+        guard validAppendPrefix(nodes,maximum:95) else { return false }
+        let packets=nodes.prefix(while:{RouterVPNOrderedNodes.prefixModes.contains($0["mode"] ?? "")}).count
+        guard packets > 0, nodes.dropFirst(packets).allSatisfy({$0["mode"] == "shadowsocks"}) else { return false }
+        return nodes.allSatisfy { row in
+            guard let id=row["id"], let mode=row["mode"],
+                  let profile=capturedCatalog.first(where:{$0["id"] as? String == id}) else { return false }
+            return profile["node_kind"] as? String == "router-vpn" && profile["external"] == nil && RouterVPNOrderedNodes.startLayerOff(profile) &&
+                (mode != "shadowsocks" || RouterVPNOrderedNodes.pairedLiteralOff(profile))
+        }
+    }
+    func appendBody(mode: String, kind: String = "router-vpn", requestedExecution: String = "local", revision: UUID, current: [String:Any]) throws -> [String:Any] {
+        guard ["local","server","auto"].contains(requestedExecution),
+              requestedExecution == "local" || mode == "shadowsocks" && kind == "router-vpn" && executionAppendEligible,
+              prefixOnly, execution == "local", externalExit == nil, ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"].contains(mode),
+              kind == "router-vpn" || !pairedProxyEntryPrefix && kind == "external" && mode == "shadowsocks",
               validAppendPrefix(prefixNodes,maximum:95), current["selected_id"] as? String == control,
               let profiles=current["profiles"] as? [[String:Any]] else { throw RouterVPNOrderedNodes.issue("Recapture the original Local prefix and device selection.") }
         let required=Set(prefixes+[control])
@@ -538,7 +589,7 @@ struct RouterVPNOrderedNodeDraft {
             let matches=profiles.filter{$0["id"] as? String == id}
             guard matches.count == 1, let token=tokens[id], matches[0]["profile_token"] as? String == token else { throw RouterVPNOrderedNodes.issue("An original prefix or device profile changed. Reopen the editor.") }
             if id == control && !RouterVPNOrderedNodes.externalFinalEntry(matches[0]) { throw RouterVPNOrderedNodes.issue("The original selected device control changed.") }
-            if let position=prefixes.firstIndex(of:id), !RouterVPNOrderedNodes.appendPrefixModes(matches[0],position:position).contains(modes[position]) { throw RouterVPNOrderedNodes.issue("An original prefix transport changed.") }
+            if let position=prefixes.firstIndex(of:id), !RouterVPNOrderedNodes.appendPrefixModes(matches[0],position:position,pairedProxyEntry:pairedProxyEntryPrefix).contains(modes[position]) { throw RouterVPNOrderedNodes.issue("An original prefix transport changed.") }
             expected[id]=token
         }
         var body:[String:Any] = ["schema":1,"purpose":"draft-prefix-append","execution":"local",
@@ -546,6 +597,7 @@ struct RouterVPNOrderedNodeDraft {
                 "append_position":prefixes.count,"next_mode":mode,"nodes":prefixNodes,
                 "expected_selected_node_id":control,"expected_profile_tokens":expected]
         if kind == "external" { body["next_kind"]="external" }
+        if requestedExecution != "local" { body["purpose"]="draft-prefix-append-execution";body["requested_execution"]=requestedExecution }
         return body
     }
 
@@ -571,7 +623,7 @@ struct RouterVPNOrderedNodeDraft {
             }
             if id == control && !RouterVPNOrderedNodes.externalFinalEntry(matches[0]) { throw RouterVPNOrderedNodes.issue("The original device control changed.") }
             if let position=prefixes.firstIndex(of:id) {
-                guard RouterVPNOrderedNodes.appendPrefixModes(matches[0],position:position).contains(modes[position]) else { throw RouterVPNOrderedNodes.issue("An original prefix transport changed.") }
+                guard RouterVPNOrderedNodes.appendPrefixModes(matches[0],position:position,pairedProxyEntry:pairedProxyEntryPrefix).contains(modes[position]) else { throw RouterVPNOrderedNodes.issue("An original prefix transport changed.") }
                 expected[id]=token
             }
             if id == final && (!RouterVPNOrderedNodes.externalFinalEntry(matches[0]) || !RouterVPNOrderedNodes.startLayerOff(matches[0])) { throw RouterVPNOrderedNodes.issue("Keep the actual last paired Shadowsocks or Hysteria2 node with Start Layer Off.") }
@@ -616,6 +668,14 @@ struct RouterVPNOrderedNodeDraft {
         func flag(_ key:String)->Bool { guard let value=response[key] as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() else { return false };return value.boolValue }
         func number(_ key:String)->Double? { guard let value=response[key] as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID(), value.doubleValue.isFinite else { return nil };return value.doubleValue }
         let external=body["next_kind"] as? String == "external"
+        let purpose=body["purpose"] as? String
+        let executionAppend=purpose == "draft-prefix-append-execution"
+        let requested=executionAppend ? body["requested_execution"] as? String : (body["requested_execution"] == nil ? "local":nil)
+        guard purpose == "draft-prefix-append" && requested == "local" || executionAppend && ["server","auto"].contains(requested ?? "") &&
+                !external && body["next_kind"] == nil && body["next_mode"] as? String == "shadowsocks" && executionAppendEligible else { throw RouterVPNOrderedNodes.issue("Keep the original explicit append execution and paired packet head with its optional Shadowsocks tail.") }
+        if executionAppend {
+            guard let digest=response["execution_source_sha256"] as? String, digest.range(of:#"\A[0-9a-f]{64}\z"#,options:.regularExpression) != nil else { throw RouterVPNOrderedNodes.issue("The original append execution source changed.") }
+        }
         let metric=external ? "routed-public-candidate-response":"routed-candidate-response"
         guard body["next_kind"] == nil || external && body["next_mode"] as? String == "shadowsocks",
               external ? response["candidate_kind"] as? String == "external":response["candidate_kind"] == nil,
@@ -624,8 +684,8 @@ struct RouterVPNOrderedNodeDraft {
               let revision=body["draft_revision"] as? String,
               let expected=body["expected_profile_tokens"] as? [String:String],
               body["nodes"] as? [[String:String]] == prefixNodes,
-              response["scope"] as? String == "draft-prefix-append", response["purpose"] as? String == "draft-prefix-append",
-              response["origin"] as? String == "editor-draft", response["requested_execution"] as? String == "local",
+              response["scope"] as? String == purpose, response["purpose"] as? String == purpose,
+              response["origin"] as? String == "editor-draft", response["requested_execution"] as? String == requested,
               response["draft_action"] as? String == "append-measured-hop", response["draft_revision"] as? String == revision,
               response["candidate_mode"] as? String == mode, response["expected_selected_node_id"] as? String == control,
               response["device_revision"] as? String == tokens[control], expected[control] == tokens[control],
@@ -637,7 +697,8 @@ struct RouterVPNOrderedNodeDraft {
               validAppendPrefix(proposed), let issued=response["expected_profile_tokens"] as? [String:String], issued.count == proposed.count,
               current["selected_id"] as? String == control, let profiles=current["profiles"] as? [[String:Any]],
               let candidate=profiles.first(where:{$0["id"] as? String == id}), RouterVPNOrderedNodes.startLayerOff(candidate),
-              external ? RouterVPNOrderedNodes.literalExternal(candidate,final:false):RouterVPNOrderedNodes.externalFinalEntry(candidate) else { throw RouterVPNOrderedNodes.issue("The measured append no longer belongs to this original closed prefix.") }
+              external ? RouterVPNOrderedNodes.appendExternal(candidate):RouterVPNOrderedNodes.externalFinalEntry(candidate),
+               !executionAppend || RouterVPNOrderedNodes.pairedLiteralOff(candidate) else { throw RouterVPNOrderedNodes.issue("The measured append no longer belongs to this original closed prefix.") }
         for key in Set(prefixes+[control,id]) {
             let matches=profiles.filter{$0["id"] as? String == key}
             guard matches.count == 1, let token=tokens[key], matches[0]["profile_token"] as? String == token,
@@ -660,18 +721,25 @@ struct RouterVPNOrderedNodeDraft {
         finalMode = "shadowsocks"
     }
     func allowedModes(at index: Int) -> [String] {
-        if prefixOnly { return prefixes.indices.contains(index) ? appendModes(for:prefixes[index],at:index):[] }
+        if prefixOnly {
+            guard prefixes.indices.contains(index) else { return [] }
+            return appendModes(for:prefixes[index],at:index).filter { mode in
+                var proposed=prefixNodes;proposed[index]["mode"]=mode
+                return validAppendPrefix(proposed)
+            }
+        }
         if externalExit != nil {
             guard (0...prefixes.count).contains(index) else { return [] }
             return index == 0 ? RouterVPNOrderedNodes.prefixModes : ["shadowsocks"]
         }
         if execution == "local", nodes.indices.contains(index) {
             let choices = index == prefixes.count ? finalModes : RouterVPNOrderedNodes.prefixModes + ["shadowsocks", "hysteria2"]
-            let retained = RouterVPNOrderedNodes.pairedHysteriaLocalShape(nodes)
+            let retained = RouterVPNOrderedNodes.pairedHysteriaLocalShape(nodes) || RouterVPNOrderedNodes.pairedProxyEntrySource(nodes, profiles: capturedCatalog)
             let allowed = choices.filter { mode in
                 var proposed = nodes
                 proposed[index]["mode"] = mode
                 return RouterVPNOrderedNodes.pairedHysteriaLocalPath(proposed, execution: execution, profiles: capturedCatalog) ||
+                    RouterVPNOrderedNodes.pairedProxyEntryLocalPath(proposed, execution: execution, profiles: capturedCatalog) ||
                     retained && (RouterVPNOrderedNodes.extendedPairedPath(proposed, execution: execution, profiles: capturedCatalog) ||
                         RouterVPNOrderedNodes.pairedSSExecutionPath(proposed, profiles: capturedCatalog) ||
                         RouterVPNOrderedNodes.pairedHysteriaExecutionPath(proposed, profiles: capturedCatalog))
@@ -812,7 +880,7 @@ struct RouterVPNOrderedNodeDraft {
     }
     mutating func add(_ id: String) throws {
         if prefixOnly {
-            guard let mode=appendModes(for:id,at:prefixes.count).first else { throw RouterVPNOrderedNodes.issue("Choose a supported prefix node; the first node must be paired WireGuard or AWG2.") }
+            guard let mode=appendModes(for:id,at:prefixes.count).first else { throw RouterVPNOrderedNodes.issue("Choose a supported paired entry; a Shadowsocks or Hysteria2 entry requires paired unlayered members throughout.") }
             let proposed=prefixNodes+[["id":id,"mode":mode]]
             guard validAppendPrefix(proposed,maximum:95) else { throw RouterVPNOrderedNodes.issue("Choose a different supported prefix node.") }
             prefixes.append(id);modes.append(mode);return
@@ -843,6 +911,7 @@ struct RouterVPNOrderedNodeDraft {
         proposed.insert(["id": id, "mode": mode], at: position)
         guard proposed.count <= 8 ||
                 RouterVPNOrderedNodes.pairedHysteriaLocalPath(proposed, execution: execution, profiles: capturedCatalog) ||
+                RouterVPNOrderedNodes.pairedProxyEntryLocalPath(proposed, execution: execution, profiles: capturedCatalog) ||
                 RouterVPNOrderedNodes.extendedPairedPath(proposed, execution: execution, profiles: capturedCatalog) ||
                 RouterVPNOrderedNodes.localImportedPath(proposed, profiles: capturedCatalog, selectedExecution: execution != "local") else {
             throw RouterVPNOrderedNodes.issue("This node cannot occupy the selected position in the longer route.")
@@ -883,7 +952,7 @@ struct RouterVPNOrderedNodeDraft {
     }
     mutating func chooseMode(_ mode: String, at index: Int) throws {
         guard allowedModes(at: index).contains(mode) else {
-            throw RouterVPNOrderedNodes.issue("Choose a supported transport for this captured node. Hysteria2 requires a paired final and paired WireGuard or AWG2 prefixes.")
+            throw RouterVPNOrderedNodes.issue("Choose a supported transport for this captured path and its original paired or imported source.")
         }
         if index == prefixes.count { finalMode = mode }
         else { modes[index] = mode }
@@ -894,7 +963,7 @@ struct RouterVPNOrderedNodeDraft {
         }
         if prefixOnly {
             var proposed=prefixNodes;proposed.swapAt(index,index+offset)
-            guard validAppendPrefix(proposed) else { throw RouterVPNOrderedNodes.issue("Keep a paired WireGuard or AWG2 node first.") }
+            guard validAppendPrefix(proposed) else { throw RouterVPNOrderedNodes.issue("Keep a supported paired entry and every original prefix member compatible with it.") }
         }
         prefixes.swapAt(index, index + offset)
         modes.swapAt(index, index + offset)
@@ -903,7 +972,7 @@ struct RouterVPNOrderedNodeDraft {
         guard prefixes.indices.contains(index), externalExit == nil || index > 0 else { throw RouterVPNOrderedNodes.issue("The entry or exit is pinned to this route.") }
         if prefixOnly {
             var proposed=prefixNodes;proposed.remove(at:index)
-            guard proposed.isEmpty || validAppendPrefix(proposed) else { throw RouterVPNOrderedNodes.issue("Keep a paired WireGuard or AWG2 node first.") }
+            guard proposed.isEmpty || validAppendPrefix(proposed) else { throw RouterVPNOrderedNodes.issue("Keep a supported paired entry and every original prefix member compatible with it.") }
         }
         prefixes.remove(at: index)
         modes.remove(at: index)
@@ -921,17 +990,19 @@ struct RouterVPNOrderedNodeDraft {
             return selection
         }
         let retainedHysteria = RouterVPNOrderedNodes.pairedHysteriaLocalPath(ordered, execution: execution, profiles: capturedCatalog)
+        let pairedProxy = RouterVPNOrderedNodes.pairedProxyEntryLocalPath(ordered, execution: execution, profiles: capturedCatalog)
+        if RouterVPNOrderedNodes.pairedProxyEntrySource(ordered, profiles: capturedCatalog) && !pairedProxy { throw RouterVPNOrderedNodes.issue("Keep the paired Shadowsocks or Hysteria2 entry route Local and unlayered throughout.") }
         if RouterVPNOrderedNodes.pairedHysteriaLocalShape(ordered) && !retainedHysteria { throw RouterVPNOrderedNodes.issue("Keep the retained Hysteria2 route Local, paired, and unlayered.") }
         let localImported = execution == "local" && RouterVPNOrderedNodes.localImportedPath(ordered, profiles: capturedCatalog)
         let multipleImported = execution != "local" && RouterVPNOrderedNodes.localImportedPath(ordered, profiles: capturedCatalog, selectedExecution: true)
-        guard ordered.count <= 8 || localImported || multipleImported || retainedHysteria ||
+        guard ordered.count <= 8 || localImported || multipleImported || retainedHysteria || pairedProxy ||
                 RouterVPNOrderedNodes.extendedPairedPath(ordered, execution: execution, profiles: capturedCatalog) else {
             throw RouterVPNOrderedNodes.issue("Longer Local packet routes require paired WireGuard prefixes and a paired Shadowsocks final, all with Start Layer Off.")
         }
         if execution != "local" && RouterVPNOrderedNodes.multipleImportedShape(ordered) && !multipleImported { throw RouterVPNOrderedNodes.issue("Each imported Shadowsocks interior must support the selected execution.") }
         guard execution == "local" || multipleImported || !prefixes.contains(where: importedIDs.contains) || RouterVPNOrderedNodes.importedExecutionPrefixes(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.connectExecutionTrio(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.socksExecutionTrio(ordered, profiles: capturedCatalog) || RouterVPNOrderedNodes.openVPNExecutionPath(ordered, profiles: capturedCatalog) else { throw RouterVPNOrderedNodes.issue("Imported ordered paths retain Local execution until native Server admission is available.") }
         for (index, id) in prefixes.enumerated() {
-            guard importedIDs.contains(id) ? (RouterVPNOrderedNodes.importedPosition(modes[index], position: index, count: ordered.count) || (localImported || multipleImported) && (RouterVPNOrderedNodes.localSSPosition(modes[index], position: index, count: ordered.count) || index == 0 && RouterVPNOrderedNodes.customEntryShape(ordered))) && modes[index] == importedModes[id] && finalMode == "shadowsocks" : (RouterVPNOrderedNodes.prefixModes.contains(modes[index]) || retainedHysteria || (localImported || multipleImported) && modes[index] == "shadowsocks") else { throw RouterVPNOrderedNodes.issue("Keep each imported node in a position supported by its captured Local or Server path.") }
+            guard importedIDs.contains(id) ? (RouterVPNOrderedNodes.importedPosition(modes[index], position: index, count: ordered.count) || (localImported || multipleImported) && (RouterVPNOrderedNodes.localSSPosition(modes[index], position: index, count: ordered.count) || index == 0 && RouterVPNOrderedNodes.customEntryShape(ordered))) && modes[index] == importedModes[id] && finalMode == "shadowsocks" : (RouterVPNOrderedNodes.prefixModes.contains(modes[index]) || retainedHysteria || pairedProxy || (localImported || multipleImported) && modes[index] == "shadowsocks") else { throw RouterVPNOrderedNodes.issue("Keep each imported node in a position supported by its captured Local or Server path.") }
         }
         return RouterVPNConnectionProfileSelection(selectedNodeID: control, multihopEnabled: true, entryMode: "",
             execution: execution, profileTokens: tokens.filter { key, _ in ordered.contains { $0["id"] == key } }, orderedNodes: ordered)
@@ -1672,7 +1743,7 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         super.init(window: window)
         let root = NSStackView(); root.orientation = .vertical; root.alignment = .leading; root.spacing = 12
         root.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        let note = NSTextField(wrappingLabelWithString: "Choose the entry and preceding hops. Longer Local packet paths use paired WireGuard nodes and a paired Shadowsocks 2022 final, all with Start Layer Off. Longer Local routes can also begin with paired WireGuard or AWG2 nodes followed by literal Shadowsocks 2022 imports. For a paired final, keep every Start Layer Off on these longer routes. A Local route to an imported exit uses the paired entry’s saved Start Layer and requires Off on every import. Each packet layer must fit the route MTU. A WireGuard or AWG2 final requires two to eight paired Local packet nodes with Start Layer Off throughout. A Hysteria2 final keeps its own Start Layer. A Local route with a Hysteria2 middle uses paired nodes with Start Layer Off throughout and ends at Shadowsocks or Hysteria2. An imported SS2022, SOCKS5, HTTP(S) CONNECT or OpenVPN middle requires a Shadowsocks 2022 final. With a paired entry, supported SS2022 imports can occupy any interior position. Server and Compare require support from every import and the native controller. An OpenVPN middle also needs its own private pairing. Each node keeps its own linked credentials and settings.")
+        let note = NSTextField(wrappingLabelWithString: "Choose nodes in order. Use Build prefix only to add and measure the next transport through the selected prefix. Choose a final node when the path is ready. Each node keeps its saved settings.")
         root.addArrangedSubview(note)
         path.setAccessibilityLabel("Ordered path"); path.target = self; path.action = #selector(selectedHopChanged); root.addArrangedSubview(path)
         transport.setAccessibilityLabel("Selected node transport")
@@ -1706,6 +1777,16 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
         revision = UUID()
         path.removeAllItems()
         appendMode.isHidden = !draft.prefixOnly;applyButton.isEnabled = !draft.prefixOnly
+        let originalNext=appendMode.selectedItem?.representedObject as? String
+        appendMode.removeAllItems()
+        for mode in ["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"] { appendMode.addItem(withTitle:RouterVPNOrderedNodes.modeName(mode));appendMode.lastItem?.representedObject=mode }
+        if !draft.pairedProxyEntryPrefix { appendMode.addItem(withTitle:"Imported Shadowsocks");appendMode.lastItem?.representedObject="external-shadowsocks" }
+        if draft.executionAppendEligible || ["server-shadowsocks","auto-shadowsocks"].contains(originalNext ?? "") {
+            for (value,title) in [("server-shadowsocks","Shadowsocks · Server"),("auto-shadowsocks","Shadowsocks · Compare")] {
+                appendMode.addItem(withTitle:title);appendMode.lastItem?.representedObject=value
+            }
+        }
+        appendMode.selectItem(at:appendMode.itemArray.firstIndex(where:{$0.representedObject as? String == originalNext}) ?? -1)
         completePrefixButton.isHidden = !draft.prefixOnly;completePrefixButton.isEnabled = draft.canCompleteWithLastPairedFinal
         completePrefixButton.title = draft.completionTitle
         prefixOnlyButton.title=draft.prefixOnly ? "Use selected node as final":"Build prefix only"
@@ -1827,11 +1908,13 @@ final class RouterVPNOrderedNodeEditor: NSWindowController, NSMenuDelegate {
     private func measureAppend() {
         do {
             guard let owner=productOwner, let choice=appendMode.selectedItem?.representedObject as? String else { throw RouterVPNOrderedNodes.issue("Choose the next transport.") }
-            let mode=choice == "external-shadowsocks" ? "shadowsocks":choice
+            let mode=["external-shadowsocks","server-shadowsocks","auto-shadowsocks"].contains(choice) ? "shadowsocks":choice
             let kind=choice == "external-shadowsocks" ? "external":"router-vpn"
+            let requested=choice == "server-shadowsocks" ? "server":choice == "auto-shadowsocks" ? "auto":"local"
+            guard requested == "local" || draft.executionAppendEligible else { throw RouterVPNOrderedNodes.issue("Server and Compare require paired nodes with Start Layer Off: WireGuard or AmneziaWG first, then an optional literal Shadowsocks tail.") }
             let current=try owner.api.json("/api/profiles",timeout:5) as? [String:Any] ?? [:]
             let original=revision, position=draft.prefixes.count-1
-            let body=try draft.appendBody(mode:mode,kind:kind,revision:original,current:current)
+            let body=try draft.appendBody(mode:mode,kind:kind,requestedExecution:requested,revision:original,current:current)
             path.selectItem(at:position);selectedHopChanged()
             owner.showOrderedPrefixCandidates(savedPrefix:true,draft:body,position:position) { [weak self, weak owner] response in
                 guard let self, let owner, self.window?.isVisible == true, self.draft.prefixOnly, self.revision == original,

@@ -173,6 +173,8 @@ func registerMultihopRelayRoute(h *http.ServeMux, s *server) {
 	h.HandleFunc(multihopTorLeasePath, s.multihopTorLease)
 	h.HandleFunc(multihopNodeChainLeasePath, s.multihopNodeChainLease)
 	h.HandleFunc(multihopNodeChainCandidatePath, s.multihopNodeChainCandidate)
+	h.HandleFunc(multihopNodeChainPrefixLeasePath, s.multihopNodeChainPrefixLease)
+	h.HandleFunc(multihopNodeChainPrefixCandidatePath, s.multihopNodeChainPrefixCandidate)
 }
 func (s *server) multihopRelay(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")

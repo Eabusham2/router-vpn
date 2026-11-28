@@ -6,11 +6,68 @@ import Libbox
 struct IOSNodeCandidateAppendSource {
     static let nextModes = IOSMultihopNodeSelection.nativePrefixModes + ["shadowsocks", "hysteria2"]
     static func supportsNextMode(_ mode: String) -> Bool { nextModes.contains(mode) }
-    struct NextChoice: Hashable { let kind: String, mode: String }
+    struct NextChoice: Hashable {
+        let kind: String, mode: String, execution: String
+        init(kind: String, mode: String, execution: String = "local") { self.kind = kind; self.mode = mode; self.execution = execution }
+        var title: String {
+            if execution != "local" { return "Shadowsocks — " + (execution == "server" ? "Server" : "Compare Local / Server") + " private response" }
+            return kind == "external" ? "Shadowsocks — imported public HTTPS" : IOSMultihopNodeSelection.transportName(mode) + " — Local private response"
+        }
+    }
     static let nextChoices = nextModes.map { NextChoice(kind: "router-vpn", mode: $0) } + [NextChoice(kind: "external", mode: "shadowsocks")]
     static func supportsNext(kind: String, mode: String) -> Bool {
         kind == "router-vpn" && supportsNextMode(mode) || kind == "external" && mode == "shadowsocks"
     }
+    static func proxyEntryMode(_ mode: String) -> Bool { ["shadowsocks", "hysteria2"].contains(mode) }
+    static func proxyEntry(_ nodes: [IOSMultihopNodeSelection]) -> Bool { proxyEntryMode(nodes.first?.mode ?? "") }
+    static func availableNextChoices(proxyEntry: Bool) -> [NextChoice] { nextChoices.filter { !proxyEntry || $0.kind == "router-vpn" } }
+    static func supportsNext(kind: String, mode: String, proxyEntry: Bool) -> Bool {
+        (!proxyEntry || kind == "router-vpn") && supportsNext(kind: kind, mode: mode)
+    }
+    // Shape is only a hint; each caller still checks actual paired profiles,
+    // and the original native Local source remains the capture authority.
+    private static func executionSourceSchema(_ modes: [String]) -> Int? {
+        guard (1..<IOSMultihopNodeSelection.physicalTraversalDepth).contains(modes.count),
+              let first = modes.first, IOSMultihopNodeSelection.supportsNativePrefix(first) else { return nil }
+        var shadowsocksTail = false
+        for mode in modes {
+            if mode == "shadowsocks" { shadowsocksTail = true }
+            else if !IOSMultihopNodeSelection.supportsNativePrefix(mode) || shadowsocksTail { return nil }
+        }
+        return shadowsocksTail ? 2 : 1
+    }
+    static func permitsExecution(nodes: [IOSMultihopNodeSelection], profiles: [RouterProfile], choice: NextChoice) -> Bool {
+        guard supportsNext(kind: choice.kind, mode: choice.mode, proxyEntry: proxyEntry(nodes)) else { return false }
+        if choice.execution == "local" { return true }
+        guard ["server", "auto"].contains(choice.execution), choice.kind == "router-vpn", choice.mode == "shadowsocks",
+              executionSourceSchema(nodes.map(\.mode)) != nil, Set(nodes.map(\.id)).count == nodes.count else { return false }
+        return nodes.allSatisfy { node in
+            let originals = profiles.filter { $0.id == node.id }
+            guard originals.count == 1 else { return false }
+            let profile = originals[0]
+            return profile.normalizedNodeKind == "router-vpn" && profile.external == nil && [nil, "", "off"].contains(profile.startLayer) &&
+                IOSImportedShadowsocksSource.literal(profile.endpoint)
+        }
+    }
+    static func availableNextChoices(nodes: [IOSMultihopNodeSelection], profiles: [RouterProfile]) -> [NextChoice] {
+        let remote = ["server", "auto"].map { NextChoice(kind: "router-vpn", mode: "shadowsocks", execution: $0) }
+        return availableNextChoices(proxyEntry: proxyEntry(nodes)) + remote.filter { permitsExecution(nodes: nodes, profiles: profiles, choice: $0) }
+    }
+    func requireExecution(_ requested: String) throws {
+        try requireDeviceCurrent()
+        if requested == "local" { return }
+        guard ["server", "auto"].contains(requested), nextKind == "router-vpn", nextMode == "shadowsocks",
+              let schema = Self.executionSourceSchema(members.map(\.mode)),
+              let input = try JSONSerialization.jsonObject(with: Data(source.utf8)) as? [String: Any], input["schema"] as? Int == schema,
+              members.allSatisfy({ member in
+                  member.profile["node_kind"] as? String == "router-vpn" &&
+                  member.profile["external"] == nil && [nil, "", "off"].contains(member.profile["start_layer"] as? String) &&
+                  IOSImportedShadowsocksSource.literal(member.profile["endpoint"] as? String ?? "")
+              }) else { throw Self.executionIssue() }
+    }
+    static func executionIssue() -> NSError { NSError(domain: "RouterVPN.CandidateAppendExecution", code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Server and Compare require paired literal WireGuard or AmneziaWG nodes, optionally followed by paired literal Shadowsocks 2022 nodes, all with Start Layer Off and a paired Shadowsocks next node. Keep WireGuard and AmneziaWG before Shadowsocks. Choose Local explicitly for other prefixes."]) }
+
     static func measurement(kind: String) -> String {
         kind == "external" ? "routed-public-candidate-response" : kind == "router-vpn" ? "routed-candidate-response" : ""
     }
@@ -42,6 +99,8 @@ struct IOSNodeCandidateAppendSource {
               Set(nodes.map(\.id)).count == nodes.count,
               nodes.allSatisfy({ !$0.id.isEmpty }),
               supportsNext(kind: nextKind, mode: nextMode) else { throw issue() }
+        let firstProxy = Self.proxyEntry(nodes)
+        guard supportsNext(kind: nextKind, mode: nextMode, proxyEntry: firstProxy) else { throw issue() }
         let root = try object(deviceBundle, maximum: 32 * 1024 * 1024)
         guard let selected = root["selectedRouterID"] as? String,
               let profiles = root["routerProfiles"] as? [[String: Any]],
@@ -55,7 +114,7 @@ struct IOSNodeCandidateAppendSource {
         for (position, node) in nodes.enumerated() {
             let source = try saved(node.id, records: records)
             let typed = try JSONDecoder().decode(RouterProfile.self, from: Data(json(source.profile, maximum: 256 * 1024).utf8))
-            guard prefixModes(typed, position: position).contains(node.mode) else { throw issue() }
+            guard prefixModes(typed, position: position, proxyEntry: firstProxy).contains(node.mode) else { throw issue() }
             inputs.append(try memberInput(profile: source.profile, assets: source.assets, mode: node.mode))
             if typed.normalizedNodeKind == "external" {
                 identities.append("")
@@ -65,7 +124,7 @@ struct IOSNodeCandidateAppendSource {
             }
         }
         var value: [String: Any] = [
-            "kind": "routervpn-node-chain-candidate-append-source", "schema": nodes.contains(where: { ["shadowsocks", "hysteria2"].contains($0.mode) }) ? 2 : 1, "execution": "local",
+            "kind": "routervpn-node-chain-candidate-append-source", "schema": firstProxy ? 3 : nodes.contains(where: { ["shadowsocks", "hysteria2"].contains($0.mode) }) ? 2 : 1, "execution": "local",
             "draft_revision": draftRevision, "device_revision": deviceRevision, "device_source": deviceInput,
             "next_mode": nextMode, "append_position": nodes.count, "nodes": inputs, "identity_sources": identities
         ]
@@ -97,11 +156,11 @@ struct IOSNodeCandidateAppendSource {
         let safe = try Self.object(Data(metadata.utf8), maximum: 256 * 1024)
         let nextKind = plan.candidateKind(), measurement = plan.candidateMeasurement()
         guard value["kind"] as? String == "routervpn-node-chain-candidate-append-source",
-              let schema = value["schema"] as? Int, [1, 2].contains(schema), value["execution"] as? String == "local",
+              let schema = value["schema"] as? Int, [1, 2, 3].contains(schema), value["execution"] as? String == "local",
               let nodes = value["nodes"] as? [String], !nodes.isEmpty, nodes.count < IOSMultihopNodeSelection.physicalTraversalDepth,
               let identities = value["identity_sources"] as? [String], identities.count == nodes.count,
               let deviceInput = value["device_source"] as? String, let mode = value["next_mode"] as? String,
-              Self.supportsNext(kind: nextKind, mode: mode), mode == plan.candidateMode(),
+              Self.supportsNext(kind: nextKind, mode: mode, proxyEntry: schema == 3), mode == plan.candidateMode(),
               measurement == Self.measurement(kind: nextKind),
               nextKind == "external" ? value["next_kind"] as? String == "external" : value["next_kind"] == nil,
               nextKind == "external" ? safe["candidate_kind"] as? String == "external" : safe["candidate_kind"] == nil,
@@ -126,11 +185,11 @@ struct IOSNodeCandidateAppendSource {
         guard safe["device_source_sha256"] as? String == deviceRecord["source_sha256"] as? String else { throw Self.issue() }
         let members = try nodes.map(Self.member), device = try Self.member(deviceInput)
         guard device.mode == "wg", device.profile["node_kind"] as? String == "router-vpn", device.profile["external"] == nil,
-              schema == (members.contains(where: { ["shadowsocks", "hysteria2"].contains($0.mode) }) ? 2 : 1),
+              schema == (Self.proxyEntryMode(members.first?.mode ?? "") ? 3 : members.contains(where: { ["shadowsocks", "hysteria2"].contains($0.mode) }) ? 2 : 1),
               Set(members.map(\.id)).count == members.count else { throw Self.issue() }
         for (position, member) in members.enumerated() {
             let typed = try JSONDecoder().decode(RouterProfile.self, from: Data(member.profileJSON.utf8))
-            guard Self.prefixModes(typed, position: position).contains(member.mode),
+            guard Self.prefixModes(typed, position: position, proxyEntry: schema == 3).contains(member.mode),
                   identities[position].isEmpty == (typed.normalizedNodeKind == "external") else { throw Self.issue() }
         }
         var protect = false, lan = true
@@ -168,10 +227,19 @@ struct IOSNodeCandidateAppendSource {
         guard let found else { throw issue() }
         return found
     }
-    static func prefixModes(_ profile: RouterProfile?, position: Int) -> [String] {
+    // The original imported capture binds a hostname to explicit Custom TCP
+    // DNS. Eligibility is source-only; the append preparation admits answers.
+    static func prefixStartModes(_ profile: RouterProfile?) -> [String] {
+        prefixModes(profile, position: 0) + prefixModes(profile, position: 0, proxyEntry: true)
+    }
+    static func prefixModes(_ profile: RouterProfile?, position: Int, proxyEntry: Bool = false) -> [String] {
         guard position >= 0, let profile else { return [] }
+        if proxyEntry {
+            let modes = position == 0 ? ["shadowsocks", "hysteria2"] : nextModes
+            return modes.filter { IOSMultihopNodeSelection.pairedProxyEntryMember(profile, mode: $0) }
+        }
         if profile.normalizedNodeKind == "external" {
-            return position > 0 && IOSImportedShadowsocksSource.eligibleLiteral(profile) ? ["shadowsocks"] : []
+            return position > 0 && IOSImportedShadowsocksSource.eligible(profile) ? ["shadowsocks"] : []
         }
         guard profile.normalizedNodeKind == "router-vpn", profile.external == nil else { return [] }
         return IOSMultihopNodeSelection.nativePrefixModes +
@@ -180,7 +248,7 @@ struct IOSNodeCandidateAppendSource {
     static func memberInput(profile: [String: Any], assets: [String: [String: String]], mode: String) throws -> String {
         if profile["node_kind"] as? String == "external" {
             let typed = try JSONDecoder().decode(RouterProfile.self, from: Data(json(profile, maximum: 256 * 1024).utf8))
-            guard mode == "shadowsocks", IOSImportedShadowsocksSource.eligibleLiteral(typed) else { throw issue() }
+            guard mode == "shadowsocks", IOSImportedShadowsocksSource.eligible(typed) else { throw issue() }
             let captured = try IOSImportedShadowsocksSource.capture(typed)
             var failure: NSError?
             let input: String? = LibboxRouterNodeChainImportedMemberInput(captured.config, captured.capture, &failure)
@@ -212,7 +280,7 @@ struct IOSNodeCandidateAppendSource {
                   let profile = try object(Data(capture.utf8), maximum: 8 * 1024 * 1024)["profile"] as? [String: Any] else { throw issue() }
             let profileJSON = try json(profile, maximum: 256 * 1024)
             let typed = try JSONDecoder().decode(RouterProfile.self, from: Data(profileJSON.utf8))
-            guard IOSImportedShadowsocksSource.eligibleLiteral(typed) else { throw issue() }
+            guard IOSImportedShadowsocksSource.eligible(typed) else { throw issue() }
             return IOSNodeChainCapture.Member(id: typed.id, mode: "shadowsocks", profileJSON: profileJSON,
                 filesJSON: config, profile: profile, startFilesJSON: nil)
         }

@@ -14,11 +14,21 @@ import (
 
 var errOriginalPeer = errors.New("ordered hostname did not resolve to an independent original peer")
 
+// The optional check can only tighten an already captured hostname lookup.
+// Its closure is owned by one preparation and is never registered globally.
+type RouterVPNOriginalPeerCheck func(context.Context, string, uint16, adapter.DNSTransport, []netip.Addr) error
+type routerVPNOriginalPeerCheckKey struct{}
+
+func ContextWithRouterVPNOriginalPeerCheck(ctx context.Context, check RouterVPNOriginalPeerCheck) context.Context {
+	return context.WithValue(ctx, routerVPNOriginalPeerCheckKey{}, check)
+}
+
 // The scoped wrapper belongs to one SS outbound and only sees its saved
 // provider endpoint. It neither opens another resolver nor changes its cache.
 type routerVPNOriginalPeer struct {
 	N.Dialer
-	peer M.Socksaddr
+	peer    M.Socksaddr
+	resolve *resolveDialer
 }
 
 func (p *routerVPNOriginalPeer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
@@ -40,6 +50,7 @@ func (p *routerVPNOriginalPeer) Upstream() any { return p.Dialer }
 type routerVPNOriginalLookup struct {
 	adapter.DNSRouter
 	host, transport string
+	port            uint16
 	excluded        map[netip.Addr]bool
 }
 
@@ -63,6 +74,11 @@ func (r *routerVPNOriginalLookup) Lookup(ctx context.Context, host string, optio
 	for _, answer := range answers {
 		if !answer.IsValid() || answer.Zone() != "" || answer.IsUnspecified() || answer.IsMulticast() || r.excluded[answer.Unmap()] {
 			return nil, errOriginalPeer
+		}
+	}
+	if check, ok := ctx.Value(routerVPNOriginalPeerCheckKey{}).(RouterVPNOriginalPeerCheck); ok && check != nil {
+		if err := check(ctx, host, r.port, options.Transport, answers); err != nil {
+			return nil, err
 		}
 	}
 	return answers, nil
@@ -89,6 +105,23 @@ func BindRouterVPNOriginalPeer(outbound N.Dialer, peer M.Socksaddr, resolver str
 		}
 		excluded[ip] = true
 	}
-	base.router = &routerVPNOriginalLookup{DNSRouter: base.router, host: peer.Fqdn, transport: resolver, excluded: excluded}
-	return &routerVPNOriginalPeer{Dialer: outbound, peer: peer}, nil
+	base.router = &routerVPNOriginalLookup{DNSRouter: base.router, host: peer.Fqdn, port: peer.Port, transport: resolver, excluded: excluded}
+	return &routerVPNOriginalPeer{Dialer: outbound, peer: peer, resolve: base}, nil
+}
+
+// ResolveRouterVPNOriginalPeer admits DNS only. It uses the same captured
+// transport, query options and original-peer checks as the later socket dial.
+func ResolveRouterVPNOriginalPeer(ctx context.Context, outbound N.Dialer) error {
+	peer, ok := outbound.(*routerVPNOriginalPeer)
+	if ctx == nil || !ok || peer == nil || peer.resolve == nil || !peer.peer.IsDomain() {
+		return errOriginalPeer
+	}
+	if err := peer.resolve.initialize(); err != nil {
+		return err
+	}
+	_, err := peer.resolve.router.Lookup(ctx, peer.peer.Fqdn, peer.resolve.queryOptions)
+	if err != nil {
+		return err
+	}
+	return ctx.Err()
 }

@@ -22,6 +22,10 @@ func routerVPNDesktopNodeChainPhysicalTarget(policy *mobilemultihop.DesktopNodeC
 	if original == nil || chain == nil {
 		return false
 	}
+	pairedProxyEntryCount := chain.PairedProxyEntryLocalNodeCount()
+	if original.PairedProxyEntryLocalNodeCount() != pairedProxyEntryCount || pairedProxyEntryCount != 0 && pairedProxyEntryCount != len(meta.Prefixes) {
+		return false
+	}
 	pairedHysteriaCount := chain.PairedHysteriaLocalNodeCount()
 	if original.PairedHysteriaLocalNodeCount() != pairedHysteriaCount || pairedHysteriaCount != 0 && pairedHysteriaCount != len(meta.Prefixes) {
 		return false
@@ -44,7 +48,7 @@ func routerVPNDesktopNodeChainPhysicalTarget(policy *mobilemultihop.DesktopNodeC
 	if len(captured) != len(meta.Prefixes) {
 		return false
 	}
-	if pairedHysteriaCount != 0 {
+	if pairedHysteriaCount != 0 || pairedProxyEntryCount != 0 {
 		originalProofs := original.ProofInventory()
 		if len(originalProofs) != len(captured) || externalFinal || middle.Tag != "" || len(publicCaptures) != 0 {
 			return false
@@ -89,7 +93,7 @@ func routerVPNDesktopNodeChainPhysicalTarget(policy *mobilemultihop.DesktopNodeC
 			continue
 		}
 		modeSupported := mobilemultihop.NodeChainPrefixMode(prefix.Mode)
-		if pairedHysteriaCount != 0 {
+		if pairedHysteriaCount != 0 || pairedProxyEntryCount != 0 {
 			// Both complete source owners and every original proof were read above.
 			modeSupported = modeSupported || prefix.Mode == "shadowsocks" || prefix.Mode == "hysteria2"
 		}

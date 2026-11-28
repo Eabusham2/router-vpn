@@ -100,6 +100,7 @@ type NodeChain struct {
 	socksSource                                   *NodeChainSOCKSSource
 	connectSource                                 *NodeChainCONNECTSource
 	pairedHysteria                                *nodeChainPairedHysteriaLocal
+	pairedProxyEntry                              *nodeChainPairedProxyEntryLocal
 	extendedPairedOwner                           *NodeChain
 	extendedPairedMembers                         []*NodeProfile
 	typedOriginal                                 *nodeChainMultipleImportedLocalSeal
@@ -174,7 +175,7 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 	c.sourceSHA = externalDigest(digest)
 	clear(digest)
 	ids, peers, clients, servers := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
-	pairedHysteria := false
+	pairedHysteria, pairedProxyEntry := false, false
 	for position, input := range source.Nodes {
 		if source.Schema == 5 && position == len(source.Nodes)-2 {
 			middle, err := parseNodeChainOpenVPNMember(input)
@@ -231,8 +232,10 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		pairedStream := source.Schema == 6 && position > 0 && position < len(source.Nodes)-1 && node.mode == "shadowsocks"
 		completeProxy := source.Schema == 1 && position > 0 && position < len(source.Nodes)-1 &&
 			(node.mode == "shadowsocks" || node.mode == "hysteria2")
+		firstProxy := source.Schema == 1 && position == 0 && nodeChainAppendProxyMode(node.mode)
+		pairedProxyEntry = pairedProxyEntry || firstProxy
 		pairedHysteria = pairedHysteria || completeProxy
-		if position < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) && !pairedStream && !completeProxy ||
+		if position < len(source.Nodes)-1 && !NodeChainPrefixMode(node.mode) && !pairedStream && !completeProxy && !firstProxy ||
 			position == len(source.Nodes)-1 && !nodeChainFinalCapture(node) {
 			return nil, errors.New("ordered Local chains require captured WG or AWG2 Fast/Strong prefixes and an eligible original paired final")
 		}
@@ -266,7 +269,12 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 			}
 		}
 	}
-	if pairedHysteria {
+	if pairedProxyEntry {
+		if source.Schema != 1 || len(source.IdentitySources) != len(c.nodes) || slices.Contains(source.IdentitySources, "") {
+			return nil, nodeChainError
+		}
+		c.config, c.proofs, c.dns, c.physical, err = compileNodeChainPairedProxyEntry(c)
+	} else if pairedHysteria {
 		if source.Schema != 1 || len(source.IdentitySources) != len(c.nodes) || slices.Contains(source.IdentitySources, "") {
 			return nil, nodeChainError
 		}
@@ -293,6 +301,11 @@ func NewNodeChain(sourceJSON string) (*NodeChain, error) {
 		return nil, err
 	}
 	c.seal = c.captureSeal()
+	if c.pairedProxyEntry != nil {
+		if err := c.pairedProxyEntry.freeze(c); err != nil {
+			return nil, err
+		}
+	}
 	if c.pairedHysteria != nil {
 		if err := c.pairedHysteria.freeze(c); err != nil {
 			return nil, err
@@ -432,6 +445,9 @@ func (c *NodeChain) captureSeal() string {
 
 func (c *NodeChain) validateCapture() error {
 	if c == nil || c.seal == "" || c.captureSeal() != c.seal || len(c.nodes) != len(c.proofs) {
+		return nodeChainError
+	}
+	if pairedProxyEntryLocalProofs(c.proofs) != (c.pairedProxyEntry != nil) || c.pairedProxyEntry != nil && !c.pairedProxyEntry.current(c) {
 		return nodeChainError
 	}
 	if pairedHysteriaLocalProofs(c.proofs) != (c.pairedHysteria != nil) || c.pairedHysteria != nil && !c.pairedHysteria.current(c) {

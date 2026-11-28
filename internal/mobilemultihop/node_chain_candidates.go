@@ -50,7 +50,7 @@ type NodeChainCandidateOwner interface {
 
 type NodeChainCandidatePlan struct {
 	appendSource           *NodeChainCandidateAppendSource
-	appendImportSeals      []*nodeChainMultipleImportedMemberSeal
+	appendImportSeals      []*nodeChainAppendImportedSeal
 	chain                  *NodeChain
 	multiple               *nodeChainCandidateMultipleOriginal
 	multipleSeal           *nodeChainMultipleCandidatePlanSeal

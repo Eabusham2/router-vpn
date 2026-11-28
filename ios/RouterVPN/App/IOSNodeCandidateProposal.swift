@@ -48,7 +48,7 @@ import Libbox
         if original.nextKind == "external" {
             let typed = try JSONDecoder().decode(RouterProfile.self, from: JSONSerialization.data(withJSONObject: candidate.profile))
             guard original.nextMode == "shadowsocks", typed.normalizedNodeKind == "external",
-                  IOSImportedShadowsocksSource.eligibleLiteral(typed) else { throw IOSNodeCandidateCapture.issue() }
+                  IOSImportedShadowsocksSource.eligible(typed) else { throw IOSNodeCandidateCapture.issue() }
         } else if ["shadowsocks", "hysteria2"].contains(original.nextMode) {
             guard candidate.profile["node_kind"] as? String == "router-vpn", candidate.profile["external"] == nil else {
                 throw IOSNodeCandidateCapture.issue()

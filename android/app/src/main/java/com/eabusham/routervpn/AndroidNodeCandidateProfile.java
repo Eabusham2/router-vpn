@@ -78,11 +78,15 @@ final class AndroidNodeCandidateProfile {
                     ||!candidateMode.equals(original.appendMode)||candidate.imported!="external".equals(original.appendKind)||catalog.session.capture.append==null
                     ||!catalog.session.capture.append.fits(actual))throw new IllegalStateException("The measured append lost its original prefix or next-mode authority.");
             AndroidNodeCandidateAppendSource.requireCandidate(candidate,original.appendKind,candidateMode);
+            if(original.appendExecutionDraft()) {
+                result.requireAppendExecution(catalog.session.candidatePrefix,true);
+                if(!catalog.session.candidatePrefix.plan.fitsExecutionSource(actual))throw new IllegalStateException("The measured node changed its original execution inventory.");
+            }
             execution="local";preparedPacketReplacement=false;preparedPacketAppend=true;
             sources.addAll(original.members);modes.addAll(original.modes);sources.add(candidate);modes.add(candidateMode);
             StringBuilder preview=new StringBuilder();
             for(int i=0;i<sources.size();i++){if(i>0)preview.append(" → ");preview.append(sources.get(i).profileId).append(" (").append(modes.get(i)).append(")");}
-            description=preview+" • unfinished prefix";requireCurrent();return;
+            description=preview+" • unfinished Local prefix"+(result.executionDetails.isEmpty()?"":"\n"+result.executionDetails);requireCurrent();return;
         }
         preparedPacketAppend=false;
         if(original==null||replacement<1||replacement>=original.members.size()||original.members.size()!=original.modes.size())
@@ -238,6 +242,10 @@ final class AndroidNodeCandidateProfile {
                 AndroidNodeStore.ChainSource candidate=sources.get(catalog.prefix+1);
                 String input=AndroidNodeChainCapture.memberInput(candidate,modes.get(catalog.prefix+1),candidate.profile());
                 if(catalog.session.capture.append==null||!catalog.session.capture.append.fits(input))throw new IllegalStateException("The original append no longer fits its captured prefix.");
+                if(catalog.originalSource.appendExecutionDraft()) {
+                    result.requireAppendExecution(catalog.session.candidatePrefix,false);
+                    if(!catalog.session.candidatePrefix.plan.fitsExecutionSource(input))throw new IllegalStateException("The original execution no longer owns this measured candidate.");
+                }
                 draft.appendMeasured(catalog.originalSource,candidate,modes.get(catalog.prefix+1),()->result.current(System.currentTimeMillis()));
             } else if(preparedPacketReplacement)
                 draft.replaceMeasured(catalog.originalSource,catalog.prefix,sources.get(catalog.prefix + 1),modes.get(catalog.prefix + 1),()->result.current(System.currentTimeMillis()));

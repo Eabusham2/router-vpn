@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"router-vpn/internal/mobilemultihop"
@@ -77,13 +78,13 @@ func (a *app) orderedCandidatePreparedCatalogWithNetwork(w http.ResponseWriter, 
 	defer cancel()
 	var view *orderedCandidatePreparedView
 	if isDraft {
-		if scope == orderedCandidateAppendScope {
+		if orderedCandidateAppendPurpose(scope) {
 			if serverResponse || !orderedCandidatePrefixPlatformSupported() {
 				http.Error(w, "append measurement requires the closed Local prefix controller", 409)
 				return
 			}
 			appendRequest, decodeErr := decodeOrderedCandidateAppendRequest(http.MaxBytesReader(w, request.Body, multihopConnectRequestLimit))
-			if decodeErr != nil || position != appendRequest.AppendPosition-1 {
+			if decodeErr != nil || appendRequest.Purpose != scope || position != appendRequest.AppendPosition-1 {
 				http.Error(w, "an exact incomplete prefix, next transport and kind, and device source are required", 400)
 				return
 			}
@@ -207,8 +208,9 @@ func (a *app) orderedCandidatePreparedRequest(w http.ResponseWriter, request *ht
 	admission, stopAdmission := context.WithTimeout(request.Context(), 12*time.Second)
 	defer stopAdmission()
 	lifetime, stopLifetime := context.WithTimeout(context.Background(), viaEntryRequestTimeout)
+	inventoryIDs, inventorySHA, executionSourceSHA := view.appendExecutionInventoryRequest()
 	p, err := beginOrderedCandidatePreparationWithLifetime(admission, lifetime, a,
-		orderedCandidatePreparationRequest{draft: view.draft, append: view.append, serverResponse: view.catalog.serverResponse, Scope: scope, RequestID: q.RequestID, Position: q.PrefixPosition, CandidateIDs: q.CandidateIDs, Samples: q.Samples}, physicalNetworkIdentityContext)
+		orderedCandidatePreparationRequest{draft: view.draft, append: view.append, inventoryCandidateIDs: inventoryIDs, inventorySHA: inventorySHA, executionSourceSHA: executionSourceSHA, serverResponse: view.catalog.serverResponse, Scope: scope, RequestID: q.RequestID, Position: q.PrefixPosition, CandidateIDs: q.CandidateIDs, Samples: q.Samples}, physicalNetworkIdentityContext)
 	if err != nil {
 		stopLifetime()
 		http.Error(w, err.Error(), 409)
@@ -304,6 +306,16 @@ func orderedCandidatePreparedResponseLocked(owner *viaEntryOwner, now time.Time)
 		"current_candidate": job.current, "results": rows, "errors": append([]viaEntryCandidateError{}, job.failures...),
 		"failure": job.failure, "cleanup_error": job.cleanupError, "measurement": candidateViewMetric(job.view.prefixes, job.view.position),
 		"active_path_changed": false, "saved_profile_id": "", "started": true, "admission_cancelled": false}
+	if job.preparation.appendExecutionPreparation != nil {
+		executionRows := make([]json.RawMessage, 0, len(rows))
+		for _, row := range rows {
+			if raw, err := job.preparation.retainedAppendExecutionResult(row.CandidateID, row, now); err == nil {
+				executionRows = append(executionRows, raw)
+			}
+		}
+		response["results"] = executionRows
+		response["accepted"] = reviewing && len(executionRows) > 0
+	}
 	job.view.addResponseSource(response)
 	if job.view.draft != nil {
 		response["requested_execution"] = job.view.draft.Execution

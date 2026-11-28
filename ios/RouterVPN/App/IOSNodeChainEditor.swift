@@ -18,7 +18,7 @@ struct IOSNodeChainDraft {
 
     mutating func beginPrefix(id: String, mode: String) throws {
         guard id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil,
-              IOSMultihopNodeSelection.supportsNativePrefix(mode) else { throw IOSNodeCandidateAppendSource.issue() }
+              IOSNodeCandidateAppendSource.supportsNextMode(mode) else { throw IOSNodeCandidateAppendSource.issue() }
         unfinished = true
         nodes = [.init(id: id, mode: mode)]
     }
@@ -36,7 +36,7 @@ struct IOSNodeChainDraft {
               Set(nodes.map(\.id)).count == nodes.count, nodes.enumerated().allSatisfy({ position, node in
                   let originals = profiles.filter { $0.id == node.id }
                   return !node.id.isEmpty && originals.count == 1 &&
-                      IOSNodeCandidateAppendSource.prefixModes(originals[0], position: position).contains(node.mode)
+                      IOSNodeCandidateAppendSource.prefixModes(originals[0], position: position, proxyEntry: IOSNodeCandidateAppendSource.proxyEntry(nodes)).contains(node.mode)
               }) else { throw IOSNodeCandidateAppendSource.issue() }
         return nodes
     }
@@ -88,8 +88,8 @@ struct IOSNodeChainDraft {
         !unfinished && ((2...IOSMultihopNodeSelection.maximumNodes).contains(nodes.count) || IOSMultihopNodeSelection.extendedOriginalModes(nodes.map(\.mode), execution: "local")) &&
             nodes.allSatisfy({ $0.id.range(of: "\\A[A-Za-z0-9_-]{1,64}\\z", options: .regularExpression) != nil }) &&
             Set(nodes.map(\.id)).count == nodes.count && (nodes.last?.id == controlID || IOSMultihopNodeSelection.externalExitReferences(nodes, controlID: controlID, execution: "local")) &&
-            (nodes.first?.mode != "shadowsocks" || IOSMultihopNodeSelection.usesLocalImportedEntry(nodes)) &&
-            (IOSMultihopNodeSelection.pairedHysteriaLocalModes(nodes.map(\.mode), execution: "local") ||
+            (nodes.first?.mode != "shadowsocks" || IOSMultihopNodeSelection.usesLocalImportedEntry(nodes) || IOSMultihopNodeSelection.pairedProxyEntryLocalModes(nodes.map(\.mode), execution: "local")) &&
+            (IOSMultihopNodeSelection.pairedHysteriaLocalModes(nodes.map(\.mode), execution: "local") || IOSMultihopNodeSelection.pairedProxyEntryLocalModes(nodes.map(\.mode), execution: "local") ||
              nodes.dropLast().enumerated().allSatisfy({ position, node in IOSMultihopNodeSelection.supportsNativePrefix(node.mode) || (IOSMultihopNodeSelection.supportsImportedMiddle(node.mode, position: position, count: nodes.count) || IOSMultihopNodeSelection.supportsLocalImportedNode(node.mode, position: position, count: nodes.count, importedEntry: IOSMultihopNodeSelection.usesLocalImportedEntry(nodes))) && nodes.last?.mode == "shadowsocks" })) &&
             (IOSMultihopNodeSelection.nativeFinalModes.contains(nodes.last?.mode ?? "") ||
              IOSMultihopNodeSelection.supportsLocalPacketRoute(nodes, execution: "local"))
@@ -252,15 +252,20 @@ struct IOSNodeChainDraft {
         nodes[0].mode = mode
     }
 
-    mutating func chooseMode(_ mode: String, at position: Int) throws {
+    mutating func chooseMode(_ mode: String, at position: Int, execution: String = "local") throws {
         if unfinished {
             guard nodes.indices.contains(position),
-                  IOSMultihopNodeSelection.supportsNativePrefix(mode) || position > 0 && ["shadowsocks", "hysteria2"].contains(mode) else { throw IOSNodeCandidateAppendSource.issue() }
+                  IOSNodeCandidateAppendSource.supportsNextMode(mode) else { throw IOSNodeCandidateAppendSource.issue() }
             nodes[position].mode = mode
             return
         }
         guard position >= firstEditablePrefix else {
             throw IOSMultihopNodeSelection.issue("Choose the entry transport from its paired source.")
+        }
+        if nodes.indices.contains(position), position < nodes.count - 1,
+           IOSMultihopNodeSelection.pairedProxyEntryLocalModes(nodes.enumerated().map { $0.offset == position ? mode : $0.element.mode }, execution: execution) {
+            nodes[position].mode = mode
+            return
         }
         guard nodes.indices.contains(position), position < nodes.count - 1,
               nodes.count <= IOSMultihopNodeSelection.maximumNodes || mode == "wg" || mode == "shadowsocks" || IOSMultihopNodeSelection.extendedMixedPacketCount(nodes.enumerated().map { $0.offset == position ? mode : $0.element.mode }, execution: "local") > 0,
@@ -297,7 +302,7 @@ struct IOSNodeChainDraft {
 
     mutating func chooseFinalMode(_ mode: String, execution: String = "local") throws {
         guard !unfinished, !nodes.isEmpty, IOSMultihopNodeSelection.nativeFinalModes.contains(mode) || execution == "local" && IOSMultihopNodeSelection.supportsNativePrefix(mode),
-              mode == "shadowsocks" || nodes.count <= IOSMultihopNodeSelection.maximumNodes && nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) else {
+              mode == "shadowsocks" || IOSMultihopNodeSelection.pairedProxyEntryLocalModes(nodes.dropLast().map(\.mode) + [mode], execution: execution) || nodes.count <= IOSMultihopNodeSelection.maximumNodes && nodes.dropLast().allSatisfy({ IOSMultihopNodeSelection.supportsNativePrefix($0.mode) }) else {
             throw IOSMultihopNodeSelection.issue("Choose a final transport supported by the selected execution and paired packet prefix.")
         }
         nodes[nodes.count - 1].mode = mode
@@ -405,7 +410,7 @@ extension RouterVPNModel {
                   allNodeProfiles.filter({ $0.id == id }).count == 1 else { throw IOSNodeCandidateAppendSource.issue() }
         }
         for (position, node) in nodes.enumerated() {
-            guard IOSNodeCandidateAppendSource.prefixModes(allNodeProfiles.first(where: { $0.id == node.id }), position: position).contains(node.mode) else {
+            guard IOSNodeCandidateAppendSource.prefixModes(allNodeProfiles.first(where: { $0.id == node.id }), position: position, proxyEntry: IOSNodeCandidateAppendSource.proxyEntry(nodes)).contains(node.mode) else {
                 throw IOSNodeCandidateAppendSource.issue()
             }
         }
@@ -577,8 +582,9 @@ enum IOSNodeChainEditorVisible {
         return IOSMultihopNodeSelection.pairedStreamPositions(proposed, execution: execution, profiles: profiles).contains(position)
     }
 
-    static func modes(_ profile: RouterProfile?, nodeCount: Int = 2, mixedPacket: Bool = false, selectedPacket: Bool = false) -> [String] {
+    static func modes(_ profile: RouterProfile?, nodeCount: Int = 2, mixedPacket: Bool = false, selectedPacket: Bool = false, proxyEntry: Bool = false, position: Int = 0) -> [String] {
         guard let profile, eligible(profile) else { return [] }
+        if proxyEntry { return IOSNodeCandidateAppendSource.prefixModes(profile, position: position, proxyEntry: true) }
         if profile.normalizedNodeKind == "external" { return [profile.external?.protocolName ?? ""] }
         if selectedPacket && nodeCount > IOSMultihopNodeSelection.maximumNodes { return IOSMultihopNodeSelection.nativePrefixModes }
         return nodeCount > IOSMultihopNodeSelection.maximumNodes && !mixedPacket ? ["wg"] : IOSMultihopNodeSelection.nativePrefixModes
@@ -595,7 +601,7 @@ enum IOSNodeChainEditorVisible {
         }
         var hysteriaFinal = nodes
         hysteriaFinal[hysteriaFinal.count - 1].mode = "hysteria2"
-        if !modes.contains("hysteria2"), IOSMultihopNodeSelection.pairedHysteriaLocalSource(hysteriaFinal, execution: execution, profiles: linked) {
+        if !modes.contains("hysteria2"), IOSMultihopNodeSelection.pairedHysteriaLocalSource(hysteriaFinal, execution: execution, profiles: linked) || IOSMultihopNodeSelection.pairedProxyEntryLocalSource(hysteriaFinal, execution: execution, profiles: linked) {
             modes.append("hysteria2")
         }
         if execution == "local", nodes.count <= IOSMultihopNodeSelection.maximumNodes,
@@ -625,6 +631,13 @@ enum IOSNodeChainEditorVisible {
             return unique(profiles).filter { profile in
                 position == 0 ? profile.id == nodes.first?.id && profile.normalizedNodeKind == "router-vpn" :
                     IOSImportedShadowsocksSource.eligibleLiteral(profile) && !nodes.enumerated().contains { $0.offset != position && $0.element.id == profile.id }
+            }
+        }
+        if execution == "local", IOSNodeCandidateAppendSource.proxyEntry(nodes),
+           profiles.contains(where: { $0.id == nodes.first?.id && $0.normalizedNodeKind == "router-vpn" && $0.external == nil }) {
+            return unique(profiles).filter { profile in
+                IOSNodeCandidateAppendSource.prefixModes(profile, position: position, proxyEntry: true).contains(nodes[position].mode) &&
+                    !nodes.enumerated().contains { $0.offset != position && $0.element.id == profile.id }
             }
         }
         let customEntry = nodes.count == 3 && nodes.last?.mode == "shadowsocks" &&

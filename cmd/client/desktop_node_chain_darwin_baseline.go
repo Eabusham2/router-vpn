@@ -96,7 +96,8 @@ func (s desktopMacOSNodeChainSelection) validMembers() bool {
 		}
 	}
 	pairedHysteria := common.PairedHysteriaLocalMultihopSelection(refs)
-	if pairedHysteria && s.Family != macosprocess.NodeChainFamily {
+	pairedProxyEntry := common.PairedProxyEntryLocalMultihopSelection(refs) && rows[0][2] == "router-vpn"
+	if (pairedHysteria || pairedProxyEntry) && s.Family != macosprocess.NodeChainFamily {
 		return false
 	}
 	imported := func(i int) bool { return rows[i][2] == "external" }
@@ -142,10 +143,10 @@ func (s desktopMacOSNodeChainSelection) validMembers() bool {
 		if i == len(rows)-1 && (id != s.ProfileID || !externalFinal && row[2] == "external") {
 			return false
 		}
-		if pairedHysteria && row[2] != "router-vpn" {
+		if (pairedHysteria || pairedProxyEntry) && row[2] != "router-vpn" {
 			return false
 		}
-		if len(rows) > common.MultihopMaximumNodes && !privateStreams && !externalFinal && !pairedHysteria {
+		if len(rows) > common.MultihopMaximumNodes && !privateStreams && !externalFinal && !pairedHysteria && !pairedProxyEntry {
 			expectedMode, expectedKind := "shadowsocks", "external"
 			if i < firstImport {
 				expectedMode, expectedKind = "wg", "router-vpn"

@@ -33,7 +33,7 @@ func captureDesktopNodeChainSourcesLocked(a *app, selection multihopSelection) (
 }
 func captureDesktopNodeCandidateSourcesLocked(a *app, selection multihopSelection, purpose *orderedCandidatePreparation) (*desktopNodeChainSources, error) {
 	var appendCapture *desktopNodeCandidateAppendCapture
-	if purpose != nil && purpose.request.Scope == orderedCandidateAppendScope {
+	if purpose != nil && orderedCandidateAppendPurpose(purpose.request.Scope) {
 		if purpose.app != a || purpose.selection.Native != selection.Native || !purpose.closedPurposeCurrent() || validateDesktopCandidatePurposeSelection(context.Background(), selection, purpose.prefixPreparation) != nil {
 			return nil, errors.New("append host lost its original closed purpose")
 		}

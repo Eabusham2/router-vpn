@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,18 +14,21 @@ import (
 	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilemtu"
 	"router-vpn/internal/mobilemultihop"
+	"router-vpn/internal/routechoice"
 )
 
 type desktopNodeCandidatePrefixRequest struct {
-	Schema     int                                                       `json:"schema"`
-	Request    string                                                    `json:"request_id"`
-	Generation uint64                                                    `json:"generation"`
-	Deadline   int64                                                     `json:"deadline_at"`
-	Position   int                                                       `json:"prefix_position"`
-	Candidate  string                                                    `json:"candidate_id"`
-	CaptureSHA string                                                    `json:"capture_sha256"`
-	Path       string                                                    `json:"path_id"`
-	Capture    mobilemultihop.DesktopNodeCandidatePreparationReadyRecord `json:"capture"`
+	Schema              int                                                            `json:"schema"`
+	Request             string                                                         `json:"request_id"`
+	Generation          uint64                                                         `json:"generation"`
+	Deadline            int64                                                          `json:"deadline_at"`
+	Position            int                                                            `json:"prefix_position"`
+	Candidate           string                                                         `json:"candidate_id"`
+	CaptureSHA          string                                                         `json:"capture_sha256"`
+	Path                string                                                         `json:"path_id"`
+	Capture             mobilemultihop.DesktopNodeCandidatePreparationReadyRecord      `json:"capture"`
+	ExecutionCaptureSHA string                                                         `json:"execution_capture_sha256,omitempty"`
+	ExecutionCapture    *mobilemultihop.DesktopNodeCandidateAppendExecutionReadyRecord `json:"execution_capture,omitempty"`
 }
 
 type desktopNodeCandidatePrefixPulse struct {
@@ -37,8 +41,29 @@ type desktopNodeCandidatePrefixPulse struct {
 
 type desktopNodeCandidatePrefixResult struct {
 	desktopNodeCandidatePrefixRequest
-	CompletedAt int64                      `json:"completed_at"`
-	Status      hopmeasure.CandidateStatus `json:"status"`
+	CompletedAt     int64                      `json:"completed_at"`
+	Status          hopmeasure.CandidateStatus `json:"status"`
+	executionStatus json.RawMessage
+}
+
+// Only the dedicated execution command returns the enriched raw status. Its
+// original request echo remains the existing Local prefix request plus the two
+// separately retained discovery fields.
+type desktopNodeCandidateAppendExecutionResult struct {
+	desktopNodeCandidatePrefixRequest
+	CompletedAt int64           `json:"completed_at"`
+	Status      json.RawMessage `json:"status"`
+}
+
+type desktopNodeCandidateAppendExecutionStatus struct {
+	hopmeasure.CandidateStatus
+	Purpose                string          `json:"purpose"`
+	SourceSHA256           string          `json:"source_sha256"`
+	ExecutionSourceSHA256  string          `json:"execution_source_sha256"`
+	ExecutionCaptureSHA256 string          `json:"execution_capture_sha256"`
+	RequestedExecution     string          `json:"requested_execution"`
+	WinningExecution       string          `json:"winning_execution"`
+	Selection              json.RawMessage `json:"selection,omitempty"`
 }
 
 // The failure carries this exact original retirement handle. A later cleanup
@@ -159,6 +184,28 @@ func exchangeDesktopNodeCandidatePrefixObserved(parent context.Context, runtime 
 	if err != nil {
 		return empty, err
 	}
+	// The native request belongs to the retained desktop projection. The
+	// unprojected source/capture remains separately bound by policy metadata.
+	projected, err := desktopNodeCandidatePrefixProjectedPreparation(preparation)
+	if err != nil {
+		return empty, err
+	}
+	var executionCapture *mobilemultihop.DesktopNodeCandidateAppendExecutionReadyRecord
+	if chain.executionPolicy != nil {
+		if err := mobilemtu.LockContext(ctx, &chain.mu); err != nil {
+			return empty, err
+		}
+		if chain.executionReady == nil {
+			chain.mu.Unlock()
+			return empty, errors.New("append timing has no authenticated original discovery")
+		}
+		retained := *chain.executionReady
+		chain.mu.Unlock()
+		if retained.Validate(chain.executionPolicy, capture.TransferSHA256, capture) != nil {
+			return empty, errors.New("append timing changed its retained discovery")
+		}
+		executionCapture = &retained
+	}
 	if chain.candidateGeneration == ^uint64(0) {
 		return empty, errors.New("candidate request generation exhausted")
 	}
@@ -169,13 +216,16 @@ func exchangeDesktopNodeCandidatePrefixObserved(parent context.Context, runtime 
 	var metadata struct {
 		PrefixPosition int `json:"prefix_position"`
 	}
-	if json.Unmarshal([]byte(preparation.prefixPreparation.Metadata()), &metadata) != nil {
+	if json.Unmarshal([]byte(projected.Metadata()), &metadata) != nil {
 		return empty, errors.New("candidate plan lost its sealed metadata")
 	}
 	deadline, _ := ctx.Deadline()
 	request := desktopNodeCandidatePrefixRequest{Schema: 1, Request: nonce, Generation: chain.candidateGeneration + 1,
-		Deadline: deadline.UnixMilli(), Position: metadata.PrefixPosition, Candidate: id, CaptureSHA: preparation.prefixPreparation.CaptureSHA256(),
+		Deadline: deadline.UnixMilli(), Position: metadata.PrefixPosition, Candidate: id, CaptureSHA: projected.CaptureSHA256(),
 		Path: live.Path, Capture: capture}
+	if executionCapture != nil {
+		request.ExecutionCaptureSHA, request.ExecutionCapture = executionCapture.ExecutionCaptureSHA256, executionCapture
+	}
 	raw, _ := json.Marshal(request)
 	check := func(call context.Context) error {
 		if err := pulseCurrent(call); err != nil {
@@ -188,6 +238,19 @@ func exchangeDesktopNodeCandidatePrefixObserved(parent context.Context, runtime 
 		if after.Session != live.Session || after.Config != live.Config || after.Path != live.Path || after.Reader != live.Reader ||
 			after.Interface != live.Interface || after.Index != live.Index || after.MTU != live.MTU || after.Active || after.Failure != "" {
 			return errors.New("candidate original TUN reader changed")
+		}
+		if chain.executionPolicy != nil {
+			if _, err := readDesktopNodeCandidatePrefixReadyContext(call, launch, capture.TransferSHA256, time.UnixMilli(capture.ObservedAt), false, after); err != nil {
+				return err
+			}
+			if err := mobilemtu.LockContext(call, &chain.mu); err != nil {
+				return err
+			}
+			unchanged := chain.executionReady != nil && chain.executionReady.ExecutionCaptureSHA256 == request.ExecutionCaptureSHA && chain.executionPolicyCurrent()
+			chain.mu.Unlock()
+			if !unchanged {
+				return errors.New("append timing changed its original runtime discovery")
+			}
 		}
 		return call.Err()
 	}
@@ -219,7 +282,14 @@ func exchangeDesktopNodeCandidatePrefixObserved(parent context.Context, runtime 
 			return nil, err
 		}
 		var result desktopNodeCandidatePrefixResult
-		if decodeRelayControlJSON(raw, &result) != nil {
+		if chain.executionPolicy != nil {
+			var wire desktopNodeCandidateAppendExecutionResult
+			if decodeRelayControlJSON(raw, &wire) != nil {
+				return nil, errors.New("append execution result is malformed")
+			}
+			result.desktopNodeCandidatePrefixRequest, result.CompletedAt = wire.desktopNodeCandidatePrefixRequest, wire.CompletedAt
+			result.executionStatus = append(json.RawMessage(nil), wire.Status...)
+		} else if decodeRelayControlJSON(raw, &result) != nil {
 			return nil, errors.New("candidate result is malformed")
 		}
 		if result.Request != request.Request {
@@ -227,6 +297,13 @@ func exchangeDesktopNodeCandidatePrefixObserved(parent context.Context, runtime 
 				return nil, nil
 			}
 			return nil, errors.New("candidate result belongs to a different request")
+		}
+		if chain.executionPolicy != nil {
+			decoded, err := decodeDesktopNodeCandidateAppendExecutionStatus(chain, request, result.executionStatus)
+			if err != nil {
+				return nil, err
+			}
+			result.Status = decoded.CandidateStatus
 		}
 		if !reflect.DeepEqual(result.desktopNodeCandidatePrefixRequest, request) || result.CompletedAt < started-1 || result.CompletedAt > time.Now().Add(time.Second).UnixMilli() ||
 			result.Status.Request != request.Request || !result.Status.Complete || !result.Status.Drained {
@@ -344,7 +421,11 @@ func exchangeDesktopNodeCandidatePrefixObserved(parent context.Context, runtime 
 				return empty, &desktopNodeCandidatePrefixPendingError{retirement, err}
 			}
 			if result.CompletedAt > request.Deadline || result.Status.Failure != "" {
-				return empty, errors.New("candidate timing failed, changed, or expired")
+				failure := errors.New("candidate timing failed, changed, or expired")
+				if chain.executionPolicy != nil {
+					return result.Status, failure
+				}
+				return empty, failure
 			}
 			if err := check(ctx); err != nil {
 				return empty, err
@@ -352,7 +433,14 @@ func exchangeDesktopNodeCandidatePrefixObserved(parent context.Context, runtime 
 			if err := current(ctx); err != nil {
 				return empty, err
 			}
-			if err := validateDesktopNodeCandidatePrefixStatus(preparation.prefixPreparation, id, result.Status, time.Now()); err != nil {
+			if chain.executionPolicy != nil {
+				if err := validateDesktopNodeCandidateAppendExecutionStatus(chain, request, result.executionStatus, time.Now()); err != nil {
+					return result.Status, err
+				}
+				if err := preparation.retainAppendExecutionResult(id, result.Status, result.executionStatus); err != nil {
+					return result.Status, err
+				}
+			} else if err := validateDesktopNodeCandidatePrefixStatus(projected, id, result.Status, time.Now()); err != nil {
 				return empty, err
 			}
 			return result.Status, nil
@@ -366,8 +454,16 @@ func exchangeDesktopNodeCandidatePrefixObserved(parent context.Context, runtime 
 }
 
 func validateDesktopNodeCandidatePrefixStatus(plan *mobilemultihop.NodeChainCandidatePreparation, id string, status hopmeasure.CandidateStatus, now time.Time) error {
+	capture := ""
+	if plan != nil {
+		capture = plan.CaptureSHA256()
+	}
+	return validateDesktopNodeCandidatePrefixStatusCapture(plan, id, status, now, capture)
+}
+
+func validateDesktopNodeCandidatePrefixStatusCapture(plan *mobilemultihop.NodeChainCandidatePreparation, id string, status hopmeasure.CandidateStatus, now time.Time, capture string) error {
 	bad := errors.New("candidate result did not retain its exact fifty-sample original prefix and source")
-	if plan == nil {
+	if plan == nil || capture == "" {
 		return bad
 	}
 	var metadata struct {
@@ -399,7 +495,7 @@ func validateDesktopNodeCandidatePrefixStatus(plan *mobilemultihop.NodeChainCand
 		return bad
 	}
 	if source == "" || status.Schema != 1 || status.Measurement != metric || status.PrefixPosition != metadata.PrefixPosition ||
-		status.PrefixID != metadata.PrefixID || status.CaptureSHA256 != plan.CaptureSHA256() || status.CandidateID != id || status.CandidateSourceSHA256 != source ||
+		status.PrefixID != metadata.PrefixID || status.CaptureSHA256 != capture || status.CandidateID != id || status.CandidateSourceSHA256 != source ||
 		status.Stage != "complete" || status.Failure != "" || !status.Complete || !status.Drained || len(status.Results) != 1 ||
 		status.MeasuredAt <= 0 || status.MeasuredAt > now.UnixMilli() || status.ExpiresAt != status.MeasuredAt+hopmeasure.CandidateReceiptLifetime.Milliseconds() || status.ExpiresAt <= now.UnixMilli() {
 		return bad
@@ -416,6 +512,198 @@ func validateDesktopNodeCandidatePrefixStatus(plan *mobilemultihop.NodeChainCand
 	finite := func(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) && v > 0 }
 	if d.Samples != hopmeasure.LatencyBenchmarkSamples || !finite(d.Min) || !finite(d.Median) || !finite(d.Average) || !finite(d.P90) || !finite(d.Max) || !finite(b.TrimmedMean) ||
 		math.IsNaN(d.Jitter) || math.IsInf(d.Jitter, 0) || d.Jitter < 0 || d.Min > d.Median || d.Median > d.P90 || d.P90 > d.Max || d.Average < d.Min || d.Average > d.Max || b.TrimmedMean < d.Min || b.TrimmedMean > d.Max {
+		return bad
+	}
+	return nil
+}
+
+// This is only a retained source/projection check. It does not grant readiness
+// after native DOWN, and it never reconstructs a plan from the current store.
+func desktopNodeCandidatePrefixProjectedPreparation(p *orderedCandidatePreparation) (*mobilemultihop.NodeChainCandidatePreparation, error) {
+	bad := errors.New("candidate receipt lost its original desktop projection")
+	if p == nil || p.prefixPreparation == nil || p.launch == nil || p.launch.candidatePrefix == nil {
+		return nil, bad
+	}
+	owner := p.launch.candidatePrefix
+	if owner.preparation != p || owner.policy == nil || owner.policy.Validate() != nil || !owner.executionPolicyCurrent() || owner.selection.Native != p.selection.Native {
+		return nil, bad
+	}
+	meta := owner.policy.Metadata()
+	projected := owner.policy.Preparation()
+	if projected == nil || meta.PreparationSHA256 != p.prefixPreparation.SourceSHA256() || meta.OriginalCaptureSHA256 != p.prefixPreparation.CaptureSHA256() ||
+		meta.SourceSHA256 != projected.SourceSHA256() || meta.ConfigSHA256 != projected.ConfigSHA256() || meta.CaptureSHA256 != projected.CaptureSHA256() || meta.PrefixPosition != p.request.Position {
+		return nil, bad
+	}
+	return projected, nil
+}
+
+func validateDesktopNodeCandidatePrefixStatusForPreparation(p *orderedCandidatePreparation, id string, status hopmeasure.CandidateStatus, now time.Time) error {
+	if p == nil || p.appendExecutionPreparation != nil {
+		return errors.New("Local candidate receipt has another execution purpose")
+	}
+	projected, err := desktopNodeCandidatePrefixProjectedPreparation(p)
+	if err != nil {
+		return err
+	}
+	return validateDesktopNodeCandidatePrefixStatus(projected, id, status, now)
+}
+
+// The typed decoder rejects unknown/duplicate fields. This presence check also
+// rejects null or omitted mandatory members whose Go zero value is meaningful.
+func desktopNodeCandidateExecutionFields(raw []byte, required ...string) (map[string]json.RawMessage, bool) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || fields == nil {
+		return nil, false
+	}
+	for _, value := range fields {
+		if len(value) == 0 || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return nil, false
+		}
+	}
+	for _, key := range required {
+		if _, exists := fields[key]; !exists {
+			return nil, false
+		}
+	}
+	return fields, true
+}
+
+func decodeDesktopNodeCandidateAppendExecutionStatus(owner *desktopNodeCandidatePrefixLaunch, request desktopNodeCandidatePrefixRequest, raw json.RawMessage) (desktopNodeCandidateAppendExecutionStatus, error) {
+	var status desktopNodeCandidateAppendExecutionStatus
+	bad := errors.New("append execution status changed its original request, source or discovery")
+	if owner == nil || owner.executionPolicy == nil || !owner.executionPolicyCurrent() || request.ExecutionCapture == nil || !desktopNodeProcessHex(request.ExecutionCaptureSHA, 32) ||
+		request.ExecutionCapture.ExecutionCaptureSHA256 != request.ExecutionCaptureSHA || request.ExecutionCapture.Validate(owner.executionPolicy, request.Capture.TransferSHA256, request.Capture) != nil {
+		return status, bad
+	}
+	projected := owner.policy.Preparation()
+	execution := owner.executionPolicy.ExecutionPreparation()
+	if projected == nil || execution == nil || execution.OriginalPreparation() != projected || request.CaptureSHA != projected.CaptureSHA256() {
+		return status, bad
+	}
+	var metadata struct {
+		PrefixPosition int    `json:"prefix_position"`
+		PrefixID       string `json:"prefix_id"`
+		Targets        []struct {
+			ID     string `json:"id"`
+			Source string `json:"source_sha256"`
+		} `json:"targets"`
+	}
+	if json.Unmarshal([]byte(projected.Metadata()), &metadata) != nil || metadata.PrefixID == "" {
+		return status, bad
+	}
+	targetSource := ""
+	for _, target := range metadata.Targets {
+		if target.ID == request.Candidate {
+			if targetSource != "" {
+				return status, bad
+			}
+			targetSource = target.Source
+		}
+	}
+	if !desktopNodeProcessHex(targetSource, 32) || decodePrivateControlJSONBounded(raw, &status, 128<<10) != nil {
+		return status, bad
+	}
+	if _, ok := desktopNodeCandidateExecutionFields(raw, "request_id", "stage", "complete", "drained", "results", "schema", "measurement", "prefix_position", "prefix_id", "capture_sha256", "purpose", "source_sha256", "execution_source_sha256", "execution_capture_sha256", "requested_execution", "winning_execution"); !ok {
+		return status, bad
+	}
+	if status.Request != request.Request || status.Stage == "" || status.Schema != 1 || status.Measurement != hopmeasure.CandidatePrivateResponseMeasurement ||
+		status.PrefixPosition != request.Position || status.PrefixPosition != metadata.PrefixPosition || status.PrefixID != metadata.PrefixID || status.CaptureSHA256 != request.ExecutionCaptureSHA ||
+		status.Purpose != "draft-prefix-append-execution" || status.SourceSHA256 != execution.OriginalSourceSHA256() || status.ExecutionSourceSHA256 != execution.SourceSHA256() ||
+		status.ExecutionCaptureSHA256 != request.ExecutionCaptureSHA || status.RequestedExecution != execution.Execution() ||
+		status.RequestedExecution != "server" && status.RequestedExecution != "auto" || status.Results == nil ||
+		status.CandidateID != "" && status.CandidateID != request.Candidate || status.CandidateSourceSHA256 != "" && status.CandidateSourceSHA256 != targetSource ||
+		status.MeasuredAt < 0 || status.ExpiresAt < 0 || (status.MeasuredAt == 0) != (status.ExpiresAt == 0) ||
+		status.WinningExecution != "" && status.WinningExecution != "local" && status.WinningExecution != "server" ||
+		status.RequestedExecution == "server" && (status.WinningExecution != "" && status.WinningExecution != "server" || len(status.Selection) != 0) {
+		return status, bad
+	}
+	if len(status.Selection) != 0 {
+		prefixes := owner.policy.Metadata().Prefixes
+		if status.RequestedExecution != "auto" || len(prefixes) == 0 || validateDesktopNodeCandidateAppendExecutionSelection(status.Selection, prefixes[0].ProfileID, request.Candidate, status.WinningExecution, false) != nil {
+			return status, bad
+		}
+	}
+	return status, nil
+}
+
+func validateDesktopNodeCandidateAppendExecutionStatus(owner *desktopNodeCandidatePrefixLaunch, request desktopNodeCandidatePrefixRequest, raw json.RawMessage, now time.Time) error {
+	status, err := decodeDesktopNodeCandidateAppendExecutionStatus(owner, request, raw)
+	if err != nil {
+		return err
+	}
+	if err := validateDesktopNodeCandidatePrefixStatusCapture(owner.policy.Preparation(), request.Candidate, status.CandidateStatus, now, request.ExecutionCaptureSHA); err != nil {
+		return err
+	}
+	if status.RequestedExecution == "server" {
+		if status.WinningExecution != "server" || len(status.Selection) != 0 {
+			return errors.New("Server candidate result changed its actual lane")
+		}
+		return nil
+	}
+	prefixes := owner.policy.Metadata().Prefixes
+	if len(prefixes) == 0 || status.WinningExecution == "" || len(status.Selection) == 0 {
+		return errors.New("Compare candidate has no original final selection")
+	}
+	return validateDesktopNodeCandidateAppendExecutionSelection(status.Selection, prefixes[0].ProfileID, request.Candidate, status.WinningExecution, true)
+}
+
+func validateDesktopNodeCandidateAppendExecutionSelection(raw json.RawMessage, entry, candidate, winning string, complete bool) error {
+	bad := errors.New("append Compare result changed its original two routed trials or final recheck")
+	var selection routechoice.Result
+	if entry == "" || candidate == "" || entry == candidate || decodePrivateControlJSONBounded(raw, &selection, 128<<10) != nil {
+		return bad
+	}
+	fields, ok := desktopNodeCandidateExecutionFields(raw, "target", "measurements")
+	if !ok || selection.Target != "https://1.1.1.1/cdn-cgi/trace" && selection.Target != "https://1.0.0.1/cdn-cgi/trace" || len(selection.Measurements) > 2 {
+		return bad
+	}
+	validCandidate := func(value routechoice.Candidate) bool {
+		return value.Valid() && value.Transport == "ordered-prefix-append" && value.EntryID == entry && value.ExitID == candidate
+	}
+	finite := func(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 }
+	validMeasurement := func(value routechoice.Measurement, original json.RawMessage) bool {
+		if _, ok := desktopNodeCandidateExecutionFields(original, "candidate", "eligible"); !ok {
+			return false
+		}
+		if !validCandidate(value.Candidate) || !finite(value.LastNodeMS) || !finite(value.ExternalMS) {
+			return false
+		}
+		if !value.Eligible {
+			return value.Failure != "" && value.ScoreMS == nil
+		}
+		if value.Failure != "" || value.LastNodeMS <= 0 || value.ExternalMS <= 0 || value.ScoreMS == nil || !finite(*value.ScoreMS) || *value.ScoreMS <= 0 {
+			return false
+		}
+		expected := value.LastNodeMS/2 + value.ExternalMS/2
+		return math.Abs(*value.ScoreMS-expected) <= math.Max(1, expected)*1e-9
+	}
+	var originals []json.RawMessage
+	if json.Unmarshal(fields["measurements"], &originals) != nil || len(originals) != len(selection.Measurements) {
+		return bad
+	}
+	seen := map[routechoice.Execution]bool{}
+	best, selected := math.Inf(1), math.Inf(1)
+	for i, trial := range selection.Measurements {
+		if seen[trial.Candidate.Execution] || !validMeasurement(trial, originals[i]) {
+			return bad
+		}
+		seen[trial.Candidate.Execution] = true
+		if trial.Eligible {
+			if *trial.ScoreMS < best {
+				best = *trial.ScoreMS
+			}
+			if selection.Winner != nil && trial.Candidate == *selection.Winner {
+				selected = *trial.ScoreMS
+			}
+		}
+	}
+	if selection.Winner != nil && (!validCandidate(*selection.Winner) || math.IsInf(selected, 1) || selected > best+math.Max(1, best)*1e-9) {
+		return bad
+	}
+	if selection.Final != nil && (selection.Winner == nil || selection.Final.Candidate != *selection.Winner || !validMeasurement(*selection.Final, fields["final"])) {
+		return bad
+	}
+	if complete && (len(selection.Measurements) != 2 || !seen[routechoice.Local] || !seen[routechoice.Server] || selection.Winner == nil || string(selection.Winner.Execution) != winning || selection.Final == nil || !selection.Final.Eligible) {
 		return bad
 	}
 	return nil

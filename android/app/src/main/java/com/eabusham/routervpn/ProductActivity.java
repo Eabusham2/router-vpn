@@ -1211,7 +1211,7 @@ public final class ProductActivity extends Activity {
             if(mutationBusy())throw new IllegalStateException("Stop the current VPN before measuring the next node.");
             draft.requireCurrent();
             final long revision=draft.revision();
-            List<AndroidNodeCandidateAppendSource.NextChoice> choices=AndroidNodeCandidateAppendSource.NEXT_CHOICES;List<String> labels=new ArrayList<>();
+            List<AndroidNodeCandidateAppendSource.NextChoice> choices=draft.appendNextChoices();List<String> labels=new ArrayList<>();
             for(var choice:choices)labels.add(choice.title());
             choiceDialog("Next transport","Measure saved candidates in this exact mode through the unfinished prefix. Applying a result adds one node after the last prefix.")
                     .setItems(labels.toArray(new CharSequence[0]),(d,w)->{
@@ -1228,7 +1228,7 @@ public final class ProductActivity extends Activity {
         draft.requireCurrent();
         if(!draft.unfinished()||draft.revision()!=revision)
             throw new IllegalStateException("The unfinished prefix changed before its next measurement.");
-        var capture=draft.candidateAppendCapture(choice.kind,choice.mode);int position=draft.members().size()-1;
+        var capture=draft.candidateAppendCapture(choice.kind,choice.mode,choice.execution);int position=draft.members().size()-1;
         showOrderedEditor(draft);detachCandidatePreparation();
         preparedCandidateDialog=new AndroidNodeCandidatePreparationDialog(this,nodeStore,connection,this::refreshConnectionLater,this::continueOrderedDraft);
         preparedCandidateDialog.showDraft(capture,position,draft);

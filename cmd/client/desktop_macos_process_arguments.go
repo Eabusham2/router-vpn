@@ -24,6 +24,8 @@ func desktopMacOSProcessArguments(scope macosprocess.Scope) ([]string, error) {
 		command = "routervpn-node-chain"
 	case macosprocess.CandidatePrefixFamily:
 		command = "routervpn-node-candidate-prefix"
+	case macosprocess.CandidateAppendExecutionFamily:
+		command = desktopNodeCandidateAppendExecutionCommand
 	default:
 		return nil, errors.New("macOS child scope has an unsupported concrete policy family")
 	}

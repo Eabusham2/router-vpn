@@ -1193,6 +1193,22 @@ private func productConnectionCheckFailure() -> NSError {
     NSError(domain: "RouterVPN.ConnectionSelfTest", code: 1,
             userInfo: [NSLocalizedDescriptionKey: "The original packaged connection check did not complete."])
 }
+// Connection self-test diagnostics never print response bodies, paths or error text.
+private func productConnectionErrorCategory(_ error: Error) -> String {
+    let issue = error as NSError
+    switch issue.domain {
+    case "RouterVPN.ConnectionSelfTest": return "assertion"
+    case "RouterVPN.ControllerOwner": return "controller-owner"
+    case "RouterVPN.ProfileLoad": return "profile-load"
+    case NSURLErrorDomain: return issue.code == NSURLErrorTimedOut ? "transport-timeout" : "transport"
+    case NSCocoaErrorDomain: return "cocoa"
+    case "RouterVPNMac":
+        if (100...599).contains(issue.code) { return "http-\(issue.code)" }
+        return issue.code == 2 ? "request-timeout" : "request-guard"
+    default: return "unclassified"
+    }
+}
+
 private func productConnectionHex(_ value: String, _ count: Int) -> Bool {
     value.utf8.count == count && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
 }
@@ -1528,6 +1544,7 @@ private final class ProductConnectionLifetime: @unchecked Sendable {
     let lifetime = ProductConnectionLifetime(files, fixture)
     var watchdog = false, cleanup = false, failure = false
     var httpOwners: [ProductConnectionHTTP] = []
+    var importCheck: String? = nil
     func fetch(_ url: URL) throws -> (Data, Int, String, Bool) {
         let original = ProductConnectionHTTP(); httpOwners.append(original)
         return try original.run(url)
@@ -1555,19 +1572,34 @@ private final class ProductConnectionLifetime: @unchecked Sendable {
         window.showWindow(nil); window.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         lifetime.advance("import")
+        importCheck = "profile-request"
         let imported = try JSONSerialization.jsonObject(with: delegate.api.request("/api/profile/import", method: "POST", body: fixture.profile)) as? [String: Any]
+        importCheck = "profile-contract"
         guard productConnectionTrue(imported?["ok"]), let profile = imported?["profile"] as? [String: Any],
               let profileID = profile["id"] as? String, !profileID.isEmpty, profileID.utf8.count <= 64,
               profileID.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95 }) else { throw productConnectionCheckFailure() }
+        importCheck = "profile-policy"
         guard profile["base_tunnel"] as? String == "wg", profile["kill_switch_policy"] as? String == "on-connect",
               !productConnectionTrue(profile["home_lan_access"]), profile["ipv6_mode"] as? String == "off",
               profile["dns_mode"] as? String == "home", profile["dns_protocol"] as? String == "udp" else { throw productConnectionCheckFailure() }
+        importCheck = "profile-select"
         _ = try delegate.api.request("/api/profile/select", method: "POST", body: ["id": profileID])
-        guard let catalog = try delegate.api.json("/api/logical-modes") as? [[String: Any]],
-              let mode = catalog.first(where: { $0["id"] as? String == fixture.mode }),
-              productConnectionTrue(mode["available"]), let variants = mode["variants"] as? [String: Any],
-              let wg = variants["wg"] as? [String: Any], productConnectionTrue(wg["available"]),
-              wg["runtime_id"] as? String == "wg" else { throw productConnectionCheckFailure() }
+        importCheck = "logical-catalog-request"
+        let catalogResponse = try delegate.api.json("/api/logical-modes")
+        importCheck = "logical-catalog-shape"
+        guard let catalog = catalogResponse as? [[String: Any]] else { throw productConnectionCheckFailure() }
+        importCheck = "logical-mode"
+        guard let mode = catalog.first(where: { $0["id"] as? String == fixture.mode }) else { throw productConnectionCheckFailure() }
+        importCheck = "logical-availability"
+        guard productConnectionTrue(mode["available"]) else { throw productConnectionCheckFailure() }
+        importCheck = "wg-variant"
+        guard let variants = mode["variants"] as? [String: Any],
+              let wg = variants["wg"] as? [String: Any] else { throw productConnectionCheckFailure() }
+        importCheck = "wg-availability"
+        guard productConnectionTrue(wg["available"]) else { throw productConnectionCheckFailure() }
+        importCheck = "wg-runtime"
+        guard wg["runtime_id"] as? String == "wg" else { throw productConnectionCheckFailure() }
+        importCheck = nil
         lifetime.advance("controls")
         window.refreshAll(); window.refreshUnifiedModeMenu(preferred: fixture.mode)
         try wait {
@@ -1625,7 +1657,12 @@ private final class ProductConnectionLifetime: @unchecked Sendable {
               (off["phase"] as? String ?? "off") == "off" else { throw productConnectionCheckFailure() }
         try wait { (window.findUnifiedView("unified-connect") as? NSButton)?.title == "Connect" }
         lifetime.proved("disconnect"); lifetime.advance("shutdown")
-    } catch { failure = true; lifetime.failed() }
+    } catch {
+        failure = true; lifetime.failed()
+        if let importCheck {
+            fputs("macOS connection self-test: import substep=\(importCheck) category=\(productConnectionErrorCategory(error))\n", stderr)
+        }
+    }
     delegate.wc?.timer?.invalidate()
     if let owner = delegate.installedController, delegate.controller === owner {
         if !watchdog {

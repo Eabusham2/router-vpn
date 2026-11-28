@@ -12,6 +12,9 @@ func routerVPNRunLinuxNodeCandidatePrefixControlled(parent context.Context, capt
 	if capture.validate() != nil || capture.windows != (routerVPNNodeJournalOptions{}) || capture.linux == (routerVPNNodeLinuxParentOptions{}) {
 		return routerVPNExternalFailure
 	}
+	if capture.appendExecution {
+		return routerVPNRunLinuxTypedFamilyControlledPurpose(parent, capture.directory, capture.session, capture.config, capture.physical, "", capture.capture, capture.transfer, capture.mtu, capture.linux, false, false, false, false, true)
+	}
 	return routerVPNRunLinuxPrefixFamilyControlled(parent, capture.directory, capture.session, capture.config, capture.physical, "", capture.capture, capture.transfer, capture.mtu, capture.linux, false, false)
 }
 
@@ -21,10 +24,31 @@ func (owner *routerVPNLinuxNodeControl) compileCandidatePrefix(ctx context.Conte
 		files == nil || files.root == nil || owner.original(ctx) != nil {
 		return nil, routerVPNExternalFailure
 	}
+	if capture.appendExecution {
+		return nil, routerVPNExternalFailure
+	}
 	policy, err := routerVPNNodeCandidatePrefixCommandCapture(files, capture.session, capture.config, capture.physical, capture.capture, "linux", capture.mtu)
 	if err != nil {
 		return nil, err
 	}
+	return owner.bindCandidatePrefix(ctx, policy, capture)
+}
+
+func (owner *routerVPNLinuxNodeControl) compileCandidateAppendExecution(ctx context.Context, files *routerVPNExternalFiles, capture routerVPNNodeCandidatePrefixCommand) (*mobilemultihop.DesktopNodeCandidateAppendExecutionPolicy, error) {
+	if !capture.appendExecution || owner == nil || owner.policy != nil || owner.external != nil || owner.control != nil || owner.retiring.Load() || files == nil || files.root == nil || owner.original(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	policy, err := routerVPNNodeCandidateAppendExecutionCommandCapture(files, capture.session, capture.config, capture.physical, capture.capture, "linux", capture.mtu)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = owner.bindCandidatePrefix(ctx, policy.LocalPolicy(), capture); err != nil {
+		return nil, err
+	}
+	return policy, nil
+}
+
+func (owner *routerVPNLinuxNodeControl) bindCandidatePrefix(ctx context.Context, policy *mobilemultihop.DesktopNodeCandidatePreparationPolicy, capture routerVPNNodeCandidatePrefixCommand) (*mobilemultihop.DesktopNodeCandidatePreparationPolicy, error) {
 	_, meta, _, err := policy.PhysicalReadValidated()
 	if err != nil {
 		return nil, err

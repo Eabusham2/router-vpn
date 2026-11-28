@@ -23,7 +23,7 @@ _connect_spec.loader.exec_module(CONNECT)
 
 
 def inputs():
-    return sorted([Path(__file__).resolve(), *sorted((ROOT / 'mobile/server_chain_component').glob('*.tmpl')), *sorted((ROOT / 'mobile/server_chain').glob('*.tmpl')), *CONNECT.server_inputs(), *(ROOT / 'mobile/chain' / name for name in SOCKS_TEMPLATES), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_socks_server*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_openvpn*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_server*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_connect_server*.go')), *sorted((ROOT / 'internal/multihoprelay').glob('node_chain_*.go'))])
+    return sorted([Path(__file__).resolve(), *sorted((ROOT / 'mobile/server_chain_component').glob('*.tmpl')), *sorted((ROOT / 'mobile/server_chain').glob('*.tmpl')), *CONNECT.server_inputs(), *(ROOT / 'mobile/chain' / name for name in SOCKS_TEMPLATES), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_socks_server*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_openvpn*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_server*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_candidate_append_execution*.go')), *sorted((ROOT / 'internal/mobilemultihop').glob('node_chain_connect_server*.go')), *sorted((ROOT / 'internal/multihoprelay').glob('node_chain_*.go'))])
 
 
 def digest():
@@ -49,7 +49,7 @@ def copies():
         if not raw.startswith(header):
             raise ValueError('Changed ordered Server package boundary')
         content[prefix+name] = raw
-    required = {'cmd/sing-box/routervpn_server_chain_candidates.go', 'cmd/sing-box/routervpn_server_chain_command.go', 'cmd/sing-box/routervpn_server_chain_native.go', 'cmd/sing-box/routervpn_server_chain_openvpn.go', 'cmd/sing-box/routervpn_server_chain_openvpn_endpoint.go', 'cmd/sing-box/routervpn_server_chain_openvpn_endpoint_stub.go', 'cmd/sing-box/routervpn_server_chain_front.go', 'routervpn_server_chain_box.go', 'cmd/sing-box/routervpn_server_chain_dns_owners.go', 'cmd/sing-box/routervpn_server_chain_resources.go'}
+    required = {'cmd/sing-box/routervpn_server_chain_candidates.go', 'cmd/sing-box/routervpn_server_chain_command.go', 'cmd/sing-box/routervpn_server_chain_native.go', 'cmd/sing-box/routervpn_server_chain_openvpn.go', 'cmd/sing-box/routervpn_server_chain_openvpn_endpoint.go', 'cmd/sing-box/routervpn_server_chain_openvpn_endpoint_stub.go', 'cmd/sing-box/routervpn_server_chain_front.go', 'routervpn_server_chain_box.go', 'cmd/sing-box/routervpn_server_chain_dns_owners.go', 'cmd/sing-box/routervpn_server_chain_resources.go', 'cmd/sing-box/routervpn_server_chain_prefix_native.go', 'cmd/sing-box/routervpn_server_chain_prefix_front.go', 'cmd/sing-box/routervpn_server_chain_prefix_command.go'}
     if not required.issubset(content):
         raise ValueError('Incomplete ordered Server native owner')
     content.update(CONNECT.server_copies())

@@ -757,8 +757,26 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
         }
     }
 
+    /// A distinct complete Local owner; mode shape alone grants no native authority.
+    static func pairedProxyEntryLocalModes(_ modes: [String], execution: String?) -> Bool {
+        execution == "local" && (2...physicalTraversalDepth).contains(modes.count) &&
+            nativeFinalModes.contains(modes.first ?? "") && nativeFinalModes.contains(modes.last ?? "") &&
+            modes.allSatisfy { supportsNativePrefix($0) || nativeFinalModes.contains($0) }
+    }
+    static func pairedProxyEntryMember(_ profile: RouterProfile, mode: String) -> Bool {
+        profile.normalizedNodeKind == "router-vpn" && profile.external == nil && [nil, "", "off"].contains(profile.startLayer) &&
+            (supportsNativePrefix(mode) || nativeFinalModes.contains(mode) && IOSImportedShadowsocksSource.literal(profile.endpoint))
+    }
+    static func pairedProxyEntryLocalSource(_ nodes: [Self], execution: String?, profiles: [RouterProfile]) -> Bool {
+        guard pairedProxyEntryLocalModes(nodes.map(\.mode), execution: execution) else { return false }
+        return nodes.allSatisfy { node in
+            let matches = profiles.filter { $0.id == node.id }
+            return matches.count == 1 && pairedProxyEntryMember(matches[0], mode: node.mode)
+        }
+    }
+
     static func extendedOriginalModes(_ modes: [String], execution: String?) -> Bool {
-        modes.count > maximumNodes && pairedHysteriaLocalModes(modes, execution: execution) ||
+        modes.count > maximumNodes && (pairedHysteriaLocalModes(modes, execution: execution) || pairedProxyEntryLocalModes(modes, execution: execution)) ||
             extendedPairedModes(modes, execution: execution) || extendedMixedPacketCount(modes, execution: execution) > 0 ||
             extendedLocalModes(modes, execution: execution) || ["server", "auto"].contains(execution ?? "") && extendedSelectedModeShape(modes)
     }
@@ -949,7 +967,7 @@ struct IOSMultihopNodeSelection: Codable, Hashable {
               [entryID, entryMode, exitID, exitMode].allSatisfy({ $0 == nil || $0 == "" }) else {
             throw issue("Keep the selected order and clear separate entry/exit selections. Longer Local routes end at a paired Shadowsocks node with every Start Layer Off. Use paired WireGuard for a packet-only prefix, or paired WireGuard or AWG2 followed by Shadowsocks 2022 streams. The first stream can use an imported hostname with its saved Custom TCP resolver. A longer Server or Compare route requires one WireGuard, AWG2 Fast, or AWG2 Strong entry followed by literal Shadowsocks 2022 imports and a paired Shadowsocks final. Server or Compare supports a paired Shadowsocks or Hysteria2 final after paired WireGuard/AWG2 nodes. Hysteria2 retains its own Off, AES or AES+XOR final Start Layer. Literal Shadowsocks 2022 imports can occupy individual interior positions before a paired Shadowsocks final. A single SOCKS5, HTTP/HTTPS CONNECT or separately paired OpenVPN node can appear immediately before that final. Each paired preceding node retains its own selected Start Layer.")
         }
-        if nodes.first?.mode == "shadowsocks" && (execution != "local" || !usesLocalImportedEntry(nodes)) {
+        if nodes.first?.mode == "shadowsocks" && !pairedProxyEntryLocalModes(nodes.map(\.mode), execution: execution) && (execution != "local" || !usesLocalImportedEntry(nodes)) {
             throw issue("A custom entry requires two original Shadowsocks 2022 nodes followed by a paired Shadowsocks 2022 final in Local execution.")
         }
         var seen = Set<String>()

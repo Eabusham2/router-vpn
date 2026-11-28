@@ -372,7 +372,7 @@ func (h *desktopLinuxNodeHost) argumentsLocked(ctx context.Context) ([]string, s
 	}
 	command := "routervpn-node"
 	if h.candidatePrefix != nil {
-		command = "routervpn-node-candidate-prefix"
+		command = h.launch.candidatePrefix.commandName()
 	}
 	if h.chain != nil || h.socksChain != nil || h.connectChain != nil {
 		command = h.launch.chain.commandName()

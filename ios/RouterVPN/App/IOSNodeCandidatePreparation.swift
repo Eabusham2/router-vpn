@@ -53,7 +53,7 @@ import Foundation
     }
 
     private init(model: RouterVPNModel, bundle: ClientBundle, purpose: Purpose,
-                 prefixPosition: Int?, request: String?, completeFinalSource: Bool = false,
+                 prefixPosition: Int?, request: String?, completeFinalSource: Bool = false, appendExecution: String = "local",
                  appendCurrent: (@MainActor () throws -> Void)? = nil, onCancelled: @escaping @MainActor () -> Void) throws {
         self.model = model; self.bundle = bundle; self.onCancelled = onCancelled; self.appendCurrent = appendCurrent
         if case .local(let capture) = purpose { appendDeviceMTU = capture.appendSource?.deviceMTU }
@@ -80,7 +80,7 @@ import Foundation
                 originalLaunch: Data(capture.launchInput.utf8), preparedResponse: true)
             do {
                 let prefix = try IOSNodeCandidatePrefixCapture.compile(original: capture, position: position,
-                    inventory: String(decoding: candidate.source.inventory.data, as: UTF8.self))
+                    inventory: String(decoding: candidate.source.inventory.data, as: UTF8.self), requestedExecution: appendExecution)
                 prefixCapture = prefix
                 prefixCandidate = IOSNodeCandidateCapture(source: candidate.source, records: candidate.records,
                     rows: candidate.rows, prefix: candidate.prefix, chainSource: prefix.sourceSHA256, chainConfig: prefix.configSHA256)
@@ -116,7 +116,7 @@ import Foundation
     }
 
     static func reserveAppend(model: RouterVPNModel, nodes: [IOSMultihopNodeSelection],
-                              editorOwner: IOSNodeChainEditorOwner, nextKind: String, nextMode: String, draftRevision: String,
+                              editorOwner: IOSNodeChainEditorOwner, nextKind: String, nextMode: String, requestedExecution: String = "local", draftRevision: String,
                               request: String, current: @escaping @MainActor () throws -> Void,
                               onCancelled: @escaping @MainActor () -> Void) throws -> IOSNodeCandidatePreparation {
         guard retained == nil, !model.connected, !model.tunnelTransitioning,
@@ -130,8 +130,9 @@ import Foundation
         let capture = try IOSNodeCandidateAppendSource.compile(deviceBundle: IOSNodeUsage.canonical(bundle),
             records: snapshot.records, nodes: nodes, nextKind: nextKind, nextMode: nextMode, draftRevision: draftRevision,
             deviceRevision: deviceRevision, deviceMTU: IOSDeviceMTUPreference.current())
+        try capture.requireExecution(requestedExecution)
         let value = try Self(model: model, bundle: bundle, purpose: .local(.append(capture)),
-            prefixPosition: nodes.count - 1, request: request, appendCurrent: current, onCancelled: onCancelled)
+            prefixPosition: nodes.count - 1, request: request, appendExecution: requestedExecution, appendCurrent: current, onCancelled: onCancelled)
         do {
             try current()
             try model.requireIOSNodeChainAppendSources(editorOwner, nodes: nodes)

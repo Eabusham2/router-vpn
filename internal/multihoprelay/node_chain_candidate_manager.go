@@ -324,6 +324,7 @@ func (m *Manager) ChainCandidateStatus(ctx context.Context, peer netip.Addr, req
 	if op.reads == 0 {
 		op.readDone = make(chan struct{})
 	}
+	readDone := op.readDone
 	op.reads++
 	op.mu.Unlock()
 	readCtx, cancelRead := context.WithCancel(ctx)
@@ -370,6 +371,17 @@ func (m *Manager) ChainCandidateStatus(ctx context.Context, peer netip.Addr, req
 	}()
 	select {
 	case outcome := <-result:
+		// Retain this exact read until its original worker releases the hold.
+		// Publishing sooner can reject the next serial read as still in flight.
+		select {
+		case <-readDone:
+		case <-ctx.Done():
+			cancelRead()
+			return NodeChainCandidateReceipt{}, ctx.Err()
+		case <-op.ctx.Done():
+			cancelRead()
+			return NodeChainCandidateReceipt{}, op.ctx.Err()
+		}
 		if ctx.Err() != nil || op.ctx.Err() != nil {
 			return NodeChainCandidateReceipt{}, ErrUnavailable
 		}

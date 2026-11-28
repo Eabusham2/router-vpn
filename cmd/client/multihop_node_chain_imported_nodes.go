@@ -106,7 +106,8 @@ func desktopNodeChainSourceSchema(members []desktopNodeChainMember) (int, error)
 	if len(members) < 2 || len(members) > mobilemultihop.NodeChainExtendedLocalMaximumNodes {
 		return 0, bad
 	}
-	if common.PairedHysteriaLocalMultihopSelection(nodeChainSelectedReferences(members)) {
+	if common.PairedHysteriaLocalMultihopSelection(nodeChainSelectedReferences(members)) ||
+		common.PairedProxyEntryLocalMultihopSelection(nodeChainSelectedReferences(members)) && members[0].Profile.NodeKind != "external" && members[0].Profile.External == nil {
 		for _, member := range members {
 			p := member.Profile
 			address, err := netip.ParseAddr(p.Endpoint)

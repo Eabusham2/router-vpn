@@ -342,8 +342,11 @@ func desktopOwnedNodeArguments(launch *desktopNodeLaunch) ([]string, error) {
 		args = append(args, "--physical-mtu", strconv.Itoa(meta.RestoredMTU))
 	}
 	if owned.candidatePrefix != nil {
-		args[0] = "routervpn-node-candidate-prefix"
+		args[0] = owned.candidatePrefix.commandName()
 		args = append(args, "--prefix-capture-sha256", owned.candidatePrefix.policy.Metadata().CaptureSHA256)
+		if owned.candidatePrefix.executionPolicy != nil {
+			return validateDesktopNodeCandidateAppendExecutionProcessArguments(args, launch.directory)
+		}
 		return validateDesktopNodeCandidatePrefixProcessArguments(args, launch.directory)
 	}
 	if owned.chain != nil {

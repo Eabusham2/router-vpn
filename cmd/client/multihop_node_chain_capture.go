@@ -94,6 +94,7 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 		return nil, errors.New("ordered control capture differs from its linked catalog source")
 	}
 	pairedHysteria := common.PairedHysteriaLocalMultihopSelection(nodes)
+	pairedProxyEntry := common.PairedProxyEntryLocalMultihopSelection(nodes) && byID[nodes[0].ID].NodeKind != "external" && byID[nodes[0].ID].External == nil
 	privateStreams := desktopPairedStreamRoles(nodes, func(i int) bool { return byID[nodes[i].ID].NodeKind == "external" })
 	externalFinal := byID[nodes[len(nodes)-1].ID].NodeKind == "external"
 	var result []desktopNodeChainMember
@@ -102,8 +103,8 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 		openVPN := found && desktopNodeChainOpenVPNMiddle(profile, selected.Mode)
 		imported := found && desktopNodeChainImported(profile, selected.Mode) || openVPN
 		paired := found && (profile.NodeKind == "" || profile.NodeKind == "router-vpn") && profile.External == nil && common.ValidNodeProofID(profile.NodeProofID)
-		if pairedHysteria && (!paired || profile.StartLayer != "" && profile.StartLayer != "off") {
-			return nil, errors.New("retained Hysteria2 requires every original paired member with Start Layer off")
+		if (pairedHysteria || pairedProxyEntry) && (!paired || profile.StartLayer != "" && profile.StartLayer != "off") {
+			return nil, errors.New("this complete Local family requires every original paired member with Start Layer off")
 		}
 		if imported {
 			bounded := len(nodes) >= 3 && (len(nodes) <= common.MultihopMaximumNodes || common.ExtendedLocalMultihopSelection(nodes) || common.ExtendedMixedLocalPacketCount(nodes) > 0)
@@ -112,14 +113,14 @@ func resolveDesktopNodeChainMembers(control common.RouterProfile, profiles []com
 				return nil, errors.New("imported ordered member requires its captured placement before a paired SS2022 final")
 			}
 		} else if !paired || i < len(nodes)-1 && !mobilemultihop.NodeChainPrefixMode(selected.Mode) &&
-			!(privateStreams && selected.Mode == "shadowsocks") && !(pairedHysteria && (selected.Mode == "shadowsocks" || selected.Mode == "hysteria2")) || i == len(nodes)-1 && !desktopNodeChainFinalSupported(selected.Mode, profile.StartLayer) {
-			return nil, errors.New("ordered selection requires its supported paired packet prefix and captured final transport")
+			!(privateStreams && selected.Mode == "shadowsocks") && !((pairedHysteria || pairedProxyEntry) && (selected.Mode == "shadowsocks" || selected.Mode == "hysteria2")) || i == len(nodes)-1 && !desktopNodeChainFinalSupported(selected.Mode, profile.StartLayer) {
+			return nil, errors.New("ordered selection requires its supported original prefix and captured final transport")
 		}
 		// Only the first closure owns physical bootstrap. An ambient lookup of
 		// any later transport would bypass its preceding selected prefix.
-		if i > 0 && !imported {
+		if (i > 0 || pairedProxyEntry) && !imported {
 			if _, err := netip.ParseAddr(profile.Endpoint); err != nil {
-				return nil, errors.New("later ordered nodes require a captured literal transport endpoint")
+				return nil, errors.New("this ordered member requires a captured literal transport endpoint")
 			}
 		}
 		result = append(result, desktopNodeChainMember{Profile: common.CloneRouterProfile(profile), Mode: selected.Mode})

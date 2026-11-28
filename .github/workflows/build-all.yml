@@ -903,6 +903,7 @@ jobs:
   aggregate:
     name: Aggregate one-SHA native release candidate
     needs: [generic-builds, windows-native-smoke, android, ios, macos, macos-intel-smoke, linux]
+    if: ${{ !cancelled() && needs.android.result == 'success' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -942,7 +943,16 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Manifest and verify artifact tree
+        env:
+          ROUTERVPN_PLATFORM_RESULTS: '${{ toJSON(needs) }}'
         run: |
+          python3 - <<'PYPLATFORMS'
+          import json, os
+          results = json.loads(os.environ['ROUTERVPN_PLATFORM_RESULTS'])
+          failed = {name: value['result'] for name, value in results.items() if value['result'] != 'success'}
+          if not results or failed:
+              raise SystemExit('Required platform jobs did not pass: ' + json.dumps(failed, sort_keys=True))
+          PYPLATFORMS
           python3 deploy/verify-release-candidate-provenance.py dist/release-candidate --sha "$GITHUB_SHA"
           (cd dist && find release-candidate -type f -print | sort)
           (cd dist && find release-candidate -type f -print0 | sort -z | xargs -0 sha256sum > RELEASE-CANDIDATE-SHA256SUMS)

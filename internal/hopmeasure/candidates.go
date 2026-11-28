@@ -60,6 +60,17 @@ type CandidateEngine interface {
 	MeasurementBoundary
 }
 
+// BoundaryIdentityCandidateEngine provides identity and complete measurement
+// verification from the same fresh observation. It must perform every native,
+// source, inventory, capture, lifetime and transport check of VerifyMeasurement
+// before returning the corresponding identity, within the supplied caller.
+// No observation may be reused across boundaries, requests or status reads.
+// Engines without this contract retain separate boundary and identity checks.
+type BoundaryIdentityCandidateEngine interface {
+	CandidateEngine
+	VerifyMeasurementIdentityContext(context.Context) (string, error)
+}
+
 // CandidateTarget is private construction input from a validated source. Only
 // its ID and source digest may appear in the public receipt, never its address.
 type CandidateTarget struct {
@@ -224,6 +235,7 @@ func NewPublicResponseCandidatesContext(ctx context.Context, engine CandidateEng
 // checked by the native append preparation before this shared service opens.
 type AppendPublicResponseCandidateAuthority interface {
 	AppendPublicResponseCandidateDepth(position int, id, tag string) int
+	AppendPublicResponseCandidateTarget(position int, id, tag string, target CandidateTarget) bool
 }
 
 func NewAppendPublicResponseCandidatesContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, limit int, authority AppendPublicResponseCandidateAuthority, response func(context.Context, CandidateTarget, func() error, func() error) error) (*CandidateService, error) {
@@ -234,7 +246,9 @@ func NewAppendPublicResponseCandidatesContext(ctx context.Context, engine Candid
 	if count < 1 || count >= 96 || prefix.Position != count-1 {
 		return nil, ErrStale
 	}
-	service, err := newPrefixCandidatesContext(ctx, engine, prefix, targets, limit, count)
+	service, err := newPrefixCandidatesContextOwnedTargets(ctx, engine, prefix, targets, limit, count, func(target CandidateTarget) bool {
+		return authority.AppendPublicResponseCandidateTarget(prefix.Position, prefix.ID, prefix.Tag, target)
+	})
 	if err == nil {
 		service.publicResponse = response
 	}
@@ -287,6 +301,10 @@ func NewExtendedPacketCandidatesContext(ctx context.Context, engine CandidateEng
 }
 
 func newPrefixCandidatesContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, limit int, depth int) (*CandidateService, error) {
+	return newPrefixCandidatesContextOwnedTargets(ctx, engine, prefix, targets, limit, depth, nil)
+}
+
+func newPrefixCandidatesContextOwnedTargets(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, limit int, depth int, originalHostname func(CandidateTarget) bool) (*CandidateService, error) {
 	if ctx == nil || engine == nil || prefix.Position < 0 || prefix.Position >= depth ||
 		!candidateText(prefix.ID) || !orderedPrefixTag.MatchString(prefix.Tag) ||
 		!strings.HasPrefix(prefix.Tag, "routervpn-chain-"+strconv.Itoa(prefix.Position)+"-") ||
@@ -301,9 +319,10 @@ func newPrefixCandidatesContext(ctx context.Context, engine CandidateEngine, pre
 		host, port, err := net.SplitHostPort(target.Address)
 		ip, ipErr := netip.ParseAddr(host)
 		number, portErr := strconv.Atoi(port)
+		literal := ipErr == nil && ip.Zone() == "" && !ip.Is4In6() && !ip.IsUnspecified() && !ip.IsMulticast() && net.JoinHostPort(ip.String(), strconv.Itoa(number)) == target.Address
+		hostname := ipErr != nil && originalHostname != nil && originalHostname(target)
 		if !candidateText(target.ID) || target.ID == prefix.ID || seen[target.ID] || !nodeID.MatchString(target.SourceSHA256) ||
-			err != nil || ipErr != nil || ip.Zone() != "" || ip.Is4In6() || ip.IsUnspecified() || ip.IsMulticast() ||
-			portErr != nil || number < 1 || number > 65535 || net.JoinHostPort(ip.String(), strconv.Itoa(number)) != target.Address {
+			err != nil || portErr != nil || number < 1 || number > 65535 || !literal && !hostname {
 			return nil, errors.New("candidate measurement requires exact captured literal TCP endpoints")
 		}
 		seen[target.ID] = true
@@ -344,6 +363,9 @@ const RegisteredPublicCandidateIntervalLimit = 2500 * time.Millisecond
 func (s *CandidateService) run(ctx context.Context, request string, target CandidateTarget) {
 	service := s.service
 	verify := func() error {
+		if engine, ok := service.engine.(BoundaryIdentityCandidateEngine); ok {
+			return service.validWithIdentity(ctx, engine.VerifyMeasurementIdentityContext)
+		}
 		if err := service.engine.(MeasurementBoundary).VerifyMeasurement(ctx); err != nil {
 			return err
 		}
@@ -436,6 +458,13 @@ func (s *CandidateService) run(ctx context.Context, request string, target Candi
 		}
 	}
 	if run != nil {
+		service.mu.Lock()
+		if service.state.Request == request && !service.closed && !service.state.Complete && service.state.Failure == "" && service.state.Stage != "cancelled" && service.state.Stage != "invalidated" {
+			// Only this original response worker can begin its own retirement.
+			service.responseRetirementStarted = true
+			service.state.Stage = "draining"
+		}
+		service.mu.Unlock()
 		failure = errors.Join(failure, run.Close())
 	}
 	if boundaryFailure == nil {
@@ -511,4 +540,31 @@ func (s *CandidateService) StatusContextJSON(ctx context.Context) string {
 	}
 	raw, _ := json.Marshal(status)
 	return string(raw)
+}
+
+// AppendExecutionResponseAuthority binds only a genuine unfinished prefix and
+// its exact private inventory. It grants no complete-final or selected depth.
+type AppendExecutionResponseAuthority interface {
+	AppendExecutionResponseDepth(position int, id, tag string) int
+	AppendExecutionResponseTarget(position int, id, tag string, target CandidateTarget) bool
+}
+
+func NewAppendExecutionResponseRunContext(ctx context.Context, engine CandidateEngine, prefix CandidatePrefix, targets []CandidateTarget, limit int, authority AppendExecutionResponseAuthority, open func(context.Context, CandidateTarget) (CandidateResponseRun, error)) (*CandidateService, error) {
+	if authority == nil || open == nil || limit <= 0 || limit > 40<<20 {
+		return nil, ErrStale
+	}
+	count := authority.AppendExecutionResponseDepth(prefix.Position, prefix.ID, prefix.Tag)
+	if count < 1 || count > 95 || prefix.Position != count-1 {
+		return nil, ErrStale
+	}
+	for _, target := range targets {
+		if !authority.AppendExecutionResponseTarget(prefix.Position, prefix.ID, prefix.Tag, target) {
+			return nil, ErrStale
+		}
+	}
+	service, err := newPrefixCandidatesContext(ctx, engine, prefix, targets, limit, count)
+	if err == nil {
+		service.responseRun = open
+	}
+	return service, err
 }

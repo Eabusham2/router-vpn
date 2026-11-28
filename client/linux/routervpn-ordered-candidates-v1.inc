@@ -202,21 +202,39 @@ static gboolean linux_oc_packet_catalog(JsonObject *view, int position) {
 /* Temporary prefix measurements carry their own closed-application proof.
  * They never acquire authority from a connected or selected-owner envelope. */
 
+static gboolean linux_oc_append_purpose(const char *purpose) {
+    return !strcmp(purpose,"draft-prefix-append") || !strcmp(purpose,"draft-prefix-append-execution");
+}
+static const char *linux_oc_append_requested(JsonObject *draft) {
+    const char *purpose=linux_ec_string(draft,"purpose"), *requested=linux_ec_string(draft,"requested_execution");
+    if (!strcmp(purpose,"draft-prefix-append")) return linux_ec_member(draft,"requested_execution")?"":"local";
+    if (!strcmp(purpose,"draft-prefix-append-execution") && (!strcmp(requested,"server") || !strcmp(requested,"auto"))) return requested;
+    return "";
+}
 static JsonArray *linux_oc_append_source(JsonObject *view, JsonObject *draft, int position) {
+    const char *purpose=linux_ec_string(draft,"purpose"), *requested=linux_oc_append_requested(draft);
+    gboolean execution_append=!strcmp(purpose,"draft-prefix-append-execution");
     JsonNode *kind=linux_ec_member(draft,"next_kind");
     gboolean external=!strcmp(linux_ec_string(draft,"next_kind"),"external");
     if(kind && (!JSON_NODE_HOLDS_VALUE(kind) || json_node_get_value_type(kind)!=G_TYPE_STRING || !external ||
        strcmp(linux_ec_string(draft,"next_mode"),"shadowsocks")))return NULL;
     if(external?strcmp(linux_ec_string(view,"candidate_kind"),"external"):linux_ec_member(view,"candidate_kind")!=NULL)return NULL;
-    if (!draft || strcmp(linux_ec_string(draft,"purpose"),"draft-prefix-append") ||
-        strcmp(linux_ec_string(draft,"execution"),"local") || strcmp(linux_ec_string(view,"scope"),"draft-prefix-append") ||
-        strcmp(linux_ec_string(view,"purpose"),"draft-prefix-append") || strcmp(linux_ec_string(view,"origin"),"editor-draft") ||
-        strcmp(linux_ec_string(view,"requested_execution"),"local") || strcmp(linux_ec_string(view,"proof_scope"),"selected-prefix") ||
+    if (!draft || !requested[0] ||
+        strcmp(linux_ec_string(draft,"execution"),"local") || strcmp(linux_ec_string(view,"scope"),purpose) ||
+        strcmp(linux_ec_string(view,"purpose"),purpose) || strcmp(linux_ec_string(view,"origin"),"editor-draft") ||
+        strcmp(linux_ec_string(view,"requested_execution"),requested) || strcmp(linux_ec_string(view,"proof_scope"),"selected-prefix") ||
         linux_ec_number(view,"schema")!=1 || linux_ec_number(view,"prefix_position")!=position ||
         strcmp(linux_ec_string(view,"measurement"),external?"routed-public-candidate-response":"routed-candidate-response") ||
         (!linux_oc_packet_mode(linux_ec_string(view,"candidate_mode")) && strcmp(linux_ec_string(view,"candidate_mode"),"shadowsocks") &&
           strcmp(linux_ec_string(view,"candidate_mode"),"hysteria2")) ||
         strcmp(linux_ec_string(view,"candidate_mode"),linux_ec_string(draft,"next_mode"))) return NULL;
+    if (execution_append) {
+        if (kind || external || strcmp(linux_ec_string(draft,"next_mode"),"shadowsocks") ||
+            !linux_ec_token(linux_ec_string(view,"execution_source_sha256"),64)) return NULL;
+    } else {
+        const char *execution_fields[]={"execution_source_sha256","execution_capture_sha256","winning_execution","selection"};
+        for (guint i=0;i<G_N_ELEMENTS(execution_fields);i++) if (linux_ec_member(view,execution_fields[i])) return NULL;
+    }
     const char *closed[]={"application_open","dns_open"};
     for (guint i=0;i<G_N_ELEMENTS(closed);i++) {
         JsonNode *flag=linux_ec_member(view,closed[i]);
@@ -234,17 +252,30 @@ static JsonArray *linux_oc_append_source(JsonObject *view, JsonObject *draft, in
     guint count=nodes?json_array_get_length(nodes):0;
     if (count<1 || count>95 || position!=(int)count-1 || linux_ec_number(view,"append_position")!=count ||
         linux_ec_number(draft,"append_position")!=count || !original || json_array_get_length(original)!=count) return NULL;
+    JsonObject *first=linux_oc_root(json_array_get_element(nodes,0));
+    gboolean proxy_entry=!strcmp(linux_ec_string(first,"kind"),"router-vpn") &&
+        (!strcmp(linux_ec_string(first,"mode"),"shadowsocks") || !strcmp(linux_ec_string(first,"mode"),"hysteria2"));
+    if(proxy_entry && external)return NULL;
     g_autoptr(GHashTable) ids=g_hash_table_new(g_str_hash,g_str_equal);
+    gboolean retained_ss=FALSE;
     for (guint i=0;i<count;i++) {
         JsonObject *node=linux_oc_root(json_array_get_element(nodes,i)), *row=linux_oc_root(json_array_get_element(original,i));
         const char *kind=linux_ec_string(node,"kind"), *mode=linux_ec_string(node,"mode");
         gboolean packet=!strcmp(kind,"router-vpn") && linux_oc_packet_mode(mode);
-        gboolean stream=i>0 && !strcmp(mode,"shadowsocks") && (!strcmp(kind,"router-vpn") || !strcmp(kind,"external"));
-        gboolean hy2=i>0 && !strcmp(mode,"hysteria2") && !strcmp(kind,"router-vpn");
+        gboolean stream=(i>0 || proxy_entry) && !strcmp(mode,"shadowsocks") && (!strcmp(kind,"router-vpn") || !strcmp(kind,"external"));
+        gboolean hy2=(i>0 || proxy_entry) && !strcmp(mode,"hysteria2") && !strcmp(kind,"router-vpn");
         if (!node || json_object_get_size(node)!=3 || !row || json_object_get_size(row)!=2 ||
             !linux_oc_response_id(linux_ec_string(node,"id")) ||
-            !g_hash_table_add(ids,(gpointer)linux_ec_string(node,"id")) || (!packet && !stream && !hy2) ||
+            !g_hash_table_add(ids,(gpointer)linux_ec_string(node,"id")) || (!packet && !stream && !hy2) || (proxy_entry && strcmp(kind,"router-vpn")) ||
             strcmp(linux_ec_string(row,"id"),linux_ec_string(node,"id")) || strcmp(linux_ec_string(row,"mode"),linux_ec_string(node,"mode"))) return NULL;
+        if (execution_append) {
+            if (packet) {
+                if (retained_ss) return NULL;
+            } else {
+                if (i==0 || strcmp(kind,"router-vpn") || strcmp(mode,"shadowsocks")) return NULL;
+                retained_ss=TRUE;
+            }
+        }
     }
     return nodes;
 }
@@ -275,7 +306,8 @@ static gboolean linux_oc_append_catalog(JsonObject *view, JsonObject *draft, int
     g_autoptr(GHashTable) ids=g_hash_table_new(g_str_hash,g_str_equal);
     for (guint i=0;i<json_array_get_length(choices);i++) {
         JsonObject *choice=linux_oc_root(json_array_get_element(choices,i));
-        if (!g_hash_table_add(ids,(gpointer)linux_ec_string(choice,"id")) ||
+        if ((!strcmp(linux_ec_string(draft,"purpose"),"draft-prefix-append-execution") && !linux_ec_token(linux_ec_string(choice,"source_sha256"),64)) ||
+            !g_hash_table_add(ids,(gpointer)linux_ec_string(choice,"id")) ||
             !linux_oc_append_path(view,draft,choice,linux_ec_array(choice,"proposed_path"),position) ||
             !linux_oc_append_path(view,draft,choice,linux_ec_array(choice,"draft_path"),position)) return FALSE;
     }
@@ -289,7 +321,7 @@ static gboolean linux_oc_append_catalog(JsonObject *view, JsonObject *draft, int
 }
 
 static JsonArray *linux_oc_prepared_source(JsonObject *view, JsonObject *draft, int position) {
-    if (!strcmp(linux_ec_string(draft,"purpose"),"draft-prefix-append") || !strcmp(linux_ec_string(view,"purpose"),"draft-prefix-append")) return linux_oc_append_source(view,draft,position);
+    if (linux_oc_append_purpose(linux_ec_string(draft,"purpose")) || linux_oc_append_purpose(linux_ec_string(view,"purpose"))) return linux_oc_append_source(view,draft,position);
     const char *requested=linux_ec_string(draft,"execution");
     if (!strcmp(linux_ec_string(view,"scope"),"draft-complete-selected") || !strcmp(requested,"auto") || !strcmp(requested,"server")) {
         if (!draft || (strcmp(requested,"auto") && strcmp(requested,"server")) ||
@@ -329,7 +361,7 @@ static JsonArray *linux_oc_prepared_source(JsonObject *view, JsonObject *draft, 
     return nodes;
 }
 static gboolean linux_oc_prepared_path(JsonObject *view, JsonObject *draft, JsonObject *choice, JsonArray *path, int position) {
-    if (!strcmp(linux_ec_string(draft,"purpose"),"draft-prefix-append")) return linux_oc_append_path(view,draft,choice,path,position);
+    if (linux_oc_append_purpose(linux_ec_string(draft,"purpose"))) return linux_oc_append_path(view,draft,choice,path,position);
     JsonArray *nodes=linux_oc_prepared_source(view,draft,position);
     const char *id=linux_ec_string(choice,"id"), *mode=linux_ec_string(view,"candidate_mode");
     if (!nodes || !path || json_array_get_length(path)!=json_array_get_length(nodes) || !linux_oc_response_id(id) ||
@@ -346,7 +378,7 @@ static gboolean linux_oc_prepared_path(JsonObject *view, JsonObject *draft, Json
     return TRUE;
 }
 static gboolean linux_oc_prepared_catalog(JsonObject *view, JsonObject *draft, int position) {
-    if (!strcmp(linux_ec_string(draft,"purpose"),"draft-prefix-append")) return linux_oc_append_catalog(view,draft,position);
+    if (linux_oc_append_purpose(linux_ec_string(draft,"purpose"))) return linux_oc_append_catalog(view,draft,position);
     JsonArray *nodes=linux_oc_prepared_source(view,draft,position), *prefixes=linux_ec_array(view,"prefixes"), *choices=linux_ec_array(view,"candidates");
     if (!nodes || !prefixes || json_array_get_length(prefixes)!=json_array_get_length(nodes)-1 || !choices ||
         !json_array_get_length(choices) || linux_ec_number(view,"samples")!=50) return FALSE;
@@ -629,6 +661,88 @@ static gboolean linux_oc_same_measurement(LinuxOrderedCandidates*s,JsonObject*o)
     const char*measurement=linux_ec_string(linux_oc_root(s->view),"measurement");
     return linux_oc_measurement_kind(measurement)[0]&&!strcmp(linux_ec_string(o,"measurement"),measurement);
 }
+static gboolean linux_oc_execution_candidate(JsonObject *value, const char *execution, const char *entry, const char *candidate) {
+    return value && json_object_get_size(value)==4 && !strcmp(linux_ec_string(value,"execution"),execution) &&
+        !strcmp(linux_ec_string(value,"transport"),"ordered-prefix-append") && !strcmp(linux_ec_string(value,"entry_id"),entry) &&
+        !strcmp(linux_ec_string(value,"exit_id"),candidate);
+}
+static gboolean linux_oc_execution_measurement(JsonObject *value, const char *execution, const char *entry, const char *candidate) {
+    if (!value || !linux_oc_execution_candidate(linux_ec_object(value,"candidate"),execution,entry,candidate)) return FALSE;
+    const char *allowed[]={"candidate","eligible","last_node_ms","external_ms","score_ms","failure"};
+    GList *keys=json_object_get_members(value);
+    gboolean valid=TRUE;
+    for (GList *key=keys;key;key=key->next) {
+        gboolean found=FALSE;
+        for (guint i=0;i<G_N_ELEMENTS(allowed);i++) if (!strcmp(key->data,allowed[i])) found=TRUE;
+        if (!found) { valid=FALSE;break; }
+    }
+    g_list_free(keys);
+    JsonNode *eligible=linux_ec_member(value,"eligible");
+    if (!valid || !eligible || !JSON_NODE_HOLDS_VALUE(eligible) || json_node_get_value_type(eligible)!=G_TYPE_BOOLEAN) return FALSE;
+    double last=linux_ec_number(value,"last_node_ms"), external=linux_ec_number(value,"external_ms"), score=linux_ec_number(value,"score_ms");
+    if (json_node_get_boolean(eligible)) {
+        if (linux_ec_member(value,"failure") || !isfinite(last) || !isfinite(external) || !isfinite(score) || last<=0 || external<=0 || score<=0) return FALSE;
+        double tolerance=fabs(score)*0.000000001;
+        if (tolerance<0.000001) tolerance=0.000001;
+        return fabs(score-(last/2+external/2))<=tolerance;
+    }
+    if (!linux_ec_string(value,"failure")[0] || linux_ec_member(value,"score_ms")) return FALSE;
+    return (!linux_ec_member(value,"last_node_ms") || (isfinite(last) && last>0)) &&
+        (!linux_ec_member(value,"external_ms") || (isfinite(external) && external>0));
+}
+static gboolean linux_oc_execution_selection(JsonObject *value, const char *winner, const char *entry, const char *candidate) {
+    const char *target=linux_ec_string(value,"target");
+    JsonArray *rows=linux_ec_array(value,"measurements");
+    if (!value || json_object_get_size(value)!=4 ||
+        (strcmp(target,"https://1.1.1.1/cdn-cgi/trace") && strcmp(target,"https://1.0.0.1/cdn-cgi/trace")) ||
+        !linux_oc_execution_candidate(linux_ec_object(value,"winner"),winner,entry,candidate) || !rows || json_array_get_length(rows)!=2) return FALSE;
+    guint seen=0;JsonObject *winning=NULL;
+    for (guint i=0;i<2;i++) {
+        JsonObject *row=linux_oc_root(json_array_get_element(rows,i));
+        const char *execution=linux_ec_string(linux_ec_object(row,"candidate"),"execution");
+        guint bit=!strcmp(execution,"local")?1:!strcmp(execution,"server")?2:0;
+        if (!bit || (seen&bit) || !linux_oc_execution_measurement(row,execution,entry,candidate)) return FALSE;
+        seen|=bit;
+        if (!strcmp(execution,winner)) winning=row;
+    }
+    if (!winning || !linux_ec_bool(winning,"eligible")) return FALSE;
+    double score=linux_ec_number(winning,"score_ms");
+    for (guint i=0;i<2;i++) {
+        JsonObject *row=linux_oc_root(json_array_get_element(rows,i));
+        if (linux_ec_bool(row,"eligible") && linux_ec_number(row,"score_ms")<score-0.000001) return FALSE;
+    }
+    JsonObject *final=linux_ec_object(value,"final");
+    return linux_oc_execution_measurement(final,winner,entry,candidate) && linux_ec_bool(final,"eligible");
+}
+static gboolean linux_oc_execution_receipt(LinuxOrderedCandidates *s, JsonObject *row) {
+    JsonObject *draft=linux_oc_root(s->draft_source), *view=linux_oc_root(s->view);
+    const char *requested=linux_oc_append_requested(draft);
+    JsonArray *nodes=linux_oc_append_source(view,draft,s->position);
+    if (!nodes || strcmp(linux_ec_string(row,"purpose"),"draft-prefix-append-execution") ||
+        linux_ec_number(row,"schema")!=1 || strcmp(linux_ec_string(row,"measurement"),"routed-candidate-response") ||
+        strcmp(linux_ec_string(row,"requested_execution"),requested) ||
+        strcmp(linux_ec_string(row,"source_sha256"),linux_ec_string(view,"source_sha256")) ||
+        strcmp(linux_ec_string(row,"execution_source_sha256"),linux_ec_string(view,"execution_source_sha256")) ||
+        linux_ec_number(row,"prefix_position")!=s->position ||
+        strcmp(linux_ec_string(row,"prefix_id"),linux_ec_string(linux_oc_root(json_array_get_element(nodes,s->position)),"id")) ||
+        !linux_ec_token(linux_ec_string(row,"request_id"),32) || !linux_ec_token(linux_ec_string(row,"capture_sha256"),64) ||
+        strcmp(linux_ec_string(row,"capture_sha256"),linux_ec_string(row,"execution_capture_sha256"))) return FALSE;
+    const char *candidate=linux_ec_string(row,"candidate_id");
+    JsonArray *choices=linux_ec_array(view,"candidates");guint matches=0;
+    for (guint i=0;choices && i<json_array_get_length(choices);i++) {
+        JsonObject *choice=linux_oc_root(json_array_get_element(choices,i));
+        if (strcmp(linux_ec_string(choice,"id"),candidate)) continue;
+        if (!linux_ec_token(linux_ec_string(choice,"source_sha256"),64) ||
+            strcmp(linux_ec_string(row,"candidate_source_sha256"),linux_ec_string(choice,"source_sha256"))) return FALSE;
+        matches++;
+    }
+    if (matches!=1) return FALSE;
+    const char *winner=linux_ec_string(row,"winning_execution");
+    if (!strcmp(requested,"server")) return !strcmp(winner,"server") && !linux_ec_member(row,"selection");
+    if (strcmp(requested,"auto") || (strcmp(winner,"local") && strcmp(winner,"server"))) return FALSE;
+    const char *entry=linux_ec_string(linux_oc_root(json_array_get_element(nodes,0)),"id");
+    return linux_oc_execution_selection(linux_ec_object(row,"selection"),winner,entry,candidate);
+}
 static double linux_oc_current_score(LinuxOrderedCandidates*s,JsonObject*o,gint64 now){
     if(!linux_oc_same_measurement(s,o))return NAN;
     if(linux_oc_response_measurement(linux_ec_string(o,"measurement"))){
@@ -642,11 +756,13 @@ static double linux_oc_current_score(LinuxOrderedCandidates*s,JsonObject*o,gint6
         }
         if(matches!=1)return NAN;
     }
+    if (!strcmp(linux_ec_string(linux_oc_root(s->draft_source),"purpose"),"draft-prefix-append-execution") && !linux_oc_execution_receipt(s,o)) return NAN;
     return linux_oc_score(o,now);
 }
 static const char*linux_oc_base(LinuxOrderedCandidates*s){return s->draft?"/api/multihop/draft-candidates":s->saved_path?"/api/multihop/saved-candidates":"/api/multihop/prefix-candidates";}
 static const char*linux_oc_scope(LinuxOrderedCandidates*s){
-    if(!strcmp(linux_ec_string(linux_oc_root(s->draft_source),"purpose"),"draft-prefix-append"))return "draft-prefix-append";
+    const char *purpose=linux_ec_string(linux_oc_root(s->draft_source),"purpose");
+    if(linux_oc_append_purpose(purpose))return purpose;
     const char*requested=linux_ec_string(linux_oc_root(s->draft_source),"execution");
     if(!strcmp(requested,"server")||!strcmp(requested,"auto"))return "draft-complete-selected";
     return s->saved_prefix?"saved-prefix-local":"saved-complete-local";}
@@ -724,7 +840,7 @@ static gboolean linux_oc_ready(LinuxOrderedCandidates*s){
     return !s->pending;
 }
 static gboolean linux_oc_final_choice(LinuxOrderedCandidates*s,JsonObject*choice){
-    if(!strcmp(linux_oc_scope(s),"draft-prefix-append"))return FALSE;
+    if(linux_oc_append_purpose(linux_oc_scope(s)))return FALSE;
     JsonObject*draft=linux_oc_root(s->draft_source);
     JsonArray*original=linux_ec_array(draft,"nodes"),*proposed=linux_ec_array(choice,"proposed_path");
     guint count=original?json_array_get_length(original):0;
@@ -781,7 +897,7 @@ static gboolean linux_oc_final_choice(LinuxOrderedCandidates*s,JsonObject*choice
 }
 static JsonNode *linux_oc_response_draft_path(LinuxOrderedCandidates *s, JsonObject *view, JsonObject *choice) {
     JsonObject *draft=linux_oc_root(s->draft_source);
-    if (!strcmp(linux_oc_scope(s),"draft-prefix-append")) return s->saved_path && s->saved_prefix &&
+    if (linux_oc_append_purpose(linux_oc_scope(s))) return s->saved_path && s->saved_prefix &&
         linux_oc_append_path(view,draft,choice,linux_ec_array(choice,"draft_path"),s->position) ? linux_ec_member(choice,"draft_path"):NULL;
     if (linux_ec_member(view,"candidate_mode")) {
         return s->saved_path && s->saved_prefix && draft && linux_oc_packet_mode(linux_ec_string(view,"candidate_mode")) &&
@@ -840,7 +956,7 @@ static void linux_oc_controls(LinuxOrderedCandidates*s){
     JsonObject*choice=linux_oc_selected(s);JsonArray*path=linux_ec_array(choice,"proposed_path");JsonObject*row=linux_oc_result(s,linux_ec_string(choice,"id"));
     gboolean response_draft=s->draft&&linux_oc_response_measurement(linux_ec_string(linux_oc_root(s->view),"measurement"));
     gboolean allowed=!s->draft||(response_draft?linux_oc_final_choice(s,choice):!linux_ec_string(choice,"proposal_action")[0]);
-    gboolean append=!strcmp(linux_oc_scope(s),"draft-prefix-append");
+    gboolean append=linux_oc_append_purpose(linux_oc_scope(s));
     gtk_widget_set_visible(s->name,!append && (!s->draft||response_draft));
     gtk_widget_set_visible(s->save,!append);
     gtk_button_set_label(GTK_BUTTON(s->save),response_draft?(!strcmp(linux_ec_string(choice,"proposal_action"),"save-intermediate-profile")?"Save profile with this hop":"Save profile with this final"):s->draft?"Add measured hop to draft":"Save next-connection profile");
@@ -901,7 +1017,7 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
     JsonNode *original=linux_ec_member(o,"original_final");
     gboolean packet_mode=phase==1 ? linux_oc_packet_mode(linux_ec_string(o,"candidate_mode")) && !original :
         linux_oc_packet_mode(linux_ec_string(prior,"candidate_mode")) && !linux_ec_member(prior,"original_final");
-    gboolean append_mode=!strcmp(linux_oc_scope(s),"draft-prefix-append");
+    gboolean append_mode=linux_oc_append_purpose(linux_oc_scope(s));
     gboolean prepared_mode=(packet_mode || append_mode) && (s->saved_path || s->draft);
     if (prepared_mode) {
         if (!s->saved_path || !s->saved_prefix) return FALSE;
@@ -912,9 +1028,12 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
                 strcmp(linux_ec_string(o,"candidate_mode"),linux_ec_string(prior,"candidate_mode")) ||
                 !json_node_equal(linux_ec_member(o,"response_source_nodes"),linux_ec_member(prior,"response_source_nodes")) ||
                 strcmp(linux_ec_string(o,"view_token"),linux_ec_string(prior,"view_token")) || strcmp(linux_ec_string(o,"request_id"),s->request)) return FALSE;
-            if (!strcmp(linux_oc_scope(s),"draft-prefix-append")) {
+            if (linux_oc_append_purpose(linux_oc_scope(s))) {
                 const char *bound[]={"purpose","source_sha256","config_sha256","draft_revision","device_revision","device_source_sha256","device_mtu_revision"};
                 for(guint i=0;i<G_N_ELEMENTS(bound);i++) if(strcmp(linux_ec_string(o,bound[i]),linux_ec_string(prior,bound[i])))return FALSE;
+                if (!strcmp(linux_oc_scope(s),"draft-prefix-append-execution") &&
+                    (strcmp(linux_ec_string(o,"execution_source_sha256"),linux_ec_string(prior,"execution_source_sha256")) ||
+                     strcmp(linux_ec_string(o,"requested_execution"),linux_ec_string(prior,"requested_execution")))) return FALSE;
                 if(linux_ec_number(o,"append_position")!=linux_ec_number(prior,"append_position") || phase==4 || *linux_ec_string(o,"saved_profile_id"))return FALSE;
             }
             const char *fields[]={"started","admission_cancelled","running","drained","cancelled","native_down","accepted","reviewing","cleanup_pending","active_path_changed"};
@@ -945,7 +1064,7 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
                     if (!linux_oc_prepared_path(prior,draft_source,choice,linux_ec_array(o,"proposed_path"),s->position)) return FALSE;
                     if (phase==6) {
                         if (!s->draft || (!append_mode && !linux_oc_packet_mode(linux_ec_string(prior,"candidate_mode"))) ||
-                            strcmp(linux_ec_string(o,"draft_action"),!strcmp(linux_oc_scope(s),"draft-prefix-append")?"append-measured-hop":"replace-measured-hop")) return FALSE;
+                            strcmp(linux_ec_string(o,"draft_action"),linux_oc_append_purpose(linux_oc_scope(s))?"append-measured-hop":"replace-measured-hop")) return FALSE;
                     } else if (strcmp(linux_ec_string(o,"proposal_action"),linux_ec_string(choice,"proposal_action"))) return FALSE;
                     matches++;
                 }
@@ -1148,7 +1267,8 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
             char*id=g_strdup_printf("%d",(int)value),*name=g_strdup_printf("After node %d · %s · %s",(int)value+1,linux_ec_string(p,"name"),linux_ec_string(p,"mode"));
             gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(s->prefix),id,name);if((int)value==s->position)gtk_combo_box_set_active_id(GTK_COMBO_BOX(s->prefix),id);g_free(id);g_free(name);
         }
-        const char*note=append_mode && !strcmp(linux_ec_string(o,"candidate_kind"),"external")?
+        const char*note=!strcmp(linux_oc_scope(s),"draft-prefix-append-execution")?
+            "Each candidate keeps its own Server or Compare execution. Compare uses the same private last-node and HTTPS target; its winner then needs 50 fresh private responses. The draft remains Local.":append_mode && !strcmp(linux_ec_string(o,"candidate_kind"),"external")?
             "Measure 50 verified public HTTPS responses through this incomplete prefix. Choose appends the original import only after the temporary path fully stops.":prepared_mode?
             "Measure 50 authenticated candidate responses through this selected prefix. The route must close before using a measured replacement or saving a future profile.":
             !strcmp(linux_ec_string(o,"measurement"),"routed-public-candidate-response")?
@@ -1205,7 +1325,7 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
             if (phase==6) {
                 JsonArray *choices=linux_ec_array(linux_oc_root(s->view),"candidates");
                 JsonNode *confirmed=linux_ec_member(o,"proposed_path");
-                const char *draft_action=!strcmp(linux_oc_scope(s),"draft-prefix-append")?"append-measured-hop":prepared_mode?"replace-measured-hop":"insert-measured-hop";
+                const char *draft_action=linux_oc_append_purpose(linux_oc_scope(s))?"append-measured-hop":prepared_mode?"replace-measured-hop":"insert-measured-hop";
                 if (strcmp(linux_ec_string(o,"draft_action"),draft_action) || !confirmed ||
                     linux_ec_member(o,"profile_id") ||
                     (!strcmp(linux_oc_scope(s),"draft-complete-selected") && (strcmp(s->selected_winner,linux_ec_member(prior,"response_executions") ? linux_ec_string(o,"selected_execution") : "local") || s->selected_epoch<=0))) return FALSE;
@@ -1230,6 +1350,7 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
             if(s->cancel_wanted || s->close_wanted || !linux_ec_bool(o,"chosen") || !linux_ec_bool(o,"drained") ||
                !linux_ec_bool(o,"native_down") || linux_ec_bool(o,"accepted") || linux_ec_string(o,"saved_profile_id")[0] ||
                g_strcmp0(s->chosen_id,linux_ec_string(o,"candidate_id")))return FALSE;
+            if (!strcmp(linux_oc_scope(s),"draft-prefix-append-execution") && !isfinite(linux_oc_current_score(s,linux_oc_result(s,s->chosen_id),g_get_real_time()/1000))) return FALSE;
             s->pending=FALSE;linux_oc_hold(s,FALSE);
             GtkWindow *editor=g_weak_ref_get(&s->editor);
             gboolean adopted=editor && linux_ordered_adopt_measured_v1(editor,s->draft,s->position,o);
@@ -1259,6 +1380,17 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
     if(phase==3){if(!linux_ec_bool(o,"drained")||(s->saved_path&&((!linux_ec_bool(o,"native_down")&&!linux_oc_before_start(o))||linux_ec_bool(o,"active_path_changed"))))return FALSE;s->pending=FALSE;if(s->receipt){json_node_free(s->receipt);s->receipt=NULL;}linux_oc_hold(s,FALSE);gtk_label_set_text(GTK_LABEL(s->status),s->saved_path&&linux_oc_before_start(o)?"Cancelled before the temporary path started.":"Cancelled; original native work drained.");return TRUE;}
     if(s->cancel_wanted||s->close_wanted){s->pending=TRUE;if(s->receipt){json_node_free(s->receipt);s->receipt=NULL;}gtk_list_store_clear(s->store);gtk_label_set_text(GTK_LABEL(s->status),"Waiting for cancellation of this exact completed request.");return TRUE;}
     if(strcmp(linux_ec_string(o,"view_token"),linux_ec_string(linux_oc_root(s->view),"view_token"))||linux_ec_number(o,"prefix_position")!=s->position||!linux_oc_same_measurement(s,o))return FALSE;
+    if (!strcmp(linux_oc_scope(s),"draft-prefix-append-execution")) {
+        g_autoptr(GHashTable) ids=g_hash_table_new(g_str_hash,g_str_equal);
+        g_autoptr(GHashTable) requests=g_hash_table_new(g_str_hash,g_str_equal);
+        JsonArray *results=linux_ec_array(o,"results");
+        for (guint i=0;results && i<json_array_get_length(results);i++) {
+            JsonObject *row=linux_oc_root(json_array_get_element(results,i));
+            if (!isfinite(linux_oc_current_score(s,row,g_get_real_time()/1000))) continue;
+            if (!g_hash_table_add(ids,(gpointer)linux_ec_string(row,"candidate_id")) ||
+                !g_hash_table_add(requests,(gpointer)linux_ec_string(row,"request_id"))) return FALSE;
+        }
+    }
     if(s->receipt){
         json_node_free(s->receipt);
     }
@@ -1269,7 +1401,7 @@ static gboolean linux_oc_receive(LinuxOrderedCandidates*s,JsonObject*o,int phase
             char*text=g_strdup_printf("Selected execution: %s. Choose a measured hop for this draft.",s->selected_winner);
             gtk_label_set_text(GTK_LABEL(s->status),text);g_free(text);return TRUE;
         }
-        gtk_label_set_text(GTK_LABEL(s->status),linux_oc_ready(s)?"Disconnected. Results for this measurement are sorted by 10% trimmed mean and expire 120 seconds after measurement. Select one to save an explicit future profile.":cleanup?"Original cleanup is pending; Cancel will retry before another operation.":s->pending&&s->draft_source?"Testing the original draft. Waiting for its temporary route to close.":s->pending?"Testing the original saved Local path. Waiting for native shutdown before showing choices.":"No adoptable original receipt; retest.");
+        gtk_label_set_text(GTK_LABEL(s->status),linux_oc_ready(s) && linux_oc_append_purpose(linux_oc_scope(s))?"Disconnected. Choose one measured node for the draft; each candidate retains its own source and execution receipt.":linux_oc_ready(s)?"Disconnected. Results for this measurement are sorted by 10% trimmed mean and expire 120 seconds after measurement. Select one to save an explicit future profile.":cleanup?"Original cleanup is pending; Cancel will retry before another operation.":s->pending&&s->draft_source?"Testing the original draft. Waiting for its temporary route to close.":s->pending?"Testing the original saved Local path. Waiting for native shutdown before showing choices.":"No adoptable original receipt; retest.");
     }else gtk_label_set_text(GTK_LABEL(s->status),s->pending?"Original cleanup is pending; retry Cancel.":linux_ec_bool(o,"accepted")?"Complete results for this measurement are sorted by trimmed mean. Each expires after 120 seconds. Select one to preview its next-connection path.":"No adoptable original receipt; retest.");return TRUE;
 }
 static gboolean linux_oc_tick(gpointer data){
@@ -1299,6 +1431,23 @@ static void linux_oc_destroy(GtkWidget*w,gpointer data){
     linux_oc_hold(s,FALSE);gtk_list_store_clear(s->store);if(s->view)json_node_free(s->view);if(s->receipt)json_node_free(s->receipt);g_object_unref(s->store);
     if(s->app->window&&g_object_get_data(G_OBJECT(s->app->window),"linux-ordered-candidates")==s)g_object_set_data(G_OBJECT(s->app->window),"linux-ordered-candidates",NULL);
 }
+static void linux_oc_execution_summary(GString *text, JsonObject *row) {
+    const char *winner=linux_ec_string(row,"winning_execution");
+    JsonObject *selection=linux_ec_object(row,"selection");
+    if (!selection) { g_string_append_printf(text,"\nMeasured execution: %s. The draft remains Local.",winner);return; }
+    g_string_append_printf(text,"\nCompare winner: %s · %s",winner,linux_ec_string(selection,"target"));
+    JsonArray *rows=linux_ec_array(selection,"measurements");
+    for (guint i=0;rows && i<json_array_get_length(rows);i++) {
+        JsonObject *value=linux_oc_root(json_array_get_element(rows,i));
+        const char *lane=linux_ec_string(linux_ec_object(value,"candidate"),"execution");
+        if (linux_ec_bool(value,"eligible")) g_string_append_printf(text,"\n%s: last node %.2f ms; HTTPS %.2f ms; score %.2f ms",lane,
+            linux_ec_number(value,"last_node_ms"),linux_ec_number(value,"external_ms"),linux_ec_number(value,"score_ms"));
+        else g_string_append_printf(text,"\n%s: unavailable",lane);
+    }
+    JsonObject *final=linux_ec_object(selection,"final");
+    g_string_append_printf(text,"\nFinal recheck: last node %.2f ms; HTTPS %.2f ms; score %.2f ms",
+        linux_ec_number(final,"last_node_ms"),linux_ec_number(final,"external_ms"),linux_ec_number(final,"score_ms"));
+}
 static void linux_oc_selection(GtkTreeSelection*selection,gpointer data){
     (void)selection;LinuxOrderedCandidates*s=data;if(s->closed)return;
     JsonObject *choice=linux_oc_selected(s);
@@ -1316,6 +1465,8 @@ static void linux_oc_selection(GtkTreeSelection*selection,gpointer data){
         }
     }
     if(!text->len)g_string_append(text,linux_ec_string(choice,"save_reason"));
+    JsonObject *original=linux_oc_result(s,linux_ec_string(choice,"id"));
+    if (!strcmp(linux_oc_scope(s),"draft-prefix-append-execution") && isfinite(linux_oc_current_score(s,original,g_get_real_time()/1000))) linux_oc_execution_summary(text,original);
     gtk_label_set_text(GTK_LABEL(s->preview),text->str);g_string_free(text,TRUE);linux_oc_controls(s);
 }
 static void linux_oc_action(GtkButton*button,gpointer data){
@@ -1328,7 +1479,7 @@ static void linux_oc_action(GtkButton*button,gpointer data){
         g_autofree char *body=linux_oc_body(s,6), *path=g_strdup_printf("%s/choose",linux_oc_base(s));
         linux_oc_send(s,6,path,body);return;
     }
-    if(action==4){if(!strcmp(linux_oc_scope(s),"draft-prefix-append"))return;linux_oc_controls(s);if(!gtk_widget_get_sensitive(s->save))return;const char*name=gtk_entry_get_text(GTK_ENTRY(s->name));char*trim=g_strdup(name);g_strstrip(trim);gboolean named=trim[0]!='\0';g_free(trim);gboolean final=linux_oc_final_choice(s,linux_oc_selected(s));if((!s->draft||final)&&!named){gtk_label_set_text(GTK_LABEL(s->status),"Enter an explicit next-connection profile name.");return;}char*body=linux_oc_body(s,4),*path=g_strdup_printf("%s/%s",linux_oc_base(s),s->draft&&!final?"choose":"save-profile");linux_oc_send(s,4,path,body);g_free(path);g_free(body);}
+    if(action==4){if(linux_oc_append_purpose(linux_oc_scope(s)))return;linux_oc_controls(s);if(!gtk_widget_get_sensitive(s->save))return;const char*name=gtk_entry_get_text(GTK_ENTRY(s->name));char*trim=g_strdup(name);g_strstrip(trim);gboolean named=trim[0]!='\0';g_free(trim);gboolean final=linux_oc_final_choice(s,linux_oc_selected(s));if((!s->draft||final)&&!named){gtk_label_set_text(GTK_LABEL(s->status),"Enter an explicit next-connection profile name.");return;}char*body=linux_oc_body(s,4),*path=g_strdup_printf("%s/%s",linux_oc_base(s),s->draft&&!final?"choose":"save-profile");linux_oc_send(s,4,path,body);g_free(path);g_free(body);}
 }
 static void linux_ordered_candidates_open_source(App*app,gboolean saved_path,gboolean saved_prefix,GtkWindow*editor,const char*draft,int position){
     if(!app||!app->window){

@@ -26,11 +26,12 @@ const serverNodeChainSourcesDirectory = "/etc/router-vpn/node-chain-sources"
 // remains with its original runner, not an ordered fallback.
 type relayNodeChainExecRunner struct {
 	multihoprelay.Runner
-	sources, runtime, core string
-	registered             []multihoprelay.NodeChainDescriptor
-	coreInfo               os.FileInfo
-	coreSHA                string
-	packetKeys             relayNodeChainPacketKeyLedger
+	sources, prefixSources, runtime, core string
+	registered                            []multihoprelay.NodeChainDescriptor
+	registeredPrefixes                    []multihoprelay.NodeChainPrefixDescriptor
+	coreInfo                              os.FileInfo
+	coreSHA                               string
+	packetKeys                            relayNodeChainPacketKeyLedger
 }
 
 func installedRelayRunner(cfg multihoprelay.Config, node string) (multihoprelay.Runner, error) {
@@ -38,10 +39,10 @@ func installedRelayRunner(cfg multihoprelay.Config, node string) (multihoprelay.
 	if err != nil {
 		return nil, err
 	}
-	if len(cfg.NodeChains) == 0 {
+	if len(cfg.NodeChains) == 0 && len(cfg.NodeChainPrefixes) == 0 {
 		return base, nil
 	}
-	r := &relayNodeChainExecRunner{Runner: base, sources: serverNodeChainSourcesDirectory, runtime: "/run/router-vpn-relays", core: "/usr/local/bin/sing-box"}
+	r := &relayNodeChainExecRunner{Runner: base, sources: serverNodeChainSourcesDirectory, prefixSources: serverNodeChainPrefixSourcesDirectory, runtime: "/run/router-vpn-relays", core: "/usr/local/bin/sing-box"}
 	file, info, digest, err := captureRelayNodeChainImage(r.core)
 	if err != nil {
 		return nil, errors.New("installed ordered relay core is unavailable")
@@ -53,6 +54,12 @@ func installedRelayRunner(cfg multihoprelay.Config, node string) (multihoprelay.
 			return nil, err
 		}
 		r.registered = append(r.registered, source.Clone())
+	}
+	for _, source := range cfg.NodeChainPrefixes {
+		if _, _, err := r.capturePrefixSource(source, node); err != nil {
+			return nil, err
+		}
+		r.registeredPrefixes = append(r.registeredPrefixes, source.Clone())
 	}
 	return r, nil
 }

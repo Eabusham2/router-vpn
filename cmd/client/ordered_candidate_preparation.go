@@ -20,42 +20,47 @@ import (
 // explicit profile save. It cannot represent an ordinary connection, a draft
 // prefix without its final node, or automatic connection adoption.
 type orderedCandidatePreparationRequest struct {
-	serverResponse bool
-	draft          *multihopConnectRequest
-	append         *orderedCandidateAppendRequest
-	Scope          string
-	RequestID      string
-	Position       int
-	CandidateIDs   []string
-	Samples        int
+	serverResponse                   bool
+	draft                            *multihopConnectRequest
+	append                           *orderedCandidateAppendRequest
+	inventoryCandidateIDs            []string
+	inventorySHA, executionSourceSHA string
+	Scope                            string
+	RequestID                        string
+	Position                         int
+	CandidateIDs                     []string
+	Samples                          int
 }
 
 type orderedCandidatePreparation struct {
-	app               *app
-	control           *viaEntryControl
-	owner             *viaEntryOwner
-	operation         context.Context
-	cancel            context.CancelFunc
-	request           orderedCandidatePreparationRequest
-	selection         multihopSelection
-	inventory         *desktopNodeChainCandidateCatalog             // source-only capture; no connected identity
-	prefixPreparation *mobilemultihop.NodeChainCandidatePreparation // distinct closed prefix purpose; nil for complete-saved
-	state             state
-	revision, network string
-	observeNetwork    func(context.Context) (string, error)
-	mu                sync.Mutex // lifecycle; if both are needed, acquire before app.mu
-	launch            *desktopNodeLaunch
-	runtime           *orderedCandidatePreparedRuntime
-	workerDone        <-chan struct{}
-	pending           error
-	releaseLease      func()
-	down              bool
-	nativeDown        bool
-	workspaceDown     bool
-	windowsRelease    *orderedCandidateWindowsRelease
-	finishOnce        sync.Once
-	finishError       error
-	invalidated       atomic.Bool
+	app                        *app
+	control                    *viaEntryControl
+	owner                      *viaEntryOwner
+	operation                  context.Context
+	cancel                     context.CancelFunc
+	request                    orderedCandidatePreparationRequest
+	selection                  multihopSelection
+	inventory                  *desktopNodeChainCandidateCatalog             // source-only capture; no connected identity
+	prefixPreparation          *mobilemultihop.NodeChainCandidatePreparation // distinct closed prefix purpose; nil for complete-saved
+	appendExecutionPreparation *mobilemultihop.NodeChainCandidateAppendExecutionPreparation
+	appendExecutionResultsMu   sync.Mutex
+	appendExecutionResults     map[string]orderedCandidateAppendExecutionResult
+	state                      state
+	revision, network          string
+	observeNetwork             func(context.Context) (string, error)
+	mu                         sync.Mutex // lifecycle; if both are needed, acquire before app.mu
+	launch                     *desktopNodeLaunch
+	runtime                    *orderedCandidatePreparedRuntime
+	workerDone                 <-chan struct{}
+	pending                    error
+	releaseLease               func()
+	down                       bool
+	nativeDown                 bool
+	workspaceDown              bool
+	windowsRelease             *orderedCandidateWindowsRelease
+	finishOnce                 sync.Once
+	finishError                error
+	invalidated                atomic.Bool
 }
 
 // A 202 response has a separate bounded, registered worker lifetime. Admission
@@ -90,7 +95,7 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 		return nil, scopeErr
 	}
 	q.Scope = scope
-	if (scope == orderedCandidateAppendScope) != (q.append != nil) || q.append != nil && (q.draft != nil || q.serverResponse || q.append.validate() != nil || q.Position != q.append.AppendPosition-1) {
+	if orderedCandidateAppendPurpose(scope) != (q.append != nil) || q.append != nil && (q.draft != nil || q.serverResponse || q.append.validate() != nil || scope != q.append.Purpose || q.Position != q.append.AppendPosition-1) {
 		return nil, errors.New("append admission requires its exclusive original request")
 	}
 	if ctx == nil || ctx.Err() != nil || lifetime == nil || lifetime.Err() != nil || a == nil || observe == nil || !validViaEntryRequestID(q.RequestID) ||
@@ -103,6 +108,9 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 			return nil, errors.New("temporary candidate IDs must be distinct saved sources")
 		}
 		seen[id] = true
+	}
+	if err := validateOrderedCandidateAppendExecutionInventoryRequest(q); err != nil {
+		return nil, err
 	}
 	if !a.operationMu.TryLock() {
 		return nil, errors.New("another operation owns candidate preparation")
@@ -189,12 +197,15 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 	}
 	var inventory *desktopNodeChainCandidateCatalog
 	if q.append != nil {
-		inventory, err = captureDesktopAppendCandidateSources(ctx, a, selection, sourceLaunch, q.CandidateIDs)
+		inventory, err = captureDesktopAppendCandidateSources(ctx, a, selection, sourceLaunch, orderedCandidateOriginalInventoryIDs(q))
 	} else {
 		inventory, err = captureDesktopNodeChainCandidateSourcesForScope(candidateServerIntent(ctx, q.serverResponse), a, sourceLaunch, q.Position, q.CandidateIDs, q.Scope)
 	}
 	if err != nil {
 		return nil, err
+	}
+	if scope == orderedCandidateAppendExecutionScope && (inventory.inventorySHA != q.inventorySHA || inventory.appendExecutionPreparation == nil || inventory.appendExecutionPreparation.SourceSHA256() != q.executionSourceSHA || inventory.appendExecutionPreparation.OriginalPreparation() != inventory.prefixPreparation) {
+		return nil, errors.New("append execution changed its original whole inventory")
 	}
 	if inventory.revision != revision {
 		return nil, errors.New("saved candidate catalog changed during preparation")
@@ -228,8 +239,9 @@ func beginOrderedCandidateNativePreparationWithLifetime(ctx, lifetime context.Co
 	}
 	operation, cancel := context.WithCancel(context.WithValue(lifetime, deviceMTUContextKey{}, deviceMTU))
 	q.CandidateIDs = append([]string(nil), q.CandidateIDs...)
+	q.inventoryCandidateIDs = append([]string(nil), q.inventoryCandidateIDs...)
 	p := &orderedCandidatePreparation{app: a, control: c, operation: operation, cancel: cancel, request: q,
-		selection: selection, inventory: inventory, prefixPreparation: prefixPreparation, state: initial, revision: revision, network: network, observeNetwork: observe}
+		selection: selection, inventory: inventory, prefixPreparation: prefixPreparation, appendExecutionPreparation: inventory.appendExecutionPreparation, state: initial, revision: revision, network: network, observeNetwork: observe}
 	p.owner = &viaEntryOwner{id: q.RequestID, cancel: cancel, done: make(chan struct{}), running: true, preparation: p}
 	p.owner.cleanup = p.retire
 	c.owner, c.seen[q.RequestID] = p.owner, time.Now()
@@ -322,6 +334,9 @@ func (p *orderedCandidatePreparation) savedSourcesCurrent(ctx context.Context) e
 	}
 	if p.prefixPreparation != nil && (current.prefixPreparation == nil || current.prefixPreparation.Source() != p.prefixPreparation.Source()) {
 		return errors.New("temporary candidate original prefix source changed")
+	}
+	if p.appendExecutionPreparation != nil && (current.appendExecutionPreparation == nil || current.appendExecutionPreparation.OriginalPreparation() != current.prefixPreparation || current.appendExecutionPreparation.Source() != p.appendExecutionPreparation.Source() || current.appendExecutionPreparation.SourceSHA256() != p.request.executionSourceSHA || current.inventorySHA != p.request.inventorySHA) {
+		return errors.New("temporary append execution changed its original whole source")
 	}
 	for i, file := range current.files {
 		if i >= len(p.inventory.files) || !sameDesktopCandidateSourceFile(file, p.inventory.files[i]) {

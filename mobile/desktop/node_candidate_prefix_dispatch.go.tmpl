@@ -17,6 +17,7 @@ import (
 type routerVPNNodeCandidatePrefixCommand struct {
 	directory, session, config, physical, capture, transfer string
 	darwin                                                  string
+	appendExecution                                         bool
 	mtu                                                     int
 	windows                                                 routerVPNNodeJournalOptions
 	linux                                                   routerVPNNodeLinuxParentOptions
@@ -27,8 +28,17 @@ func init() {
 }
 
 func routerVPNNewNodeCandidatePrefixCommand(run func(context.Context, routerVPNNodeCandidatePrefixCommand) error) *cobra.Command {
+	return routerVPNNewNodeCandidatePrefixCommandPurpose(run, false)
+}
+
+func routerVPNNewNodeCandidatePrefixCommandPurpose(run func(context.Context, routerVPNNodeCandidatePrefixCommand) error, execution bool) *cobra.Command {
 	var capture routerVPNNodeCandidatePrefixCommand
-	command := &cobra.Command{Use: "routervpn-node-candidate-prefix", Short: "Run one captured closed candidate prefix", Args: cobra.NoArgs, SilenceUsage: true,
+	capture.appendExecution = execution
+	name := "routervpn-node-candidate-prefix"
+	if execution {
+		name = "routervpn-node-candidate-append-execution"
+	}
+	command := &cobra.Command{Use: name, Short: "Run one captured closed candidate prefix", Args: cobra.NoArgs, SilenceUsage: true,
 		RunE: func(command *cobra.Command, _ []string) error {
 			if command.Flags().Changed("darwin-control") && capture.darwin != "inherited-v1" {
 				return routerVPNExternalFailure
@@ -96,7 +106,7 @@ func routerVPNRunNodeCandidatePrefixCommand(parent context.Context, capture rout
 		if runtime.GOOS != "darwin" {
 			return routerVPNExternalFailure
 		}
-		return routerVPNRunDarwinNodeCandidatePrefixControlled(parent, capture.directory, capture.session, capture.physical, capture.config)
+		return routerVPNRunDarwinNodeCandidatePrefixControlledPurpose(parent, capture.directory, capture.session, capture.physical, capture.config, capture.appendExecution)
 	}
 	if capture.linux != (routerVPNNodeLinuxParentOptions{}) {
 		return routerVPNRunLinuxNodeCandidatePrefixControlled(parent, capture)
@@ -109,6 +119,9 @@ func routerVPNRunNodeCandidatePrefixCommand(parent context.Context, capture rout
 		return errors.Join(err, routerVPNExternalFailure)
 	}
 	defer func() { failure = errors.Join(failure, journal.close()) }()
+	if capture.appendExecution {
+		return routerVPNRunNodeMTUTypedFamiliesCapturedPurpose(parent, capture.directory, capture.session, capture.config, "", "", "", "", capture.physical, capture.capture, "", "", capture.transfer, capture.mtu, journal, true)
+	}
 	return routerVPNRunNodeMTUPrefixFamiliesCaptured(parent, capture.directory, capture.session, capture.config,
 		"", "", "", "", capture.physical, capture.capture, capture.transfer, capture.mtu, journal)
 }

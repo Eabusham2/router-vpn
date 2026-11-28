@@ -8,7 +8,16 @@ final class AndroidNodeCandidateResult {
     final String id,name,source;
     final long measuredAt,expiresAt;
     final double score;
-    private AndroidNodeCandidateResult(String id,String name,String source,long measured,long expires,double score){this.id=id;this.name=name;this.source=source;measuredAt=measured;expiresAt=expires;this.score=score;}
+    final String requestedExecution,winningExecution,executionSource,executionCapture,originalAppendSource,requestID,selection,executionDetails;
+    private AndroidNodeCandidateResult(String id,String name,String source,long measured,long expires,double score){
+        this.id=id;this.name=name;this.source=source;measuredAt=measured;expiresAt=expires;this.score=score;
+        requestedExecution=winningExecution=executionSource=executionCapture=originalAppendSource=requestID=selection=executionDetails="";
+    }
+    private AndroidNodeCandidateResult(AndroidNodeCandidateResult value,AndroidNodeCandidatePrefixCapture prefix,String request,String capture,String winner,String selection,String details){
+        id=value.id;name=value.name;source=value.source;measuredAt=value.measuredAt;expiresAt=value.expiresAt;score=value.score;
+        requestedExecution=prefix.requestedExecution();winningExecution=winner;executionSource=prefix.sourceSHA256;
+        executionCapture=capture;originalAppendSource=prefix.original.append.sourceSHA256;requestID=request;this.selection=selection;executionDetails=details;
+    }
     static AndroidNodeCandidateResult capture(String raw,String request,JSONObject metadata,String id,String name,long now)throws Exception{
         return capture(raw,request,metadata,id,name,now,false,false);
     }
@@ -28,7 +37,103 @@ final class AndroidNodeCandidateResult {
             throw new IllegalStateException("The registered public candidate lost its original selected route.");
         return capture(raw,request,metadata,id,name,now,"server".equals(winner),true);
     }
+    static AndroidNodeCandidateResult captureAppendExecution(String raw,String request,JSONObject metadata,String id,String name,long now,
+            AndroidNodeCandidatePrefixCapture prefix)throws Exception {
+        if(prefix==null||!prefix.appendExecution()||raw==null||raw.length()>32768)throw executionInvalid();
+        prefix.requireCurrent();
+        JSONObject status=new JSONObject(raw);
+        keys(status,java.util.Set.of("request_id","stage","complete","drained","results","schema","measurement","prefix_position","prefix_id","capture_sha256","purpose","source_sha256",
+                "execution_source_sha256","execution_capture_sha256","requested_execution","winning_execution"),
+                java.util.Set.of("failure","candidate_id","candidate_source_sha256","measured_at","expires_at","selection"));
+        String capture=prefix.plan.captureSHA256(),requested=prefix.requestedExecution();
+        if(!capture.matches("[0-9a-f]{64}")||!"draft-prefix-append-execution".equals(status.getString("purpose"))
+                ||!"draft-prefix-append-execution".equals(metadata.getString("purpose"))||!metadata.getString("capture_sha256").isEmpty()
+                ||!metadata.getString("execution_capture_sha256").isEmpty()||!"routed-candidate-response".equals(status.getString("measurement"))
+                ||integer(status,"schema")!=1||!request.equals(status.getString("request_id"))||!request.matches("[0-9a-f]{32}")
+                ||!Boolean.TRUE.equals(status.get("complete"))||!Boolean.TRUE.equals(status.get("drained"))
+                ||!prefix.original.append.sourceSHA256.equals(status.getString("source_sha256"))||!prefix.sourceSHA256.equals(status.getString("execution_source_sha256"))
+                ||!requested.equals(status.getString("requested_execution"))||!requested.equals(metadata.getString("requested_execution"))
+                ||!capture.equals(status.getString("capture_sha256"))||!capture.equals(status.getString("execution_capture_sha256"))
+                ||integer(metadata,"prefix_position")!=integer(status,"prefix_position")||!metadata.getString("prefix_id").equals(status.getString("prefix_id")))throw executionInvalid();
+        // Failed lanes remain genuine no-score rows; no winner or successful
+        // comparison is fabricated to make a negative result selectable.
+        if(!"complete".equals(status.getString("stage"))||!status.optString("failure").isEmpty())return null;
+        JSONArray rows=status.getJSONArray("results");
+        if(rows.length()!=1||!Boolean.TRUE.equals(rows.getJSONObject(0).opt("ready")))return null;
+        String winner=status.getString("winning_execution"),selection="",details;
+        if("server".equals(requested)) {
+            if(!"server".equals(winner)||status.has("selection")||!prefix.plan.selectionJSON().isEmpty())throw executionInvalid();
+            details="Server private response";
+        } else if("auto".equals(requested)) {
+            if(!java.util.Set.of("local","server").contains(winner)||!(status.opt("selection") instanceof JSONObject))throw executionInvalid();
+            String original=prefix.plan.selectionJSON();
+            if(original==null||original.isEmpty()||original.length()>16384)throw executionInvalid();
+            JSONObject comparison=new JSONObject(original);
+            if(!comparison.toString().equals(status.getJSONObject("selection").toString()))throw executionInvalid();
+            String entry=prefix.original.append.original.members.get(0).profileId;
+            details=compareDetails(comparison,entry,id,winner);selection=comparison.toString();
+        } else throw executionInvalid();
+        AndroidNodeCandidateResult measured=capture(raw,request,metadata,id,name,now,false,false,capture);
+        if(measured==null)throw executionInvalid();
+        prefix.requireCurrent();if(!capture.equals(prefix.plan.captureSHA256()))throw executionInvalid();
+        return new AndroidNodeCandidateResult(measured,prefix,request,capture,winner,selection,details);
+    }
+    void requireAppendExecution(AndroidNodeCandidatePrefixCapture prefix,boolean live)throws Exception {
+        if(prefix==null||!prefix.appendExecution()||prefix.original.append==null||!requestedExecution.equals(prefix.requestedExecution())
+                ||!executionSource.equals(prefix.sourceSHA256)||!originalAppendSource.equals(prefix.original.append.sourceSHA256)
+                ||!executionCapture.matches("[0-9a-f]{64}")||!requestID.matches("[0-9a-f]{32}")
+                ||!AndroidNodeChainCapture.selectedResponseWinner(requestedExecution,winningExecution)
+                ||live&&!executionCapture.equals(prefix.plan.captureSHA256()))throw executionInvalid();
+        prefix.requireCurrent();
+    }
+    private static String compareDetails(JSONObject comparison,String entry,String candidate,String winner)throws Exception {
+        keys(comparison,java.util.Set.of("target","measurements","winner","final"),java.util.Set.of());
+        if(entry.isEmpty()||candidate.isEmpty()||entry.equals(candidate)||!java.util.Set.of("https://1.1.1.1/cdn-cgi/trace","https://1.0.0.1/cdn-cgi/trace").contains(comparison.getString("target")))throw executionInvalid();
+        JSONArray measurements=comparison.getJSONArray("measurements");if(measurements.length()!=2)throw executionInvalid();
+        java.util.Set<String> seen=new java.util.HashSet<>();double chosen=Double.NaN,minimum=Double.POSITIVE_INFINITY;
+        StringBuilder details=new StringBuilder("Compare both");
+        for(int i=0;i<measurements.length();i++) {
+            JSONObject measured=measurements.getJSONObject(i);String lane=compareLane(measured.getJSONObject("candidate"),entry,candidate);
+            if(!seen.add(lane))throw executionInvalid();double score=compareMeasurement(measured,entry,candidate);
+            details.append(" • ").append(AndroidOrderedPathSelection.executionTitle(lane)).append(Double.isNaN(score)?" failed":String.format(java.util.Locale.US," %.2f ms",score));
+            if(!Double.isNaN(score)){minimum=Math.min(minimum,score);if(lane.equals(winner))chosen=score;}
+        }
+        if(!seen.equals(java.util.Set.of("local","server"))||Double.isNaN(chosen)||chosen>minimum
+                ||!winner.equals(compareLane(comparison.getJSONObject("winner"),entry,candidate)))throw executionInvalid();
+        JSONObject last=comparison.getJSONObject("final");double finalScore=compareMeasurement(last,entry,candidate);
+        if(Double.isNaN(finalScore)||!winner.equals(compareLane(last.getJSONObject("candidate"),entry,candidate)))throw executionInvalid();
+        return details.append(" • Winner ").append(AndroidOrderedPathSelection.executionTitle(winner))
+                .append(String.format(java.util.Locale.US,"; final recheck %.2f ms",finalScore)).toString();
+    }
+    private static String compareLane(JSONObject candidate,String entry,String exit)throws Exception {
+        keys(candidate,java.util.Set.of("execution","transport","entry_id","exit_id"),java.util.Set.of());
+        String lane=candidate.getString("execution");
+        if(!java.util.Set.of("local","server").contains(lane)||!"ordered-prefix-append".equals(candidate.getString("transport"))
+                ||!entry.equals(candidate.getString("entry_id"))||!exit.equals(candidate.getString("exit_id")))throw executionInvalid();
+        return lane;
+    }
+    private static double compareMeasurement(JSONObject value,String entry,String exit)throws Exception {
+        keys(value,java.util.Set.of("candidate","eligible"),java.util.Set.of("last_node_ms","external_ms","score_ms","failure"));
+        compareLane(value.getJSONObject("candidate"),entry,exit);
+        if(!(value.get("eligible") instanceof Boolean))throw executionInvalid();
+        if(!value.getBoolean("eligible")) {
+            if(value.has("score_ms")||value.optString("failure").isEmpty())throw executionInvalid();
+            for(String key:new String[]{"last_node_ms","external_ms"})if(value.has(key))finite(value,key);
+            return Double.NaN;
+        }
+        double last=finite(value,"last_node_ms"),external=finite(value,"external_ms"),score=finite(value,"score_ms");
+        if(last<=0||external<=0||score<=0||!value.optString("failure").isEmpty()||Math.abs(score-(last/2+external/2))>0.000001)throw executionInvalid();
+        return score;
+    }
+    private static void keys(JSONObject value,java.util.Set<String> required,java.util.Set<String> optional)throws Exception {
+        for(String key:required)if(!value.has(key))throw executionInvalid();
+        java.util.Iterator<String> keys=value.keys();while(keys.hasNext()){String key=keys.next();if(!required.contains(key)&&!optional.contains(key))throw executionInvalid();}
+    }
+    private static IllegalStateException executionInvalid(){return new IllegalStateException("The append response lost its original execution source, discovery capture or actual comparison.");}
     private static AndroidNodeCandidateResult capture(String raw,String request,JSONObject metadata,String id,String name,long now,boolean selectedServerResponse,boolean selectedPublic)throws Exception{
+        return capture(raw,request,metadata,id,name,now,selectedServerResponse,selectedPublic,metadata.getString("capture_sha256"));
+    }
+    private static AndroidNodeCandidateResult capture(String raw,String request,JSONObject metadata,String id,String name,long now,boolean selectedServerResponse,boolean selectedPublic,String expectedCapture)throws Exception{
         if(raw==null||raw.length()>32768)throw new IllegalStateException("Invalid candidate receipt size");
         JSONObject status=new JSONObject(raw);
         String metric=metadata.optString("measurement","routed-tcp-connect");
@@ -40,7 +145,7 @@ final class AndroidNodeCandidateResult {
         if(integer(status,"schema")!=1||!metric.equals(status.getString("measurement"))
                 ||!request.equals(status.getString("request_id"))||!Boolean.TRUE.equals(status.get("complete"))||!Boolean.TRUE.equals(status.get("drained"))
                 ||!"complete".equals(status.getString("stage"))||!status.optString("failure").isEmpty()
-                ||!metadata.getString("capture_sha256").equals(status.getString("capture_sha256"))
+                ||!expectedCapture.equals(status.getString("capture_sha256"))
                 ||integer(metadata,"prefix_position")!=integer(status,"prefix_position")
                 ||!metadata.getString("prefix_id").equals(status.getString("prefix_id"))
                 ||!id.equals(status.getString("candidate_id")))throw new IllegalStateException("Candidate receipt belongs to another original prefix or request");

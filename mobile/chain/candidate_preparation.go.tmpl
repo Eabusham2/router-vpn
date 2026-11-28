@@ -23,6 +23,7 @@ import (
 // usage session, application/DNS ingress or caller-selected native destination.
 type RouterNodeChainCandidatePreparation struct {
 	prep           *mobilemultihop.NodeChainCandidatePreparation
+	execution      *mobilemultihop.NodeChainCandidateAppendExecutionPreparation
 	inventorySHA   string
 	mu             sync.Mutex
 	state          atomic.Pointer[routerCandidatePreparationState]
@@ -49,6 +50,7 @@ type routerCandidatePreparationState struct {
 	done          chan struct{}
 	engine        atomic.Pointer[box.RouterVPNNodeChainCandidatePreparationEngine]
 	runtime       atomic.Pointer[mobilemultihop.NodeChainCandidatePreparationRuntime]
+	execution     atomic.Pointer[mobilemultihop.NodeChainCandidateAppendExecutionRuntime]
 	service       atomic.Pointer[hopmeasure.CandidateService]
 }
 
@@ -317,11 +319,43 @@ func (m *RouterNodeChainCandidatePreparation) Run(server *CommandServer, catalog
 		end()
 		return err
 	}
-	engine, err := instance.Box().RouterVPNNewNodeChainCandidatePreparationEngine(observe, m.prep, hex.EncodeToString(nonce[:]), func(call context.Context) error { return m.nativeCurrent(call, state) })
+	current := func(call context.Context) error { return m.nativeCurrent(call, state) }
+	if m.execution != nil {
+		if m.execution.OriginalPreparation() != m.prep || m.execution.SourceSHA256() == "" {
+			end()
+			return errRouterCandidatePreparation()
+		}
+		// Logical cancellation still retains the exact native reader for already
+		// owned remote DELETE operations. Ordinary Local callers keep their callback.
+		current = func(call context.Context) error { return m.appendExecutionNativeCurrent(call, state) }
+	}
+	engine, err := instance.Box().RouterVPNNewNodeChainCandidatePreparationEngine(observe, m.prep, hex.EncodeToString(nonce[:]), current)
 	state.engine.Store(engine)
 	end()
 	if err != nil {
 		return err
+	}
+	if m.execution != nil {
+		runtime, err := mobilemultihop.NewNodeChainCandidateAppendExecutionRuntime(m.execution, m)
+		if runtime != nil {
+			state.execution.Store(runtime)
+		}
+		if err != nil {
+			return err
+		}
+		if err = runtime.StartContext(lifetime); err != nil {
+			return err
+		}
+		observe, end = context.WithTimeout(lifetime, hopmeasure.ObservationTimeout)
+		defer end()
+		service, err := runtime.NewMeasurementContext(observe)
+		if service != nil {
+			state.service.Store(service)
+		}
+		if err != nil {
+			return err
+		}
+		return runtime.VerifyMeasurement(observe)
 	}
 	runtime, err := mobilemultihop.NewNodeChainCandidatePreparationRuntime(m.prep, m)
 	if err != nil {
@@ -362,6 +396,38 @@ func (m *RouterNodeChainCandidatePreparation) nativeCurrent(ctx context.Context,
 	}
 	return ctx.Err()
 }
+
+// This observation retains only the originally reserved daemon/Box and its
+// immutable preparation. It does not consult a replacement catalog, open the
+// application gate, or authorize a new operation after logical retirement.
+func (m *RouterNodeChainCandidatePreparation) appendExecutionNativeCurrent(ctx context.Context, state *routerCandidatePreparationState) error {
+	if m == nil || ctx == nil || ctx.Err() != nil || m.execution == nil || m.execution.OriginalPreparation() != m.prep || m.execution.SourceSHA256() == "" || m.closed.Load() || state == nil || m.state.Load() != state || state.server == nil || state.server.ctx == nil || state.server.ctx.Err() != nil || state.nativeService == nil || state.server.StartedService != state.nativeService || state.instance == nil {
+		return errRouterCandidatePreparation()
+	}
+	native := m.native.Load()
+	if native == nil || native.server != state.server || native.service != state.nativeService || native.capture == nil || !native.capture.Owns(state.instance, state.instance.Box()) {
+		return errRouterCandidatePreparation()
+	}
+	actual, err := state.nativeService.RouterVPNInstanceContext(ctx)
+	if err != nil || actual != state.instance || m.state.Load() != state || m.native.Load() != native || m.closed.Load() {
+		return errors.Join(err, errRouterCandidatePreparation())
+	}
+	return ctx.Err()
+}
+func (m *RouterNodeChainCandidatePreparation) AppendExecutionEngineContext(ctx context.Context, prep *mobilemultihop.NodeChainCandidatePreparation) (mobilemultihop.NodeChainCandidateAppendExecutionEngine, error) {
+	if m == nil || m.execution == nil || prep == nil || prep != m.prep || m.execution.OriginalPreparation() != prep {
+		return nil, errRouterCandidatePreparation()
+	}
+	state := m.state.Load()
+	if err := m.appendExecutionNativeCurrent(ctx, state); err != nil {
+		return nil, err
+	}
+	engine := state.engine.Load()
+	if engine == nil {
+		return nil, errRouterCandidatePreparation()
+	}
+	return engine, nil
+}
 func (m *RouterNodeChainCandidatePreparation) ObservePreparationContext(ctx context.Context) (mobilemultihop.NodeChainIdentity, error) {
 	state := m.state.Load()
 	if err := m.nativeCurrent(ctx, state); err != nil {
@@ -373,6 +439,24 @@ func (m *RouterNodeChainCandidatePreparation) ObservePreparationContext(ctx cont
 	}
 	return engine.ObservePreparationContext(ctx)
 }
+func (m *RouterNodeChainCandidatePreparation) PrepareAppendHostnameContext(ctx context.Context, prep *mobilemultihop.NodeChainCandidatePreparation) error {
+	if m == nil || prep == nil || m.prep != prep {
+		return errRouterCandidatePreparation()
+	}
+	state := m.state.Load()
+	if err := m.nativeCurrent(ctx, state); err != nil {
+		return err
+	}
+	engine := state.engine.Load()
+	if engine == nil {
+		return errRouterCandidatePreparation()
+	}
+	if err := engine.PrepareAppendHostnameContext(ctx, prep); err != nil {
+		return err
+	}
+	return m.nativeCurrent(ctx, state)
+}
+
 func (m *RouterNodeChainCandidatePreparation) PreparedPacketEngineContext(ctx context.Context, prep *mobilemultihop.NodeChainCandidatePreparation) (mobilemultihop.NodeChainPreparedPacketEngine, error) {
 	if m == nil || prep == nil || m.prep != prep {
 		return nil, errRouterCandidatePreparation()
@@ -489,6 +573,14 @@ func (m *RouterNodeChainCandidatePreparation) Healthy() bool {
 		return false
 	}
 	state := m.state.Load()
+	if state != nil && state.execution.Load() != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), hopmeasure.ObservationTimeout)
+		defer cancel()
+		runtime := state.execution.Load()
+		original := runtime.OriginalRuntime()
+		// Prepared-prefix health does not claim that a remote request has drained.
+		return original != nil && runtime.HealthyContext(ctx) == nil && original.VerifyMeasurement(ctx) == nil
+	}
 	if state == nil || state.runtime.Load() == nil {
 		return false
 	}
@@ -497,6 +589,18 @@ func (m *RouterNodeChainCandidatePreparation) Healthy() bool {
 	return state.runtime.Load().VerifyMeasurement(ctx) == nil
 }
 func (m *RouterNodeChainCandidatePreparation) ProgressJSON() string {
+	if m != nil && m.execution != nil {
+		value := mobilemultihop.NodeChainCandidateAppendExecutionProgress{Stage: "pending-prefix-proof", Purpose: "draft-prefix-append-execution", RequestedExecution: m.execution.Execution(), Prefixes: []mobilemultihop.NodeChainPrefixProgress{}, ExecutionSourceSHA256: m.execution.SourceSHA256()}
+		if state := m.state.Load(); state != nil && state.execution.Load() != nil {
+			value = state.execution.Load().Progress()
+		}
+		if m.retired.Load() {
+			value.Prepared = false
+			value.Stage = "append-execution-retired"
+		}
+		raw, _ := json.Marshal(value)
+		return string(raw)
+	}
 	value := mobilemultihop.NodeChainCandidatePreparationProgress{Stage: "pending-prefix-proof"}
 	if m != nil {
 		if state := m.state.Load(); state != nil && state.runtime.Load() != nil {
@@ -539,6 +643,11 @@ func (m *RouterNodeChainCandidatePreparation) Drain(request string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if runtime := state.execution.Load(); runtime != nil {
+		if err := runtime.DrainContext(ctx, request); err != nil {
+			return err
+		}
+	}
 	return m.joinCatalog(ctx)
 }
 func (m *RouterNodeChainCandidatePreparation) StatusJSON() string {
@@ -548,6 +657,21 @@ func (m *RouterNodeChainCandidatePreparation) StatusJSON() string {
 	state := m.state.Load()
 	if state == nil || state.service.Load() == nil {
 		return ""
+	}
+	if runtime := state.execution.Load(); runtime != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), hopmeasure.ObservationTimeout)
+		defer cancel()
+		raw := runtime.StatusContextJSON(ctx)
+		if !m.callbackActive.Load() {
+			return raw
+		}
+		var status map[string]any
+		if json.Unmarshal([]byte(raw), &status) != nil {
+			return ""
+		}
+		status["complete"], status["drained"], status["stage"], status["results"] = false, false, "draining", []any{}
+		encoded, _ := json.Marshal(status)
+		return string(encoded)
 	}
 	raw := state.service.Load().StatusJSON()
 	if !m.callbackActive.Load() {
@@ -570,6 +694,9 @@ func (m *RouterNodeChainCandidatePreparation) NetworkChanged() {
 		state.cancel()
 		if runtime := state.runtime.Load(); runtime != nil {
 			runtime.Cancel()
+		}
+		if execution := state.execution.Load(); execution != nil {
+			execution.Cancel()
 		}
 		if service := state.service.Load(); service != nil {
 			service.Invalidate()
@@ -607,6 +734,24 @@ func (m *RouterNodeChainCandidatePreparation) closeContext(ctx context.Context) 
 	select {
 	case <-state.done:
 	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if execution := state.execution.Load(); execution != nil {
+		if err := execution.CloseContext(ctx); err != nil {
+			return err
+		}
+		if err := m.joinCatalog(ctx); err != nil {
+			return err
+		}
+		if m.measuring.Load() {
+			return errors.New("append execution original measurement has not joined")
+		}
+		if engine := state.engine.Load(); engine != nil {
+			if err := engine.RetireContext(ctx); err != nil {
+				return err
+			}
+		}
+		m.closed.Store(true)
 		return ctx.Err()
 	}
 	if service := state.service.Load(); service != nil {

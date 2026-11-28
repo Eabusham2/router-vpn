@@ -66,6 +66,16 @@ func capturePlan(plan *Plan) *Plan {
 // envelope checks as NewPlan. Return numeric bounds only; no runnable config,
 // Plan or authority to change a TUN leaves this observation.
 func PrefixCeilings(config string, actual int, tags []string) ([]int, error) {
+	return prefixCeilingsWithHostnameFamilies(config, actual, tags, nil)
+}
+
+// Hostname families are supplied only by the captured append compiler. This
+// read-only arithmetic does not make a runnable Plan or change the source.
+func PrefixCeilingsWithHostnameFamilies(config string, actual int, tags []string, ipv4Only map[string]bool) ([]int, error) {
+	return prefixCeilingsWithHostnameFamilies(config, actual, tags, ipv4Only)
+}
+
+func prefixCeilingsWithHostnameFamilies(config string, actual int, tags []string, ipv4Only map[string]bool) ([]int, error) {
 	var graph map[string]any
 	if len(tags) < 1 || len(tags) > hopmeasure.PhysicalTraversalDepth || strictJSON(config, &graph, 4*1024*1024) != nil {
 		return nil, errors.New("MTU prefixes need their original graph and tags")
@@ -77,7 +87,7 @@ func PrefixCeilings(config string, actual int, tags []string) ([]int, error) {
 	ceilings := make([]int, len(tags))
 	for i, tag := range tags {
 		route["final"] = tag
-		plan, err := planForParsedGraph(graph, "", actual, false)
+		plan, err := planForParsedGraphWithHostnameFamilies(graph, "", actual, false, ipv4Only)
 		if err != nil {
 			return nil, err
 		}
@@ -131,18 +141,30 @@ func CombineExtendedPairedHysteriaLocalPlans(config string, actual int, prefixes
 	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(prefixes) != len(originalTags) {
 		return nil, errors.New("extended paired Hysteria2 MTU needs every original complete prefix")
 	}
-	scope := &capturedPairedHysteriaLocalMTU{source: config, tags: append([]string(nil), originalTags...)}
-	return combinePlansWithPairedHysteria(config, actual, prefixes, scope.tags, 0, false, nil, scope)
+	scope := &capturedPairedLocalMTU{source: config, tags: append([]string(nil), originalTags...)}
+	return combinePlansWithPairedLocal(config, actual, prefixes, scope.tags, 0, false, nil, scope)
+}
+
+// CombineExtendedPairedProxyEntryLocalPlans retains the same exact source,
+// copied original tags and complete selector/TUN checks for a paired SS/HY2
+// physical entry. It grants no imported, append or runtime capability.
+func CombineExtendedPairedProxyEntryLocalPlans(config string, actual int, prefixes []*Plan, originalTags []string) (*Plan, error) {
+	if len(prefixes) <= 8 || len(prefixes) > hopmeasure.PhysicalTraversalDepth || len(prefixes) != len(originalTags) {
+		return nil, errors.New("extended paired proxy-entry MTU needs every original complete prefix")
+	}
+	scope := &capturedPairedLocalMTU{source: config, tags: append([]string(nil), originalTags...), proxyEntry: true}
+	return combinePlansWithPairedLocal(config, actual, prefixes, scope.tags, 0, false, nil, scope)
 }
 
 // This scope is exclusive to the complete paired family. It is not an imported
 // suffix count or an append-prefix capability.
-type capturedPairedHysteriaLocalMTU struct {
-	source string
-	tags   []string
+type capturedPairedLocalMTU struct {
+	source     string
+	tags       []string
+	proxyEntry bool
 }
 
-func (scope *capturedPairedHysteriaLocalMTU) valid(config string, nodes map[string]map[string]any) bool {
+func (scope *capturedPairedLocalMTU) valid(config string, nodes map[string]map[string]any) bool {
 	if scope == nil || scope.source != config || len(scope.tags) <= 8 || len(scope.tags) > hopmeasure.PhysicalTraversalDepth {
 		return false
 	}
@@ -155,7 +177,7 @@ func (scope *capturedPairedHysteriaLocalMTU) valid(config string, nodes map[stri
 		kind := node["type"]
 		packet := kind == "wireguard" || kind == "routervpn-amneziawg"
 		stream := kind == "shadowsocks" || kind == "hysteria2"
-		if !packet && !stream || i == 0 && !packet || i == len(scope.tags)-1 && !stream {
+		if !packet && !stream || i == 0 && (scope.proxyEntry && !stream || !scope.proxyEntry && !packet) || i == len(scope.tags)-1 && !stream {
 			return false
 		}
 		if kind == "shadowsocks" && node["method"] != "2022-blake3-aes-256-gcm" {
@@ -172,7 +194,7 @@ func (scope *capturedPairedHysteriaLocalMTU) valid(config string, nodes map[stri
 			interiorHysteria = true
 		}
 	}
-	return interiorHysteria
+	return scope.proxyEntry || interiorHysteria
 }
 
 type capturedEntryLayer struct {
@@ -211,10 +233,10 @@ func originalExternalEntryLayer(entryTag, outerTag, layer string) (*capturedEntr
 }
 
 func combinePlans(config string, actual int, prefixes []*Plan, originalTags []string, packets int, mixed bool, layer *capturedEntryLayer) (*Plan, error) {
-	return combinePlansWithPairedHysteria(config, actual, prefixes, originalTags, packets, mixed, layer, nil)
+	return combinePlansWithPairedLocal(config, actual, prefixes, originalTags, packets, mixed, layer, nil)
 }
 
-func combinePlansWithPairedHysteria(config string, actual int, prefixes []*Plan, originalTags []string, packets int, mixed bool, layer *capturedEntryLayer, pairedHysteria *capturedPairedHysteriaLocalMTU) (*Plan, error) {
+func combinePlansWithPairedLocal(config string, actual int, prefixes []*Plan, originalTags []string, packets int, mixed bool, layer *capturedEntryLayer, pairedHysteria *capturedPairedLocalMTU) (*Plan, error) {
 	bad := errors.New("captured MTU needs complete matching prefix plans")
 	if len(prefixes) < 2 || len(prefixes) > 8 && originalTags == nil {
 		return nil, bad

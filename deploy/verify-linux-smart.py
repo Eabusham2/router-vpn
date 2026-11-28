@@ -1449,6 +1449,29 @@ def remove_ordered_namespace(name, original):
     remove_namespace(name)
 
 
+def ordered_uplink_pair(host_link, peer_link, namespace):
+    ordered_require(os.path.samestat(namespace,os.stat('/proc/self/ns/net')),
+                    'Original host namespace changed during uplink capture')
+    links=[]
+    for name in (host_link,peer_link):
+        rows=ordered_json(['ip','-j','-d','link','show','dev',name])
+        ordered_require(len(rows)==1, 'Original created uplink endpoint is not unique')
+        row=rows[0]
+        ordered_require(row.get('ifname')==name and type(row.get('ifindex')) is int and row['ifindex']>0 and
+                        row.get('linkinfo',{}).get('info_kind')=='veth' and
+                        re.fullmatch(r'(?:[0-9a-f]{2}:){5}[0-9a-f]{2}',row.get('address','')) is not None,
+                        'Original created uplink endpoint identity was not captured')
+        links.append(row)
+    first,second=links
+    ordered_require(first['ifindex']!=second['ifindex'] and
+                    int(Path('/sys/class/net',host_link,'iflink').read_text().strip())==second['ifindex'] and
+                    int(Path('/sys/class/net',peer_link,'iflink').read_text().strip())==first['ifindex'] and
+                    os.path.samestat(namespace,os.stat('/proc/self/ns/net')),
+                    'Original created uplink pair or namespace changed')
+    identity=tuple((row['ifname'],row['ifindex'],row['address']) for row in links)
+    return first,identity
+
+
 @contextmanager
 def ordered_namespaces(work):
     before=ordered_host_snapshot()
@@ -1482,7 +1505,8 @@ def ordered_namespaces(work):
                 cleanup.callback(remove_ordered_namespace,final,final_original)
                 run('ip','-n',final,'link','set','lo','up')
                 for name in (client,peer,final):
-                    descriptor=os.open('/run/netns/'+name,os.O_RDONLY)
+                    identities[name]=(os.open('/run/netns/'+name,os.O_RDONLY),None)
+                    descriptor=identities[name][0]
                     identities[name]=(descriptor,os.fstat(descriptor))
                 run('ip','-n',peer,'link','add','ordered-final','type','veth','peer','name','ordered-peer','netns',final)
                 for namespace,link,address in ((peer,'ordered-final',peer_ip),(final,'ordered-peer',final_ip)):
@@ -1490,11 +1514,16 @@ def ordered_namespaces(work):
                     run('ip','-n',namespace,'link','set',link,'mtu','9000','up')
                 if any(row['ifname'] in (host_link,moved_link) for row in ordered_json(['ip','-j','link','show'])):
                     raise RuntimeError('An original ordered uplink name is already present')
+                host_namespace=os.stat('/proc/self/ns/net')
                 host_attempted=True
-                run('ip','link','add','name',host_link,'alias',owner,'type','veth','peer','name',moved_link)
-                host_identity=ordered_json(['ip','-j','link','show','dev',host_link])[0]
-                if host_identity.get('ifalias')!=owner:
+                run('ip','link','add','name',host_link,'type','veth','peer','name',moved_link)
+                host_identity,created_pair=ordered_uplink_pair(host_link,moved_link,host_namespace)
+                # Linux applies IFLA_IFALIAS when updating the retained link, not when creating it.
+                run('ip','link','set','dev',host_link,'alias',owner)
+                tagged,tagged_pair=ordered_uplink_pair(host_link,moved_link,host_namespace)
+                if tagged_pair!=created_pair or tagged.get('ifalias')!=owner:
                     raise RuntimeError('Original host uplink owner was not captured')
+                host_identity=tagged
                 run('ip','link','set',moved_link,'netns',final)
                 run('ip','-n',final,'link','set',moved_link,'name','ordered-uplink')
                 run('ip','addr','add',host_ip+'/30','dev',host_link)
@@ -1572,7 +1601,10 @@ def ordered_namespaces(work):
                 if host_attempted:
                     try:
                         current=ordered_json(['ip','-j','link','show','dev',host_link])[0]
-                        if current.get('ifalias')!=owner or host_identity is not None and current['ifindex']!=host_identity['ifindex']:
+                        if (host_identity is None or current.get('ifalias')!=owner or
+                                current['ifindex']!=host_identity['ifindex'] or
+                                current.get('address')!=host_identity.get('address') or
+                                not os.path.samestat(host_namespace,os.stat('/proc/self/ns/net'))):
                             raise RuntimeError('Original host uplink was replaced')
                         run('ip','link','delete','dev',host_link)
                     except BaseException as error:
@@ -1611,7 +1643,12 @@ def ordered_namespaces(work):
                  'physical_interfaces':records.get('physical_interfaces'),
                  'captured_carrier_mtu':records.get('captured_carrier_mtu'),
                  'final_tun_mtu':records.get('final_tun_mtu'),'cleanup_errors':cleanup_errors}
-        private_write(work/'ordered-topology-result.json',receipt)
+        try:
+            private_write(work/'ordered-topology-result.json',receipt)
+        except BaseException as evidence_error:
+            if failure is None:
+                raise
+            failure.add_note('Original topology receipt also failed: '+type(evidence_error).__name__)
         if cleanup_errors and failure is None:
             raise RuntimeError('Original ordered topology terminal readback failed')
 
@@ -2222,7 +2259,12 @@ def qualify_ordered(work,user,password,topology_file):
         result['cleanup_errors']=cleanup_errors
         result['body_budget_seconds']=440
         result['case_budget_seconds']=650
-        private_write(work/'ordered-result.json',result)
+        try:
+            private_write(work/'ordered-result.json',result)
+        except BaseException as evidence_error:
+            if primary is None:
+                raise
+            primary.add_note('Original ordered result publication also failed: '+type(evidence_error).__name__)
         if cleanup_errors and primary is None:
             raise RuntimeError('Original ordered gate handle retirement failed')
 

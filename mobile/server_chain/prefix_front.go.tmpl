@@ -1,0 +1,545 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/dialer"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/option"
+	ssclient "github.com/sagernet/sing-shadowsocks2"
+	"github.com/sagernet/sing/common/auth"
+	B "github.com/sagernet/sing/common/bufio"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/protocol/socks"
+)
+
+type routerVPNServerPrefixCandidate struct {
+	self                                           *routerVPNServerPrefixCandidate
+	owner                                          *routerVPNServerPrefix
+	capture                                        multihoprelay.NodeChainPrefixCandidateCapture
+	digest                                         string
+	ctx                                            context.Context
+	cancel                                         context.CancelFunc
+	target                                         *mobilemultihop.NodeChainServerPrefixCandidateTarget
+	quota                                          *multihoprelay.NodeChainPrefixCandidateAdmission
+	tag, address, method, password, privateAddress string
+	outbound                                       adapter.Outbound
+	direct                                         N.Dialer
+	users                                          map[string]auth.User
+	authenticator                                  *auth.Authenticator
+	mu                                             sync.Mutex
+	attempted, prepared, retired, drained          bool
+	nonces                                         map[string]bool
+	resources                                      map[net.Conn]*routerVPNServerChainClose
+	release                                        func()
+	workDone                                       chan struct{}
+	closeGate                                      chan struct{}
+}
+
+func (n *routerVPNServerPrefix) startFront(ctx context.Context) error {
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", net.JoinHostPort(n.capture.Host, strconv.Itoa(n.capture.Request.Port)))
+	if listener != nil {
+		n.listener = listener
+		n.listenerClose = n.trackClose(listener)
+	}
+	if err != nil || listener == nil {
+		return errors.Join(err, errServerChainFront)
+	}
+	actual := M.SocksaddrFromNet(listener.Addr()).Unwrap()
+	host, e := netip.ParseAddr(n.capture.Host)
+	if e != nil || actual.Addr != host || int(actual.Port) != n.capture.Request.Port {
+		return errServerChainFront
+	}
+	n.mu.Lock()
+	n.acceptStarted = true
+	n.mu.Unlock()
+	go n.acceptFront()
+	return nil
+}
+func (n *routerVPNServerPrefix) acceptFront() {
+	defer close(n.acceptDone)
+	peer, _ := netip.ParseAddr(n.capture.Peer)
+	for {
+		raw, err := n.listener.Accept()
+		if raw == nil {
+			if err != nil {
+				return
+			}
+			continue
+		}
+		conn := n.trackConnection(raw)
+		source := M.SocksaddrFromNet(conn.RemoteAddr()).Unwrap()
+		n.mu.Lock()
+		op := n.candidate
+		admitted := !n.closing && n.ctx.Err() == nil && op != nil && source.Addr == peer
+		if admitted {
+			n.frontWorkers.Add(1)
+		}
+		n.mu.Unlock()
+		if !admitted {
+			_ = conn.Close()
+			if err != nil {
+				return
+			}
+			continue
+		}
+		go func(original *routerVPNServerChainConn, operation *routerVPNServerPrefixCandidate, source M.Socksaddr) {
+			defer n.frontWorkers.Done()
+			defer original.Close()
+			deadline := time.Now().Add(5 * time.Second)
+			if operation.capture.Deadline.Before(deadline) {
+				deadline = operation.capture.Deadline
+			}
+			if original.SetDeadline(deadline) != nil {
+				return
+			}
+			if !operation.current(n.ctx) {
+				return
+			}
+			reader := bufio.NewReader(original)
+			version, e := reader.Peek(1)
+			if e != nil || version[0] != 5 {
+				return
+			}
+			_ = socks.HandleConnectionEx(operation.ctx, original, reader, operation.authenticator, operation, operation, 0, source, nil)
+		}(conn, op, source)
+		if err != nil {
+			return
+		}
+	}
+}
+func (op *routerVPNServerPrefixCandidate) ListenPacket(net.ListenConfig, context.Context, string, string) (net.PacketConn, error) {
+	return nil, errServerChainFront
+}
+func (op *routerVPNServerPrefixCandidate) NewPacketConnectionEx(_ context.Context, conn N.PacketConn, _ M.Socksaddr, _ M.Socksaddr, onClose N.CloseHandlerFunc) {
+	_ = conn.Close()
+	if onClose != nil {
+		onClose(errServerChainFront)
+	}
+}
+func (op *routerVPNServerPrefixCandidate) current(ctx context.Context) bool {
+	if op == nil || op.self != op || ctx == nil || ctx.Err() != nil || op.ctx.Err() != nil || !time.Now().Before(op.capture.Deadline) {
+		return false
+	}
+	op.mu.Lock()
+	valid := op.prepared && !op.retired && !op.drained && op.quota != nil && !op.quota.Snapshot().Retired
+	target := op.target
+	op.mu.Unlock()
+	if !valid || target == nil || !op.owner.preparedCurrent(ctx) || target.CurrentContext(ctx) != nil {
+		return false
+	}
+	op.owner.mu.Lock()
+	same := op.owner.candidate == op
+	op.owner.mu.Unlock()
+	return same
+}
+func (op *routerVPNServerPrefixCandidate) retain(original net.Conn) {
+	if original == nil {
+		return
+	}
+	owner := &routerVPNServerChainClose{original: original}
+	owner.release = func(exact *routerVPNServerChainClose) {
+		op.mu.Lock()
+		if op.resources[original] == exact {
+			delete(op.resources, original)
+		}
+		op.mu.Unlock()
+	}
+	op.mu.Lock()
+	op.resources[original] = owner
+	op.mu.Unlock()
+}
+func (op *routerVPNServerPrefixCandidate) closeResources(ctx context.Context) error {
+	op.mu.Lock()
+	owners := make([]*routerVPNServerChainClose, 0, len(op.resources))
+	for _, owner := range op.resources {
+		owners = append(owners, owner)
+	}
+	op.mu.Unlock()
+	var failure error
+	for _, owner := range owners {
+		if conn, ok := owner.original.(net.Conn); ok {
+			_ = conn.SetDeadline(time.Now())
+		}
+		failure = errors.Join(failure, owner.CloseContext(ctx))
+	}
+	return failure
+}
+func (op *routerVPNServerPrefixCandidate) releaseIfClosed() {
+	op.mu.Lock()
+	if len(op.resources) == 0 && op.workDone == nil {
+		release := op.release
+		op.release = nil
+		op.mu.Unlock()
+		if release != nil {
+			release()
+		}
+		return
+	}
+	op.mu.Unlock()
+}
+func (op *routerVPNServerPrefixCandidate) NewConnectionEx(ctx context.Context, conn net.Conn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	failure := errServerChainFront
+	defer func() {
+		if onClose != nil {
+			onClose(failure)
+		}
+	}()
+	username, ok := auth.UserFromContext[string](ctx)
+	user, known := op.users[username]
+	peer, _ := netip.ParseAddr(op.capture.Lease.Peer)
+	if !ok || !known || source.Addr != peer || !op.current(ctx) {
+		return
+	}
+	bounded, cancel := context.WithDeadline(ctx, op.capture.Deadline)
+	defer cancel()
+	if err := op.awaitIdle(bounded); err != nil {
+		return
+	}
+	op.mu.Lock()
+	if op.retired || op.workDone != nil || len(op.resources) != 0 {
+		op.mu.Unlock()
+		return
+	}
+	release, err := op.quota.Begin(bounded, user.Username, user.Password, "tcp", destination.String())
+	if err != nil {
+		op.mu.Unlock()
+		return
+	}
+	op.release = release
+	done := make(chan struct{})
+	op.workDone = done
+	op.mu.Unlock()
+	// Retain the original accepted control before any foreign native dial. Its
+	// release cannot free the next quota slot until every late socket has joined.
+	op.retain(conn)
+	defer func() {
+		cleanup, finish := context.WithTimeout(context.Background(), routerVPNServerChainDrainBudget)
+		_ = op.closeResources(cleanup)
+		finish()
+		op.mu.Lock()
+		op.workDone = nil
+		close(done)
+		op.mu.Unlock()
+		op.releaseIfClosed()
+	}()
+	if !op.current(bounded) {
+		return
+	}
+	var raw net.Conn
+	if op.tag != "" {
+		raw, err = op.owner.dialOriginal(bounded, op.tag, op.address)
+	} else if op.direct != nil {
+		original, e := op.direct.DialContext(bounded, "tcp", M.ParseSocksaddr(op.address))
+		raw = op.owner.trackConnection(original)
+		err = e
+	} else {
+		err = errServerChainFront
+	}
+	if raw != nil {
+		op.retain(raw)
+	}
+	if err != nil || raw == nil || !op.current(bounded) {
+		return
+	}
+	wrap := func(call context.Context, original net.Conn, method, password, address string) (net.Conn, error) {
+		cipher, e := ssclient.CreateMethod(call, method, ssclient.MethodOptions{Password: password})
+		if e != nil {
+			return nil, e
+		}
+		return cipher.DialConn(original, M.ParseSocksaddr(address))
+	}
+	if op.capture.Request.ChildPurpose == multihoprelay.NodeChainPrefixComparePair {
+		remote, e := wrap(bounded, raw, op.method, op.password, destination.String())
+		if remote != nil {
+			op.retain(remote)
+		}
+		if e != nil || remote == nil || !op.current(bounded) {
+			return
+		}
+		if e = N.ReportConnHandshakeSuccess(conn, remote); e != nil {
+			return
+		}
+		if e = conn.SetDeadline(op.capture.Deadline); e != nil {
+			return
+		}
+		if e = remote.SetDeadline(op.capture.Deadline); e != nil {
+			return
+		}
+		// The client performs the private HTTP/TLS proof and observes both elapsed
+		// intervals. The worker forwards only the one captured Compare target.
+		failure = B.CopyConn(bounded, conn, remote)
+		return
+	}
+	if op.capture.Request.ChildPurpose != multihoprelay.NodeChainPrefixPrivateResponse || destination.String() != op.privateAddress {
+		return
+	}
+	if err = N.ReportConnHandshakeSuccess(conn, raw); err != nil {
+		return
+	}
+	var frame [96]byte
+	if _, err = io.ReadFull(conn, frame[:]); err != nil {
+		return
+	}
+	nonce := string(frame[:32])
+	op.mu.Lock()
+	replayed := op.nonces[nonce]
+	if !replayed && hopmeasure.ValidCandidateNonce(nonce) {
+		op.nonces[nonce] = true
+	}
+	op.mu.Unlock()
+	if replayed || !hopmeasure.ValidCandidateNonce(nonce) || !op.current(bounded) {
+		return
+	}
+	reply, err := op.target.Reply(bounded, raw, nonce, string(frame[32:]), wrap)
+	if err != nil || len(reply) != 64 || !op.current(bounded) {
+		return
+	}
+	written, err := io.WriteString(conn, reply)
+	if err != nil || written != len(reply) {
+		failure = errors.Join(err, io.ErrShortWrite)
+		return
+	}
+	failure = nil
+}
+func (op *routerVPNServerPrefixCandidate) Prepare(ctx context.Context) error {
+	op.mu.Lock()
+	if op.attempted || op.retired {
+		op.mu.Unlock()
+		return errServerChainFront
+	}
+	op.attempted = true
+	op.mu.Unlock()
+	if ctx == nil || ctx.Err() != nil || !op.owner.preparedCurrent(ctx) {
+		return errServerChainFront
+	}
+	var err error
+	op.target, err = mobilemultihop.NewNodeChainServerPrefixCandidateTargetContext(ctx, op.owner.transport, op.owner.session, op.capture)
+	if err != nil {
+		return err
+	}
+	var directOptions string
+	op.tag, op.address, op.method, op.password, op.privateAddress, directOptions, err = op.target.ReadContext(ctx, op.owner.session, op.capture)
+	if err != nil {
+		return err
+	}
+	if op.tag != "" {
+		op.outbound = op.owner.outputs[op.tag]
+		if op.outbound == nil || directOptions != "" {
+			return errServerChainFront
+		}
+	} else {
+		var options option.DialerOptions
+		options, err = SJ.UnmarshalExtendedContext[option.DialerOptions](op.owner.transport, []byte(directOptions))
+		if err != nil {
+			return err
+		}
+		op.direct, err = dialer.New(op.owner.transport, options, false)
+		if err != nil || op.direct == nil {
+			return errServerChainFront
+		}
+	}
+	op.quota, err = multihoprelay.NewNodeChainPrefixCandidateAdmission(op.ctx, op.capture, op.privateAddress)
+	if err != nil {
+		return err
+	}
+	limit := multihoprelay.NodeChainCandidateMaximumConnects
+	if op.capture.Request.ChildPurpose == multihoprelay.NodeChainPrefixComparePair {
+		limit = 2
+	}
+	users := make([]auth.User, 0, limit)
+	for i := 0; i < limit; i++ {
+		grant, e := op.capture.FrontGrant(op.privateAddress, i)
+		if e != nil {
+			return e
+		}
+		u, p, e := op.capture.FrontCredentials(grant, op.privateAddress)
+		if e != nil {
+			return e
+		}
+		user := auth.User{Username: u, Password: p}
+		if _, exists := op.users[u]; exists {
+			return errServerChainFront
+		}
+		op.users[u] = user
+		users = append(users, user)
+	}
+	op.authenticator = auth.NewAuthenticator(users)
+	if !op.owner.preparedCurrent(ctx) || op.target.CurrentContext(ctx) != nil || op.ctx.Err() != nil {
+		return errServerChainFront
+	}
+	op.mu.Lock()
+	defer op.mu.Unlock()
+	if op.retired {
+		return errServerChainFront
+	}
+	op.prepared = true
+	return nil
+}
+
+// The next authenticated grant waits for the preceding original request to
+// close before acquiring its one-use slot. Live status remains observational;
+// it never waits for or claims retirement of an in-flight response.
+func (op *routerVPNServerPrefixCandidate) awaitIdle(ctx context.Context) error {
+	if !op.current(ctx) {
+		return errServerChainFront
+	}
+	op.mu.Lock()
+	done := op.workDone
+	op.mu.Unlock()
+	if done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	op.releaseIfClosed()
+	op.mu.Lock()
+	idle := op.workDone == nil && len(op.resources) == 0 && op.release == nil
+	quota := op.quota
+	op.mu.Unlock()
+	if !idle || quota == nil || quota.Snapshot().InFlight || !op.current(ctx) {
+		return errServerChainFront
+	}
+	return ctx.Err()
+}
+func (op *routerVPNServerPrefixCandidate) receipt(nonce string) multihoprelay.NodeChainPrefixCandidateReceipt {
+	op.mu.Lock()
+	defer op.mu.Unlock()
+	accepted := 0
+	if op.quota != nil {
+		accepted = op.quota.Snapshot().Accepted
+	}
+	q := op.capture.Request
+	return multihoprelay.NodeChainPrefixCandidateReceipt{Schema: 1, Purpose: multihoprelay.NodeChainPrefixPurpose, CaptureSHA256: op.digest, OwnerID: op.capture.OwnerID, LeaseOwnerID: op.capture.Lease.OwnerID, TrialID: q.TrialID, OperationID: q.OperationID, CandidateID: q.CandidateID, CandidateSourceSHA256: q.CandidateSourceSHA256, AppendPosition: q.AppendPosition, ChildPurpose: q.ChildPurpose, ExternalTarget: q.ExternalTarget, Prepared: op.prepared && !op.retired, Drained: op.drained, Connections: accepted, Nonce: nonce, ObservedAt: time.Now().UTC()}
+}
+func (op *routerVPNServerPrefixCandidate) Close(ctx context.Context) error {
+	if ctx == nil {
+		return errServerChainFront
+	}
+	select {
+	case op.closeGate <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-op.closeGate }()
+	op.mu.Lock()
+	if op.drained {
+		op.mu.Unlock()
+		return nil
+	}
+	op.retired = true
+	op.prepared = false
+	op.cancel()
+	done := op.workDone
+	op.mu.Unlock()
+	if err := op.closeResources(ctx); err != nil {
+		return err
+	}
+	if done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if err := op.closeResources(ctx); err != nil {
+		return err
+	}
+	op.releaseIfClosed()
+	if op.quota != nil {
+		if err := op.quota.CloseContext(ctx); err != nil {
+			return err
+		}
+		if usage := op.quota.Snapshot(); !usage.Drained || usage.InFlight {
+			return errServerChainFront
+		}
+	}
+	if op.target != nil {
+		if err := op.target.CloseContext(ctx); err != nil {
+			return err
+		}
+	}
+	op.mu.Lock()
+	if len(op.resources) != 0 || op.workDone != nil || op.release != nil {
+		op.mu.Unlock()
+		return errServerChainFront
+	}
+	op.drained = true
+	op.mu.Unlock()
+	return nil
+}
+func (n *routerVPNServerPrefix) CandidateCommand(ctx context.Context, q multihoprelay.NodeChainPrefixIPCRequest) (*multihoprelay.NodeChainPrefixCandidateReceipt, error) {
+	if ctx == nil || q.Candidate == nil || !q.Valid() || q.CaptureSHA256 != n.captureSHA {
+		return nil, errServerChainFront
+	}
+	capture := q.Candidate.Clone()
+	digest, err := capture.Digest()
+	if err != nil {
+		return nil, err
+	}
+	n.mu.Lock()
+	op := n.attempts[capture.Request.OperationID]
+	if op != nil && op.digest != digest {
+		n.mu.Unlock()
+		return nil, errServerChainFront
+	}
+	if op == nil {
+		if q.Operation != "candidate-prepare" || n.closing || n.candidate != nil || len(n.attempts) >= 1024 {
+			n.mu.Unlock()
+			return nil, errServerChainFront
+		}
+		for _, old := range n.attempts {
+			if old.capture.Request.TrialID == capture.Request.TrialID {
+				n.mu.Unlock()
+				return nil, errServerChainFront
+			}
+		}
+		lifetime, cancel := context.WithDeadline(n.ctx, capture.Deadline)
+		op = &routerVPNServerPrefixCandidate{owner: n, capture: capture, digest: digest, ctx: lifetime, cancel: cancel, users: make(map[string]auth.User), nonces: make(map[string]bool), resources: make(map[net.Conn]*routerVPNServerChainClose), closeGate: make(chan struct{}, 1)}
+		op.self = op
+		n.attempts[capture.Request.OperationID] = op
+		n.candidate = op
+	}
+	n.mu.Unlock()
+	nonce := q.Nonce
+	switch q.Operation {
+	case "candidate-prepare":
+		err = op.Prepare(ctx)
+		nonce = ""
+	case "candidate-status":
+		if !op.current(ctx) {
+			err = errServerChainFront
+		}
+	case "candidate-close":
+		err = op.Close(ctx)
+		if err == nil {
+			n.mu.Lock()
+			if n.candidate == op {
+				n.candidate = nil
+			}
+			n.mu.Unlock()
+		}
+	default:
+		err = errServerChainFront
+	}
+	if err != nil {
+		return nil, err
+	}
+	r := op.receipt(nonce)
+	return &r, nil
+}

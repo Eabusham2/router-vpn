@@ -43,6 +43,7 @@ type NodeChainCandidateAppendSource struct {
 	device, originalDevice   *NodeProfile
 	nodes, originalNodes     []*NodeProfile
 	imports, originalImports []*nodeChainImportedMember
+	importOwners             []*nodeChainAppendImportedSeal
 	source, sourceSHA        string
 	config, configSHA, seal  string
 	proofs                   []NodeChainProof
@@ -58,11 +59,12 @@ var nodeChainCandidateAppendError = errors.New("candidate append requires its or
 func NewNodeChainCandidateAppendSource(input string) (*NodeChainCandidateAppendSource, error) {
 	var record nodeChainCandidateAppendSourceRecord
 	if exactJSON([]byte(input), &record, NodeChainInputLimit) != nil ||
-		record.Kind != nodeChainCandidateAppendSourceKind || record.Schema != 1 && record.Schema != 2 || record.Execution != "local" ||
+		record.Kind != nodeChainCandidateAppendSourceKind || record.Schema != 1 && record.Schema != 2 && record.Schema != 3 || record.Execution != "local" ||
 		!nodeChainIdentityText(record.DraftRevision) || !nodeChainIdentityText(record.DeviceRevision) ||
 		len(record.DraftRevision) > 256 || len(record.DeviceRevision) > 256 ||
 		!NodeChainCandidateAppendNextMode(record.NextMode) || record.NextKind != "" && (record.NextKind != "external" || record.NextMode != "shadowsocks") || len(record.Nodes) < 1 || len(record.Nodes) >= NodeChainExtendedLocalMaximumNodes ||
 		record.AppendPosition != len(record.Nodes) || len(record.IdentitySources) != len(record.Nodes) ||
+		record.Schema == 3 && record.NextKind != "" ||
 		record.DeviceMTURevision != "" && (!nodeChainIdentityText(record.DeviceMTURevision) || len(record.DeviceMTURevision) > 256) ||
 		record.DeviceFixedMTU != 0 && (record.DeviceMTURevision == "" || record.DeviceFixedMTU < 1280 || record.DeviceFixedMTU > 9000) {
 		return nil, nodeChainCandidateAppendError
@@ -187,7 +189,11 @@ func (s *NodeChainCandidateAppendSource) applyDevicePolicy(config string, proofs
 	}
 	// This validates every original endpoint's configured MTU separately from
 	// the shared TUN ceiling; it never resizes a prefix to fit a candidate.
-	mtu, err := orderedPrefixMTUBounds(string(raw), proofs, actual, "routervpn-chain-tun")
+	families, err := s.appendHostnameFamilies(string(raw), proofs)
+	if err != nil {
+		return "", NodeChainMTUPlan{}, err
+	}
+	mtu, err := orderedPrefixMTUBoundsWithHostnameFamilies(string(raw), proofs, actual, "routervpn-chain-tun", families)
 	if err != nil {
 		return "", NodeChainMTUPlan{}, err
 	}

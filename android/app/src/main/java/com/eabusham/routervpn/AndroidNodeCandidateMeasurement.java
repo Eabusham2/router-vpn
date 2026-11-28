@@ -2,7 +2,6 @@ package com.eabusham.routervpn;
 
 import io.nekohasekai.libbox.Libbox;
 import io.nekohasekai.libbox.RouterNodeChainCandidateMeasurement;
-import io.nekohasekai.libbox.RouterNodeChainCandidatePreparation;
 import io.nekohasekai.libbox.RouterNodeChainSOCKSCandidateMeasurement;
 import io.nekohasekai.libbox.RouterNodeChainCONNECTCandidateMeasurement;
 import io.nekohasekai.libbox.RouterNodeChainExecutionCandidateMeasurement;
@@ -28,13 +27,13 @@ final class AndroidNodeCandidateMeasurement {
      * preparation already owns its closed-ingress native lifetime. */
     private static final class NativeOwner {
         final RouterNodeChainCandidateMeasurement connected;
-        final RouterNodeChainCandidatePreparation prefix;
+        final AndroidNodeCandidatePrefixCapture.NativePlan prefix;
         final RouterNodeChainSOCKSCandidateMeasurement socks;
         final RouterNodeChainCONNECTCandidateMeasurement connect;
         final RouterNodeChainExecutionCandidateMeasurement execution;
         private String admittedRequest="";
         NativeOwner(RouterNodeChainCandidateMeasurement value){if(value==null)throw new IllegalStateException("Native candidate owner was not returned.");connected=value;prefix=null;socks=null;connect=null;execution=null;}
-        NativeOwner(RouterNodeChainCandidatePreparation value){if(value==null)throw new IllegalStateException("Native prefix owner was not returned.");connected=null;prefix=value;socks=null;connect=null;execution=null;}
+        NativeOwner(AndroidNodeCandidatePrefixCapture.NativePlan value){if(value==null)throw new IllegalStateException("Native prefix owner was not returned.");connected=null;prefix=value;socks=null;connect=null;execution=null;}
         NativeOwner(RouterNodeChainSOCKSCandidateMeasurement value){if(value==null)throw new IllegalStateException("Native SOCKS candidate owner was not returned.");connected=null;prefix=null;socks=value;connect=null;execution=null;}
         NativeOwner(RouterNodeChainCONNECTCandidateMeasurement value){if(value==null)throw new IllegalStateException("Native CONNECT candidate owner was not returned.");connected=null;prefix=null;socks=null;connect=value;execution=null;}
         NativeOwner(RouterNodeChainExecutionCandidateMeasurement value){if(value==null)throw new IllegalStateException("Native execution candidate owner was not returned.");connected=null;prefix=null;socks=null;connect=null;execution=value;}
@@ -98,7 +97,11 @@ final class AndroidNodeCandidateMeasurement {
         }else if(!retainedFirstPage.equals(first)){
             throw new IllegalStateException("The original candidate metadata was replaced.");
         }
-        if(!catalog.measurement.equals(metadata.optString("measurement","routed-tcp-connect"))||!nativeOwner.captureSHA256().equals(metadata.getString("capture_sha256"))||catalog.prefix!=metadata.getInt("prefix_position"))
+        AndroidNodeCandidatePrefixCapture appendExecution=catalog.session.candidatePrefix;
+        boolean executionAppend=appendExecution!=null&&appendExecution.appendExecution();
+        if(!catalog.measurement.equals(metadata.optString("measurement","routed-tcp-connect"))
+                ||(executionAppend?!metadata.getString("capture_sha256").isEmpty()||!nativeOwner.captureSHA256().matches("[0-9a-f]{64}")
+                    :!nativeOwner.captureSHA256().equals(metadata.getString("capture_sha256")))||catalog.prefix!=metadata.getInt("prefix_position"))
             throw new IllegalStateException("Candidate metadata belongs to another original chain.");
         if(catalog.responseMode.isEmpty()?metadata.has("candidate_mode"):
                 !catalog.responseMode.equals(metadata.optString("candidate_mode"))||!(catalog.selectedPacketResponse()||catalog.executionOwner==null
@@ -107,7 +110,14 @@ final class AndroidNodeCandidateMeasurement {
         if(catalog.originalSource.appendDraft()) {
             AndroidNodeCandidatePrefixCapture append=catalog.session.candidatePrefix;
             if(!catalog.preparedAppendResponse()||append==null)throw new IllegalStateException("The append result lost its original closed owner.");
-            JSONObject captured=new JSONObject(append.metadata);
+            append.requireCurrent();JSONObject captured=new JSONObject(append.metadata);
+            if(append.appendExecution()) {
+                if(!catalog.originalSource.appendExecutionDraft()||!append.nativeMetadata.equals(first)||metadata.length()!=30
+                        ||!"draft-prefix-append-execution".equals(metadata.getString("purpose"))||!metadata.getString("execution_capture_sha256").isEmpty())
+                    throw new IllegalStateException("The append execution metadata acquired foreign runtime authority.");
+                for(String key:new String[]{"execution_source_sha256","requested_execution","original_preparation_source_sha256","original_preparation_capture_sha256"})
+                    if(!captured.get(key).equals(metadata.get(key)))throw new IllegalStateException("The append execution replaced its original preparation.");
+            } else if(catalog.originalSource.appendExecutionDraft())throw new IllegalStateException("The append request lost its original execution preparation.");
             if(captured.has("candidate_kind")?!captured.get("candidate_kind").equals(metadata.opt("candidate_kind")):metadata.has("candidate_kind"))
                 throw new IllegalStateException("The append result changed its captured candidate kind.");
             for(String key:new String[]{"purpose","append_position","draft_revision","device_revision","device_source_sha256",
@@ -163,7 +173,9 @@ final class AndroidNodeCandidateMeasurement {
     private volatile List<AndroidNodeCandidateResult> admitted=java.util.Collections.emptyList();
     synchronized void requireResult(AndroidNodeCandidateResult result)throws Exception {
         if(cancelled||nativeOwner==null||!admitted.contains(result)||!result.current(System.currentTimeMillis()))throw new IllegalStateException("Retest this candidate before saving its next connection.");
-        requireMetadata();JSONObject current=new JSONObject(nativeOwner.statusJSON());
+        requireMetadata();
+        if(catalog.originalSource.appendExecutionDraft())result.requireAppendExecution(catalog.session.candidatePrefix,true);
+        JSONObject current=new JSONObject(nativeOwner.statusJSON());
         if("invalidated".equals(current.optString("stage"))||!current.optString("failure").isEmpty())throw new IllegalStateException("The original native prefix proof changed.");
         catalog.requireCurrent();
     }
@@ -217,7 +229,10 @@ final class AndroidNodeCandidateMeasurement {
                 }
                 nativeOwner.drain(request);requireMetadata();
                 if(cancelled)break;
-                if (catalog.executionOwner != null && "routed-public-candidate-response".equals(catalog.measurement)) {
+                if(prefix!=null&&prefix.appendExecution()) {
+                    AndroidNodeCandidateResult receipt=AndroidNodeCandidateResult.captureAppendExecution(raw,request,metadata,row.id,row.name,System.currentTimeMillis(),prefix);
+                    if(receipt!=null)results.add(receipt);
+                } else if (catalog.executionOwner != null && "routed-public-candidate-response".equals(catalog.measurement)) {
                     AndroidNodeCandidateResult receipt=AndroidNodeCandidateResult.captureSelectedPublic(raw,request,metadata,row.id,row.name,System.currentTimeMillis(),
                             catalog.prefix,catalog.selectedPrefixID(),catalog.originalSource.execution,catalog.executionOwner.execution(),
                             catalog.executionOwner.sourceSHA256(),catalog.executionOwner.configSHA256());

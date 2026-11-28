@@ -174,12 +174,12 @@ func (a *app) saveOrderedCandidatePreparedProfile(w http.ResponseWriter, request
 		http.Error(w, "an original completed result, exact candidate/path and explicit profile name are required", 400)
 		return
 	}
-	if scope == orderedCandidateAppendScope {
+	if orderedCandidateAppendPurpose(scope) {
 		if !draftChoice || draftSave || q.Name != "" {
 			http.Error(w, "an incomplete prefix may only append its measured node to the original editor", 400)
 			return
 		}
-		a.chooseOrderedCandidateAppend(w, request, q)
+		a.chooseOrderedCandidateAppend(w, request, q, scope)
 		return
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
@@ -504,7 +504,7 @@ func (a *app) completePreparedProfileResponse(w http.ResponseWriter, owner *viaE
 // A measured append is an in-memory editor proposal. The original source is
 // compiled prospectively again, then all native and observer ownership joins
 // before any append is released. No profile or selected-final authority is made.
-func (a *app) chooseOrderedCandidateAppend(w http.ResponseWriter, request *http.Request, q orderedCandidateSaveRequest) {
+func (a *app) chooseOrderedCandidateAppend(w http.ResponseWriter, request *http.Request, q orderedCandidateSaveRequest, scope string) {
 	ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
 	defer cancel()
 	if !a.operationMu.TryLock() {
@@ -519,7 +519,7 @@ func (a *app) chooseOrderedCandidateAppend(w http.ResponseWriter, request *http.
 	}
 	owner := control.owner
 	if owner == nil || owner.id != q.RequestID || owner.prepared == nil || owner.prepared.view == nil ||
-		owner.prepared.view.token != q.ViewToken || owner.prepared.view.scopeValue() != orderedCandidateAppendScope ||
+		owner.prepared.view.token != q.ViewToken || !orderedCandidateAppendPurpose(scope) || owner.prepared.view.scopeValue() != scope ||
 		owner.prepared.view.append == nil || owner.prepared.view.draft != nil {
 		control.mu.Unlock()
 		http.Error(w, "original append result is unavailable", 409)
@@ -563,13 +563,21 @@ func (a *app) chooseOrderedCandidateAppend(w http.ResponseWriter, request *http.
 		http.Error(w, err.Error(), 409)
 		return
 	}
-	compiled, err := captureDesktopAppendCandidateSources(ctx, a, p.selection, p.inventory.launch, []string{q.CandidateID})
+	compileIDs := []string{q.CandidateID}
+	if p.appendExecutionPreparation != nil {
+		compileIDs = p.originalCandidateInventoryIDs()
+	}
+	compiled, err := captureDesktopAppendCandidateSources(ctx, a, p.selection, p.inventory.launch, compileIDs)
 	if err != nil || compiled == nil || compiled.prefixPreparation == nil || !compiled.prefixPreparation.IsAppend() ||
 		compiled.prefixPreparation.OriginalSourceSHA256() != p.selection.Native.source || compiled.candidateMode != job.view.candidateMode ||
 		compiled.prefixPreparation.CandidateKind() != p.prefixPreparation.CandidateKind() ||
 		compiled.prefixPreparation.CandidateMeasurement() != p.prefixPreparation.CandidateMeasurement() ||
 		compiled.revision != p.revision || compiled.profiles[q.CandidateID] != p.inventory.profiles[q.CandidateID] {
 		http.Error(w, "the exact appended source no longer compiles through the retained prefix", 409)
+		return
+	}
+	if p.appendExecutionPreparation != nil && (compiled.appendExecutionPreparation == nil || compiled.appendExecutionPreparation.SourceSHA256() != p.appendExecutionPreparation.SourceSHA256() || compiled.appendExecutionPreparation.OriginalPreparation() != compiled.prefixPreparation || compiled.inventory != p.inventory.inventory || compiled.inventorySHA != p.inventory.inventorySHA) {
+		http.Error(w, "append execution changed its original measured inventory", 409)
 		return
 	}
 	nodes := append(append([]common.MultihopNodeSelection(nil), p.request.append.Nodes...), common.MultihopNodeSelection{ID: q.CandidateID, Mode: job.view.candidateMode})

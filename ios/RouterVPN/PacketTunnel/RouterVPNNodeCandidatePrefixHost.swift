@@ -119,7 +119,7 @@ final class RouterVPNNodeCandidatePrefixHost: NSObject, LibboxRouterNodeChainCan
         try requireCurrent(); try requireReadback()
         guard input.capture.native.healthy(),
               let progress = try JSONSerialization.jsonObject(with: Data(input.capture.native.progressJSON().utf8)) as? [String: Any],
-              progress["stage"] as? String == "prefix-prepared", progress["prepared"] as? Bool == true,
+              progress["stage"] as? String == (input.capture.isAppendExecution ? "append-execution-prepared" : "prefix-prepared"), progress["prepared"] as? Bool == true,
               progress["application_open"] as? Bool == false, progress["dns_open"] as? Bool == false else { throw Self.issue() }
         try requireCurrent(); try requireReadback()
     }
@@ -182,20 +182,47 @@ final class RouterVPNNodeCandidatePrefixHost: NSObject, LibboxRouterNodeChainCan
             default: throw Self.issue()
             }
             let status = input.capture.native.statusJSON()
+            if input.capture.isAppendExecution { try requireExecutionStatus(status, request: request) }
             try requirePrepared()
             return envelope(request: request, values: ["status": status])
         } catch { return nil }
     }
+    private func requireExecutionStatus(_ raw: String, request: String) throws {
+        let capture = input.capture.native.captureSHA256()
+        guard raw.utf8.count <= 65536, IOSCandidateCatalogPublication.isDigest(capture),
+              let body = try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
+              body["request_id"] as? String == request, body["purpose"] as? String == "draft-prefix-append-execution",
+              body["source_sha256"] as? String == input.capture.originalSourceSHA256,
+              body["execution_source_sha256"] as? String == input.capture.sourceSHA256,
+              body["requested_execution"] as? String == input.capture.requestedExecution,
+              body["capture_sha256"] as? String == capture, body["execution_capture_sha256"] as? String == capture else { throw Self.issue() }
+        if input.capture.requestedExecution == "server" {
+            guard body["selection"] == nil, input.capture.native.selectionJSON().isEmpty else { throw Self.issue() }
+        } else if body["complete"] as? Bool == true, body["drained"] as? Bool == true,
+                  body["stage"] as? String == "complete", (body["failure"] as? String)?.isEmpty != false,
+                  let rows = body["results"] as? [[String: Any]], rows.count == 1, rows[0]["ready"] as? Bool == true {
+            let original = input.capture.native.selectionJSON()
+            guard input.capture.requestedExecution == "auto", !original.isEmpty, original.utf8.count <= 16384,
+                  let selected = try JSONSerialization.jsonObject(with: Data(original.utf8)) as? [String: Any],
+                  let returned = body["selection"] as? [String: Any], NSDictionary(dictionary: selected).isEqual(to: returned) else { throw Self.issue() }
+        }
+    }
     private func envelope(request: String, values: [String: Any]) -> Data? {
         var body = values
         body["session_id"] = input.epoch; body["owner_request"] = input.source.request; body["request_id"] = request
-        if let mode = input.capture.responseMode, let source = input.capture.responseSourceNodes {
+        if values["closed"] as? Bool != true || !input.capture.isAppendExecution, let mode = input.capture.responseMode, let source = input.capture.responseSourceNodes {
             body["candidate_mode"] = mode
             body["response_source_nodes"] = source.map(\.object)
             if let digest = input.capture.appendSourceMetadataSHA256 {
-                body["candidate_purpose"] = "draft-prefix-append"
+                body["candidate_purpose"] = input.capture.isAppendExecution ? "draft-prefix-append-execution" : "draft-prefix-append"
                 body["append_source_metadata_sha256"] = digest
                 if let kind = input.capture.responseKind { body["candidate_kind"] = kind }
+                if input.capture.isAppendExecution {
+                    let capture = input.capture.native.captureSHA256()
+                    guard IOSCandidateCatalogPublication.isDigest(capture), let requested = input.capture.requestedExecution else { return nil }
+                    body["requested_execution"] = requested; body["execution_source_sha256"] = input.capture.sourceSHA256
+                    body["execution_capture_sha256"] = capture
+                }
             }
         }
         guard let data = try? JSONSerialization.data(withJSONObject: body), data.count <= 131072 else { return nil }

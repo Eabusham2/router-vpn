@@ -179,7 +179,18 @@ func (s *nodeChainExecutionIO) exchangeCaptured(ctx context.Context, method, pat
 				if network != "tcp" || address != s.address || s.closed.Load() {
 					return nil, nodeChainExecutionError
 				}
-				dialCtx, finish, err := operation.begin(parent)
+				if err := parent.Err(); err != nil {
+					return nil, err
+				}
+				// Transport detaches its dial context from the request deadline.
+				// Keep this original bounded call and also honor transport cancellation.
+				dialParent, cancelDial := context.WithCancel(call)
+				stopTransport := context.AfterFunc(parent, cancelDial)
+				defer func() {
+					stopTransport()
+					cancelDial()
+				}()
+				dialCtx, finish, err := operation.begin(dialParent)
 				if err != nil {
 					return nil, err
 				}
